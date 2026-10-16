@@ -1,0 +1,3 @@
+project: seeds
+version: 1
+emitDir: .claude/commands

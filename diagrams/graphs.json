@@ -1,0 +1,615 @@
+[
+  [
+    "01-system",
+    "System boundaries",
+    [
+      [
+        "Web",
+        "Browser GUI"
+      ],
+      [
+        "TUI",
+        "TUI and CLI"
+      ],
+      [
+        "API",
+        "Local authenticated API"
+      ],
+      [
+        "Core",
+        "Luuna runtime and scheduler"
+      ],
+      [
+        "Records",
+        "Memory prompts and tickets"
+      ],
+      [
+        "DB",
+        "Run state and evidence"
+      ],
+      [
+        "Pi",
+        "Supervised Pi sessions"
+      ],
+      [
+        "Exec",
+        "Task worktrees and executors"
+      ]
+    ],
+    [
+      [
+        "Web",
+        "API",
+        ""
+      ],
+      [
+        "TUI",
+        "API",
+        ""
+      ],
+      [
+        "API",
+        "Core",
+        ""
+      ],
+      [
+        "Core",
+        "Records",
+        ""
+      ],
+      [
+        "Core",
+        "DB",
+        ""
+      ],
+      [
+        "Core",
+        "Pi",
+        ""
+      ],
+      [
+        "Pi",
+        "Exec",
+        ""
+      ],
+      [
+        "Exec",
+        "DB",
+        "results"
+      ]
+    ]
+  ],
+  [
+    "02-delegation",
+    "Bounded delegation",
+    [
+      [
+        "Goal",
+        "Goal and acceptance criteria"
+      ],
+      [
+        "Project",
+        "Project orchestrator"
+      ],
+      [
+        "Plan",
+        "Approved coordinated plan"
+      ],
+      [
+        "App",
+        "App lead"
+      ],
+      [
+        "Shared",
+        "Shared library lead"
+      ],
+      [
+        "Backend",
+        "Backend lead"
+      ],
+      [
+        "AT",
+        "Scoped app specialists"
+      ],
+      [
+        "ST",
+        "Scoped library specialists"
+      ],
+      [
+        "BT",
+        "Scoped backend specialists"
+      ],
+      [
+        "Integrate",
+        "Candidate integration"
+      ],
+      [
+        "PR",
+        "Linked PRs for human merge"
+      ]
+    ],
+    [
+      [
+        "Goal",
+        "Project",
+        ""
+      ],
+      [
+        "Project",
+        "Plan",
+        ""
+      ],
+      [
+        "Plan",
+        "App",
+        ""
+      ],
+      [
+        "Plan",
+        "Shared",
+        ""
+      ],
+      [
+        "Plan",
+        "Backend",
+        ""
+      ],
+      [
+        "App",
+        "AT",
+        ""
+      ],
+      [
+        "Shared",
+        "ST",
+        ""
+      ],
+      [
+        "Backend",
+        "BT",
+        ""
+      ],
+      [
+        "AT",
+        "Integrate",
+        ""
+      ],
+      [
+        "ST",
+        "Integrate",
+        ""
+      ],
+      [
+        "BT",
+        "Integrate",
+        ""
+      ],
+      [
+        "Integrate",
+        "PR",
+        "gates pass"
+      ]
+    ]
+  ],
+  [
+    "03-onboarding",
+    "Project initialization",
+    [
+      [
+        "Open",
+        "Create or import project"
+      ],
+      [
+        "Kind",
+        "Existing repositories"
+      ],
+      [
+        "Discover",
+        "Discover map and test recipes"
+      ],
+      [
+        "New",
+        "New project"
+      ],
+      [
+        "Scaffold",
+        "Approve scaffold and testing plan"
+      ],
+      [
+        "Confirm",
+        "Confirm project relationships"
+      ],
+      [
+        "Baseline",
+        "Establish passing baseline"
+      ],
+      [
+        "Blocked",
+        "Pause on missing prerequisites"
+      ],
+      [
+        "Ready",
+        "Ready for feature planning"
+      ]
+    ],
+    [
+      [
+        "Open",
+        "Kind",
+        "import"
+      ],
+      [
+        "Open",
+        "New",
+        "create"
+      ],
+      [
+        "Kind",
+        "Discover",
+        ""
+      ],
+      [
+        "Discover",
+        "Confirm",
+        ""
+      ],
+      [
+        "New",
+        "Scaffold",
+        ""
+      ],
+      [
+        "Scaffold",
+        "Confirm",
+        ""
+      ],
+      [
+        "Confirm",
+        "Baseline",
+        ""
+      ],
+      [
+        "Baseline",
+        "Blocked",
+        "not usable"
+      ],
+      [
+        "Baseline",
+        "Ready",
+        "passes"
+      ]
+    ]
+  ],
+  [
+    "04-session",
+    "Approved coding session",
+    [
+      [
+        "Ticket",
+        "Ready ticket and baseline"
+      ],
+      [
+        "Scouts",
+        "Parallel read only exploration"
+      ],
+      [
+        "Plan",
+        "One coordinated plan"
+      ],
+      [
+        "Approve",
+        "Developer approves exact revision"
+      ],
+      [
+        "Implement",
+        "Dependency ready implementation"
+      ],
+      [
+        "Checks",
+        "Tests analysis and conventions"
+      ],
+      [
+        "Review",
+        "Fresh independent diff review"
+      ],
+      [
+        "Integration",
+        "Exact candidate integration"
+      ],
+      [
+        "Publish",
+        "Create linked PRs"
+      ],
+      [
+        "Pause",
+        "Pause with evidence"
+      ],
+      [
+        "Human",
+        "Developer controls merge"
+      ]
+    ],
+    [
+      [
+        "Ticket",
+        "Scouts",
+        ""
+      ],
+      [
+        "Scouts",
+        "Plan",
+        ""
+      ],
+      [
+        "Plan",
+        "Approve",
+        ""
+      ],
+      [
+        "Approve",
+        "Implement",
+        ""
+      ],
+      [
+        "Implement",
+        "Checks",
+        ""
+      ],
+      [
+        "Checks",
+        "Review",
+        "pass"
+      ],
+      [
+        "Review",
+        "Integration",
+        "pass"
+      ],
+      [
+        "Integration",
+        "Publish",
+        "pass"
+      ],
+      [
+        "Publish",
+        "Human",
+        ""
+      ],
+      [
+        "Checks",
+        "Implement",
+        "bounded repair"
+      ],
+      [
+        "Review",
+        "Implement",
+        "bounded repair"
+      ],
+      [
+        "Integration",
+        "Implement",
+        "in scope repair"
+      ],
+      [
+        "Implement",
+        "Pause",
+        "limit or blocker"
+      ]
+    ]
+  ],
+  [
+    "05-memory",
+    "Scoped context and memory",
+    [
+      [
+        "User",
+        "Private user memory"
+      ],
+      [
+        "Project",
+        "Project knowledge"
+      ],
+      [
+        "Process",
+        "Reusable process lessons"
+      ],
+      [
+        "Retrieve",
+        "Scoped retrieval and budget"
+      ],
+      [
+        "Canopy",
+        "Versioned process prompts"
+      ],
+      [
+        "Seeds",
+        "Ticket and approved plan"
+      ],
+      [
+        "Code",
+        "Current repository evidence"
+      ],
+      [
+        "Packet",
+        "Assignment context manifest"
+      ],
+      [
+        "Agent",
+        "Pi worker"
+      ],
+      [
+        "Evidence",
+        "Observed results and lessons"
+      ],
+      [
+        "Classify",
+        "Validate scope and provenance"
+      ]
+    ],
+    [
+      [
+        "User",
+        "Retrieve",
+        ""
+      ],
+      [
+        "Project",
+        "Retrieve",
+        ""
+      ],
+      [
+        "Process",
+        "Retrieve",
+        ""
+      ],
+      [
+        "Retrieve",
+        "Packet",
+        ""
+      ],
+      [
+        "Canopy",
+        "Packet",
+        ""
+      ],
+      [
+        "Seeds",
+        "Packet",
+        ""
+      ],
+      [
+        "Code",
+        "Packet",
+        ""
+      ],
+      [
+        "Packet",
+        "Agent",
+        ""
+      ],
+      [
+        "Agent",
+        "Evidence",
+        ""
+      ],
+      [
+        "Evidence",
+        "Classify",
+        ""
+      ],
+      [
+        "Classify",
+        "Project",
+        "durable knowledge"
+      ],
+      [
+        "Classify",
+        "Process",
+        "validated lesson"
+      ]
+    ]
+  ],
+  [
+    "06-publication",
+    "Evidence and publication",
+    [
+      [
+        "Candidate",
+        "Freeze candidate commit set"
+      ],
+      [
+        "Checks",
+        "Required pre PR checks pass"
+      ],
+      [
+        "Review",
+        "Independent review passes"
+      ],
+      [
+        "Push",
+        "Push managed branches"
+      ],
+      [
+        "PRs",
+        "Create linked PRs idempotently"
+      ],
+      [
+        "Partial",
+        "Persist partial publication"
+      ],
+      [
+        "CI",
+        "Observe PR triggered CI"
+      ],
+      [
+        "Repair",
+        "Repair and revalidate"
+      ],
+      [
+        "Human",
+        "Human approves merge"
+      ],
+      [
+        "Done",
+        "All required PRs integrated"
+      ]
+    ],
+    [
+      [
+        "Candidate",
+        "Checks",
+        ""
+      ],
+      [
+        "Checks",
+        "Review",
+        ""
+      ],
+      [
+        "Review",
+        "Push",
+        ""
+      ],
+      [
+        "Push",
+        "PRs",
+        ""
+      ],
+      [
+        "PRs",
+        "Partial",
+        "partial failure"
+      ],
+      [
+        "Partial",
+        "PRs",
+        "reconcile missing only"
+      ],
+      [
+        "PRs",
+        "CI",
+        ""
+      ],
+      [
+        "CI",
+        "Repair",
+        "fails"
+      ],
+      [
+        "Repair",
+        "Candidate",
+        ""
+      ],
+      [
+        "CI",
+        "Human",
+        "passes"
+      ],
+      [
+        "Human",
+        "Done",
+        "all repositories"
+      ]
+    ]
+  ]
+]

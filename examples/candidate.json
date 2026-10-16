@@ -1,0 +1,24 @@
+{
+  "schema_version": "0.1",
+  "id": "candidate-example",
+  "plan_hash": "REPLACE_WITH_OBSERVED_PLAN_HASH",
+  "repositories": {
+    "backend": "REPLACE_WITH_OBSERVED_COMMIT",
+    "shared": "REPLACE_WITH_OBSERVED_COMMIT",
+    "app": "REPLACE_WITH_OBSERVED_COMMIT"
+  },
+  "dependency_bindings": [
+    {
+      "producer": "shared",
+      "consumer": "app",
+      "strategy": "local_package_override",
+      "artifact": "REPLACE_WITH_CANDIDATE_PATH_OR_ARTIFACT"
+    },
+    {
+      "producer": "backend",
+      "consumer": "shared",
+      "strategy": "isolated_test_endpoint",
+      "artifact": "REPLACE_WITH_CANDIDATE_ENDPOINT"
+    }
+  ]
+}

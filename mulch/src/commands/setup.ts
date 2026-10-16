@@ -1,0 +1,790 @@
+import { existsSync } from "node:fs";
+import { chmod, mkdir, readFile, unlink, writeFile } from "node:fs/promises";
+import { createRequire } from "node:module";
+import { dirname, join, relative } from "node:path";
+import chalk from "chalk";
+import type { Command } from "commander";
+import { missingMulchHooks, syncMulchHooks } from "../utils/claude-hooks.ts";
+import { getMulchDir, readConfig } from "../utils/config.ts";
+import { getSessionEndReminder } from "../utils/format.ts";
+import { outputJson, outputJsonError, reportCommandError } from "../utils/json-output.ts";
+import {
+	hasMarkerSection,
+	MARKER_END,
+	MARKER_START,
+	removeMarkerSection,
+} from "../utils/markers.ts";
+import {
+	listFilesystemRecipes,
+	NPM_RECIPE_PREFIX,
+	type ProviderRecipe,
+	type RecipeResult,
+	type RecipeWithSource,
+	resolveRecipe,
+} from "../utils/recipe-discovery.ts";
+
+// Read prime.session_close from .mulch/mulch.config.yaml. Returns undefined
+// when mulch isn't initialized yet (setup may run before `ml init`) so the
+// caller falls back to the default preset rather than failing.
+async function readSessionCloseConfig(cwd: string) {
+	try {
+		const config = await readConfig(cwd);
+		return config.prime?.session_close;
+	} catch {
+		return undefined;
+	}
+}
+
+// ────────────────────────────────────────────────────────────
+// Git hook helpers
+// ────────────────────────────────────────────────────────────
+
+const HOOK_MARKER_START = "# mulch:start";
+const HOOK_MARKER_END = "# mulch:end";
+
+const MULCH_HOOK_SECTION = `${HOOK_MARKER_START}
+# Run mulch validate before committing
+if command -v mulch >/dev/null 2>&1; then
+  mulch validate
+  if [ $? -ne 0 ]; then
+    echo "mulch validate failed. Commit aborted."
+    exit 1
+  fi
+fi
+${HOOK_MARKER_END}`;
+
+async function installGitHook(cwd: string): Promise<RecipeResult> {
+	const gitDir = join(cwd, ".git");
+	if (!existsSync(gitDir)) {
+		return {
+			success: false,
+			message: "Not a git repository — .git directory not found.",
+		};
+	}
+
+	const hooksDir = join(gitDir, "hooks");
+	await mkdir(hooksDir, { recursive: true });
+
+	const hookPath = join(hooksDir, "pre-commit");
+	let content = "";
+
+	if (existsSync(hookPath)) {
+		content = await readFile(hookPath, "utf-8");
+		if (content.includes(HOOK_MARKER_START)) {
+			return {
+				success: true,
+				message: "Git pre-commit hook already installed.",
+			};
+		}
+	}
+
+	if (content) {
+		content = `${content.trimEnd()}\n\n${MULCH_HOOK_SECTION}\n`;
+	} else {
+		content = `#!/bin/sh\n\n${MULCH_HOOK_SECTION}\n`;
+	}
+
+	await writeFile(hookPath, content, "utf-8");
+	await chmod(hookPath, 0o755);
+
+	return { success: true, message: "Installed mulch pre-commit git hook." };
+}
+
+async function checkGitHook(cwd: string): Promise<RecipeResult> {
+	const hookPath = join(cwd, ".git", "hooks", "pre-commit");
+	if (!existsSync(hookPath)) {
+		return { success: false, message: "Git pre-commit hook not found." };
+	}
+
+	const content = await readFile(hookPath, "utf-8");
+	if (!content.includes(HOOK_MARKER_START)) {
+		return {
+			success: false,
+			message: "Git pre-commit hook exists but has no mulch section.",
+		};
+	}
+
+	return { success: true, message: "Git pre-commit hook is installed." };
+}
+
+async function removeGitHook(cwd: string): Promise<RecipeResult> {
+	const hookPath = join(cwd, ".git", "hooks", "pre-commit");
+	if (!existsSync(hookPath)) {
+		return {
+			success: true,
+			message: "Git pre-commit hook not found; nothing to remove.",
+		};
+	}
+
+	const content = await readFile(hookPath, "utf-8");
+	if (!content.includes(HOOK_MARKER_START)) {
+		return {
+			success: true,
+			message: "No mulch section in pre-commit hook; nothing to remove.",
+		};
+	}
+
+	const startIdx = content.indexOf(HOOK_MARKER_START);
+	const endIdx = content.indexOf(HOOK_MARKER_END);
+	const before = content.substring(0, startIdx);
+	const after = content.substring(endIdx + HOOK_MARKER_END.length);
+	const cleaned = (before + after).replace(/\n{3,}/g, "\n\n").trim();
+
+	// If only the shebang (or nothing) remains, delete the file
+	if (!cleaned || cleaned === "#!/bin/sh") {
+		await unlink(hookPath);
+		return {
+			success: true,
+			message: "Removed mulch pre-commit hook (file deleted).",
+		};
+	}
+
+	await writeFile(hookPath, `${cleaned}\n`, "utf-8");
+	return {
+		success: true,
+		message: "Removed mulch section from pre-commit hook.",
+	};
+}
+
+// ────────────────────────────────────────────────────────────
+// Built-in provider recipes
+// ────────────────────────────────────────────────────────────
+
+// ── Claude ──────────────────────────────────────────────────
+// Hook specs and the settings merge live in utils/claude-hooks.ts.
+
+const CLAUDE_HOOK_COMMAND = "ml prime";
+
+function claudeSettingsPath(cwd: string): string {
+	return join(cwd, ".claude", "settings.json");
+}
+
+async function readClaudeSettings(settingsPath: string): Promise<Record<string, unknown> | null> {
+	if (!existsSync(settingsPath)) return null;
+	const raw = await readFile(settingsPath, "utf-8");
+	if (raw.trim() === "") return {};
+	let parsed: unknown;
+	try {
+		parsed = JSON.parse(raw);
+	} catch (err) {
+		const msg = err instanceof Error ? err.message : String(err);
+		throw new Error(`Failed to parse Claude settings at ${settingsPath}: ${msg}`);
+	}
+	if (typeof parsed !== "object" || parsed === null || Array.isArray(parsed)) {
+		throw new Error(`Claude settings at ${settingsPath} is not a JSON object`);
+	}
+	return parsed as Record<string, unknown>;
+}
+
+async function syncClaudeSettings(cwd: string, remove: boolean): Promise<boolean | null> {
+	const settingsPath = claudeSettingsPath(cwd);
+	const current = await readClaudeSettings(settingsPath);
+	if (current === null && remove) return null;
+	const result = syncMulchHooks(current ?? {}, remove);
+	if (result.changed) {
+		await mkdir(dirname(settingsPath), { recursive: true });
+		await writeFile(settingsPath, `${JSON.stringify(result.settings, null, 2)}\n`, "utf-8");
+	}
+	return result.changed;
+}
+
+const claudeRecipe: ProviderRecipe = {
+	async install(cwd) {
+		const changed = await syncClaudeSettings(cwd, false);
+		return changed
+			? {
+					success: true,
+					message:
+						"Installed Claude hooks: SessionStart `ml prime`, PreToolUse `ml hook` (file-anchored records + .mulch/expertise guard).",
+				}
+			: { success: true, message: "Claude hooks already installed." };
+	},
+
+	async check(cwd) {
+		const settings = await readClaudeSettings(claudeSettingsPath(cwd));
+		if (settings === null) {
+			return { success: false, message: "Claude settings.json not found." };
+		}
+		const missing = missingMulchHooks(settings);
+		return missing.length > 0
+			? { success: false, message: `Missing hooks for: ${missing.join(", ")}.` }
+			: { success: true, message: "Claude hooks are installed and correct." };
+	},
+
+	async remove(cwd) {
+		const changed = await syncClaudeSettings(cwd, true);
+		if (changed === null) {
+			return { success: true, message: "Claude settings.json not found; nothing to remove." };
+		}
+		return {
+			success: true,
+			message: changed
+				? "Removed mulch hooks from Claude settings."
+				: "No mulch hooks found in Claude settings.",
+		};
+	},
+};
+
+// ── Cursor ──────────────────────────────────────────────────
+
+function cursorRulePath(cwd: string): string {
+	return join(cwd, ".cursor", "rules", "mulch.mdc");
+}
+
+// Built from config at install/check time so projects can swap the session-close
+// preset (prime.session_close.style) without forking the recipe.
+async function buildCursorRuleContent(cwd: string): Promise<string> {
+	const sessionClose = await readSessionCloseConfig(cwd);
+	const footer = getSessionEndReminder("embedded", sessionClose);
+	return `---
+description: Mulch expertise integration
+globs: *
+alwaysApply: true
+---
+
+# Mulch Expertise
+
+At the start of every session, run the following command to load project expertise:
+
+\`\`\`
+ml prime
+\`\`\`
+
+This injects project-specific conventions, patterns, decisions, and other learnings into your context.
+Use \`ml prime --files src/foo.ts\` to load only records relevant to specific files.
+
+Evidence auto-populates from git (current commit + changed files). Link trackers explicitly with \`--evidence-seeds <id>\` / \`--evidence-gh <id>\` / \`--evidence-linear <id>\` / \`--evidence-bead <id>\`, or \`--relates-to <mx-id>\`.
+
+${footer}
+`;
+}
+
+const cursorRecipe: ProviderRecipe = {
+	async install(cwd) {
+		const rulePath = cursorRulePath(cwd);
+		const content = await buildCursorRuleContent(cwd);
+
+		if (existsSync(rulePath)) {
+			const existing = await readFile(rulePath, "utf-8");
+			if (existing === content) {
+				return { success: true, message: "Cursor rule already installed." };
+			}
+		}
+
+		await mkdir(dirname(rulePath), { recursive: true });
+		await writeFile(rulePath, content, "utf-8");
+
+		return {
+			success: true,
+			message: "Installed Cursor rule at .cursor/rules/mulch.mdc.",
+		};
+	},
+
+	async check(cwd) {
+		const rulePath = cursorRulePath(cwd);
+		if (!existsSync(rulePath)) {
+			return { success: false, message: "Cursor rule file not found." };
+		}
+		const content = await readFile(rulePath, "utf-8");
+		const expected = await buildCursorRuleContent(cwd);
+		if (content !== expected) {
+			return {
+				success: false,
+				message: "Cursor rule file exists but has been modified.",
+			};
+		}
+		return { success: true, message: "Cursor rule is installed and correct." };
+	},
+
+	async remove(cwd) {
+		const rulePath = cursorRulePath(cwd);
+		if (!existsSync(rulePath)) {
+			return {
+				success: true,
+				message: "Cursor rule not found; nothing to remove.",
+			};
+		}
+		await unlink(rulePath);
+		return { success: true, message: "Removed Cursor rule file." };
+	},
+};
+
+// ── Codex ───────────────────────────────────────────────────
+
+function codexAgentsPath(cwd: string): string {
+	return join(cwd, "AGENTS.md");
+}
+
+async function buildCodexSection(cwd: string): Promise<string> {
+	const sessionClose = await readSessionCloseConfig(cwd);
+	const footer = getSessionEndReminder("embedded", sessionClose);
+	return `${MARKER_START}
+## Mulch Expertise
+
+At the start of every session, run \`ml prime\` to load project expertise.
+
+This injects project-specific conventions, patterns, decisions, and other learnings into your context.
+Use \`ml prime --files src/foo.ts\` to load only records relevant to specific files.
+
+Evidence auto-populates from git (current commit + changed files). Link trackers explicitly with \`--evidence-seeds <id>\` / \`--evidence-gh <id>\` / \`--evidence-linear <id>\` / \`--evidence-bead <id>\`, or \`--relates-to <mx-id>\`.
+
+${footer}
+${MARKER_END}`;
+}
+
+// Codex hooks via .codex/config.toml — Codex 0.124.0+ (April 2026) supports
+// SessionStart hooks whose stdout JSON `additionalContext` is injected as
+// extra developer context. Schema reference:
+//   https://developers.openai.com/codex/hooks
+// We fence the managed block in marker comments so we can re-find it for
+// idempotent install and clean removal without disturbing user-added entries.
+
+const CODEX_TOML_MARKER_START = "# mulch:start — managed by `ml setup codex`";
+const CODEX_TOML_MARKER_END = "# mulch:end";
+
+const CODEX_TOML_BLOCK = `${CODEX_TOML_MARKER_START}
+[features]
+codex_hooks = true
+
+[[hooks.SessionStart]]
+
+[[hooks.SessionStart.hooks]]
+type = "command"
+command = "ml prime"
+statusMessage = "Loading mulch expertise"
+${CODEX_TOML_MARKER_END}`;
+
+function codexConfigPath(cwd: string): string {
+	return join(cwd, ".codex", "config.toml");
+}
+
+function hasCodexTomlBlock(content: string): boolean {
+	return content.includes(CODEX_TOML_MARKER_START);
+}
+
+function removeCodexTomlBlock(content: string): string {
+	const startIdx = content.indexOf(CODEX_TOML_MARKER_START);
+	if (startIdx === -1) return content;
+	const endMarkerIdx = content.indexOf(CODEX_TOML_MARKER_END, startIdx);
+	if (endMarkerIdx === -1) return content;
+	const endLineIdx = content.indexOf("\n", endMarkerIdx);
+	const cutEnd = endLineIdx === -1 ? content.length : endLineIdx + 1;
+
+	const before = content.substring(0, startIdx);
+	const after = content.substring(cutEnd);
+	const cleaned = (before + after).replace(/\n{3,}/g, "\n\n").trimEnd();
+	return cleaned ? `${cleaned}\n` : "";
+}
+
+const codexRecipe: ProviderRecipe = {
+	async install(cwd) {
+		const agentsPath = codexAgentsPath(cwd);
+		const tomlPath = codexConfigPath(cwd);
+
+		// 1. AGENTS.md — fallback prose for Codex versions without hook support
+		let agentsContent = "";
+		let agentsAlready = false;
+		if (existsSync(agentsPath)) {
+			agentsContent = await readFile(agentsPath, "utf-8");
+			agentsAlready = hasMarkerSection(agentsContent);
+		}
+
+		if (!agentsAlready) {
+			const codexSection = await buildCodexSection(cwd);
+			const newAgents = agentsContent
+				? `${agentsContent.trimEnd()}\n\n${codexSection}\n`
+				: `${codexSection}\n`;
+			await writeFile(agentsPath, newAgents, "utf-8");
+		}
+
+		// 2. .codex/config.toml — SessionStart hook running `ml prime`
+		let tomlContent = "";
+		let tomlAlready = false;
+		if (existsSync(tomlPath)) {
+			tomlContent = await readFile(tomlPath, "utf-8");
+			tomlAlready = hasCodexTomlBlock(tomlContent);
+		}
+
+		if (!tomlAlready) {
+			await mkdir(dirname(tomlPath), { recursive: true });
+			const newToml = tomlContent.trim()
+				? `${tomlContent.trimEnd()}\n\n${CODEX_TOML_BLOCK}\n`
+				: `${CODEX_TOML_BLOCK}\n`;
+			await writeFile(tomlPath, newToml, "utf-8");
+		}
+
+		if (agentsAlready && tomlAlready) {
+			return {
+				success: true,
+				message: "Codex integration already installed (AGENTS.md + .codex/config.toml).",
+			};
+		}
+
+		const installed: string[] = [];
+		if (!agentsAlready) installed.push("AGENTS.md mulch section");
+		if (!tomlAlready) installed.push(".codex/config.toml SessionStart hook");
+		return { success: true, message: `Installed Codex integration: ${installed.join(", ")}.` };
+	},
+
+	async check(cwd) {
+		const agentsPath = codexAgentsPath(cwd);
+		const tomlPath = codexConfigPath(cwd);
+
+		if (!existsSync(agentsPath)) {
+			return { success: false, message: "AGENTS.md not found." };
+		}
+		const agentsContent = await readFile(agentsPath, "utf-8");
+		if (!hasMarkerSection(agentsContent)) {
+			return {
+				success: false,
+				message: "AGENTS.md exists but has no mulch section.",
+			};
+		}
+
+		if (!existsSync(tomlPath)) {
+			return { success: false, message: ".codex/config.toml not found." };
+		}
+		const tomlContent = await readFile(tomlPath, "utf-8");
+		if (!hasCodexTomlBlock(tomlContent)) {
+			return {
+				success: false,
+				message: ".codex/config.toml exists but has no mulch SessionStart hook.",
+			};
+		}
+
+		return {
+			success: true,
+			message: "Codex integration installed (AGENTS.md + .codex/config.toml).",
+		};
+	},
+
+	async remove(cwd) {
+		const agentsPath = codexAgentsPath(cwd);
+		const tomlPath = codexConfigPath(cwd);
+		const removed: string[] = [];
+
+		if (existsSync(agentsPath)) {
+			const content = await readFile(agentsPath, "utf-8");
+			if (hasMarkerSection(content)) {
+				const cleaned = removeMarkerSection(content);
+				await writeFile(agentsPath, cleaned, "utf-8");
+				removed.push("AGENTS.md mulch section");
+			}
+		}
+
+		if (existsSync(tomlPath)) {
+			const content = await readFile(tomlPath, "utf-8");
+			if (hasCodexTomlBlock(content)) {
+				const cleaned = removeCodexTomlBlock(content);
+				if (cleaned) {
+					await writeFile(tomlPath, cleaned, "utf-8");
+				} else {
+					// Block was the whole file — leave an empty file rather than
+					// deleting, so user-managed `[features]` etc. coming back
+					// later doesn't fight a recreate race. Empty file is harmless.
+					await writeFile(tomlPath, "", "utf-8");
+				}
+				removed.push(".codex/config.toml SessionStart hook");
+			}
+		}
+
+		if (removed.length === 0) {
+			return {
+				success: true,
+				message: "No Codex integration found; nothing to remove.",
+			};
+		}
+		return { success: true, message: `Removed Codex integration: ${removed.join(", ")}.` };
+	},
+};
+
+// ── Recipe registry ─────────────────────────────────────────
+
+/**
+ * Built-in recipes shipped with mulch. Filesystem (`.mulch/recipes/<name>.{ts,sh}`)
+ * and npm (`mulch-recipe-<name>`) discovery is handled by `resolveRecipe` in
+ * `utils/recipe-discovery.ts` and takes precedence over these in that order.
+ */
+const BUILTIN_RECIPES = {
+	claude: claudeRecipe,
+	cursor: cursorRecipe,
+	codex: codexRecipe,
+} as const satisfies Record<string, ProviderRecipe>;
+
+/** @deprecated kept as alias for `BUILTIN_RECIPES` — used by tests. */
+const recipes = BUILTIN_RECIPES;
+
+const BUILTIN_PROVIDER_NAMES = Object.keys(BUILTIN_RECIPES).sort();
+
+// ── Exported helpers for testing ────────────────────────────
+
+export {
+	BUILTIN_RECIPES,
+	recipes,
+	BUILTIN_PROVIDER_NAMES,
+	buildCursorRuleContent,
+	buildCodexSection,
+	CLAUDE_HOOK_COMMAND,
+	MULCH_HOOK_SECTION,
+	installGitHook,
+	checkGitHook,
+	removeGitHook,
+};
+
+export type { ProviderRecipe };
+
+// ── Command registration ────────────────────────────────────
+
+export function registerSetupCommand(program: Command): void {
+	program
+		.command("setup")
+		.argument(
+			"[provider]",
+			`agent provider (built-in: ${BUILTIN_PROVIDER_NAMES.join(", ")}; or any name resolvable from .mulch/recipes/ or ${NPM_RECIPE_PREFIX}*)`,
+		)
+		.description("Set up mulch integration for a specific agent provider")
+		.option("--check", "verify provider integration is installed")
+		.option("--remove", "remove provider integration")
+		.option("--hooks", "install a pre-commit git hook running mulch validate")
+		.option("--list", "list discovered providers (built-in, .mulch/recipes/, mulch-recipe-* npm)")
+		.action(
+			async (
+				provider: string | undefined,
+				options: {
+					check?: boolean;
+					remove?: boolean;
+					hooks?: boolean;
+					list?: boolean;
+				},
+			) => {
+				const jsonMode = program.opts().json === true;
+
+				// Verify .mulch/ exists
+				const mulchDir = getMulchDir();
+				if (!existsSync(mulchDir)) {
+					reportCommandError(
+						"setup",
+						jsonMode,
+						"No .mulch/ directory found. Run `mulch init` first.",
+					);
+					return;
+				}
+
+				// Handle --list (no provider needed)
+				if (options.list) {
+					await runList(process.cwd(), jsonMode);
+					return;
+				}
+
+				if (!provider && !options.hooks) {
+					if (jsonMode) {
+						outputJsonError("setup", "Specify a provider, use --hooks, or use --list.");
+					} else {
+						console.error(chalk.red("Error: specify a provider, use --hooks, or use --list."));
+					}
+					process.exitCode = 1;
+					return;
+				}
+
+				// Handle --hooks
+				if (options.hooks) {
+					const cwd = process.cwd();
+					let hookResult: RecipeResult;
+					const action = options.check ? "check" : options.remove ? "remove" : "install";
+					if (options.check) {
+						hookResult = await checkGitHook(cwd);
+					} else if (options.remove) {
+						hookResult = await removeGitHook(cwd);
+					} else {
+						hookResult = await installGitHook(cwd);
+					}
+
+					if (jsonMode) {
+						outputJson({
+							success: hookResult.success,
+							command: "setup",
+							target: "hooks",
+							action,
+							message: hookResult.message,
+						});
+					} else if (hookResult.success) {
+						console.log(chalk.green(`\u2714 ${hookResult.message}`));
+					} else {
+						console.error(chalk.red(`\u2716 ${hookResult.message}`));
+					}
+
+					if (!hookResult.success) {
+						process.exitCode = 1;
+					}
+
+					// If no provider, stop here
+					if (!provider) return;
+				}
+
+				// Handle provider
+				if (!provider) return;
+
+				const cwd = process.cwd();
+				let resolved: RecipeWithSource | null;
+				try {
+					resolved = await resolveRecipe(provider, cwd, BUILTIN_RECIPES);
+				} catch (err) {
+					const msg = err instanceof Error ? err.message : String(err);
+					reportCommandError("setup", jsonMode, msg);
+					return;
+				}
+
+				if (!resolved) {
+					const hint = `Unknown provider "${provider}". Run \`ml setup --list\` to see discovered providers, or add a recipe at .mulch/recipes/${provider}.{ts,sh} or install ${NPM_RECIPE_PREFIX}${provider}.`;
+					reportCommandError("setup", jsonMode, hint);
+					return;
+				}
+
+				const action = options.check ? "check" : options.remove ? "remove" : "install";
+				let result: RecipeResult;
+				try {
+					if (options.check) {
+						result = await resolved.recipe.check(cwd);
+					} else if (options.remove) {
+						result = await resolved.recipe.remove(cwd);
+					} else {
+						result = await resolved.recipe.install(cwd);
+					}
+				} catch (err) {
+					// A recipe that throws (instead of returning a RecipeResult) would
+					// otherwise surface as a raw Bun stack trace from a top-level
+					// awaited action. Convert to the same shape as a returned failure
+					// so users see a one-line, formatted error.
+					const msg = err instanceof Error ? err.message : String(err);
+					const sourceLabel =
+						resolved.source === "builtin" ? "built-in" : (resolved.path ?? resolved.source);
+					result = {
+						success: false,
+						message: `recipe "${provider}" ${action} threw (${sourceLabel}): ${msg}`,
+					};
+				}
+
+				if (jsonMode) {
+					outputJson({
+						success: result.success,
+						command: "setup",
+						provider,
+						source: resolved.source,
+						...(resolved.path ? { path: resolved.path } : {}),
+						action,
+						message: result.message,
+					});
+				} else if (result.success) {
+					console.log(chalk.green(`\u2714 ${result.message}`));
+				} else if (options.check) {
+					console.log(chalk.yellow(`\u2716 ${result.message}`));
+				} else {
+					console.error(chalk.red(`Error: ${result.message}`));
+				}
+
+				if (!result.success) {
+					process.exitCode = 1;
+				}
+			},
+		);
+}
+
+interface ProviderListing {
+	name: string;
+	source: "builtin" | "filesystem-ts" | "filesystem-sh" | "npm";
+	path?: string;
+	shadowedBy?: "filesystem-ts" | "filesystem-sh" | "npm";
+}
+
+function npmShadowExists(name: string, cwd: string): boolean {
+	// resolveRecipe prefers filesystem \u2192 npm \u2192 built-in, so an installed
+	// `mulch-recipe-<name>` package shadows the built-in (and is itself shadowed
+	// by a filesystem recipe of the same name). Probe per-builtin rather than
+	// enumerating node_modules \u2014 fast, and avoids rummaging through unrelated
+	// packages.
+	try {
+		const requireFn = createRequire(import.meta.url);
+		requireFn.resolve(`${NPM_RECIPE_PREFIX}${name}`, { paths: [cwd] });
+		return true;
+	} catch {
+		return false;
+	}
+}
+
+async function gatherProviderListings(cwd: string): Promise<ProviderListing[]> {
+	const fsRecipes = await listFilesystemRecipes(cwd);
+
+	const listings: ProviderListing[] = [];
+
+	for (const name of BUILTIN_PROVIDER_NAMES) {
+		// Resolution order is filesystem \u2192 npm \u2192 built-in, so a filesystem
+		// shadow wins over npm. Report the actual winner so the marker isn't a
+		// lie about what `ml setup <name>` would run.
+		const fsShadow = fsRecipes.find((r) => r.name === name);
+		const shadowedBy: ProviderListing["shadowedBy"] | undefined = fsShadow
+			? fsShadow.source
+			: npmShadowExists(name, cwd)
+				? "npm"
+				: undefined;
+		listings.push({
+			name,
+			source: "builtin",
+			...(shadowedBy ? { shadowedBy } : {}),
+		});
+	}
+
+	for (const fs of fsRecipes) {
+		listings.push({ name: fs.name, source: fs.source, path: fs.path });
+	}
+
+	listings.sort((a, b) => {
+		if (a.name !== b.name) return a.name.localeCompare(b.name);
+		// Filesystem before builtin so the active recipe sorts first.
+		const order = { "filesystem-ts": 0, "filesystem-sh": 1, npm: 2, builtin: 3 } as const;
+		return order[a.source] - order[b.source];
+	});
+
+	return listings;
+}
+
+async function runList(cwd: string, jsonMode: boolean): Promise<void> {
+	const listings = await gatherProviderListings(cwd);
+
+	if (jsonMode) {
+		outputJson({
+			success: true,
+			command: "setup",
+			action: "list",
+			providers: listings.map((l) => ({
+				name: l.name,
+				source: l.source,
+				...(l.path ? { path: relative(cwd, l.path) } : {}),
+				...(l.shadowedBy ? { shadowed_by: l.shadowedBy } : {}),
+			})),
+		});
+		return;
+	}
+
+	console.log(chalk.bold("Available providers:"));
+	const labelWidth = Math.max(...listings.map((l) => l.name.length), 6);
+	for (const l of listings) {
+		const sourceLabel =
+			l.source === "builtin"
+				? l.shadowedBy
+					? chalk.dim(`built-in (shadowed by ${l.shadowedBy})`)
+					: "built-in"
+				: l.source === "filesystem-ts"
+					? `filesystem-ts: ${relative(cwd, l.path ?? "")}`
+					: l.source === "filesystem-sh"
+						? `filesystem-sh: ${relative(cwd, l.path ?? "")}`
+						: `npm: ${NPM_RECIPE_PREFIX}${l.name}`;
+		const marker = l.shadowedBy ? chalk.dim("\u00b7") : chalk.green("\u2713");
+		console.log(`  ${marker} ${l.name.padEnd(labelWidth)}  ${sourceLabel}`);
+	}
+	console.log("");
+	console.log(
+		chalk.dim(
+			`Resolution order: filesystem (.mulch/recipes/<name>.{ts,sh}) \u2192 npm (${NPM_RECIPE_PREFIX}<name>) \u2192 built-in.`,
+		),
+	);
+}

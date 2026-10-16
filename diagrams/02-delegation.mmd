@@ -1,0 +1,24 @@
+flowchart TD
+    Goal["Goal and acceptance criteria"]
+    Project["Project orchestrator"]
+    Plan["Approved coordinated plan"]
+    App["App lead"]
+    Shared["Shared library lead"]
+    Backend["Backend lead"]
+    AT["Scoped app specialists"]
+    ST["Scoped library specialists"]
+    BT["Scoped backend specialists"]
+    Integrate["Candidate integration"]
+    PR["Linked PRs for human merge"]
+    Goal --> Project
+    Project --> Plan
+    Plan --> App
+    Plan --> Shared
+    Plan --> Backend
+    App --> AT
+    Shared --> ST
+    Backend --> BT
+    AT --> Integrate
+    ST --> Integrate
+    BT --> Integrate
+    Integrate -->|"gates pass"| PR

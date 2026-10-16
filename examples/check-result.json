@@ -1,0 +1,20 @@
+{
+  "schema_version": "0.1",
+  "id": "check-example",
+  "run_id": "run-example",
+  "repository_id": "backend",
+  "recipe_id": "backend-tests",
+  "candidate_hash": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+  "commit": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+  "environment_fingerprint": "illustrative-environment",
+  "command": [
+    "go",
+    "test",
+    "./..."
+  ],
+  "status": "passed",
+  "exit_code": 0,
+  "artifact_refs": [
+    "artifact:illustrative-only"
+  ]
+}

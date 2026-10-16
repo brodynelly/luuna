@@ -1,0 +1,14 @@
+# Bun runtime configuration for mulch.
+# See https://bun.sh/docs/runtime/bunfig for available options.
+#
+# Mulch's tests live under `test/` (test/commands/*.test.ts,
+# test/utils/*.test.ts), not colocated inside `src/`. Bun's default test
+# runner globs `*.test.ts` recursively from the repo root, so it already
+# discovers `test/**/*.test.ts` without any config — `bun test` from the
+# mulch root runs every test file.
+#
+# The `[test].root` key below documents where the suite lives. Discovery
+# already works without it; do not rely on it to "fix" test discovery.
+
+[test]
+root = "test"

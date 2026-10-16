@@ -1,0 +1,22 @@
+{
+	"$schema": "https://unpkg.com/knip@6/schema.json",
+	"ignore": [
+		".bun/**",
+		"dist/**",
+		"coverage/**",
+		"test-results/**",
+		".mulch/**"
+	],
+	"ignoreDependencies": ["jscpd"],
+	"workspaces": {
+		".": {
+			"entry": [
+				"src/cli.ts",
+				"src/index.ts",
+				"scripts/**/*.ts",
+				"**/*.test.ts"
+			],
+			"project": ["src/**/*.ts", "test/**/*.ts"]
+		}
+	}
+}

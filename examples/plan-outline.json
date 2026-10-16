@@ -1,0 +1,50 @@
+{
+  "illustrative_only": true,
+  "ticket_id": "example-referral",
+  "revision": 1,
+  "base_commits": {
+    "app": "REPLACE_WITH_OBSERVED_COMMIT",
+    "shared": "REPLACE_WITH_OBSERVED_COMMIT",
+    "backend": "REPLACE_WITH_OBSERVED_COMMIT"
+  },
+  "contracts": [
+    "request fields, response schema, compatibility and rollout policy"
+  ],
+  "tasks": [
+    {
+      "id": "backend-change",
+      "repository_id": "backend",
+      "depends_on": []
+    },
+    {
+      "id": "shared-client",
+      "repository_id": "shared",
+      "depends_on": []
+    },
+    {
+      "id": "app-flow",
+      "repository_id": "app",
+      "depends_on": [
+        "shared-client"
+      ]
+    },
+    {
+      "id": "integration",
+      "repository_id": null,
+      "depends_on": [
+        "backend-change",
+        "app-flow"
+      ]
+    }
+  ],
+  "required_gates": [
+    "passing_baseline",
+    "tests",
+    "analysis",
+    "conventions",
+    "fresh_review",
+    "candidate_integration"
+  ],
+  "approval": null,
+  "notes": "Not a full PlanRevision schema. M0 must complete and validate the contract."
+}

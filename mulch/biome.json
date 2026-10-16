@@ -1,0 +1,123 @@
+{
+	"$schema": "https://biomejs.dev/schemas/2.4.6/schema.json",
+	"files": {
+		"includes": [
+			"src/**",
+			"test/**",
+			"!**/node_modules",
+			"!test/**/__snapshots__/**"
+		]
+	},
+	"assist": { "actions": { "source": { "organizeImports": "on" } } },
+	"linter": {
+		"enabled": true,
+		"rules": {
+			"recommended": true,
+			"complexity": {
+				"noForEach": "off",
+				"noExcessiveCognitiveComplexity": {
+					"level": "error",
+					"options": { "maxAllowedComplexity": 15 }
+				},
+				"noExcessiveLinesPerFunction": {
+					"level": "error",
+					"options": { "maxLines": 500 }
+				}
+			},
+			"correctness": {
+				"noUnusedVariables": "error",
+				"noUnusedImports": "error"
+			},
+			"suspicious": {
+				"noExplicitAny": "error"
+			},
+			"style": {
+				"noNonNullAssertion": "error",
+				"useConst": "error",
+				"useFilenamingConvention": {
+					"level": "error",
+					"options": {
+						"strictCase": true,
+						"requireAscii": true,
+						"filenameCases": ["kebab-case"]
+					}
+				}
+			}
+		}
+	},
+	"formatter": {
+		"enabled": true,
+		"indentStyle": "tab",
+		"lineWidth": 100
+	},
+	"overrides": [
+		{
+			"includes": [
+				"src/api.ts",
+				"src/commands/archive.ts",
+				"src/commands/audit.ts",
+				"src/commands/compact.ts",
+				"src/commands/delete-domain.ts",
+				"src/commands/delete.ts",
+				"src/commands/diff.ts",
+				"src/commands/doctor.ts",
+				"src/commands/edit.ts",
+				"src/commands/learn.ts",
+				"src/commands/move.ts",
+				"src/commands/onboard.ts",
+				"src/commands/outcome.ts",
+				"src/commands/prime.ts",
+				"src/commands/prune.ts",
+				"src/commands/query.ts",
+				"src/commands/rank.ts",
+				"src/commands/ready.ts",
+				"src/commands/record.ts",
+				"src/commands/restore.ts",
+				"src/commands/search.ts",
+				"src/commands/setup.ts",
+				"src/commands/sync.ts",
+				"src/commands/upgrade.ts",
+				"src/commands/validate.ts",
+				"src/registry/custom.ts",
+				"src/utils/active-work.ts",
+				"src/utils/anchor-validity.ts",
+				"src/utils/audit.ts",
+				"src/utils/budget.ts",
+				"src/utils/domain-rules.ts",
+				"src/utils/expertise.ts",
+				"src/utils/format.ts",
+				"src/utils/git.ts",
+				"src/utils/hooks.ts",
+				"src/utils/lock.ts",
+				"src/utils/prime-ranking.ts",
+				"src/utils/version.ts",
+				"test/commands/audit.test.ts"
+			],
+			"linter": {
+				"rules": {
+					"complexity": {
+						"noExcessiveCognitiveComplexity": "off"
+					}
+				}
+			}
+		},
+		{
+			"includes": [
+				"src/commands/record.ts",
+				"test/commands/compact.test.ts",
+				"test/commands/prime.test.ts",
+				"test/commands/query.test.ts",
+				"test/commands/record.test.ts",
+				"test/commands/search.test.ts",
+				"test/commands/setup.test.ts"
+			],
+			"linter": {
+				"rules": {
+					"complexity": {
+						"noExcessiveLinesPerFunction": "off"
+					}
+				}
+			}
+		}
+	]
+}

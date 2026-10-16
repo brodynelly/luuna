@@ -1,0 +1,24 @@
+flowchart TD
+    User["Private user memory"]
+    Project["Project knowledge"]
+    Process["Reusable process lessons"]
+    Retrieve["Scoped retrieval and budget"]
+    Canopy["Versioned process prompts"]
+    Seeds["Ticket and approved plan"]
+    Code["Current repository evidence"]
+    Packet["Assignment context manifest"]
+    Agent["Pi worker"]
+    Evidence["Observed results and lessons"]
+    Classify["Validate scope and provenance"]
+    User --> Retrieve
+    Project --> Retrieve
+    Process --> Retrieve
+    Retrieve --> Packet
+    Canopy --> Packet
+    Seeds --> Packet
+    Code --> Packet
+    Packet --> Agent
+    Agent --> Evidence
+    Evidence --> Classify
+    Classify -->|"durable knowledge"| Project
+    Classify -->|"validated lesson"| Process

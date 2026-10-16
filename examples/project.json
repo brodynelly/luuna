@@ -1,0 +1,122 @@
+{
+  "schema_version": "0.1",
+  "id": "example-project",
+  "name": "Illustrative product",
+  "revision": 1,
+  "repositories": [
+    {
+      "id": "app",
+      "remote": "https://github.com/EXAMPLE/app.git",
+      "default_branch": "main",
+      "profiles": [
+        "flutter"
+      ],
+      "execution": "native",
+      "checks": [
+        {
+          "id": "app-tests",
+          "executable": "flutter",
+          "args": [
+            "test"
+          ],
+          "required": true,
+          "timeout_seconds": 600,
+          "capabilities": [
+            "flutter"
+          ]
+        },
+        {
+          "id": "app-analysis",
+          "executable": "flutter",
+          "args": [
+            "analyze"
+          ],
+          "required": true,
+          "timeout_seconds": 600,
+          "capabilities": [
+            "flutter"
+          ]
+        }
+      ]
+    },
+    {
+      "id": "shared",
+      "remote": "https://github.com/EXAMPLE/shared.git",
+      "default_branch": "main",
+      "profiles": [
+        "flutter-package"
+      ],
+      "execution": "native",
+      "checks": [
+        {
+          "id": "shared-tests",
+          "executable": "flutter",
+          "args": [
+            "test"
+          ],
+          "required": true,
+          "timeout_seconds": 600,
+          "capabilities": [
+            "flutter"
+          ]
+        }
+      ]
+    },
+    {
+      "id": "backend",
+      "remote": "https://github.com/EXAMPLE/backend.git",
+      "default_branch": "main",
+      "profiles": [
+        "go"
+      ],
+      "execution": "native",
+      "checks": [
+        {
+          "id": "backend-tests",
+          "executable": "go",
+          "args": [
+            "test",
+            "./..."
+          ],
+          "required": true,
+          "timeout_seconds": 600,
+          "capabilities": [
+            "go"
+          ]
+        }
+      ]
+    }
+  ],
+  "relationships": [
+    {
+      "producer": "backend",
+      "consumer": "shared",
+      "kind": "api",
+      "contract": "contracts/referral-api.yaml",
+      "confirmed": true,
+      "evidence": [
+        "backend:api/openapi.yaml",
+        "shared:lib/api_client.dart"
+      ]
+    },
+    {
+      "producer": "shared",
+      "consumer": "app",
+      "kind": "package",
+      "contract": "package:shared",
+      "confirmed": true,
+      "evidence": [
+        "app:pubspec.yaml"
+      ]
+    }
+  ],
+  "policy": {
+    "approval": "plan",
+    "testing_prerequisite": true,
+    "publish": "automatic_pr",
+    "merge": "human",
+    "max_explorers": 3,
+    "max_implementers": 2,
+    "max_task_repairs": 2
+  }
+}

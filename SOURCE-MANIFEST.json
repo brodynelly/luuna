@@ -1,0 +1,208 @@
+{
+  "design_version": "0.1",
+  "sources": [
+    {
+      "id": "S01",
+      "url": "https://github.com/earendil-works/pi",
+      "checked_date": "2026-10-15",
+      "pinned_version": null,
+      "note": "Primary documentation checked; implementation must pin compatible releases."
+    },
+    {
+      "id": "S02",
+      "url": "https://pi.dev/docs/latest/rpc",
+      "checked_date": "2026-10-15",
+      "pinned_version": null,
+      "note": "Primary documentation checked; implementation must pin compatible releases."
+    },
+    {
+      "id": "S03",
+      "url": "https://pi.dev/docs/latest/sdk",
+      "checked_date": "2026-10-15",
+      "pinned_version": null,
+      "note": "Primary documentation checked; implementation must pin compatible releases."
+    },
+    {
+      "id": "S04",
+      "url": "https://pi.dev/docs/latest/configuration",
+      "checked_date": "2026-10-15",
+      "pinned_version": null,
+      "note": "Primary documentation checked; implementation must pin compatible releases."
+    },
+    {
+      "id": "S05",
+      "url": "https://pi.dev/docs/latest/providers",
+      "checked_date": "2026-10-15",
+      "pinned_version": null,
+      "note": "Primary documentation checked; implementation must pin compatible releases."
+    },
+    {
+      "id": "S06",
+      "url": "https://github.com/jayminwest/mulch",
+      "checked_date": "2026-10-15",
+      "pinned_version": null,
+      "note": "Primary documentation checked; implementation must pin compatible releases."
+    },
+    {
+      "id": "S07",
+      "url": "https://github.com/jayminwest/canopy",
+      "checked_date": "2026-10-15",
+      "pinned_version": null,
+      "note": "Primary documentation checked; implementation must pin compatible releases."
+    },
+    {
+      "id": "S08",
+      "url": "https://github.com/jayminwest/seeds",
+      "checked_date": "2026-10-15",
+      "pinned_version": null,
+      "note": "Primary documentation checked; implementation must pin compatible releases."
+    },
+    {
+      "id": "S09",
+      "url": "https://git-scm.com/docs/git-worktree",
+      "checked_date": "2026-10-15",
+      "pinned_version": null,
+      "note": "Primary documentation checked; implementation must pin compatible releases."
+    },
+    {
+      "id": "S10",
+      "url": "https://www.sqlite.org/wal.html",
+      "checked_date": "2026-10-15",
+      "pinned_version": null,
+      "note": "Primary documentation checked; implementation must pin compatible releases."
+    },
+    {
+      "id": "S11",
+      "url": "https://docs.github.com/en/rest/pulls/pulls",
+      "checked_date": "2026-10-15",
+      "pinned_version": null,
+      "note": "Primary documentation checked; implementation must pin compatible releases."
+    },
+    {
+      "id": "S12",
+      "url": "https://docs.docker.com/engine/security/",
+      "checked_date": "2026-10-15",
+      "pinned_version": null,
+      "note": "Primary documentation checked; implementation must pin compatible releases."
+    },
+    {
+      "id": "S13",
+      "url": "https://docs.docker.com/desktop/",
+      "checked_date": "2026-10-15",
+      "pinned_version": null,
+      "note": "Primary documentation checked; implementation must pin compatible releases."
+    },
+    {
+      "id": "S14",
+      "url": "https://docs.rs/axum/latest/axum/",
+      "checked_date": "2026-10-15",
+      "pinned_version": null,
+      "note": "Primary documentation checked; implementation must pin compatible releases."
+    },
+    {
+      "id": "S15",
+      "url": "https://docs.rs/tokio/latest/tokio/process/",
+      "checked_date": "2026-10-15",
+      "pinned_version": null,
+      "note": "Primary documentation checked; implementation must pin compatible releases."
+    },
+    {
+      "id": "S16",
+      "url": "https://ratatui.rs/",
+      "checked_date": "2026-10-15",
+      "pinned_version": null,
+      "note": "Primary documentation checked; implementation must pin compatible releases."
+    },
+    {
+      "id": "S17",
+      "url": "https://react.dev/learn",
+      "checked_date": "2026-10-15",
+      "pinned_version": null,
+      "note": "Primary documentation checked; implementation must pin compatible releases."
+    },
+    {
+      "id": "S18",
+      "url": "https://vite.dev/guide/",
+      "checked_date": "2026-10-15",
+      "pinned_version": null,
+      "note": "Primary documentation checked; implementation must pin compatible releases."
+    },
+    {
+      "id": "S19",
+      "url": "https://learn.microsoft.com/en-us/windows/win32/procthread/job-objects",
+      "checked_date": "2026-10-15",
+      "pinned_version": null,
+      "note": "Primary documentation checked; implementation must pin compatible releases."
+    },
+    {
+      "id": "S20",
+      "url": "https://code.visualstudio.com/api/advanced-topics/remote-extensions",
+      "checked_date": "2026-10-15",
+      "pinned_version": null,
+      "note": "Primary documentation checked; implementation must pin compatible releases."
+    },
+    {
+      "id": "S21",
+      "url": "https://vitest.dev/guide/",
+      "checked_date": "2026-10-15",
+      "pinned_version": null,
+      "note": "Primary documentation checked; implementation must pin compatible releases."
+    },
+    {
+      "id": "S22",
+      "url": "https://playwright.dev/docs/intro",
+      "checked_date": "2026-10-15",
+      "pinned_version": null,
+      "note": "Primary documentation checked; implementation must pin compatible releases."
+    },
+    {
+      "id": "S23",
+      "url": "https://go.dev/doc/tutorial/add-a-test",
+      "checked_date": "2026-10-15",
+      "pinned_version": null,
+      "note": "Primary documentation checked; implementation must pin compatible releases."
+    },
+    {
+      "id": "S24",
+      "url": "https://nodejs.org/api/test.html",
+      "checked_date": "2026-10-15",
+      "pinned_version": null,
+      "note": "Primary documentation checked; implementation must pin compatible releases."
+    },
+    {
+      "id": "S25",
+      "url": "https://docs.pytest.org/en/stable/",
+      "checked_date": "2026-10-15",
+      "pinned_version": null,
+      "note": "Primary documentation checked; implementation must pin compatible releases."
+    },
+    {
+      "id": "S26",
+      "url": "https://docs.flutter.dev/testing/overview",
+      "checked_date": "2026-10-15",
+      "pinned_version": null,
+      "note": "Primary documentation checked; implementation must pin compatible releases."
+    },
+    {
+      "id": "S27",
+      "url": "https://developer.apple.com/xcode/",
+      "checked_date": "2026-10-15",
+      "pinned_version": null,
+      "note": "Primary documentation checked; implementation must pin compatible releases."
+    },
+    {
+      "id": "S28",
+      "url": "https://developer.android.com/studio/test",
+      "checked_date": "2026-10-15",
+      "pinned_version": null,
+      "note": "Primary documentation checked; implementation must pin compatible releases."
+    },
+    {
+      "id": "S29",
+      "url": "https://doc.rust-lang.org/cargo/commands/cargo-test.html",
+      "checked_date": "2026-10-15",
+      "pinned_version": null,
+      "note": "Primary documentation checked; implementation must pin compatible releases."
+    }
+  ]
+}

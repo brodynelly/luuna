@@ -1,0 +1,9 @@
+# Bun runtime configuration for seeds.
+# See https://bun.sh/docs/runtime/bunfig for available options.
+#
+# Tests live next to the file under test (e.g. src/foo.test.ts,
+# src/commands/bar.test.ts) and may also appear under the top-level
+# extensions/ tree. We intentionally do NOT set `[test] root` so Bun's
+# default recursive discovery covers both src/ and extensions/ — scoping
+# to a single root would hide extensions/ tests once that directory is
+# populated.

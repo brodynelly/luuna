@@ -1,0 +1,880 @@
+# Changelog
+
+All notable changes to this project will be documented in this file.
+
+The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
+and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
+
+## [Unreleased]
+
+## [0.11.0] - 2026-09-29
+
+### Added
+
+- **Claude Code hooks: file-triggered injection, JSONL guard, usage log** (mulch-7164): `ml setup claude` now also installs a PreToolUse `ml hook` handler. On Read/Edit/Write/MultiEdit/NotebookEdit it returns the records anchored to that file as `additionalContext` (failures first, ~500-token budget, stale last, each record once per session; silent when nothing is anchored). Write/Edit and best-effort Bash writes to `.mulch/expertise/*.jsonl` are denied with a pointer to `ml record` / `ml edit` / `ml delete`. Each injection appends `{ts, session, tool, files, ids}` to `.mulch/state/usage.jsonl` (self-gitignored). Install is idempotent, keeps unrelated hooks, and refuses malformed settings; `--remove` strips only mulch handlers.
+- **`ml record --description` works for every built-in type** (mulch-7164): missing type-specific fields are filled from it (convention content, a derived pattern/reference/guide name, decision title + rationale). Explicit flags win; failures still need `--resolution`. Derived names end in a 6-char content hash (mulch-9f0f), so distinct records sharing their first six words no longer silently upsert-merge; explicit `--name` keeps upsert semantics.
+
+- **Write-time quality gate on `ml record`** (mulch-a378): near-duplicate detection (BM25 shortlist + token-set Jaccard, lower bar when file/dir anchors overlap) blocks records that restate an existing one and prints it with `--supersedes <id>` / `ml edit` / `ml outcome` / `--force` suggestions. Soft checks warn on conventions/patterns with no file/dir anchor or evidence (an auto-populated commit does not count) and on conventions that read like code restatement (the `ml audit` rule-signal heuristic). New `quality.level` config knob: `warn` (default), `error` (block unless `--force`), `off`.
+
+- **Git-based staleness: `ml stale` + prime demotion** (mulch-094a): `ml stale [domains...]` lists live records whose file/dir anchors changed in 5+ commits since the record's evidence commit, whose anchors no longer exist, or that are tactical/observational past shelf life with no confirmations (`--json` returns ids + structured reasons). `ml prime` ranks stale records last within their budget tier and marks them `(stale?)` in the index (`; stale?` in the why-surfaced suffix for `--full` / xml / plain). Two batched git calls cover all records (`git log --name-only` bounded at the oldest record), so the editor-hook path stays fast. Advisory only; nothing is deleted.
+- **`ml show <ids...>`** (mulch-bffe): prints full record bodies by ID (full id, bare hash, or unique prefix) across every domain; `--json` returns `{ domain, record }` pairs.
+- **`ml prime --records-only`** (mulch-bffe): emits only the record lines (no project contract, quick reference, or session-close footer, and nothing at all when no record matches) for editor hooks such as `ml prime --files <path> --budget 500 --records-only`.
+
+### Changed
+
+- **Prime staleness uses anchor evidence only** (mulch-7164): `ml prime` demotes and marks `(stale?)` only for `anchors_changed` / `anchors_missing`. `shelf_life` (old, never confirmed) flagged most real corpora and is now reported by `ml stale` only.
+- **BREAKING: `ml prime` defaults to a record index** (mulch-bffe): the default (compact) output is one line per record (id, type, summary truncated to ~100 chars, up to 3 file/dir anchors, ★ score), grouped by domain, with a short quick reference; bodies, links, and why-surfaced suffixes moved behind `ml show <id>` / `--full`. Ranking is failures first, then confirmation score, classification, and recency; with `--files` / `--context`, failures anchored to those paths survive any `--budget` and other anchored records outrank unanchored ones. Records superseded by a live record's `supersedes` are hidden. The v0.10 size-based auto-flip to manifest is retired (the budget keeps large corpora small); `prime.default_mode: manifest` and `--manifest` still work. `ml query` / `ml search --format compact` share the index line. The per-type `formatCompactLine` registry hook is removed; `formatIndexLine` (src/utils/format.ts) renders every type and drives budget estimates.
+- **Exact duplicates are hard-blocked** (mulch-a378): dedup now compares normalized text (case, punctuation, whitespace folded), so trivially reworded copies no longer slip through, and `content_hash` custom types dedup on their normalized body instead of never matching. `ml record` exits 1 on an exact duplicate of a convention/failure (previously a successful "skipped"), and `--force` no longer re-creates one in any record path; named types still upsert.
+- **Session-close and onboard prose** (mulch-a378): the default session-close footer and the onboard snippet now say "record only what a future agent would get wrong without it", steer toward `failure` records (symptom -> root cause -> preventive check) and `ml outcome` confirmations, and drop the 🚨 banner from every preset. The package description is now plain: "Git-native expertise records for AI agents".
+
+- **`ml --version --json` now emits 2-space-indented JSON** (closes mulch-6d8a): the early-exit `--version --json` path in `src/cli.ts` previously emitted a single-line `JSON.stringify(...)` payload while every other `--json`-mode response in mulch is 2-space-indented via `outputJson`. The output is now formatted with `JSON.stringify(..., null, 2)` so machine consumers see one consistent JSON shape across the CLI. Fields (`name`, `version`, `runtime`, `platform`) and values are unchanged; consumers that `JSON.parse` the output are unaffected.
+- **`ml upgrade --json` key canonicalized to `up_to_date`** (closes mulch-4ca6): the `upgrade` JSON output previously emitted `upToDate` (camelCase) while `ml onboard --json` emitted the same concept as the snake_case action value `up_to_date`. The `upgrade` payload now uses `up_to_date` to match the rest of mulch's snake_case JSON convention (e.g. `not_installed`, `default_mode`, `extracts_files`). Consumers that read `parsed.upToDate` must switch to `parsed.up_to_date`; the boolean semantics are unchanged.
+
+## [0.10.7] - 2026-06-02
+
+A targeted bug-fix release. Published consumers of `@os-eco/mulch-cli` running in an interactive TTY hit pino's pretty-transport path even though `pino-pretty` ships only as a devDependency, causing pino to throw `unable to determine transport target for "pino-pretty"`. The diagnostic logger now probes `pino-pretty` resolvability and degrades to JSON-on-stderr when it is absent, honoring the documented JSON-for-consumers promise. No schema, hook-event, config-key, or public CLI-command changes. 1497 tests across 71 files / 3854 expect() calls (up from 1494 / 71 / 3849 in 0.10.6).
+
+### Fixed
+
+- **`src/log.ts` — JSON fallback when `pino-pretty` is unavailable** (closes mulch-35c9): `pino-pretty` is a devDependency, so published consumers running in an interactive TTY previously crashed when the logger selected the pretty transport. `createLogger()` now gates the pretty path on a new `isPinoPrettyAvailable()` probe (`createRequire(...).resolve("pino-pretty")`) and falls back to newline-delimited JSON on stderr when the package is absent. Adds a test-injectable `prettyAvailable` option to `createLogger()` and exports `isPinoPrettyAvailable()`.
+
+## [0.10.6] - 2026-05-28
+
+The **Level 5 agent-readiness uplift** (validation mission VAL-MULCH-*): mulch adopts the portable L5 toolkit from the os-eco `templates/l5-toolkit/` tree — a structured diagnostic logger, ratchet/reporter scripts with baselined budgets, governance config, and operator docs. No schema, hook-event, config-key, or public CLI-command changes; the only runtime-visible addition is a stderr diagnostic channel gated behind `MULCH_DEBUG`. 1494 tests across 71 files / 3849 expect() calls (up from 1482 / 70 / 3831 in 0.10.5).
+
+### Added
+
+#### Structured diagnostic logging
+
+- **`src/log.ts` — pino-based diagnostic logger** (`pino` is now a runtime dependency): a *diagnostics-only* channel, distinct from mulch's product output. User-facing output (`ml prime` markdown, status tables, `--json` results, hints) still goes straight to stdout via `console.log` / `outputJson`; the logger writes exclusively to **stderr** (fd 2) so it can never collide with the CLI result or corrupt `--json` consumers. Silent at `info` for routine internals — those log at `debug`, gated behind `MULCH_DEBUG`. Level resolution: `MULCH_LOG_LEVEL` wins, else `debug` when `MULCH_DEBUG` is set, else `info`. Dev TTYs render via `pino-pretty` (a devDep, never shipped to consumers); CI / non-TTY / production emit newline-delimited JSON. Exports `createLogger()` (test-injectable destination + env), `resolveLogLevel()`, `redactDbUrl()`, and `REDACT_PATHS` (password / token / apiKey / secret / auth headers redaction).
+- **Hook-execution diagnostics in `src/utils/hooks.ts`**: each hook run now emits a `log.debug` trace (event, command, exitCode, durationMs, timedOut) and a `log.warn` on non-zero/timeout exit (with the `blocking` flag). Logging runs outside the expertise-file write lock, so it can never contend with a concurrent writer. Silent at the default level; surfaces under `MULCH_DEBUG`.
+- **`src/cli.ts` registry-init failure path**: now emits a gated `log.debug` diagnostic alongside the formatted human error; in `--json` mode the structured log is intentionally skipped so stderr carries only the machine-readable error object.
+
+#### L5 ratchet & reporter scripts
+
+- **Ratchet scripts** with co-located test suites and baselined budgets: `scripts/check-file-sizes.ts` (`scripts/file-size-budgets.json`), `scripts/check-debt-markers.ts` (`scripts/debt-markers-budget.json`), `scripts/check-coverage.ts` (`scripts/coverage-budgets.json`), and `scripts/validate-agents-md.ts`.
+- **Reporters**: `scripts/report-test-timing.ts` and `scripts/report-quality-metrics.ts`.
+- **`package.json` check/report scripts**: `check:size`, `check:debt`, `check:dups` (jscpd), `check:deps` (knip), `check:coverage`, `check:agents`, the aggregate `check:all`, `report:timing`, `report:quality`, `test:ci` (coverage + junit), and a `prepare` script that points `core.hooksPath` at `scripts/hooks`.
+
+#### Governance & config baselines
+
+- **CI / repo governance**: extended `.github/workflows/ci.yml` (pinned `bun-version`, `check:all` wiring), `.github/dependabot.yml` (cooldown), `.github/labels.yml` + `.github/workflows/sync-labels.yml`, and a `scripts/hooks/pre-commit` hook.
+- **Tooling baselines**: `.jscpd.json`, `knip.json`, `bunfig.toml`, extended `biome.json`, `.devcontainer/devcontainer.json`, `.env.example`, and an extended `.gitignore`.
+- **Operator docs**: `AGENTS.md`, `RUNBOOK.md`, and the first `.factory/skills/mulch-record-from-evidence/SKILL.md`.
+- **devDependencies**: `jscpd`, `knip`, `pino-pretty`.
+
+### Fixed
+
+- **`test/log.test.ts` discovery** (sd mulch-3fd5): moved the logger test under `test/` so default `bun test` discovers it, and corrected its import to `../src/log.ts`.
+
+### Changed
+
+- **README**: removed a broken os-eco logo embed.
+
+### Testing
+
+- 1494 tests across 71 files, 3849 expect() calls (up from 1482 / 70 / 3831 in 0.10.5).
+- New `test/log.test.ts` (95 lines) exercising `createLogger` with injected destinations/env, level resolution, redaction paths, and `redactDbUrl` edge cases — all via real streams, no mocks.
+- New co-located ratchet/reporter test suites: `scripts/check-file-sizes.test.ts`, `scripts/check-debt-markers.test.ts`, `scripts/check-coverage.test.ts`, `scripts/validate-agents-md.test.ts`, `scripts/report-quality-metrics.test.ts`, `scripts/report-test-timing.test.ts`.
+
+## [0.10.5] - 2026-05-28
+
+A nightwatch hardening release out of plan pl-7a81 (parent mulch-e7f6): strict regex parsing for `--outcome-duration` / `--duration` (#37), normalized fatal-error coloring across the remaining CLI sites (#38), file-path context in Claude `settings.json` parse errors (#39), and `--json` honored by the deprecated `mulch update` command (#40). No schema, hook, config, or public command surface changes. 1482 tests across 70 files / 3831 expect() calls (up from 1460 / 69 / 3778 in 0.10.4).
+
+### Added
+
+- **`src/utils/numeric-flags.ts`** (mulch-5b9c, #37): extracts `parseStrictPositiveInt` and `parseStrictNonNegativeNumber` — regex-gated parsers used by `record` / `edit` / `outcome` for `--outcome-duration` / `--duration`. Mirrors the inline parsers already in `ready` / `prime` / `compact` / `rank` (mx-5b9578) and is the first time the convention has been shared via a util module.
+
+### Fixed
+
+- **`--outcome-duration` / `--duration` silently accepted garbage input** (mulch-5b9c, #37): `record`, `edit`, and `outcome` parsed these flags with bare `Number.parseFloat`, so `--outcome-duration 10abc` wrote `10` and `--duration 3.7xyz` wrote `3.7` to `.mulch/expertise/*.jsonl`. They now go through `parseStrictNonNegativeNumber` and reject anything that isn't a clean non-negative number with `--<flag> must be a non-negative number (got "<raw>")`, exit `1`, and write nothing. `--json` mode emits the standard error envelope on stderr.
+- **Fatal-error stderr coloring was inconsistent** (mulch-2a17, #38): the remaining plain `console.error("Error: …")` sites in `query.ts`, `prime.ts`, `search.ts`, and several other commands now wrap fatal messages in `chalk.red(...)`, matching the convention used by `record` / `sync` / `validate`. No wording changes; `--json` error envelopes are unchanged (chalk only applies to the human-readable branch).
+- **Claude `settings.json` parse errors lacked file-path context** (mulch-1b36, #39): a corrupted `.claude/settings.json` used to surface as a bare `Unexpected token …` from `JSON.parse`. The Claude recipe's install / check / remove now route through a `parseClaudeSettings()` helper that rethrows as `Failed to parse Claude settings at <absolute-path>: <reason>`, matching the `file:line` context convention `readExpertiseFile` already uses (mx-7c199c).
+- **`mulch update` ignored `--json`** (mulch-a8cd, #40): the deprecated `update` command always printed its yellow deprecation warning to stdout, breaking the JSON-output contract every other command honors. When `--json` is active it now emits `{success:false, command:"update", error:…}` to stderr via `outputJsonError` and exits `1`; the human-readable yellow warning is unchanged.
+
+### CI
+
+- **Pin `bun-version` in `.github/workflows/ci.yml`** (#39): `setup-bun@v2` was reading `engines.bun` (`>=1.0.0`) and resolving the range via the GitHub tags API, which intermittently 404s and reds the job. Explicit `bun-version` skips that range-resolution path.
+
+### Testing
+
+- 1482 tests across 70 files, 3831 expect() calls (up from 1460 / 69 / 3778 in 0.10.4).
+- New `test/utils/numeric-flags.test.ts` covering both parsers' accept/reject boundaries.
+- New spawn-integration tests in `test/commands/record.test.ts`, `test/commands/edit.test.ts`, and `test/commands/outcome.test.ts` asserting (a) invalid `--outcome-duration` / `--duration` exits non-zero and writes no record/outcome, (b) valid inputs round-trip unchanged, (c) `--json` mode produces the standard error envelope on stderr.
+- New `test/commands/setup.test.ts` cases covering the wrapped Claude `settings.json` parse error (path is present, original `SyntaxError` reason is preserved).
+- New `test/commands/update.test.ts` cases for the deprecated command honoring `--json`.
+
+## [0.10.4] - 2026-05-27
+
+A discoverability fix for `ml record --type convention` (plan pl-21a3, parent mulch-4f80): adds a named `--content <text>` flag and replaces the tautological missing-content error with a concrete retry example. No schema, hook, or config changes. 1460 tests across 69 files / 3778 expect() calls (up from 1453 / 69 / 3749 in 0.10.3).
+
+### Added
+
+- **`ml record --content <text>` flag for convention records** (mulch-6871, #32): convention's required `content` field used to be reachable only via a positional argument, which made it undiscoverable from `--help`. `--content` is now a first-class named option; the positional form still works, and an explicit `--content` wins when both are supplied (read first inside `collectField`). After-help block updated to show `convention   --content (or positional [content])`; `--content` threaded through `buildRetryCommand` so retry hints preserve it.
+
+### Fixed
+
+- **Missing-content error for `ml record convention` now names the flag and shows a retry command** (mulch-2f54, #33): the validation message used to read `convention records require: content (or positional content for content).` — tautological, and it never named the actual CLI flag. It now reads `convention records are missing required flag(s): --content.` followed by an inline `Retry: ml record <domain> --type convention --content "<content>"` example. The `--json` error path emits the same shape on stderr.
+
+### Testing
+
+- 1460 tests across 69 files, 3778 expect() calls (up from 1453 / 69 / 3749 in 0.10.3). New `--content flag for convention (pl-21a3)` describe block in `test/commands/record.test.ts` (mulch-ca83, #34): 7 tests covering the named flag write path, positional regression guard, explicit-flag-wins-over-positional precedence, the rewritten missing-content error (both text and `--json` shapes), and `--help` registration of `--content <content>` plus the updated after-help line.
+
+## [0.10.3] - 2026-05-27
+
+A hardening release out of nightwatch plan pl-c92f: tighter numeric-flag parsing in `ml ready` / `ml prime` / `ml compact`, a prerelease-aware `compareSemver`, conversion of the last `execSync` call site to `execFileSync`, and direct unit coverage for two previously transitively-tested utility modules. No public CLI surface, schema, hook, or config changes. 1453 tests across 69 files / 3749 expect() calls (up from 1382 / 67 / 3621 in 0.10.2).
+
+### Fixed
+
+- **`compareSemver` mishandled prerelease / non-numeric version segments** (mulch-88fa, #26): inputs like `1.2.3-beta` ran each segment through `Number()`, so the patch became `NaN` and both `NaN < x` and `NaN > x` are false — the comparator falsely reported `1.2.3-beta == 1.2.4`. Now splits on the prerelease boundary up front, compares `major.minor.patch` numerically, and only consults the prerelease tail on a main-version tie per semver 2.0.0 §11.4 (release outranks prerelease, numeric identifiers compare numerically and rank below alphanumeric, longer identifier lists win on tie). Build metadata after `+` is ignored. Affects every code path that compares the local version to the upstream npm version (upgrade nudges, `ml upgrade`, `ml status`).
+- **Strict numeric parsing for `--limit` / `--budget` / `--min-group` / `--max-records`** (mulch-8bd6, #25): `ml ready --limit 10abc`, `ml prime --budget 3.7`, and `ml compact --auto --min-group 0` previously slipped through `Number.parseInt()`'s silent truncation. They now reject non-integer / non-positive input with a targeted error and `exit 1`, matching the convention `ml rank` already used (mx-5b9578). Each command inlines its own `parseStrictPositiveInt` rather than introducing a shared util — the plan was explicit about no new abstractions.
+
+### Changed
+
+- **`src/utils/version.ts` probes npm via `execFileSync`** (mulch-8405, #27): the last `execSync` call site in the codebase is gone. `getLatestVersion()` now spawns `npm` directly with an argv array instead of through a shell. Test helpers across `active-work`, `git`, `git-context`, `sync`, `prime`, `record`, `update`, `upgrade`, and `completions` were converted in the same pass for consistency. Acceptance: `grep -r 'execSync(' src test` returns zero hits. No behavior change.
+
+### Testing
+
+- 1453 tests across 69 files, 3749 expect() calls (up from 1382 / 67 / 3621 in 0.10.2).
+- **New direct suite for `src/utils/prime-ranking.ts`** (mulch-bc7b, #28): 36 tests covering every exported symbol — `resolveTierWeights`, `computeTrustScore`, `sortByTrust`, `whySurfaced`, `formatSurfaceReason`, `buildSurfaceAnnotations`, the `RECENT_AUTHORSHIP_DAYS` constant — plus `SurfaceReason` exhaustiveness. Previously covered only transitively through `ml prime` / `ml rank` integration tests.
+- **New direct suite for `src/utils/anchor-validity.ts`** (mulch-2525, #29): 19 tests covering `getRecordAnchors` (files / `dir_anchors` / `evidence.file` extraction, empty/non-string filtering, non-array guards), `computeAnchorValidity` (null fraction for zero anchors, all-valid, all-broken, partial, `evidence.file` resolution against `projectRoot`), and `passedAnchorGrace` (boundary inclusivity, fractional days, `graceDays=0` edge).
+
+## [0.10.2] - 2026-05-26
+
+A cleanup release: adds `ml move` for transferring records between domains (#23), rolls back the experimental pi-mulch extension (mulch-88e9), and removes the `pi.*` config namespace. Three built-in provider recipes remain: claude, cursor, codex. 1382 tests across 67 files / 3621 expect() calls (down from 1465 / 72 / 3856 in 0.10.1 — the pi test suites accounted for the difference).
+
+### Added
+
+- **`ml move <domain> <id> <target-domain>` — transfer records between domains** (#23): moves a record from one domain to another, preserving the record's ID so existing `relates_to` / `supersedes` cross-references continue to resolve. Validates the record against the target domain's `allowed_types` and `required_fields` before writing; `--force` bypasses domain-rule checks. `--dry-run` previews without writing. Scans all other expertise files for incoming references (`relates_to` / `supersedes`) and emits informational warnings so users can audit the link graph. Uses `withFileLock` on both source and target files for concurrent safety. See `src/commands/move.ts`.
+
+### Removed
+
+- **Pi-mulch extension rolled back** (mulch-88e9): the entire `extensions/pi/` directory, the `pi.*` config namespace (`pi.auto_prime`, `pi.scope_load.*`, `pi.tools`, `pi.commands`, `pi.agent_end_widget`), the `pi` built-in provider recipe, pi-aware onboarding variant (`:pi` marker suffix), and all pi test suites (`test/extensions/pi-*.test.ts`, `test/commands/setup.test.ts` pi coverage) have been removed. The experiment shipped in v0.10.1; it's being rolled back after evaluation. Users who relied on the pi integration can re-create the same behavior as a filesystem recipe under `.mulch/recipes/pi.{ts,sh}`. The `@earendil-works/pi-coding-agent` peer dependency is dropped.
+- **`pi.*` config schema removed** — the `pi` block in `mulch.config.yaml` is no longer recognized. Existing configs with `pi.*` keys will fail schema validation; remove the block to resolve.
+- **`ml setup pi` removed** — three built-in recipes remain: `claude`, `cursor`, `codex`.
+
+### Changed
+
+- **`ml onboard` drops the `:pi` marker suffix** — the version marker is now always `<!-- mulch-onboard:v<version> -->` without a variant suffix. Existing `:pi`-suffixed markers are detected as outdated and migrated on the next `ml onboard` run.
+
+### Testing
+
+- 1382 tests across 67 files, 3621 expect() calls (down from 1465 / 72 / 3856 in 0.10.1). The decrease reflects removal of pi extension test suites. New suite: `test/commands/move.test.ts` covers domain transfer, dry-run, force bypass, cross-reference scanning, and domain-rule validation.
+
+## [0.10.1] - 2026-05-15
+
+A polish release that ships the `@os-eco/pi-mulch` extension (pl-5563), makes the close-session footer configurable, and generalizes `ml audit` from seeds-only to tracker-agnostic. The pi extension is the first first-class runtime integration — `ml prime` auto-fires on session_start, scope-load fires on tool_call, and `record_expertise` / `query_expertise` tools register inside the agent process so the model stops escaping into bash for record I/O. 1465 tests across 72 files / 3856 expect() calls (up from 1225 / 61 / 3047 in 0.10.0).
+
+### Added
+
+#### pi-mulch extension (pl-5563)
+
+- **`@os-eco/pi-mulch` extension shipped in-tree** under `extensions/pi/` (mulch-be45 / mulch-7359 / mulch-71cf / mulch-4d87 / mulch-903f / mulch-d060 / mulch-7229): a first-class integration for the pi-coding-agent runtime. The package exports a single `ExtensionAPI` factory wired into pi's lifecycle hooks (session_start, before_agent_start, tool_call, agent_end). `peerDependencies` declare `@earendil-works/pi-coding-agent` and `typebox` as optional so non-pi consumers install Mulch without the extra weight. Adds the `pi-package` keyword and an `extensions: [./extensions/pi/index.ts]` manifest to `package.json`; `extensions/` is now part of `files`, `biome`, `tsconfig`, and the lint scripts.
+- **Auto-prime on session_start** (mulch-7359): the extension shells out to `ml prime` once at session_start and stashes the rendered markdown in a closure-cached string. `before_agent_start` injects it as a `systemPrompt` append fenced by `<!-- mulch:prime:start -->` / `<!-- mulch:prime:end -->` banners so chained extension prompts and `/reload` re-primes replace the previous body instead of duplicating. Shells out to `ml` (vs. importing `commands/prime.ts` in-process) so auto-flip-to-manifest, pre-prime hooks, and any future CLI behavior land in pi without code churn.
+- **Per-file scope-load on `tool_call`** (mulch-71cf): the extension fires `ml prime --files <path> --budget <n>` whenever the LLM reads/edits/writes a file and steers the rendered records into the message stream as a `mulch-scope-load` steer (display:false). Per-path debounce (default 500ms) coalesces rapid edit→read→edit sequences into one exec; paths canonicalize to absolute against `ctx.cwd` before keying the dedup set; an in-flight set blocks a second exec on the same path while the first awaits. Each successful scope-load calls `pi.appendEntry("mulch-scope-load", { path })`, and `session_start` walks `ctx.sessionManager.getEntries()` to seed `primedPaths` so post-`/reload` edits short-circuit before debounce — the user pays the prime cost once per file per session.
+- **`record_expertise` + `query_expertise` custom pi tools** (mulch-4d87): registered on `session_start` when `pi.tools` is true. Both rebuild on every session so per-project `allowed_types`, `custom_types`, and `required_fields` show up in the LLM-facing schema/description without restart. `record_expertise` writes a single-record JSON to `mkdtemp()` and invokes `ml record <domain> --batch <tmp> --json` (pi.exec has no stdin, so `--batch` is the path); pre-flight validation surfaces `allowed_types` / `required_fields` rules client-side so the LLM gets a targeted error instead of an opaque AJV rejection. `query_expertise` wraps `ml search`, `ml prime --files`, and `ml prime <domain>` behind one call so the model stops escaping into bash for reads.
+- **`/ml:prime` slash command + `agent_end` learn-nudge widget** (mulch-903f): `/ml:prime [domain]` re-runs `ml prime` (full or single-domain) and pushes the rendered markdown back into the conversation as a steer message; the `[domain]` argument autocompletes from the live `mulch.config.yaml` on every keystroke. Registered once at extension load with late-bound deps (cwd / sendMessage / notify) so the command becomes a no-op between sessions rather than throwing. On `agent_end`, the extension shells out to `ml learn --json`, parses the suggested-domains list, and renders one `Record: <domain>/<type>?` line per suggestion via `ctx.ui.setWidget`. The widget is cleared on `session_start` and `session_shutdown` so `/reload`, fork, or quit don't strand stale UI.
+- **`ml setup pi` provider recipe + pi-aware onboarding marker** (mulch-d060): `ml setup pi` writes `.pi/settings.json` with `@os-eco/mulch-cli` in `packages` (preserving existing entries) and refreshes the CLAUDE.md / AGENTS.md mulch section to a short pi-aware variant. The onboarding marker gains a `:pi` suffix (`<!-- mulch-onboard:v0.10.1:pi -->`) so detection logic doubles as install-state. `--check` and `--remove` round-trip both legs.
+- **`pi.*` config namespace** (mulch-be45): full `MulchConfig.pi` block (`auto_prime`, `scope_load.{enabled,budget,debounce_ms}`, `tools`, `commands`, `agent_end_widget`) with matching JSON schema parity so `ml config set pi.<path> <value>` validates atomically. Defaults: `auto_prime: true`, `scope_load.budget: 2000`, `scope_load.debounce_ms: 500`, all sub-toggles `true`. Read on every hook invocation via `readPiConfig()` so edits to `mulch.config.yaml` take effect on `/reload` without restart.
+
+#### Core CLI
+
+- **`prime.session_close` config knob — configurable + richer session-close footer** (mulch-cc0f): the prose `ml prime` appends as the session-close marker (and the snippet `ml setup` / `ml onboard` write into CLAUDE.md / AGENTS.md / .cursor/rules/mulch.mdc) is now driven by `prime.session_close` in `mulch.config.yaml`. `style: directive | conditional | minimal | none` selects a built-in preset (default `conditional` — back-compat with the v0.10.0 reframe); `custom: <string>` overrides the preset with verbatim prose. The new `directive` preset ships imperative + numbered steps, the type glossary inline (`convention`=norm, `pattern`=how-to, `failure`=anti-pattern+fix, `decision`=we-picked-X, `reference`=external spec, `guide`=walk-through), the dedup nudge (`--name` upserts merge — re-recording is safe; outcomes accumulate, fields update in place), and concrete anti-filler examples (don't record CLAUDE.md restatements, generic truisms like "use TypeScript", single-PR-scoped facts, ritual confirmations). `minimal` collapses to a one-line nudge; `none` suppresses the footer entirely. The 🚨 anchor stays on markdown/plain `directive` for memory-anchor function (V1_PLAN §5.2); the embedded variant drops it because it lives at the top of CLAUDE.md, not at end-of-session. Custom always wins over style. Wired through every surface: `getSessionEndReminder(format, config)` in `src/utils/format.ts`, the two prime footer call sites in `src/commands/prime.ts`, the cursor/codex builders in `src/commands/setup.ts`, and `buildSnippet` in `src/commands/onboard.ts` (setup/onboard read config gracefully — pre-`ml init` projects fall back to the default preset rather than erroring).
+
+### Changed
+
+- **`ml audit` generalizes from seeds-only to tracker-agnostic** (mulch-1334): the evidence-coverage block and the citation-resolution block both treat `seeds`/`gh`/`linear`/`bead` as peers, so gh-only / linear-only / bead-only repos no longer see the report collapse into `with seeds-ev: 0 (0%)` plus a missing citation section. Human output emits `with any tracker:` as the headline and a per-tracker breakdown beneath (lines for trackers with zero records are omitted, so a seeds-only repo still prints one tracker line just like before). The renamed `top-cited tracker ids:` block renders gh ids as `gh#42` (the GitHub-native form), linear as `linear:ENG-123`, bead as `bead:b-abc123`, and seeds bare (`mulch-007`) for visual back-compat. gh/linear/bead citations bucket into `status_counts.unresolved` because mulch does not yet have networked status lookups for those trackers — a future seed can layer in `gh` CLI / linear API resolution and turn the `unresolved` bucket into real per-tracker statuses. The JSON shape adds `report.evidence.with_tracker: { seeds, gh, linear, bead }` and `report.tracker_citations` (same shape as the old `seed_citations` with `missing_in_seeds` → `missing_in_index` and a new `tracker: TrackerName` field on each `top_cited` entry).
+- **`ml onboard` snippet** now carries a `:pi` suffix on the version marker when emitted by the pi recipe (`<!-- mulch-onboard:v0.10.1:pi -->`), so a repo that has run `ml setup pi` is distinguishable from one that only ran `ml onboard`. Legacy markers without the suffix are still detected as outdated and migrated on the next run.
+
+### Deprecated
+
+- **`report.evidence.with_seeds` and `report.seed_citations` in `ml audit --ci` / `--json` output** (mulch-1334): both fields stay readable for one release so existing JSON consumers don't break — `with_seeds` mirrors `with_tracker.seeds`, and `seed_citations` is populated with only the seeds entries (filtered) from the new `tracker_citations`. Migrate to `evidence.with_tracker.seeds` and `tracker_citations`; the deprecated fields will be removed in v0.11.
+
+### Testing
+
+- 1465 tests across 72 files, 3856 expect() calls (up from 1225 / 61 / 3047 in 0.10.0). New suites under `test/extensions/` cover the pi config resolver, prime injection, scope-load (including debounce + canonicalization + `/reload` re-seeding), the `record_expertise` / `query_expertise` tools (all four validation gates, batch-file exec path, mid-session config re-read), commands, and the learn-nudge widget. `test/commands/setup.test.ts` adds pi recipe coverage (`.pi/settings.json` write / preserve / idempotency, `:pi` marker flip, check states, remove paths including the malformed-JSON safety case). `test/commands/prime.test.ts` covers the new `prime.session_close` presets; `test/commands/audit.test.ts` exercises the tracker-agnostic output.
+
+## [0.10.0] - 2026-05-13
+
+The visibility + prime overhaul release (pl-0752 / mulch-105d). Twelve PR-sized steps cover four V1_PLAN.md §3 deliverables: a first-class `ml audit` command for floater rate / evidence coverage / convention rule-density / per-domain mix; age-aware `ml status` surfacing rotting domains; a centralized and softened close-session prompt; and a three-slice `ml prime` overhaul that leads with the project contract, auto-flips to manifest above the size threshold, context-scopes by default in full mode, and ranks surfaced records by trust tier with a per-record "why surfaced now" suffix. A mid-cycle expansion (rev 2) adds the curation-surface gaps that make the new visibility primitives actionable — `ml archive` for direct soft-archive without waiting for `ml prune`, an `archive_reason` field on every archived record, granular per-record `ml prune --dry-run` output by default, and a `ml compact` overhaul that adds a `pre-compact` hook for semantic summarization and soft-archives originals instead of deleting them. The schema is unchanged for live records; `archive_reason` lands only on archived rows (V1_PLAN §2 frozen live-`BaseRecord` envelope preserved). One behavioral breaking change: `ml prime` default output now auto-flips to manifest above 100 records or 5 domains — pin `--full --all` for the legacy shape.
+
+### Added
+
+- **`ml audit` — first-class corpus-health command** (mulch-a051 / pl-0752, v0.10 step 1): ports the `mulch-audit.py` prototype (V1_PLAN §4.2) into the CLI so teams can measure floater rate, evidence coverage, convention rule-density, per-domain mix, and seed-citation status from a single command — and act on the results without leaving the terminal. Default output reproduces the Python prototype's signal layout (type mix → evidence → seed citations → convention quality → per-domain mix → top-cited seeds → domain age → summary signals) with PASS/WARN/FAIL verdicts per metric.
+  - **`ml audit --ci`** exits 1 when any signal is in the FAIL band and emits the report as JSON so CI pipelines can gate on corpus health without parsing human output.
+  - **`ml audit --suggest`** groups specific record IDs into `archive` (stale, non-foundational records), `revise` (conventions without rule-signal language), and `attribute` (floaters with no tracker / relates_to / commit) buckets — each bucket prints a copy-paste-able `ml prune --ids …` or `ml edit <id> …` command. This is the ROI multiplier per V1_PLAN: "your corpus is bad" is uncomforting; "here are the 47 specific records to fix" is actionable.
+  - **`ml audit --domain <name>`** scopes every metric and verdict to one domain.
+  - **`ml audit --ignore-domains <a,b>`** excludes domains from the audit (CLI list merges with `audit.ignore_domains` from config).
+  - **`audit.thresholds` config block** overrides every default (evidence_coverage 0.5, evidence_coverage_warn 0.3, floater_max 0.2, rule_density_min 0.25, rule_density_warn 0.15, max_records_per_domain 200, max_stale 0). Per-domain overrides via `audit.per_domain.<name>` layer on top of the global thresholds — partial overrides inherit unspecified knobs from the global. Defaults relaxed from the Python prototype per V1_PLAN §4.2 ("0.7 evidence coverage is empirically unreachable today"); recalibrate after one quarter of real-corpus data.
+- **`ml archive <domain> [id]` — direct archive without `ml prune`** (mulch-d563, v0.10): a new write command that moves a specific live record (or several, via `--records mx-a,mx-b`) to `.mulch/archive/<domain>.jsonl` without waiting for shelf-life decay. Symmetric to `ml restore`; pairs with the `archive_reason` field (mulch-b41a) so manual archives are auditable. `--reason <text>` is required and stamped on disk as `manual: <text>` (e.g. `archive_reason: "manual: wrong domain"`); `--dry-run` previews without writing; `--json` emits `{ success, command: "archive", domain, dryRun, archived: [{id, type, summary, reason}], kept }`. ID resolution reuses the same prefix/`mx-`/bare-hash matcher as `ml delete` and `ml restore`. The live-file read+rewrite happens inside a single `withFileLock(getExpertisePath(domain))` acquisition so concurrent writers can't lose data; archive writing happens after (matches `ml prune` phase 3). Closes the soft-archive UX gap: prune handles bulk decay; `ml archive` handles targeted intent. See `src/commands/archive.ts`.
+- **`archive_reason` field on archived records** (mulch-b41a, v0.10): every record moved to `.mulch/archive/<domain>.jsonl` now carries an `archive_reason` field alongside `status: "archived"` and `archived_at`. Convention values: `"stale" | "superseded" | "anchor_decay" | "manual" | "compacted"` (free-text suffix permitted, e.g. `"manual: wrong domain"`). `ml prune` stamps `"stale"` on records that aged out of their classification shelf life, `"superseded"` on records that bottom out via supersession decay, `"anchor_decay"` on records that bottom out via `--check-anchors`, and `"superseded+anchor_decay"` on the rare overlap. `ml restore`'s rollback-on-conflict path preserves the original reason so the round-trip is invisible to anyone reading the archive. `ml search --archived` now renders the reason in its output line: `[ARCHIVED 2026-04-12 anchor_decay] mx-abc [pattern] …`. `ml restore <id>` includes the reason in its success message: `✓ Restored pattern mx-abc to testing (archived: stale): …` (JSON mode adds an `archive_reason` field to the success payload). Field is optional — archives written before this seed lands continue to load and render without the suffix. Lives only on archived records; the v1.0-frozen live `BaseRecord` envelope is unchanged. See `archiveRecords` / `stripArchiveFields` in `src/utils/archive.ts`.
+- **Active-work resolver chain** (mulch-f3d0 / pl-0752, v0.10 step 3): `src/utils/active-work.ts` exposes symmetric per-tracker resolvers (`seedsResolver`, `ghResolver`, `linearResolver`, `beadResolver`) plus a `resolveActiveWork()` orchestrator that returns the first non-empty match across all four. Each resolver looks at the current branch name (parsed for tracker-style IDs: seeds `xxx-abc123`, gh `#42`, linear `ENG-123`, bead `b-abc123`) and the relevant external state (in-progress seeds via `sd`, current PR via `gh pr view`, environment variables). Conservative auto-link behavior: a single resolved match writes through to evidence, multi-match emits a formatted stderr warning listing each candidate so the operator self-corrects via explicit `--evidence-*` flags. Explicit overrides short-circuit any resolver. The schema already supported seeds/gh/linear/bead symmetrically (src/schemas/record.ts) — this lands the helper that consumes them at the resolver layer so v0.10 prime context-scope (mulch-244c) and v0.11 auto-link-on-record can share one implementation. See `src/utils/active-work.ts`.
+- **`pre-compact` lifecycle hook + `ml compact --apply` archives originals** (mulch-184b / pl-0752, v0.10 step 11): two changes that together replace `ml compact`'s mechanical concatenate-and-delete with an auditable, undoable, optionally-semantic flow. (1) A new `pre-compact` event joins the existing hook contract (`pre-record` / `post-record` / `pre-prime` / `pre-prune` / `pre-compact`). The hook receives `{ event: "pre-compact", payload: { domain, candidates: [...], merged: <mechanical-merge-record> } }` on stdin; if it prints `{ replacement: <RecordShape> }` on stdout, the replacement is validated against the type registry and substituted for the mechanical merge. Absent hook → existing `mergeRecords()` strategy (back-compat for every existing `ml compact` test). Malformed hook output (parse error, missing fields, validation failure) rejects the compaction with a copy-paste retry hint matching the standard record-validation error shape. (2) The candidate records that get rolled into the merged output are now soft-archived to `.mulch/archive/<domain>.jsonl` with `archive_reason: "compacted"` instead of being silently deleted, so `ml restore <id>` round-trips a compacted record back to live expertise. `ml compact --auto` and `ml compact --apply` both archive; `ml compact --analyze` and `ml compact --dry-run` are unchanged (no writes). `ml doctor` adds a new informational `compact-summarizer` check that reports `configured (pre-compact: <script-path>)` or `not configured (mechanical merge in use)`. See `src/commands/compact.ts` and `runHooks("pre-compact", …)` wiring.
+
+### Changed
+
+- **BREAKING: `ml prime` leads with the project contract + auto-flips to manifest above the size threshold** (mulch-0ef5 / pl-0752, v0.10 step 5, slice 1 of the prime overhaul). `ml prime` now opens its non-JSON output with a `## Project Contract` section (markdown / compact / plain / xml variants) summarizing the project's active write-side gates — custom types, disabled types, per-domain `allowed_types` / `required_fields`, and configured hook events. The block is suppressed when the project has no gates worth surfacing (minimal config) and for `--json` / `--dry-run` output (consumers parse config separately; dry-run emits a record-level JSON payload). Default mode now auto-flips to manifest when the unscoped corpus exceeds 100 records *or* 5 domains (strict greater-than; 100 records or 5 domains still emits full output). `--full`, `--manifest`, explicit `prime.default_mode` in config, scoping (`ml prime <domain>` / `--files` / `--context` / `--exclude-domain`), and `--dry-run` all opt out of the auto-flip. **Behavioral breaking change**: downstream consumers parsing `ml prime` output (warren, custom tooling) that expect full record content unconditionally must pin `--full --all` to keep the legacy shape. The project-local `.mulch/hooks/prime-budget-warn.sh` pre-prime warning hook is retired in the same commit (the default *is* the right thing now; the heads-up is redundant). See `formatProjectContract` and `shouldAutoFlipToManifest` in `src/utils/format.ts`.
+- **`ml prune --dry-run` prints per-record IDs + reasons by default** (mulch-5ce3, v0.10): the dry-run preview no longer hides record-level detail behind `--explain`. Under each per-domain header, the command now emits one line per affected record — `mx-abc123 [pattern]: foundational → archived (stale)` — covering every prune-driven outcome: stale shelf-life archives, supersession demotions (tier or bottom-out), and anchor-decay demotions. The reason vocabulary matches the `archive_reason` field on disk (`stale | superseded | anchor_decay`, joined with `" + "` when both apply). `--explain` is now strictly the deeper view: it adds the per-record anchor breakdown (`anchors: 1/3 valid (33%)` plus the broken-anchor list) underneath each anchor-decay line. `--quiet` suppresses the per-record list and per-domain header but keeps the `Total:` summary line — a small behavior change from prior `--quiet` (which suppressed all text). `--json` output is unchanged: the legacy `explanations` array still appears only under `--explain` and still excludes pure-stale entries (those live in `results` / `totalPruned`). The `DemotionExplain` interface is renamed to `RecordAction` and its `reasons` vocabulary unified with `archive_reason` (`"supersession"` → `"superseded"`). Inverts the prior safety contract where the operator had to add `--explain` and re-run to see which records would move. See `src/commands/prune.ts`.
+- **`ml prime` ranks surfaced records by trust tier and appends a 'why surfaced now' suffix** (mulch-4665 / pl-0752, v0.10 step 7, slice 3 of the prime overhaul). Within the surfaced corpus (after context-scope filtering, before budget truncation), records are now ordered by trust score = `(★ count * star_weight) + classification_weight`. Default weights: star=100, foundational=50, tactical=20, observational=10 — so a star-confirmed tactical record outranks an unconfirmed foundational, an unconfirmed foundational outranks a tactical, and so on. Within-tier ties preserve insertion order so output stays stable run-to-run. The new `prime.tier_weights` config block overrides any subset of the four knobs (partial overrides inherit the rest from the default). Trust ordering applies before `applyBudget`, so when the budget cap forces truncation the highest-trust records survive. Every surfaced record now carries a "why: …" suffix picked from the strongest available signal in priority order: `file match (<anchor>)` when the record's `files` / `dir_anchors` overlap the active changed-file set, `in-progress <tracker>:<id>` when its `evidence.{seeds,gh,linear,bead}` matches the active-work resolver's pick, `★N confirmations` when it has confirmation outcomes, `recorded today` / `recorded Nd ago` when authored within the last 7 days, or `applies broadly (no anchors)` for universal records with no other signal. Suffixes are appended to the compact line, to each markdown bullet (post-processed via the leading `[mx-…]` id tag), to plain-format bullets (mirrored post-processor), and rendered as a `why="…"` attribute on each XML record element. JSON mode and manifest mode are intentionally untouched — JSON is the machine-consumer contract, manifest emits domain counts not records. See `src/utils/prime-ranking.ts` (`resolveTierWeights`, `computeTrustScore`, `sortByTrust`, `whySurfaced`, `formatSurfaceReason`, `buildSurfaceAnnotations`) and the slice-3 wiring in `src/commands/prime.ts`.
+- **`ml prime` context-scopes by default in full mode** (mulch-244c / pl-0752, v0.10 step 6, slice 2 of the prime overhaul). When `ml prime` emits full record content (not manifest) without explicit scoping, it now narrows the surfaced corpus to what the agent is about to work on using three signals: `git status --porcelain -uall` (staged/unstaged/untracked changes), the current branch name parsed for tracker IDs, and the active-work resolver chain (`src/utils/active-work.ts` — in-progress seeds, current GH PR, branch-parsed linear/bead IDs). A record is kept when it has no file/dir anchors AND no evidence-tracker anchor (universal applies-everywhere), when its `files` / `dir_anchors` match the active changed files, or when its `evidence.{seeds,gh,linear,bead}` matches one of the active tracker IDs. `--all` opts out and emits the full corpus; a stderr line reports `prime: scoped to N of M records based on git status [+ active-work (…)]; run with --all for the full corpus` so the agent sees the scoping ratio without parsing stdout. Auto-scope is skipped when the user has already scoped explicitly (positional domain, `--domain`, `--files`, `--context`, `--exclude-domain`), when `--manifest` is in effect (size-based, not file-based), when `--json` mode is on (machine consumers expect deterministic output), and when not in a git repo (no signal source). Dry-run reflects auto-scope so the JSON preview matches what a real prime would emit. The threshold for auto-flip-to-manifest still uses the unfiltered corpus count, so a scoped session in a 200-record corpus still flips to manifest by default. See `getActiveFiles` + `filterByActiveContext` in `src/utils/git.ts`.
+- **Close-session prose centralized + reframed to conditional** (mulch-14e8 / pl-0752, v0.10 step 4): a single helper, `getSessionEndReminder` in `src/utils/format.ts`, now feeds all four close-session surfaces — the `ml prime` footer (markdown / compact / xml / plain), `ml onboard`'s CLAUDE.md / AGENTS.md snippet, the Cursor recipe (`.cursor/rules/mulch.mdc`), and the Codex recipe's AGENTS.md section. The prose is reframed from ritualistic (`Before saying "done" or "complete", you MUST run this checklist … NEVER skip this`) to conditional (`If you discovered insights worth preserving — a new convention, a pattern that worked, a decision made, a failure encountered — record them before closing this session … Skip if no insight surfaced. Unrecorded learnings are lost; ritual filler records are also noise`). V1_PLAN §3 audit found 70–80% of recorded conventions were ritual restatements driven by the prior prompt shape; the conditional reframe surfaces only true insights without losing the close-session memory anchor. The 🚨 marker is preserved in the markdown and plain prime-footer variants (per V1_PLAN §5.2: 🚨 functions as a memory anchor for agents whose context has filled with file edits since session start) and intentionally omitted from the embedded snippet variant (which lives inside a session-start CLAUDE.md / AGENTS.md section, not at the end of a long edit-saturated context window). The new `"embedded"` style on `SessionCloseStyle` (a superset of `PrimeFormat`) produces the markdown shape used by onboard and the setup recipes, so adding a new close-session surface is a one-line helper call rather than a fresh prose duplication. Existing CLAUDE.md / AGENTS.md / Cursor rule files installed by previous `ml setup` runs will check stale after upgrade; re-run `ml setup <provider>` and `ml onboard` to pick up the new prose.
+- **Age-aware `ml status` — surface domain age range and rotting flag** (mulch-4326 / pl-0752, v0.10 step 2): `ml status` now reports per-domain `oldest_recorded → newest_recorded` ISO dates and flags any domain as `ROTTING` when the most recent record's age exceeds the configured observational shelf life (`classification_defaults.shelf_life.observational`, default 30 days). The text formatter emits a `… rotting <N>d` suffix next to the count when the flag is set; JSON output adds `oldest_recorded`, `newest_recorded`, `rotting`, `rotting_days`, plus a top-level `shelf_life` block (`{ foundational, tactical, observational }`) so consumers can compute their own thresholds. `formatStatusOutput` preserves the legacy single-line output when range fields are omitted (back-compat for callers/tests that pass a minimal status row). The signal pairs with `ml audit` (mulch-a051): audit surfaces what is wrong with the corpus; status surfaces which domains have gone quiet so operators know where to look first. See `src/commands/status.ts` and `formatStatusOutput` in `src/utils/format.ts`.
+
+## [0.9.0] - 2026-05-10
+
+A warren-integration release: a full `ml config` family (schema + show/set/unset) gives config-UI consumers atomic, schema-validated reads and writes; `ml prime --dry-run` returns a JSON token-budget preview without rendering record content; `owner` and `status` join `BaseRecord` as built-in optional fields. The Codex provider recipe gains a real `SessionStart` hook (so `ml prime` finally runs on Codex), and the `aider` / `gemini` / `windsurf` built-in recipes are removed after an audit found all three writing to paths the runtimes don't read. 1225 tests across 61 files / 3047 expect() calls (up from 1120 / 58 in 0.8.0).
+
+### Removed
+
+- **Built-in recipes for `aider`, `gemini`, and `windsurf`**: an audit against the providers' current docs found all three writing to paths the runtime doesn't actually read, so `ml setup <one of these>` was silently a no-op. `ml setup aider|gemini|windsurf` now fails with the standard unknown-provider hint pointing at `--list`, `.mulch/recipes/<name>.{ts,sh}`, and `mulch-recipe-<name>`. Users who relied on the old paths can re-create the same behavior as a filesystem recipe in their own repo.
+  - **Aider** (`.aider.conf.md`): Aider only auto-loads files explicitly listed under `read:` in `.aider.conf.yml`, so the orphan markdown file was never opened.
+  - **Gemini** (`.gemini/settings.md`): not a path Gemini CLI reads. Gemini reads `GEMINI.md` at the project root; users wanting Mulch wired into Gemini should adopt the AGENTS.md / `ml onboard` flow instead.
+  - **Windsurf** (`.windsurf/rules.md`): Windsurf uses a directory of per-rule files at `.windsurf/rules/<name>.md` with required `trigger:` frontmatter, not a single combined file.
+
+### Added
+
+- **`ml config` worktree + concurrency integration tests** (mulch-ebfa / pl-6212): adds 12 integration tests in `test/commands/config.test.ts` that close out the `ml config` plan. Worktree block (6 tests) sets up a real `git worktree add` checkout and asserts that `schema` / `show` work read-side from the worktree (worktree-aware path resolution kicks in via `getMulchDir`), `set` / `unset` write to the main repo's `.mulch/mulch.config.yaml` while leaving the worktree's checkout copy of the file untouched (so writes survive `git worktree remove`), no `.tmp` / `.lock` stragglers leak into either location, and the file lock spans the worktree boundary (concurrent `set` from worktree + main both land). Concurrency block (6 tests) covers disjoint-keys → no lost writes, same-key contention → last-writer-wins (final value is one of the inputs, never garbled YAML), `set` + `unset` interleaving on disjoint keys, invalid + valid concurrent writes (invalid is rejected without corrupting on-disk config), `.tmp` / `.lock` cleanup, and YAML round-trip stays parseable + schema-valid after mixed concurrent traffic.
+- **`ml config unset <path>` subcommand** (mulch-b2c4 / pl-6212): removes a knob from disk so subsequent reads fall back to the schema default. Same closed-shape gate as `ml config set` (rejects `governance.typo` with the list of known keys); same atomic write under `withFileLock`. Empty parent objects along the unset path are pruned when the schema allows the parent to be omitted (so `ml config unset search.boost_factor` leaves no orphan `search: {}` in the YAML and lets the schema's `required: [boost_factor]` under `search` stay satisfied via the parent being absent). Required-field removals (`ml config unset governance.max_entries`) are rejected with the schema-titled validation error — use `ml config set` to override required knobs. Idempotent: unsetting a never-set path is a silent no-op and does not rewrite the file. Errors with the standard `No .mulch/ directory found. Run \`mulch init\`` message when run outside a project.
+- **`ml config set <path> <value>` subcommand** (mulch-1833 / pl-6212): atomic per-knob writes for warren and other config-UI consumers. `<value>` is YAML-parsed (so booleans, numbers, lists, and objects all work uniformly without per-knob serialization rules); the resulting full `MulchConfig` is validated against the JSON Schema (`ml config schema`) before write, and invalid values are rejected with a schema-titled error (e.g. `must be integer (Soft target)`). The write goes through `withFileLock` + temp-file-and-rename so concurrent agents serialize cleanly. Closed-shape misses error early with the list of known keys (`Known keys at 'governance': max_entries, warn_entries, hard_limit.`); open-map paths (`domains.<name>.required_fields`, `custom_types.<name>.required`) auto-create intermediate objects. Last-writer-wins under concurrent writes — warren UIs should re-fetch via `ml config show` after every write. Errors with the standard `No .mulch/ directory found. Run \`mulch init\`` message when run outside a project.
+- **`ml config show [--path <p>]` subcommand** (mulch-d639 / pl-6212): emits the effective `MulchConfig` as JSON for warren and other config-UI consumers. With no `--path`, dumps the full on-disk config (with `applyConfigDefaults` filling required `governance` / `classification_defaults` sections). With `--path foo.bar`, walks the dot-notation path and emits just that subtree; if the knob is unset, falls back to the schema's declared `default` (so `ml config show --path search.boost_factor` returns `0.1` even when `search:` is absent from the YAML). Section-level paths over unset knobs synthesize an object from leaf defaults (`--path prime` → `{ default_mode: "full" }`). Closed-shape misses (`--path governance.typo`) and missing-with-no-default leaves error with `Path '<p>' not found in config and has no schema default.` The global `--json` flag is accepted as a no-op (output is unconditionally JSON, matching the `ml config schema` precedent).
+
+- **`ml prime --dry-run` for spawn-time preview** (mulch-358b / pl-fd71, R-11 warren integration): emits a JSON summary of which records would be primed (`{ wouldPrime: [{id, type, domain, tokens}], totalTokens, budgetUsed, budgetTotal }`) without rendering record content, so orchestrators (warren and similar) can show "would prime: N records, K tokens" in editor preview panes before shelling out for the full prime. Reuses the same `applyBudget` + `estimateRecordText` pipeline as a real prime, so token counts and the kept-record set match what an immediate non-dry-run invocation would produce. Composes with `--domain`, `--files`, `--context`, `--budget`, `--no-limit`, `--exclude-domain`, and `--export`. `pre-prime` hooks are skipped (preview must not trigger Slack posts or `digest-then-confirm` confirmations, mirroring the `ml prune --dry-run` precedent). `--format plain --dry-run` returns the dry-run JSON (format ignored when dry-running). `--dry-run --manifest` is rejected with a targeted error since manifest mode lists domains, not records. `budgetUsed` / `budgetTotal` are `null` when `--no-limit` is in effect.
+
+- **`owner` and `status` as built-in optional record fields** (mulch-ab20, R-06 step 1): `BaseRecord` now carries an optional `owner` (opaque string, e.g. `@user` or `@team`) and `status` (`draft` | `active` | `deprecated`). Both round-trip through `ml record` → JSONL → `ml prime` and existing records without these fields stay valid. `status: "archived"` continues to live only on soft-archived records under `.mulch/archive/`; the live-record AJV schemas reject it via `additionalProperties: false`. Custom types that `extends` a built-in inherit both fields automatically. Owner-resolution chain (`--owner` flag, CODEOWNERS lookup, per-domain `default_owner`, git-author fallback) and `ml review` ship in subsequent plan steps (mulch-846f / mulch-0880 / mulch-41e1 / mulch-8cce).
+- **Codex SessionStart hook** (Codex 0.124.0+, April 2026): `ml setup codex` now writes a managed `[[hooks.SessionStart]]` block to `.codex/config.toml` (in addition to the existing AGENTS.md prose section), so `ml prime` actually executes at session start and its output is injected as developer context via Codex's `additionalContext` mechanism. The TOML block is fenced by `# mulch:start` / `# mulch:end` line comments for idempotent install and clean removal — user-managed entries in the same file are preserved on `install`, `check`, and `remove`. Schema reference: https://developers.openai.com/codex/hooks. Requires `[features] codex_hooks = true`, which the managed block provides.
+
+### Fixed
+
+- **`ml prime --no-limit` now actually disables the budget** (mulch-358b / pl-fd71): Commander parses `--no-limit` as `options.limit = false` (defaults `true`), but `prime` was checking `options.noLimit !== true`, which was always `true` since `noLimit` was undefined — so `--no-limit` had been a silent no-op since the flag was added. Surfaced while implementing `--dry-run`, which needed the budget toggle to compose correctly. `--no-limit` now correctly skips the budget pass for both rendered and dry-run output (`budgetUsed` / `budgetTotal` are `null` in the dry-run JSON when `--no-limit` is in effect).
+
+- **Claude `PreCompact` hook is no longer registered** by `ml setup claude`. Per the Claude Code hooks docs, `PreCompact`'s only documented control is "block the compaction" — its stdout is discarded across compaction and never reaches the model. The empty-matcher `SessionStart` registration already covers the post-compact reload path via the `compact` matcher, so the second registration was dead weight. `install` now writes only `SessionStart`; `check` only verifies `SessionStart`; `remove` still iterates every event in `settings.hooks` so legacy `PreCompact` entries from older installs are cleaned up automatically. Existing settings.json files with both entries remain functional until the next `ml setup claude --remove`/`--install` cycle.
+
+### Changed
+
+- **`ml prime --format plain` now matches the spawn-injection contract** (mulch-358b / pl-fd71): the leading `Project Expertise (via Mulch)` decorative title and the `============================` underline are dropped from `formatPrimeOutputPlain`, and the trailing `=== SESSION CLOSE PROTOCOL ===` reminder is suppressed when `format=plain` (in both records and manifest paths). The output now starts directly with the per-domain section (`[domain] N records (updated …)`) and ends with the last record, so warren / other embedders can concatenate it into a coding agent's system prompt without smuggling in markdown headers, decorative ASCII, or session-framing instructions that would conflict with the orchestrator's own dispatch. The per-domain `formatDomainExpertisePlain` body (used by `ml search --format plain` and `ml query --format plain`) is unchanged, so non-prime consumers are unaffected. The two existing prime tests that asserted the old document title now assert its absence.
+
+- **`ml onboard` snippet now surfaces the package version** (mulch-391b): the snippet injected into AGENTS.md / CLAUDE.md previously identified itself only with an opaque schema integer (`<!-- mulch-onboard-v:4 -->`), so consumers had no way to correlate the installed snippet with a Mulch release. The marker is now `<!-- mulch-onboard:v<package.version> -->` (resolved at runtime via `getCurrentVersion()`) and the body line reads `This project uses Mulch v<package.version> for structured expertise management.` Outdated detection compares the marker against the running CLI's package version, so any version change (including patch bumps) prompts re-running `ml onboard` — which is the desired UX, since the visible version in CLAUDE.md should track the installed Mulch. Legacy `mulch-onboard-v:N` markers are still detected as outdated and migrated on the next run.
+
+### Fixed
+
+- **v0.8.0 polish batch** (mulch-04ca): five small bugs surfaced by the v0.8.0 stress test, bundled into one pass.
+  - **Migration wording**: the v0.8.0 entry that claimed "Migration is automatic for legacy configs" was misleading — `domains: string[]` configs are normalized to the object map at read time, not rewritten to disk. The CHANGELOG line now spells that out and notes that the first `mulch` write that touches `mulch.config.yaml` (e.g. `ml add`) is what round-trips the file in the new shape. Behavior unchanged.
+  - **Archive parse errors**: `readExpertiseFile` now wraps the per-line `JSON.parse` and throws `Malformed JSONL at <file>:<line>: <reason>. Line: <preview>` instead of propagating a context-free `Unexpected token …` from the engine. Matters most for `.mulch/archive/<domain>.jsonl` files that operators rarely open directly.
+  - **Anchor decay knobs validated**: `decay.anchor_validity.threshold` and `grace_days` are now range-checked. `ml prune --check-anchors` aborts with a formatted error before the prune walk when `threshold` is outside `[0, 1]`, when `grace_days < 0`, or when either knob is `NaN`/`Infinity`. A new `decay-config` doctor check surfaces the same misconfigurations proactively. Previously, a typo like `grace_days: -1` silently flipped the grace gate to "always passed," exposing freshly-recorded records to anchor decay before their anchors stabilized.
+  - **`ml rank` flag parsing**: `--limit 10abc` and `--min-score 0.5xyz` no longer silently parse to `10` / `0.5` (the `parseInt`/`parseFloat` trailing-garbage gotcha) — both flags now use a strict regex+`Number()` pair and reject non-integer or trailing-junk values with the offending input quoted in the error.
+  - **`--quiet` semantics**: `ml add` and `ml onboard` now respect the global `-q/--quiet` flag for their non-error success messages, matching the rest of the write commands. `--quiet` already gated record/edit/delete/restore/sync output; the two stragglers were bare `console.log` calls. Errors are still printed under `--quiet`.
+- **Archive-lifecycle data integrity** (mulch-9096): `ml restore` now refuses to overwrite a live record with the same id instead of silently producing a duplicate-id JSONL. The pre-check runs before the archive is touched; a race-safe re-check inside the live-file lock rolls the archive back if a duplicate appears mid-flight. Supersession cycle detection (Tarjan SCC, iterative) excludes any record that participates in a cycle (A↔B, A→B→C→A, etc.) from `supersededIds`, so cycle members are no longer demoted/archived together. Cycle detection emits a yellow warning on `ml prune` so operators notice the misconfiguration.
+- **Config error surfacing** (mulch-41e3): registry-init failures (custom type extending a `disabled_types` parent, `disabled_types` referencing an unregistered type, malformed YAML) now print a one-line `Config error:` message with a pointer to `.mulch/mulch.config.yaml` and `mulch doctor`, instead of a raw Bun stack trace from a top-level await failure. `--json` mode emits a structured `{ success: false, command: "init", error }` payload. `readConfig` now applies `governance` and `classification_defaults` defaults when those required-by-type sections are absent from a hand-written minimal config, so `ml doctor` / `ml status` / `ml prune` / `ml compact` / `ml prime` no longer crash with `TypeError: undefined is not an object` on a config that only declares `domains:`. Partial overrides (e.g. `governance: { max_entries: 50 }`) keep their explicit values; only missing keys are backfilled.
+- **Custom-types polish: name regex docs + foreign-base-field alias collision** (mulch-aeb2): The naming rule is now spelled out plainly in errors instead of pasting the regex literal — `Custom type "my-type" (contains a hyphen). Allowed: lowercase letters, digits, and underscores; must start with a letter; no hyphens.` The same rule (`CUSTOM_NAME_RE`) is now applied to required/optional field names and to alias legacy names (previously only the type name itself was checked, so `required: ["my-field"]` slipped through and produced confusing AJV errors at write time). Aliases also reject any legacy name that matches a built-in type's required/optional field — declaring `aliases: { title: ["name"] }` on a custom type that extends `decision` now fails with a "collides with a built-in type's field" error, since `name` is `pattern`'s required field and the alias would silently misroute records of that field across types.
+- **dir-anchors normalization + project-root containment** (mulch-c282): `normalizeDirAnchor` now strips a leading `./` so `--dir-anchor ./src/foo` and `--dir-anchor src/foo` produce the same stored value (the prior pass left `./src/foo` untouched, splitting a single anchor into two equivalence classes that missed each other in dedup and prime/--files containment). New `assertWritableDirAnchor` is wired into `ml record --dir-anchor` and rejects (1) absolute paths (POSIX `/etc/passwd`, Windows `C:\…`, UNC `\\server\share`) and (2) any `..` parent-traversal segment (`..`, `../parent`, `src/../sibling`). Both produce a formatted one-line error and abort before the record is written. `normalizeDirAnchor` itself stays non-throwing so legacy on-disk values keep working through `fileLivesUnderDir` and doctor checks.
+- **Provider recipe loader hardening** (mulch-828d): `ml setup <name>` now wraps the `recipe.install/check/remove` call in try/catch and surfaces a thrown exception as `recipe "<name>" <action> threw (<source>): <message>` instead of a raw Bun stack trace. `loadFilesystemRecipe` and `loadNpmRecipe` now require `export default { install, check, remove }` strictly — the prior `mod.default ?? mod` fallback silently accepted modules with named-only exports, which violated the documented spec. Both loaders throw a targeted "has no default export" error pointing at `examples/recipes/internal-ide.ts` when default is absent, and a separate "default export is not a valid ProviderRecipe" error when the default is the wrong shape. `ml setup --list` now detects npm shadows: when a built-in name is also resolvable as `mulch-recipe-<name>` from the project root, the listing reports `shadowed_by: "npm"` so the marker matches what `ml setup <name>` would actually run (filesystem-ts/sh shadows still take precedence over npm).
+- **Hook timeout reliably kills forked descendants** (mulch-9c81): `Bun.spawn`'s `timeout` option only signals the direct `sh` child, so a hook that backgrounds a forked exec (e.g. `slack-post.sh & wait`, `curl …`) orphaned the long-running command and left it holding the inherited stdout fd. `Promise.all([Response.text(), …, proc.exited])` then blocked indefinitely even though the timeout fired — the CLI hung. The hook runner now uses `node:child_process.spawn` with `detached: true` (POSIX `setsid` → new process group) and calls `process.kill(-pid, "SIGKILL")` on timeout, killing every descendant in one shot. The runner also reads stdout/stderr via `data` events instead of a stream-await, so a closed pipe can never re-introduce a hang. New regression test in `test/utils/hooks.test.ts` exercises the actual `sleep 30 & wait` case (the prior test only used a shell-builtin busy loop). Mutable-events doc/code drift in `runHooks` JSDoc, `src/schemas/config.ts`, and the `init` config template fixed: `pre-prune` is block-or-allow only — only `pre-record` and `pre-prime` may mutate the payload via stdout JSON. Behavior was already correct (`MUTABLE_EVENTS` excluded `pre-prune`); only the comments were wrong.
+
+## [0.8.0] - 2026-05-06
+
+Per-domain governance, lifecycle hooks, soft-archive prune, and pluggable provider recipes — Mulch grows up from "shared shelf" to "shared shelf with rules and lifecycle". Custom types now inherit from built-ins, records can anchor to directories, prune demotes superseded/decayed records before archiving, and a new `ml rank` surfaces top confirmation-frequency records without a query. 1120 tests across 58 files (up from 840 / 41 in 0.7.0).
+
+### Added
+
+#### `ml rank` — top records by confirmation score (mulch-cky)
+- **New read-only command**: `ml rank [domain]` returns records sorted by confirmation-frequency score (highest first). Unlike `ml search --sort-by-score`, no text query is required and output is a flat cross-domain ranking instead of per-domain groups, so context-constrained consumers can grab the top-N battle-tested records directly.
+- **Filters**: `--type <type>` to scope to a single record type, `--limit <n>` (default 10) to cap the result set, `--min-score <n>` (default 0) to exclude records below a confirmation threshold (e.g. `--min-score 1` keeps only records with at least one confirmed application).
+- **`--json`** emits `{ success, command, count, records[] }` with `domain`, `id`, `type`, `score`, `summary`, and the full `record` per entry, sorted by score desc.
+- Joins the `prime`, `query`, `search`, `status`, `validate`, `learn`, `ready` tier of fully-safe (read-only) commands.
+
+#### Provider Recipe Discovery (R-04, mulch-6deb)
+- **`ml setup <name>` now resolves recipes via discovery instead of a closed list.** Resolution order: filesystem (`.mulch/recipes/<name>.ts` or `.sh`) → npm (`mulch-recipe-<name>`) → built-in. Filesystem wins so orgs can override built-ins. Adding a 7th provider no longer requires patching core.
+- **TypeScript recipes** are loaded directly by Bun (no build step). The default export must implement the existing `ProviderRecipe` shape (`install` / `check` / `remove` returning `{ success, message }`). Shape is validated at load time; bad exports throw with a pointer to the offending file.
+- **Shell recipes** are invoked as `<script> install|check|remove` with cwd set to the project root and `MULCH_RECIPE_NAME` / `MULCH_RECIPE_ACTION` in the environment. Stdout becomes the success message; non-zero exit signals failure (stderr surfaced).
+- **npm recipes** resolve via `require.resolve('mulch-recipe-<name>')` from the project root, so normal `package.json` `dependencies` resolution applies.
+- **`ml setup --list`** (and `--list --json`) surfaces every discovered provider with its source, plus shadow flags on built-ins overridden by a filesystem recipe of the same name.
+- **Unknown-provider hint** now points at `--list`, `.mulch/recipes/<name>.{ts,sh}`, and `mulch-recipe-<name>` instead of repeating the hard-coded built-in list.
+- **Examples** under `examples/recipes/` cover both a TypeScript and a shell recipe.
+
+#### Anchor-Validity Decay (R-05f, mulch-2551)
+- **`ml prune --check-anchors`**: opt-in flag that demotes a record one classification tier when its file/dir anchors stop resolving. For each record we count valid vs. broken anchors across `files[]` (PatternRecord/ReferenceRecord), `dir_anchors[]`, and `evidence.file`; if the resulting `valid_fraction` is below the configured threshold AND the record was recorded more than `grace_days` ago, the record walks `foundational → tactical → observational → archived` (or is hard-deleted with `--hard`). Each demotion stamps `anchor_decay_demoted_at: <iso-date>` so the signal is auditable across passes.
+- **Records with zero anchors are exempt** — the absence of anchors means "applies globally," not "100% broken."
+- **Staleness still wins** when both apply — the record archives for staleness without an intermediate anchor-decay stamp.
+- **Co-existence with supersession** — a record that is both superseded and anchor-decayed still demotes only one tier per pass, but both `supersession_demoted_at` and `anchor_decay_demoted_at` get stamped.
+- **`--explain`** flag: prints per-record reasons for each demotion, listing the broken anchors (kind + path) and the tier transition. Works for both supersession and anchor decay.
+- **Configurable knobs** under `decay.anchor_validity` in `mulch.config.yaml`:
+  ```yaml
+  decay:
+    anchor_validity:
+      threshold: 0.5    # demote if valid_fraction < this
+      grace_days: 7     # don't punish records younger than this
+      weight: 1.0       # reserved for the future R-05g fitness blend
+  ```
+- **JSON output adds `totalAnchorDemoted`, `totalSupersessionDemoted`, plus per-domain `anchor_demoted` / `supersession_demoted`** breakdowns alongside existing `pruned` / `demoted` counts. With `--explain`, the payload includes an `explanations[]` array.
+
+#### Supersession-Based Auto-Demotion (R-05e, mulch-4426)
+- **`ml prune` demotes superseded records by one tier per pass**: when record B has `supersedes: [A]`, A walks down the classification ladder (`foundational → tactical → observational → archived`). Each demotion stamps `supersession_demoted_at: <iso-date>` on A so the event is auditable. The signal was already in the schema — supersession is now a first-class decay axis.
+- **Cross-domain by design**: a record in domain X can supersede a record in domain Y. Supersession is content-relational, not domain-bound.
+- **Staleness wins on overlap**: a record that is both stale and superseded gets archived for staleness in one shot, no intermediate demotion stamp.
+- **`--aggressive`** flag on `ml prune`: collapses every superseded record straight to archived (or hard-deleted with `--hard`) in a single pass instead of walking the ladder.
+- **Self-supersession is a no-op**: a record listing its own id under `supersedes` is treated as a typo and ignored.
+- **JSON output adds `totalDemoted` and per-domain `demoted` counts** alongside the existing `totalPruned` / `pruned`. The pre-prune hook payload now carries both `stale` and `demote` arrays per candidate domain.
+
+#### Soft Archive on Prune (R-05a, mulch-7876)
+- **`ml prune` defaults to soft-archive**: stale records move to `.mulch/archive/<domain>.jsonl` (with `status: "archived"` and `archived_at: <iso-date>` fields) instead of being deleted. A single bad classification at record-time stops being destructive — recoverable with one command.
+- **`--hard`** opt-in for true deletion (legacy behavior).
+- **Archive file format**: each `.jsonl` starts with a banner comment line (`# ARCHIVED — not for active use. Run \`ml restore <id>\` to revive.`). `readExpertiseFile` now skips `#`-prefixed lines so banners don't break reads.
+- **`ml restore <id>`**: new command. Searches archives across all domains, removes the record from the archive, strips lifecycle fields, and appends back to the live expertise file. Errors on cross-domain ambiguity.
+- **`ml search --archived`**: opt-in flag includes archived records in search output, rendered in a dedicated `## <domain> (archived, N records)` section with `[ARCHIVED <date>] mx-id [type] summary` lines per record. Excluded by default. JSON mode adds an `archived` array per domain.
+- **`ml prime` and default `ml search` never read `.mulch/archive/`** — they only walk `.mulch/expertise/`. Agents told via the onboard snippet not to grep the archive directly.
+- **Onboard snippet** bumped to v4 with archive guidance.
+
+#### Custom-Type Inheritance (R-01, mulch-4d6d)
+- **`extends: <builtin>`** on `custom_types` entries: inherit `required` / `optional` / `dedup_key` / `id_key` / `summary` / `compact` / `section_title` / `extracts_files` / `files_field` from one of the six built-in types. Override only what differs; arrays merge as a union. Listing a parent's `optional` field under the child's `required` promotes it (and removes it from `optional`). Closes the last open R-01 sub-item — corpora stay portable because agents reading an unknown child type fall back to the parent's semantics under `--allow-unknown-types`.
+- **Validation**: `extends` must reference a built-in (custom-from-custom is not supported in v1) and must not be on the `disabled_types` list (hard error at registry init).
+- **AJV schema layering**: the merged schema lists the union of parent + child required fields and unions their `properties`; `additionalProperties: false` is preserved, and the child's `type` const overrides the parent's.
+
+#### Directory Anchors (R-01, mulch-476b)
+- **`dir_anchors[]`** as a built-in field on every record type — repo-relative POSIX directory paths the record applies to. Survives file rename/move within the directory, where `files[]` (file anchors) get invalidated.
+- **`--dir-anchor <path>`** flag on `ml record` (repeatable). Trailing slashes are normalized away on write (`src/utils/` → `src/utils`); duplicates collapsed and entries stored sorted.
+- **Auto-population from git context**: when no `--dir-anchor` is supplied, `ml record` infers anchors from the immediate parent of changed files — any directory that is the parent of 3+ changed files becomes a dir anchor. Explicit `--dir-anchor` wins over the heuristic.
+- **`ml prime --files <path>` matches by directory membership**: a record matches when *either* `files[]` lists the path *or* any `dir_anchors[]` entry is an ancestor directory. Boundary-respecting prefix check (`src/util` does not match `src/utils/foo.ts`).
+- **`ml doctor` extension**: the existing `file-anchors` check now scans `dir_anchors[]` and flags entries pointing at deleted directories. `--fix` strips broken dir anchors the same way it strips broken file anchors; when every entry is broken, the field is removed entirely.
+
+#### Per-Domain Allowed Types & Required Fields (R-01b/c/d)
+- **`domain.allowed_types`**: gate which record types may be written into a domain — `ml record` rejects any `--type` not in the list and prints a copy-paste retry hint with the first allowed type filled in. Empty/missing list preserves back-compat (any registered type accepted). `disabled_types` wins on overlap so peer agents in shared domains don't hard-fail when a type is being retired.
+- **`domain.required_fields`**: require additional top-level fields on every record written into a domain. `ml record` rejects writes that omit any listed field with a single retry hint listing all missing fields. Stacks on top of per-type required fields — adds, never replaces. Top-level fields only.
+- **Doctor re-validation**: new `domain-conformance` (informational) and `domain-violations` (failing) checks surface existing records that violate domain rules — catches worktree/CI lag where records land via `merge=union` before config does. No `--fix` in v1: violations need human judgment (rewrite vs. relax the rule).
+- **Sync re-validation**: `ml sync` re-reads `mulch.config.yaml` and re-validates every on-disk record against the current rules before staging. Once config catches up, sync reconciles without a process restart. Sync intentionally ignores `--allow-domain-mismatch` — escape hatches stop at the commit gate.
+- **`--allow-domain-mismatch`** global flag: tolerates rule violations during the lag window. Honored by `ml record` and `ml validate` only.
+- **Config reshape (mulch-68ba)**: `domains` reshaped from `string[]` to `Record<string, DomainConfig>` so per-domain settings have a home. Legacy `string[]` configs are normalized to the object map at read time — no on-disk rewrite — so older configs keep working without user action. The first `mulch` write that touches `mulch.config.yaml` (e.g. `ml add`) will round-trip the file in the new shape.
+
+#### Domain-Rules Compatibility Surfacing (mulch-cc51)
+- **New `domain-rules-compatibility` doctor check**: when `domain.required_fields` names a field no allowed type can hold (built-in/custom schemas use `additionalProperties: false`), `ml doctor` now reports the offending field, lists the domain's allowed types, and prints a fix-it hint pointing at `custom_types`. Catches the misconfiguration at config time instead of every write.
+- **Targeted runtime hint on AJV failure**: when a record write fails schema validation AND the rejected `additionalProperty` is in `domain.required_fields`, `ml record` now appends a clear hint identifying the field and the type that doesn't declare it, instead of letting users wade through the raw `oneOf` / `additionalProperties` soup.
+
+#### Lifecycle Hooks (R-02)
+- **`hooks` config block** in `mulch.config.yaml`: declare ordered shell scripts for `pre-record`, `post-record`, `pre-prime`, and `pre-prune`. Each script is invoked with the relevant payload as JSON on stdin (`MULCH_HOOK=1` set in the environment, cwd at the project root). Exit `0` to continue; non-zero **blocks** for `pre-*` events and **warns** for `post-*` events.
+- **Payload mutation** for `pre-record` and `pre-prime`: a script may print a modified JSON payload on stdout, which becomes input to the next script and the eventual write. Useful for redaction, owner injection, team-scoped filtering. Empty stdout leaves the payload untouched. Non-JSON stdout is ignored with a warning. Both `{ event, payload }` and bare-payload shapes are accepted on the way back.
+- **Composition**: multiple scripts per event run in declaration order. Pre-* short-circuit on the first non-zero exit; post-* runs all scripts and surfaces every failure as a separate warning.
+- **Per-hook timeout** via `hook_settings.timeout_ms` (default 5000). Bun SIGKILLs the subprocess on timeout; a timed-out `pre-*` hook is treated as blocking.
+- **Dry-run skips hooks** (record, prune): previews never fire side-effecting hooks like Slack posts or `digest-then-confirm` confirmations.
+- **Init scaffold** documents the `hooks` and `hook_settings` blocks under the optional-knobs section of the generated config.
+
+#### Phase 3 Custom-Type Polish
+- **`disabled_types`** in `mulch.config.yaml`: list type names (built-in or custom) to mark as deprecated. Writes still succeed but emit a stderr warning (suppressed under `--quiet`); reads work as normal; the type stays in CLI choices so peers in shared domains aren't broken. Cross-project safe — overstory/greenhouse can retire a type without hard-failing partners.
+- **Unknown-type policy on read**: `readExpertiseFile` throws a targeted `Unknown record type "X" at <file>:<line> (id=<id>)` when a record's type isn't registered. Validate emits the same targeted error instead of Ajv's generic "no oneOf matched" blob.
+- **`--allow-unknown-types`** global flag: tolerates unregistered types in readers and validate. Escape hatch for the worktree/CI window where JSONL (`merge=union`) lands before `mulch.config.yaml` does. Sync intentionally ignores the flag — its job is to gatekeep commits.
+- **`ml sync` re-validates against on-disk config**: rebuilds the type registry from disk before validating, so once config catches up, sync reconciles without needing a process restart.
+- **Custom-type aliases**: `aliases: { canonical_field: [legacy_name, ...] }` in `custom_types` declares former field names. At read time, legacy fields are rewritten to the canonical name (canonical wins on conflict, legacy is dropped). Writes always use canonical. Schema-evolution support — rename a field without rewriting historic JSONL.
+- **`ml doctor` type registry listing**: new `type-registry` check enumerates registered types (built-in vs custom) with per-type counts and a `(disabled)` marker. New `unknown-types` check fails with file/line/id details for unregistered records.
+- **Init scaffold updated**: commented `disabled_types`, `custom_types`, and `aliases` examples in the generated `mulch.config.yaml` so users can discover the knobs.
+
+### Fixed
+
+#### Custom-type summary templates: brace-style + register-time validation (mulch-2da1)
+- **Mustache-style `{{field}}` now resolves identically to `{field}`** in `compileSummaryTemplate`, so the prior init-wizard examples (and any user templates copied from Mustache-style docs) render correctly instead of leaking literal braces around the value.
+- **Unknown-token validation at registry load**: `validateCustomTypeConfig` now rejects summary templates whose tokens aren't declared on the type (or inherited via `extends`, or a base record field). The error names the bad token and lists every legal one, replacing the previous silent empty-string render at `ml prime` time.
+- **Init-wizard examples** (`src/utils/config.ts`) and the README's `Custom Types` / `Aliases (Schema Evolution)` snippets are now single-brace `{field}` for consistency. The README also calls out that both styles are accepted and tokens are validated.
+
+#### Doctor domain-violations record count (mulch-7ac8)
+- `ml doctor`'s `domain-violations` check now counts records (not message lines) in its summary so the failing-check tally matches reality.
+
+#### Prime token estimator handles custom record types
+- `ml prime`'s budget enforcement no longer crashes when summing tokens for a custom record type — previously the type-specific token estimator only knew about the six built-ins.
+
+### Testing
+
+- 1120 tests across 58 files, 2681 expect() calls (up from 840 / 41 / 1935 in 0.7.0)
+- New tests for: `rank` command, lifecycle hooks (pre/post-record, pre-prime, pre-prune), soft-archive prune (archive read/write, banner skipping, restore, search --archived), supersession demotion, anchor-validity decay, custom-type inheritance via `extends`, dir anchors (record write, prime --files matching, doctor scanning), per-domain `allowed_types` / `required_fields` gates, doctor re-validation, sync re-validation, registry (custom types, disabled_types, unknown-type policy, aliases), provider recipe discovery (filesystem, npm, built-in resolution + --list)
+
+## [0.7.0] - 2026-04-28
+
+### Added
+
+#### Global `--format` Flag
+- Global `--format <markdown|compact|xml|plain>` flag that routes record-rendering commands (`ml prime`, `ml query`, `ml search`) through the selected formatter. `xml` is Claude-optimized, `plain` is Codex-optimized, `compact` emits one-liners (the default for `ml prime`), `markdown` emits the full sectioned layout. Per-command `--format` (including `ml query --format ids` and `ml search --format ids`) still wins over the global flag. `ml prime --compact` and `ml prime --full` are kept as aliases for `--format compact` and `--format markdown` respectively.
+- `ml query --format xml|plain` and `ml search --format xml|plain` — the four formatters are now reachable from any record-rendering command, not just `ml prime`.
+
+#### Manifest Mode for Monoliths
+- `ml prime --manifest` emits a quick reference + per-domain index (with per-record-type counts and governance status) instead of full records — designed for monolith projects where dumping every record across every domain wastes agent context
+- Optional `prime.default_mode` config knob in `.mulch/mulch.config.yaml`: set to `manifest` so plain `ml prime` (with no scoping args) emits the index by default; `ml prime <domain>` and `ml prime --files <path>` keep loading full records for the requested scope
+- `--full` flag forces full output even when config says `manifest`
+- `--manifest` combined with any scoping argument (`<domain>`, `--domain`, `--exclude-domain`, `--context`, `--files`) is a hard error with a usage hint
+- `ml prime --manifest --json` emits a structured `{ type: "manifest", quick_reference, domains[] }` payload with per-type counts and per-domain health status
+
+#### Search Confirmation-Frequency Boost
+- `ml search <query>` now applies a confirmation-frequency boost to BM25 scores by default: records with successful outcomes float above unconfirmed records at the same relevance. Boost factor is `1 + 0.1 * confirmation_score` per record (records with no outcomes are unaffected). Activates the previously-unused `applyConfirmationBoost` helper.
+- Optional `search.boost_factor` knob in `.mulch/mulch.config.yaml` to tune or disable the boost (`0` = pure BM25)
+- `ml search --no-boost` flag as a per-call escape hatch back to pure BM25 ordering. `--sort-by-score` is unchanged and continues to work as a confirmation-only post-sort.
+
+#### Init Scaffolding
+- `ml init` now writes `.mulch/mulch.config.yaml` from a templated string with a header comment and a commented-out optional-knobs section (currently `prime.default_mode`) so users can discover settings without reading the source. The body is generated via `yaml.dump(DEFAULT_CONFIG)` so required-field values can't drift; subsequent `writeConfig()` calls still round-trip through the YAML serializer and strip comments — by design, the scaffold lives only at init time.
+
+#### Tooling
+- `scripts/version-bump.ts` — atomically bumps `package.json` and `src/cli.ts` in lockstep; wired into `bun run version:bump <major|minor|patch>`. (The script existed in `package.json` since 2026-03-05 but was never committed; fresh clones used to fail to bump.)
+
+### Changed
+
+- `ml onboard` snippet rewritten to cover 0.6.4 agent workflow: multi-tracker evidence (`--evidence-seeds`/`--evidence-gh`/`--evidence-linear`), git auto-context for commit + files, `--relates-to`, outcome merge on upserts, retry hints on validation failures, `ml doctor --fix` for broken file anchors, and worktree-safe storage; now also mentions manifest mode for monolith discovery
+- `ONBOARD_VERSION` bumped to 3 so existing `v:1` and `v:2` installs are detected as outdated and migrated on the next `ml onboard`
+- `MULCH_README` (rendered to `.mulch/README.md` on `ml init`) now documents the optional `prime.default_mode` knob
+- `formatMcpOutput` / `McpDomain` renamed to `formatJsonOutput` / `JsonDomain` to match reality (no MCP integration was ever wired up)
+- TypeScript bumped from 5.9.3 to **6.0.3** (Dependabot #20); `bun.lock` regenerated to match
+
+### Removed
+
+- `ml prime --mcp` flag (use `--json` instead — the two produced identical output and there was no MCP integration consuming the flag)
+
+### Testing
+
+- 840 tests across 41 files, 1935 expect() calls (up from 811 / 41 / 1848 in 0.6.5)
+- Expanded `test/commands/prime.test.ts` (+401 lines): manifest-mode output, scoping-conflict errors, `prime.default_mode` config resolution, `--full` override, JSON manifest payload shape
+- Expanded `test/commands/query.test.ts` (+122 lines) and `test/commands/search.test.ts` (+140 lines): global `--format` resolution across xml/plain/markdown/compact, per-command `--format` precedence
+- Expanded `test/commands/init.test.ts` (+26 lines): scaffolded YAML header comment and commented-out `prime.default_mode` block
+
+## [0.6.5] - 2026-04-22
+
+### Fixed
+
+- `ml prime` domain-not-found hints now emit `ml add <domain>` instead of `mulch add <domain>` — finishes the `ml` alias unification across teaching surfaces (applies to both `--domain` and `--exclude-domain` missing-domain errors)
+
+### Changed
+
+#### Lint & Type Strictness
+- Biome `noNonNullAssertion` promoted from warning to **error**, and `bun run lint` now runs with `--error-on-warnings` so any regression fails CI
+- All `!` non-null assertions removed from `src/` (production code) and across 7 test files — replaced with explicit narrowing or optional chaining
+- ~74 `as` type casts in tests replaced with real runtime narrowing (e.g., `if (!x) throw …`) so tests exercise the same type flow as production code
+
+### Testing
+
+- 811 tests across 41 files, 1848 expect() calls (unchanged from 0.6.4; coverage preserved through the strictness refactor)
+
+## [0.6.4] - 2026-04-22
+
+### Added
+
+#### New CLI Commands
+- `ml delete-domain <domain>` — remove a domain from config and delete its expertise JSONL file; `--yes` skips confirmation, `--dry-run` previews without changes; destructive operation is wrapped in a file lock for concurrency safety
+
+#### Worktree-Aware Storage
+- `getMulchDir()` now resolves to the main repo's `.mulch/` directory when run from inside a git worktree, preventing expertise loss when worktrees are cleaned up
+- `ml sync` skips commits in worktree context with an informational message
+- Mirrors the pattern from seeds' `resolveWorktreeRoot()` (see `src/utils/git.ts`)
+
+#### Schema Evidence & Auto-Context
+- Evidence schema now supports multiple tracker fields alongside `bead`: `seeds`, `gh`, `linear` — record origin tickets from any tracker
+- `src/utils/git-context.ts`: `getCurrentCommit()` and `getContextFiles()` auto-populate `evidence.commit` and `files[]` without requiring explicit flags
+- Upsert of named records (pattern/decision/reference/guide) now **merges outcomes** — existing outcomes are preserved and new ones appended instead of replaced
+- Record validation failures now emit a copy-paste **retry hint** with placeholders for missing required fields
+
+#### Prime Output Enrichment
+- Compact quick reference: new type → required-fields table in `ml prime`
+- `--files` reframed as "prime before editing a file", not just session start
+- `--relates-to` included in evidence guidance (compact and verbose modes)
+- Compact lines now show classification age (`tactical 7d ago`, `observational 14d ago`; foundational is permanent) and confirmation score `★N` when > 0
+
+#### Doctor Health Checks
+- `checkFileAnchors()` in `ml doctor` warns when records reference filesystem paths (`PatternRecord.files[]`, `ReferenceRecord.files[]`, `evidence.file`) that no longer exist
+- `ml doctor --fix` strips broken anchors from records without deleting the records themselves
+
+### Changed
+
+- **Messaging unification**: all teaching surfaces now use the `ml` short alias instead of `mulch` — onboard snippet, setup recipes (cursor/codex/generic), prime output (`src/utils/format.ts`), session-end reminder, and `.mulch/README.md` template (`src/utils/config.ts`)
+- `ml onboard` fallback: when no snippet is found and neither `CLAUDE.md` nor `AGENTS.md` exists, now creates `CLAUDE.md` by default (previously `AGENTS.md`); if `AGENTS.md` already exists without a snippet, still appends there
+- `onboard` outdated/legacy check messages now reference `ml onboard`
+- `formatStatusOutput` empty-domain message now references `ml add`
+- `query` hint and error messages now reference `ml add` / `ml init`
+- README Quick Start includes `ml prime --files src/foo.ts`; example output uses `records` instead of `entries`
+
+### Fixed
+
+- `isInsideWorktree` false positive in git submodules — `--git-common-dir` returns `/parent/.git/modules/<name>` for submodules, which does not end with `.git`; guard against this by returning `false` early
+- `upgrade --check` test timeout increased from 5s to 15s (npm registry network call can exceed default Bun test timeout in CI)
+
+### Tooling
+
+- Upgraded Biome from 1.9 to **2.4.6** — applies tab indentation, import sorting, unused import/variable removal, and updated lint rules across all source and test files
+- `ci: extract changelog notes for GitHub releases` — `publish.yml` now uses `awk` to pull the version section from `CHANGELOG.md`, falling back to `--generate-notes` if no entry is found
+
+### Testing
+
+- 811 tests across 41 files, 1848 expect() calls
+- New `test/commands/delete-domain.test.ts` (CLI-level via Commander + unit tests: --yes, --dry-run, confirmation prompt, file lock, removeDomain config update)
+- New `test/utils/worktree.test.ts` (worktree-aware storage resolution, submodule false-positive guard)
+- New `test/utils/git-context.test.ts` (auto-populate commit and files[] from git context)
+- Expanded `test/commands/prime.test.ts` (per-type required fields table, per-file framing, classification age, confirmation score markers)
+- Expanded `test/commands/doctor.test.ts` (file-anchors check, --fix stripping broken anchors)
+- Updated `test/commands/onboard.test.ts` (CLAUDE.md default fallback, ml alias)
+
+## [0.6.3] - 2026-02-26
+
+### Added
+
+#### Bulk Delete
+- `ml delete <domain> --records <ids>` — delete multiple records by comma-separated IDs in a single operation
+- `ml delete <domain> --all-except <ids>` — delete all records except specified IDs (inverse selection)
+- `--dry-run` flag for delete command — preview what would be deleted without making changes
+
+#### Output Formatting
+- `--format <markdown|compact|ids>` flag for `ml query` and `ml search` — choose output format (`ids` emits one record ID per line, useful for piping)
+- `--verbose` promoted to global flag — available on all commands (previously `prime`-only `-v`/`--verbose`)
+
+#### CLI Improvements
+- Levenshtein-based typo suggestions for unknown commands (e.g., `ml recrod` → "Did you mean 'record'?")
+- Per-type required fields table added to `ml prime` "Recording New Learnings" section
+- Package metadata: `keywords`, `engines`, `homepage`, `bugs`, `repository`, and ecosystem footer added to package.json and README
+
+### Changed
+
+- `ml upgrade` uses `getCurrentVersion()` from `version.ts` instead of importing `VERSION` constant — improves testability
+- Ecosystem footer added to README (os-eco branding)
+- `showSuggestionAfterError(false)` disables Commander's built-in suggestions in favor of custom Levenshtein suggestions
+
+### Fixed
+
+- Biome formatting in timing test (`test/commands/timing.test.ts`)
+
+### Testing
+
+- 763 tests across 38 files, 1763 expect() calls
+- New `test/suggestions.test.ts` (Levenshtein typo suggestions: matching, no-match, distance threshold, JSON mode)
+- New `test/commands/sync.test.ts` (comprehensive sync command coverage: git init, validate, stage, commit)
+- New `test/commands/upgrade.test.ts` (upgrade command: up-to-date, update available, --check, install flow)
+- Expanded `test/commands/delete.test.ts` (bulk delete: --records, --all-except, --dry-run, flag combination errors, JSON mode)
+- Expanded `test/commands/query.test.ts` (--format compact, --format ids, piping workflows)
+- Expanded `test/commands/search.test.ts` (--format compact, --format ids, no-match ids output)
+- Expanded `test/commands/prime.test.ts` (required fields table in prime output)
+
+## [0.6.2] - 2026-02-25
+
+### Added
+
+- `mulch completions <shell>` command — generates shell completion scripts for bash, zsh, and fish (supports both `mulch` and `ml` aliases)
+- `--timing` global flag — prints execution time to stderr (`Done in Xms`) for performance profiling
+- Prioritize slash command (`.claude/commands/prioritize.md`) for Claude Code
+
+### Changed
+
+- `mulch update` deprecated and hidden — prints a warning directing users to `mulch upgrade`
+- Command parsing switched from `program.parse()` to `program.parseAsync()` for proper async support
+- Documentation updated to use `ml` short alias consistently throughout README and CLAUDE.md
+
+### Testing
+
+- 717 tests across 35 files, 1638 expect() calls
+- New `test/commands/completions.test.ts` (completions command coverage for bash, zsh, fish, ml alias, hidden commands, error handling)
+- New `test/commands/timing.test.ts` (--timing flag output on stderr, stdout isolation, opt-in behavior)
+- Updated `test/commands/update.test.ts` for deprecated update command behavior
+
+## [0.6.1] - 2026-02-25
+
+### Added
+
+#### New CLI Commands
+- `mulch outcome <domain> <id>` command — append outcomes to existing records (`--status success|failure|partial`, `--duration`, `--agent`, `--notes`, `--test-results`), or view existing outcomes when called without `--status`
+- `mulch upgrade` command — checks npm registry for newer versions and installs via `bun install -g` (`--check` for dry run); replaces the older `update` command approach
+
+#### Developer Experience
+- Auto-create domains: `mulch record` now auto-creates missing domains instead of erroring, with a branded confirmation message
+- Record validation hints: schema validation errors now include type-specific hints (e.g., "Hint: pattern records require: name, description")
+- Domain-not-found hints in `query`, `search`, and `prime` commands — suggests `mulch add <domain>` when a domain isn't found
+
+#### Health Checks
+- `mulch doctor` legacy-outcome check — detects records with deprecated singular `outcome` field on disk
+- `mulch doctor --fix` migrates legacy `outcome` fields to `outcomes[]` array format
+- `mulch validate` warns (non-error) on records with legacy singular `outcome` field, suggests `mulch doctor --fix`
+
+#### Programmatic API
+- `appendOutcome()` function exported from `@os-eco/mulch-cli` — programmatic outcome recording with locking
+- `OutcomeOptions` and `AppendOutcomeResult` types exported
+- Full scoring module exported: `getSuccessCount`, `getFailureCount`, `getTotalApplications`, `getSuccessRate`, `computeConfirmationScore`, `applyConfirmationBoost`, `sortByConfirmationScore`
+
+### Fixed
+- ENOENT crash when `mulch learn` runs in non-mulch projects (now exits gracefully)
+- Package name in version check — was using old `mulch-cli` instead of `@os-eco/mulch-cli`
+
+### Testing
+- 708 tests across 33 files, 1617 expect() calls
+- New `test/commands/outcome.test.ts` (outcome command coverage)
+- Expanded test suites: record (auto-create, validation hints), doctor (legacy-outcome), validate (legacy warnings), prime/query/search (domain-not-found hints), api (appendOutcome, scoring exports)
+
+## [0.6.0] - 2026-02-24
+
+### Added
+- Branding system (`src/utils/palette.ts`) — brand color (brown/soil), accent (amber for IDs), muted (stone gray), status icons, and message formatters (`printSuccess`, `printError`, `printWarning`)
+- `--quiet` / `-q` global option to suppress non-error output
+- `-v` shorthand for `--version`
+- `--version --json` outputs structured JSON (`name`, `version`, `runtime`, `platform`)
+- `VERSION` constant exported from `src/cli.ts` for programmatic access
+- Custom help screen formatting with branded colors and column layout
+- `ml` binary alias for `mulch`
+- Release slash command (`.claude/commands/release.md`)
+
+### Changed
+- **BREAKING**: Package renamed from `mulch-cli` to `@os-eco/mulch-cli` (scoped under `@os-eco` npm org)
+- **BREAKING**: Switched runtime from Node.js to Bun — `bun` is now required
+- All commands updated to use shared palette utilities instead of inline chalk calls
+- Replaced vitest with `bun:test` for all 675 tests across 32 files
+- Replaced ESLint/Prettier with Biome for linting and formatting
+- Source `.ts` files shipped directly (no build step needed)
+- All import extensions changed from `.js` to `.ts` (145 in src/, 98 in test/)
+- Simplified Ajv imports — Bun handles ESM/CJS interop natively (removed `_Ajv.default ?? _Ajv` shim)
+- Simplified `src/utils/version.ts` — uses `import.meta.dir` instead of `fileURLToPath`/`dirname`
+- CI workflows (`ci.yml`, `publish.yml`) now use `oven-sh/setup-bun@v2`
+- Publish workflow updated for scoped package with provenance signing
+- Onboard snippet now includes version marker (`mulch-onboard-v:1`) for staleness detection
+- Bumped `ajv` from 8.17.1 to 8.18.0
+
+### Fixed
+- Test pollution from shallow copy of `DEFAULT_CONFIG.governance` — now deep-cloned
+
+### Removed
+- `dist/` build output (Bun runs `.ts` directly)
+- `vitest.config.ts` (using `bun:test`)
+- `package-lock.json` (using `bun.lock`)
+- `.beads/` directory (replaced by `.seeds/` for issue tracking)
+
+### Testing
+- 675 tests across 32 files, 1541 expect() calls
+
+## [0.5.0] - 2026-02-20
+
+### Added
+
+#### Programmatic API
+- High-level programmatic API (`src/api.ts`) — `recordExpertise()`, `searchExpertise()`, `queryDomain()`, `editRecord()` for use as a library, with full type exports via `src/index.ts`
+
+#### Query Command Enhancements
+- `--outcome-status <status>` filter for `mulch query` — filter records by outcome status (success/failure)
+- `--sort-by-score` flag for `mulch query` — sort results by confirmation-frequency score (highest first)
+
+### Changed
+
+- **Breaking**: Migrated `BaseRecord.outcome` (singular `Outcome`) to `outcomes` (array `Outcome[]`) — existing records with `outcome` field should be migrated to `outcomes: [...]`
+- Schema, scoring, format, search, query, edit, and record commands all updated for `outcomes[]` array
+
+### Testing
+
+- New `test/api.test.ts` with 26 tests for the programmatic API
+- Expanded `test/commands/query.test.ts` from 6 to 31 tests (outcome-status filter, sort-by-score, JSON output mode)
+- 671 tests across 32 test files
+
+## [0.4.3] - 2026-02-20
+
+### Added
+
+- Confirmation-frequency scoring module (`src/utils/scoring.ts`) — tracks record application outcomes (success/failure/partial) and computes confirmation scores for prioritization
+- Optional `outcome` field on all record types — agents can record whether applying a record's guidance succeeded or failed (`--outcome-status`, `--outcome-duration`, `--outcome-test-results`, `--outcome-agent`)
+- `--sort-by-score` flag for `mulch search` — orders results by confirmation-frequency score (most-confirmed records first)
+- `--classification` filter for `mulch search` and `mulch query` — filter by foundational/tactical/observational
+- `--file` filter for `mulch search` and `mulch query` — substring match on records with `files[]` field
+- `filterByClassification()` and `filterByFile()` utilities in `src/utils/expertise.ts`
+
+### Changed
+
+- `mulch prime` budget sorting now uses confirmation score as a third-level sort factor (after type and classification, before recency)
+- `DomainRecords.records` widened from `ExpertiseRecord[]` to `ScoredRecord[]` to support outcomes
+
+### Testing
+
+- New `test/utils/scoring.test.ts` with 40 tests for the scoring module
+- 625 tests across 31 test files
+
+## [0.4.2] - 2026-02-17
+
+### Fixed
+
+- `compact --auto` now respects domain argument to filter compaction to specific domain
+- `compact --analyze` now respects domain argument to filter analysis to specific domain
+- `compact --auto --dry-run` shows detailed preview instead of terse summary
+- `compact --analyze` output has better formatting with domain grouping and visual hierarchy
+- `doctor` command now prints `check.details` for non-pass checks (e.g., governance threshold violations were silently hidden)
+
+### Testing
+
+- Added comprehensive domain filtering tests for compact command
+- Added doctor governance threshold violation detection test
+- 539 tests across 30 test files
+
+## [0.4.1] - 2026-02-17
+
+### Added
+
+- Quick reference section in compact `mulch prime` output — shows essential commands (`search`, `prime --files`, `prime --context`, `record`, `doctor`) so agents have a cheat sheet without switching to `--full` mode
+
+### Testing
+
+- 532 tests across 30 test files
+
+## [0.4.0] - 2026-02-15
+
+### Added
+
+- BM25 search ranking algorithm — `mulch search` now returns results ranked by relevance instead of raw order (`src/utils/bm25.ts`)
+- `--dry-run` flag for `mulch record` — preview what would be created/updated/skipped without writing to JSONL (works with `--batch` and `--stdin`)
+- `--batch <file>` flag for `mulch record` — read JSON records from a file (more discoverable alternative to `--stdin`)
+- Cross-domain record references — `relates_to` and `supersedes` now accept `domain:mx-hash` format (e.g., `api:mx-abc123`) in addition to local `mx-hash`
+- Required-fields-per-type table in `mulch record --help` output
+- Comprehensive tests for `src/index.ts` exports
+
+### Changed
+
+- `mulch search` uses BM25 scoring for ranked results instead of simple substring matching
+- README: added 'Batch recording' section documenting `--batch` and `--stdin` workflows
+- `mulch prime` verbose output updated to show `--batch` alongside `--stdin`
+
+## [0.3.1] - 2026-02-15
+
+### Changed
+
+- `mulch prime` full/verbose output now documents `mulch learn`, `mulch sync`, `mulch diff`, `mulch compact --auto`, `--files`/`--exclude-domain` flags, `--evidence-bead`/`--evidence-commit` evidence linking, and `--stdin` batch recording
+- Session close protocol (all formats) streamlined from 4 steps to 3: `mulch learn` → `mulch record` → `mulch sync` (replaces manual `mulch validate` + `git add` + `git commit`)
+- Onboard snippet (`CLAUDE.md`/`AGENTS.md`) updated with `mulch prime --files` tip, evidence linking, and `mulch learn`/`mulch sync` workflow
+- Provider setup recipes (Cursor, Codex, Gemini, Windsurf, Aider) updated with same session-end workflow
+
+## [0.3.0] - 2026-02-13
+
+### Added
+
+- `mulch diff` command — shows expertise changes between git refs (`mulch diff HEAD~3`, `mulch diff main..feature`)
+- `--files` flag for `mulch prime` — filter records by file paths (`mulch prime --files src/utils/config.ts`)
+- `--exclude-domain` flag for `mulch prime` — exclude specific domains from output
+- `--stdin` flag for `mulch record` — batch-record from JSON on stdin (single object or array)
+- `--evidence-bead` flag for `mulch record` — link records to bead issue IDs
+- `compact --auto` flag — deterministic auto-compaction that merges groups of same-type records without LLM
+- `compact --auto` guardrails — `--min-group <n>`, `--max-records <n>`, and `--dry-run` flags to control compaction aggressiveness
+- Health metrics in `status --json` — `governance_utilization`, `stale_count`, `staleness_ratio`, classification breakdowns per domain
+- Functional API export (`src/index.ts`) — programmatic access to config, expertise, and schema utilities
+- Optional `bead` field on Evidence type for linking records to issue trackers
+- CONTRIBUTING.md with fork/branch workflow, ESM conventions, and test guidelines
+- SECURITY.md with private vulnerability reporting via GitHub Security Advisories
+- PR template and issue templates (bug report, feature request)
+- Dependabot config for npm and GitHub Actions dependency updates
+- FUNDING.yml for GitHub Sponsors
+- README badges (npm version, CI status, license, node version)
+
+### Changed
+
+- `record --stdin` infers record type from JSON input when `--type` is omitted
+- `record --stdin` defaults classification to `tactical` when not specified
+- Auto-tag git releases in publish workflow on version bump
+- Enabled auto-delete of merged PR branches
+- Required CI status checks on main branch protection
+
+### Fixed
+
+- `--full` flag being ignored in `prime` command
+- `--files` flag referencing undefined variable in `prime` command
+
+### Security
+
+- Hardened against command injection, path traversal, symlink attacks, and temp file races (thanks @burakseyman)
+
+## [0.2.5] - 2026-02-12
+
+### Added
+
+- Session-end reminder section in `mulch prime` output — reminds agents to record learnings before completing tasks (all non-MCP formats)
+- Token budget for `mulch prime` — `--budget <tokens>` (default 4000) caps output size with smart record prioritization (conventions first, then decisions, patterns, guides, failures, references)
+- `--no-limit` flag to disable token budget
+
+## [0.2.4] - 2026-02-12
+
+### Added
+
+- Advisory file locking (`withFileLock`) for safe concurrent writes across multiple agents
+- Atomic JSONL writes via temp file + rename to prevent partial/corrupt files
+
+### Fixed
+
+- CI workflow now runs `build` before `test` so integration tests find `dist/cli.js`
+
+## [0.2.3] - 2026-02-11
+
+### Added
+
+- `mulch update` command — checks npm registry for newer versions and installs them (`--check` for dry run)
+- Version check integrated into `mulch doctor`
+- `mulch onboard` now uses `<!-- mulch:start -->` / `<!-- mulch:end -->` markers for idempotent updates
+
+### Changed
+
+- Record addressing switched from 1-based JSONL line indices to stable `mx-` prefix IDs
+
+## [0.2.2] - 2026-02-11
+
+### Changed
+
+- Standardized on ID-based record addressing (replacing line-index addressing in `edit` and `delete`)
+
+## [0.2.1] - 2026-02-10
+
+### Changed
+
+- Synced all user-facing messaging across onboard snippets, setup recipes, CLAUDE.md, and README
+- Agent prompts now ask agents to "review your work for insights" before completing tasks
+
+## [0.2.0] - 2026-02-10
+
+### Added
+
+- `reference` and `guide` record types
+- Multi-domain scoping for `mulch prime` (variadic args and `--domain` flag)
+- `mulch search` command with case-insensitive substring matching, `--domain` and `--type` filters
+- `mulch compact` command with `--analyze` mode for finding compaction candidates
+- Record deduplication in `mulch record` (upsert named types, skip exact-match unnamed types, `--force` override)
+- Optional `tags` field on all record types
+- Compact output as default for `mulch prime` (`--full` for verbose)
+- GitHub Actions CI workflow (lint, build, test)
+- GitHub Actions publish workflow (auto-publish to npm on version bump)
+
+### Fixed
+
+- Flaky prune boundary test — `Math.floor` age-in-days so boundary records land on exact whole days
+
+## [0.1.0] - 2026-02-10
+
+### Added
+
+- Initial release
+- Core commands: `init`, `add`, `record`, `edit`, `query`, `prime`, `status`, `validate`
+- Infrastructure commands: `setup`, `onboard`, `prune`, `doctor`
+- JSONL storage in `.mulch/expertise/<domain>.jsonl`
+- YAML config at `.mulch/mulch.config.yaml`
+- Six record types: `convention`, `pattern`, `failure`, `decision`, `reference`, `guide`
+- Three classifications with shelf lives: `foundational` (permanent), `tactical` (14 days), `observational` (30 days)
+- Provider setup recipes for Claude, Cursor, Codex, Gemini, Windsurf, and Aider
+- Git merge strategy (`merge=union`) for JSONL via `.gitattributes`
+- Schema validation with Ajv
+- Prime output formats: `xml`, `plain`, `markdown`, `--mcp` (JSON)
+- Context-aware prime via `--context` (filters by git changed files)
+
+[Unreleased]: https://github.com/jayminwest/mulch/compare/v0.11.0...HEAD
+[0.11.0]: https://github.com/jayminwest/mulch/compare/v0.10.7...v0.11.0
+[0.10.7]: https://github.com/jayminwest/mulch/compare/v0.10.6...v0.10.7
+[0.10.6]: https://github.com/jayminwest/mulch/compare/v0.10.5...v0.10.6
+[0.10.5]: https://github.com/jayminwest/mulch/compare/v0.10.4...v0.10.5
+[0.10.4]: https://github.com/jayminwest/mulch/compare/v0.10.3...v0.10.4
+[0.10.3]: https://github.com/jayminwest/mulch/compare/v0.10.2...v0.10.3
+[0.10.2]: https://github.com/jayminwest/mulch/compare/v0.10.1...v0.10.2
+[0.10.1]: https://github.com/jayminwest/mulch/compare/v0.10.0...v0.10.1
+[0.10.0]: https://github.com/jayminwest/mulch/compare/v0.9.0...v0.10.0
+[0.9.0]: https://github.com/jayminwest/mulch/compare/v0.8.0...v0.9.0
+[0.8.0]: https://github.com/jayminwest/mulch/compare/v0.7.0...v0.8.0
+[0.7.0]: https://github.com/jayminwest/mulch/compare/v0.6.5...v0.7.0
+[0.6.5]: https://github.com/jayminwest/mulch/compare/v0.6.4...v0.6.5
+[0.6.4]: https://github.com/jayminwest/mulch/compare/v0.6.3...v0.6.4
+[0.6.3]: https://github.com/jayminwest/mulch/compare/v0.6.2...v0.6.3
+[0.6.2]: https://github.com/jayminwest/mulch/compare/v0.6.1...v0.6.2
+[0.6.1]: https://github.com/jayminwest/mulch/compare/v0.6.0...v0.6.1
+[0.6.0]: https://github.com/jayminwest/mulch/compare/v0.5.0...v0.6.0
+[0.5.0]: https://github.com/jayminwest/mulch/compare/v0.4.3...v0.5.0
+[0.4.3]: https://github.com/jayminwest/mulch/compare/v0.4.2...v0.4.3
+[0.4.2]: https://github.com/jayminwest/mulch/compare/v0.4.1...v0.4.2
+[0.4.1]: https://github.com/jayminwest/mulch/compare/v0.4.0...v0.4.1
+[0.4.0]: https://github.com/jayminwest/mulch/compare/v0.3.1...v0.4.0
+[0.3.1]: https://github.com/jayminwest/mulch/compare/v0.3.0...v0.3.1
+[0.3.0]: https://github.com/jayminwest/mulch/compare/v0.2.5...v0.3.0
+[0.2.5]: https://github.com/jayminwest/mulch/compare/v0.2.4...v0.2.5
+[0.2.4]: https://github.com/jayminwest/mulch/compare/v0.2.3...v0.2.4
+[0.2.3]: https://github.com/jayminwest/mulch/compare/v0.2.2...v0.2.3
+[0.2.2]: https://github.com/jayminwest/mulch/compare/v0.2.1...v0.2.2
+[0.2.1]: https://github.com/jayminwest/mulch/compare/v0.2.0...v0.2.1
+[0.2.0]: https://github.com/jayminwest/mulch/compare/v0.1.0...v0.2.0
+[0.1.0]: https://github.com/jayminwest/mulch/releases/tag/v0.1.0

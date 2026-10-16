@@ -1,0 +1,205 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "urn:luuna:project:0.1",
+  "title": "Proposed Luuna project",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema_version",
+    "id",
+    "name",
+    "revision",
+    "repositories",
+    "relationships",
+    "policy"
+  ],
+  "properties": {
+    "schema_version": {
+      "const": "0.1"
+    },
+    "id": {
+      "type": "string",
+      "minLength": 1
+    },
+    "name": {
+      "type": "string",
+      "minLength": 1
+    },
+    "revision": {
+      "type": "integer",
+      "minimum": 1
+    },
+    "repositories": {
+      "type": "array",
+      "minItems": 1,
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "id",
+          "remote",
+          "default_branch",
+          "profiles",
+          "execution",
+          "checks"
+        ],
+        "properties": {
+          "id": {
+            "type": "string",
+            "pattern": "^[a-z][a-z0-9-]*$"
+          },
+          "remote": {
+            "type": "string",
+            "minLength": 1
+          },
+          "default_branch": {
+            "type": "string",
+            "minLength": 1
+          },
+          "profiles": {
+            "type": "array",
+            "minItems": 1,
+            "items": {
+              "type": "string"
+            }
+          },
+          "execution": {
+            "enum": [
+              "native",
+              "container"
+            ]
+          },
+          "checks": {
+            "type": "array",
+            "minItems": 1,
+            "items": {
+              "type": "object",
+              "additionalProperties": false,
+              "required": [
+                "id",
+                "executable",
+                "args",
+                "required",
+                "timeout_seconds",
+                "capabilities"
+              ],
+              "properties": {
+                "id": {
+                  "type": "string",
+                  "minLength": 1
+                },
+                "executable": {
+                  "type": "string",
+                  "minLength": 1
+                },
+                "args": {
+                  "type": "array",
+                  "items": {
+                    "type": "string"
+                  }
+                },
+                "required": {
+                  "type": "boolean"
+                },
+                "timeout_seconds": {
+                  "type": "integer",
+                  "minimum": 1
+                },
+                "capabilities": {
+                  "type": "array",
+                  "items": {
+                    "type": "string"
+                  }
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "relationships": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "producer",
+          "consumer",
+          "kind",
+          "contract",
+          "confirmed",
+          "evidence"
+        ],
+        "properties": {
+          "producer": {
+            "type": "string"
+          },
+          "consumer": {
+            "type": "string"
+          },
+          "kind": {
+            "enum": [
+              "api",
+              "package",
+              "generated-contract",
+              "runtime",
+              "integration"
+            ]
+          },
+          "contract": {
+            "type": "string"
+          },
+          "confirmed": {
+            "type": "boolean"
+          },
+          "evidence": {
+            "type": "array",
+            "minItems": 1,
+            "items": {
+              "type": "string"
+            }
+          }
+        }
+      }
+    },
+    "policy": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "approval",
+        "testing_prerequisite",
+        "publish",
+        "merge",
+        "max_explorers",
+        "max_implementers",
+        "max_task_repairs"
+      ],
+      "properties": {
+        "approval": {
+          "const": "plan"
+        },
+        "testing_prerequisite": {
+          "const": true
+        },
+        "publish": {
+          "const": "automatic_pr"
+        },
+        "merge": {
+          "const": "human"
+        },
+        "max_explorers": {
+          "type": "integer",
+          "minimum": 1
+        },
+        "max_implementers": {
+          "type": "integer",
+          "minimum": 1
+        },
+        "max_task_repairs": {
+          "type": "integer",
+          "minimum": 0
+        }
+      }
+    }
+  }
+}

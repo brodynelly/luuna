@@ -1,0 +1,102 @@
+{
+	"$schema": "https://biomejs.dev/schemas/2.4.14/schema.json",
+	"files": {
+		"includes": ["src/**", "scripts/**", "extensions/**", "!**/node_modules", "!**/.bun"]
+	},
+	"assist": { "actions": { "source": { "organizeImports": "on" } } },
+	"linter": {
+		"enabled": true,
+		"rules": {
+			"recommended": true,
+			"correctness": {
+				"noUnusedVariables": "error",
+				"noUnusedImports": "error",
+				"noUnusedFunctionParameters": "error",
+				"noUnusedPrivateClassMembers": "error"
+			},
+			"suspicious": {
+				"noExplicitAny": "error"
+			},
+			"style": {
+				"noNonNullAssertion": "error",
+				"useConst": "error",
+				"useImportType": "error",
+				"useExportType": "error",
+				"useNodejsImportProtocol": "error",
+				"useTemplate": "error",
+				"useFilenamingConvention": {
+					"level": "error",
+					"options": {
+						"strictCase": true,
+						"requireAscii": true,
+						"filenameCases": ["kebab-case"]
+					}
+				}
+			},
+			"complexity": {
+				"noUselessTypeConstraint": "error",
+				"noExcessiveLinesPerFunction": {
+					"level": "error",
+					"options": { "maxLines": 500 }
+				},
+				"noExcessiveCognitiveComplexity": {
+					"level": "error",
+					"options": { "maxAllowedComplexity": 15 }
+				}
+			}
+		}
+	},
+	"formatter": {
+		"enabled": true,
+		"indentStyle": "tab",
+		"lineWidth": 100
+	},
+	"overrides": [
+		{
+			"includes": ["scripts/check-all.ts", "scripts/check-ci-parity.ts"],
+			"formatter": {
+				"enabled": false
+			}
+		},
+		{
+			"includes": [
+				"src/index.ts",
+				"src/plan-domain.ts",
+				"src/plan-mulch.ts",
+				"src/plan-schema.ts",
+				"src/test-harness.ts",
+				"src/validation.ts",
+				"src/yaml.ts",
+				"src/commands/blocked.ts",
+				"src/commands/close.ts",
+				"src/commands/create.ts",
+				"src/commands/dep.ts",
+				"src/commands/doctor.ts",
+				"src/commands/label.ts",
+				"src/commands/list.ts",
+				"src/commands/migrate.ts",
+				"src/commands/onboard.ts",
+				"src/commands/plan.ts",
+				"src/commands/plan-show.ts",
+				"src/commands/ready.ts",
+				"src/commands/search.ts",
+				"src/commands/show.ts",
+				"src/commands/sync.ts",
+				"src/commands/tpl.ts",
+				"src/commands/unblock.ts",
+				"src/commands/update.ts",
+				"src/commands/upgrade.ts",
+				"scripts/check-file-sizes.ts",
+				"scripts/check-debt-markers.ts",
+				"scripts/validate-agents-md.ts"
+			],
+			"linter": {
+				"rules": {
+					"complexity": {
+						"noExcessiveCognitiveComplexity": "off"
+					}
+				}
+			}
+		}
+	]
+}

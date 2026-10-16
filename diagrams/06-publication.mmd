@@ -1,0 +1,22 @@
+flowchart TD
+    Candidate["Freeze candidate commit set"]
+    Checks["Required pre PR checks pass"]
+    Review["Independent review passes"]
+    Push["Push managed branches"]
+    PRs["Create linked PRs idempotently"]
+    Partial["Persist partial publication"]
+    CI["Observe PR triggered CI"]
+    Repair["Repair and revalidate"]
+    Human["Human approves merge"]
+    Done["All required PRs integrated"]
+    Candidate --> Checks
+    Checks --> Review
+    Review --> Push
+    Push --> PRs
+    PRs -->|"partial failure"| Partial
+    Partial -->|"reconcile missing only"| PRs
+    PRs --> CI
+    CI -->|"fails"| Repair
+    Repair --> Candidate
+    CI -->|"passes"| Human
+    Human -->|"all repositories"| Done

@@ -1,0 +1,25 @@
+flowchart TD
+    Ticket["Ready ticket and baseline"]
+    Scouts["Parallel read only exploration"]
+    Plan["One coordinated plan"]
+    Approve["Developer approves exact revision"]
+    Implement["Dependency ready implementation"]
+    Checks["Tests analysis and conventions"]
+    Review["Fresh independent diff review"]
+    Integration["Exact candidate integration"]
+    Publish["Create linked PRs"]
+    Pause["Pause with evidence"]
+    Human["Developer controls merge"]
+    Ticket --> Scouts
+    Scouts --> Plan
+    Plan --> Approve
+    Approve --> Implement
+    Implement --> Checks
+    Checks -->|"pass"| Review
+    Review -->|"pass"| Integration
+    Integration -->|"pass"| Publish
+    Publish --> Human
+    Checks -->|"bounded repair"| Implement
+    Review -->|"bounded repair"| Implement
+    Integration -->|"in scope repair"| Implement
+    Implement -->|"limit or blocker"| Pause

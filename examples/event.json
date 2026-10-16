@@ -1,0 +1,13 @@
+{
+  "schema_version": "0.1",
+  "event_id": "event-example",
+  "sequence": 1,
+  "timestamp": "2026-10-15T20:34:57Z",
+  "project_id": "example-project",
+  "run_id": "run-example",
+  "type": "check.finished",
+  "payload": {
+    "result_id": "check-example",
+    "illustrative_only": true
+  }
+}

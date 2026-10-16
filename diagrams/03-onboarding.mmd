@@ -1,0 +1,19 @@
+flowchart TD
+    Open["Create or import project"]
+    Kind["Existing repositories"]
+    Discover["Discover map and test recipes"]
+    New["New project"]
+    Scaffold["Approve scaffold and testing plan"]
+    Confirm["Confirm project relationships"]
+    Baseline["Establish passing baseline"]
+    Blocked["Pause on missing prerequisites"]
+    Ready["Ready for feature planning"]
+    Open -->|"import"| Kind
+    Open -->|"create"| New
+    Kind --> Discover
+    Discover --> Confirm
+    New --> Scaffold
+    Scaffold --> Confirm
+    Confirm --> Baseline
+    Baseline -->|"not usable"| Blocked
+    Baseline -->|"passes"| Ready

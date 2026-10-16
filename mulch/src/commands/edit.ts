@@ -1,0 +1,180 @@
+import chalk from "chalk";
+import { type Command, Option } from "commander";
+import { getRegistry } from "../registry/type-registry.ts";
+import type { Classification, ExpertiseRecord } from "../schemas/record.ts";
+import { getExpertisePath, readConfig } from "../utils/config.ts";
+import { readExpertiseFile, resolveRecordId, writeExpertiseFile } from "../utils/expertise.ts";
+import { outputJson, outputJsonError, reportCommandError } from "../utils/json-output.ts";
+import { withFileLock } from "../utils/lock.ts";
+import { accent, brand, isQuiet } from "../utils/palette.ts";
+import { addCustomTypeFieldOptions, parseOutcomeFlags } from "../utils/record-flags.ts";
+
+// snake_case field name → camelCase Commander option key.
+function fieldToOptionKey(field: string): string {
+	return field.replace(/_(.)/g, (_, c: string) => c.toUpperCase());
+}
+
+export function registerEditCommand(program: Command): void {
+	const registry = getRegistry();
+	const cmd = program
+		.command("edit")
+		.argument("<domain>", "expertise domain")
+		.argument("<id>", "record ID (e.g. mx-abc123, abc123, or abc)")
+		.description("Edit an existing expertise record")
+		.addOption(
+			new Option("--classification <classification>", "update classification").choices([
+				"foundational",
+				"tactical",
+				"observational",
+			]),
+		)
+		.option("--content <content>", "update content (convention)")
+		.option("--name <name>", "update name (pattern)")
+		.option("--description <description>", "update description")
+		.option("--resolution <resolution>", "update resolution (failure)")
+		.option("--title <title>", "update title (decision)")
+		.option("--rationale <rationale>", "update rationale (decision)")
+		.option("--files <files>", "update related files (comma-separated)")
+		.option("--relates-to <ids>", "update linked record IDs (comma-separated)")
+		.option("--supersedes <ids>", "update superseded record IDs (comma-separated)")
+		.addOption(
+			new Option("--outcome-status <status>", "set outcome status").choices([
+				"success",
+				"failure",
+				"partial",
+			]),
+		)
+		.option("--outcome-duration <ms>", "set outcome duration in milliseconds")
+		.option("--outcome-test-results <text>", "set outcome test results summary")
+		.option("--outcome-agent <agent>", "set outcome agent name");
+
+	addCustomTypeFieldOptions(cmd, registry, (type, field) => `update ${type} field: ${field}`);
+
+	cmd.action(async (domain: string, id: string, options: Record<string, unknown>) => {
+		const jsonMode = program.opts().json === true;
+		try {
+			const config = await readConfig();
+
+			if (!(domain in config.domains)) {
+				if (jsonMode) {
+					outputJsonError(
+						"edit",
+						`Domain "${domain}" not found in config. Available domains: ${Object.keys(config.domains).join(", ") || "(none)"}`,
+					);
+				} else {
+					console.error(chalk.red(`Error: domain "${domain}" not found in config.`));
+					console.error(
+						chalk.red(`Available domains: ${Object.keys(config.domains).join(", ") || "(none)"}`),
+					);
+				}
+				process.exitCode = 1;
+				return;
+			}
+
+			const filePath = getExpertisePath(domain);
+			await withFileLock(filePath, async () => {
+				const records = await readExpertiseFile(filePath);
+
+				const resolved = resolveRecordId(records, id);
+				if (!resolved.ok) {
+					reportCommandError("edit", jsonMode, resolved.error);
+					return;
+				}
+				const targetIndex = resolved.index;
+
+				const original = records[targetIndex];
+				if (!original) {
+					console.error(chalk.red(`Error: Record at index ${targetIndex} not found`));
+					process.exitCode = 1;
+					return;
+				}
+				const record: ExpertiseRecord = { ...original };
+
+				// Apply updates based on record type
+				if (options.classification) {
+					record.classification = options.classification as Classification;
+				}
+				if (typeof options.relatesTo === "string") {
+					record.relates_to = options.relatesTo
+						.split(",")
+						.map((id: string) => id.trim())
+						.filter(Boolean);
+				}
+				if (typeof options.supersedes === "string") {
+					record.supersedes = options.supersedes
+						.split(",")
+						.map((id: string) => id.trim())
+						.filter(Boolean);
+				}
+				const parsedOutcome = parseOutcomeFlags(options);
+				if (parsedOutcome.error) {
+					reportCommandError("edit", jsonMode, parsedOutcome.error);
+					return;
+				}
+				if (parsedOutcome.outcome) {
+					record.outcomes = [...(record.outcomes ?? []), parsedOutcome.outcome];
+				}
+
+				const def = registry.get(record.type);
+				if (def) {
+					const mutable = record as unknown as Record<string, unknown>;
+					for (const field of [...def.required, ...def.optional]) {
+						const optKey = fieldToOptionKey(field);
+						const value = options[optKey];
+						if (value === undefined) continue;
+						if (def.extractsFiles && field === def.filesField && typeof value === "string") {
+							mutable[field] = value
+								.split(",")
+								.map((s) => s.trim())
+								.filter(Boolean);
+						} else {
+							mutable[field] = value;
+						}
+					}
+				}
+
+				// Validate the updated record (cached on registry)
+				const validate = getRegistry().validator;
+				if (!validate(record)) {
+					const errors = (validate.errors ?? []).map((err) => `${err.instancePath} ${err.message}`);
+					if (jsonMode) {
+						outputJsonError(
+							"edit",
+							`Updated record failed schema validation: ${errors.join("; ")}`,
+						);
+					} else {
+						console.error(chalk.red("Error: updated record failed schema validation:"));
+						for (const err of validate.errors ?? []) {
+							console.error(chalk.red(`  ${err.instancePath} ${err.message}`));
+						}
+					}
+					process.exitCode = 1;
+					return;
+				}
+
+				records[targetIndex] = record;
+				await writeExpertiseFile(filePath, records);
+
+				if (jsonMode) {
+					outputJson({
+						success: true,
+						command: "edit",
+						domain,
+						id: record.id ?? null,
+						type: record.type,
+						record,
+					});
+				} else {
+					if (!isQuiet()) {
+						const id = record.id ? ` ${accent(record.id)}` : "";
+						console.log(
+							`${brand("✓")} ${brand(`Updated ${record.type}`)}${id} ${brand(`in ${domain}`)}`,
+						);
+					}
+				}
+			});
+		} catch (err) {
+			reportCommandError("edit", jsonMode, err);
+		}
+	});
+}

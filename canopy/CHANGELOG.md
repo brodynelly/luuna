@@ -1,0 +1,291 @@
+# Changelog
+
+All notable changes to this project will be documented in this file.
+
+The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
+and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
+
+## [Unreleased]
+
+## [0.2.6] - 2026-06-07
+
+### Added
+- **L5 agent-readiness toolkit** — ported the canonical L5 governance and tooling baseline into the repo
+  - File-size, debt-marker, and coverage ratchet scripts (`scripts/check-file-sizes.ts`, `scripts/check-debt-markers.ts`, `scripts/check-coverage.ts`) backed by JSON budgets in `budgets/`
+  - Test-timing and quality-metrics reporters (`scripts/report-test-timing.ts`, `scripts/report-quality-metrics.ts`)
+  - AGENTS.md validator (`scripts/validate-agents-md.ts`) and CLI doc generator (`scripts/generate-cli-docs.ts` → `docs/cli-reference.md`)
+  - `RUNBOOK.md` release/triage/rollback procedures, service-flow architecture diagram, and a repo-local `.factory/skills/` prompt-workflow skill
+  - Baseline drop-ins for naming consistency, cyclomatic complexity, duplicate-code detection (`jscpd`), unused-dependency detection (`knip`), devcontainer, env template, and a comprehensive `.gitignore`
+- **Governance scaffolding** — pre-commit hook, log-redaction policy in `src/output.ts`, minimum-release-age cooldown, and an issue-labeling system
+
+### Changed
+- **CI** — wired the `check:all` aggregator plus CI reporters and artifact uploads into the pipeline
+- Tracked `bun.lock` and unignored it in `.gitignore` so dependencies are pinned
+
+### Fixed
+- Removed a broken os-eco logo embed from `README.md`
+
+## [0.2.5] - 2026-05-15
+
+### Added
+- **`cn config` command** — schema-driven read/write surface for `.canopy/config.yaml`, mirroring `sd config` / `ml config` to complete warren V2's wire contract for the three primitive CLIs
+  - `cn config schema [--json]` emits the JSON Schema for `.canopy/config.yaml` (canonical `targets` shape; `additionalProperties: false`); warren reads this once to auto-render a form
+  - `cn config show [--path <dot.path>] [--json]` prints the current config or a value at a dot-path
+  - `cn config set <path> <value> [--json]` validates and atomically writes a value; `<value>` is YAML-parsed (`true`, `42`, `[a, b]`, `{k: v}`)
+  - `cn config unset <path> [--json]` removes a value (idempotent on absent paths)
+  - Writes hold the `config.yaml` advisory lock, write to `.tmp.{random}` then rename, and validate the full post-write document before persisting
+  - First `cn config set` on a legacy `emitDir`/`emitDirByTag` config normalizes the file to the canonical `targets` shape
+  - `src/config-schema.ts` exports `configSchema()` (draft 2020-12 advertised; URI stripped at compile so AJV runs default draft-07 mode, matching the seeds implementation)
+  - `src/yaml.ts` adds `parseScalarOrFlow` and the `YamlScalar` union for typed scalar/flow-style parsing used by `cn config set`
+
+### Changed
+- **Runtime dependencies** — `ajv` joins `chalk` and `commander` as the third runtime dependency (pinned `^8.17.1` to match mulch); justified by parity across the three primitive CLIs and the warren wire contract requirement
+- SPEC.md, README.md, and CLAUDE.md document the `cn config` surface and the updated dependency posture
+
+## [0.2.4] - 2026-05-10
+
+### Added
+- **Mulch integration** — prompts can now declare and inherit Mulch expertise scope
+  - `mulch` and `extends_mulch` fields on the `Prompt` type (`src/types.ts`) — `mulch` declares scope (`domains`, `files`, `mode`), `extends_mulch` controls how parent scopes merge (`replace` | `merge`)
+  - Validation of `mulch` block and `extends_mulch` shape in `src/validate.ts` (domain shape, file globs, mode enum, extends_mulch enum)
+  - `cn render --json` envelope surfaces resolved `mulch` scope after extends/mixin resolution
+  - `cn doctor` validates `mulch.prime.domains` against `.mulch/mulch.config.yaml` and flags unknown domains
+  - SPEC.md documents the `mulch` block and `extends_mulch` semantics; `cn prime` and `cn onboard` document the integration
+- **Mixin visibility** — `cn show` now surfaces a prompt's mixins alongside its `extends` chain, matching the multi-inheritance documentation in SPEC.md
+- E2E smoke test for warren-style render envelope consumption (`render.smoke.test.ts`)
+
+## [0.2.3] - 2026-03-11
+
+### Added
+- **Multi-inheritance / mixin support** — prompts can now compose from multiple parents via `mixins` in addition to single `extends` inheritance
+  - `--mixin <name>` flag on `cn create` (repeatable) for adding mixins at creation time
+  - `--mixin <name>` and `--remove-mixin <name>` flags on `cn update` (repeatable) for managing mixins
+  - `--mixin <name>` filter on `cn list` for finding prompts that use a specific mixin
+  - `mixins` field on the `Prompt` type
+  - Resolution order: extends chain → mixins (left-to-right) → focal prompt; later entries override earlier on section name conflicts
+  - Frontmatter merges across extends, mixins, and focal prompt
+  - Circular reference detection covers mixin graphs
+  - Mixins with their own extends chains are fully resolved before merging
+- `cn tree` shows mixin relationships — focal prompt displays its mixins, children show theirs
+- `cn tree --json` includes `mixins` and `mixinUsers` fields
+- `cn doctor` inheritance check now validates mixin chains
+- 10 new tests for mixin resolution (section merging, override precedence, frontmatter merging, circular detection, extends+mixin combinations)
+
+## [0.2.2] - 2026-03-05
+
+### Added
+- **Named emit targets** — `config.yaml` now uses a `targets` section with named entries (each with `dir`, optional `default`, optional `tags`) replacing the flat `emitDir`/`emitDirByTag` fields
+  - Legacy `emitDir`/`emitDirByTag` configs are transparently converted to named targets on load
+  - `EmitTarget` type added to `types.ts`
+- **Quiet flag wiring** — `--quiet`/`-q` now fully suppresses non-error output across all commands
+  - `isQuiet()` exported from `output.ts` for programmatic checks
+  - `jsonOut()` suppresses non-error JSON output in quiet mode
+  - `humanOut()` used consistently across all commands for gate-able output
+  - Quiet mode applied early in `index.ts` (before any output)
+- `formatSections()` helper in emit — single-section prompts omit the `## heading` wrapper
+
+### Fixed
+- **Double-escaping of backticks in `.ts` emit** — `escapeTemplateLiteral()` now uses single-pass regex to correctly handle pre-escaped sequences
+- **Single-section emit** — prompts with one section no longer get a redundant `## heading` in emitted output
+
+### Changed
+- All command registration functions renamed from `register()` to `register<Name>Command()` for consistency
+- YAML parser expanded to support multi-level nested maps and array values
+- Stricter lint and TypeScript settings via updated biome.json and tsconfig.json
+- CI publish workflow extracts changelog notes for GitHub releases
+- Dependencies bumped: `@biomejs/biome` ^2.4.6, `commander` ^14.0.3, `typescript` ^5.9.0
+
+## [0.2.1] - 2026-03-03
+
+### Added
+- **TypeScript emit support** — when `emitAs` is set to a `.ts` filename, `cn emit` renders a TypeScript module (`export const NAME = \`...\``) instead of markdown
+  - `toExportName()` converts prompt names to `UPPER_SNAKE_CASE` export names
+  - `escapeTemplateLiteral()` escapes backticks, `${...}` expressions, and backslashes in template literals
+  - Frontmatter is excluded from `.ts` output (TypeScript exports are pure prompt content)
+  - `--check`, skip-if-unchanged, and `--dry-run` all work with `.ts` files
+- Tests for TypeScript emit: export name conversion, template literal escaping, `.ts` file generation, stale detection, and skip-unchanged behavior (7 tests)
+
+## [0.2.0] - 2026-02-25
+
+### Added
+- **Frontmatter support** — full YAML frontmatter lifecycle for prompts:
+  - `frontmatter` field on `Prompt` type and `RenderResult`
+  - `--fm <key=value>` flag on `cn create` and `cn update` (repeatable) for setting frontmatter fields
+  - `--remove-fm <key>` flag on `cn update` (repeatable) for removing frontmatter fields
+  - `src/frontmatter.ts` module — YAML frontmatter extraction and rendering
+  - Frontmatter merging in render engine (child inherits parent frontmatter, can override)
+  - `cn import` extracts YAML frontmatter from markdown files (maps `description` to prompt field, stores rest as frontmatter)
+  - `cn show` and `cn render` display frontmatter fields
+  - `cn emit` includes YAML frontmatter block in output files (name, description, and custom fields)
+- Tests for frontmatter module (frontmatter.test.ts) and render engine frontmatter merging (render.test.ts)
+- Tests for frontmatter in emit pipeline (emit.test.ts)
+
+### Fixed
+- Unknown command handler uses `process.exitCode` instead of `process.exit()` (avoids abrupt termination)
+- Unknown command errors route through JSON output when `--json` flag is present
+- `--timing` flag now works on `--version --json` path
+
+### Removed
+- Dead `mergeFrontmatter` function from render.ts
+
+## [0.1.9] - 2026-02-25
+
+### Added
+- `cn completions <bash|zsh|fish>` command — generates shell completion scripts for bash, zsh, and fish
+- `--timing` global flag — shows command execution time on stderr (e.g., `[timing] 42ms`)
+- Typo suggestions for unknown commands — suggests closest match via Levenshtein distance (e.g., `cn crate` → "Did you mean 'create'?")
+
+## [0.1.8] - 2026-02-25
+
+### Added
+- Per-prompt `--emit-dir` flag on `cn create` and `cn update` — routes individual prompts to a custom output directory
+- Tag-based emit routing via `emitDirByTag` config — map tags to output directories (e.g., `slash-command: .claude/commands`)
+- `resolveEmitDir()` function in `emit.ts` — centralizes emit directory resolution with priority: per-prompt > tag-based > global > default
+- One-level nested map support in YAML parser (`parseYaml` / `serializeYaml`) for `emitDirByTag` config
+- Tests for `resolveEmitDir` (6 unit tests) and emit routing integration (5 tests covering tag routing, per-prompt override, `--out-dir` override, `--dry-run`, `--check`)
+- Tests for nested YAML parsing and serialization (8 tests)
+
+### Changed
+- `cn emit` now resolves output directory per-prompt instead of using a single global directory
+- `cn doctor` emit staleness check respects per-prompt routing
+- YAML parser upgraded from flat key-value only to support one-level nested maps
+
+## [0.1.7] - 2026-02-25
+
+### Added
+- Integration tests for `update` command (22 tests covering section add/remove/replace, tags, description, rename, status, schema, extends)
+- Integration tests for `sync` command (git repo setup, staging, commit verification)
+- Concurrent lock access tests for `store.ts` (5 parallel acquire/write operations)
+- Integration tests for `show` command (name lookup, `--json` output, not-found handling)
+- Integration tests for `list` command (filtering by tag, status, extends; archived visibility)
+- Integration tests for `archive` command (archive/unarchive, not-found, `--json`)
+- Integration tests for `pin`/`unpin` commands (pin to version, resolve pinned, unpin, `--json`)
+- Integration tests for `history` command (version timeline, `--limit`, `--json`)
+- Integration tests for `tree` command (inheritance tree rendering, cycle detection, `--json`)
+
+## [0.1.6] - 2026-02-24
+
+### Added
+- `cn doctor` command — checks project health and data integrity (config, JSONL integrity, schema validation, inheritance chains, emit staleness, stale locks, version sync) with `--fix` and `--verbose` flags
+- `cn upgrade` command — upgrades canopy to the latest npm version (`--check` for dry-run)
+- Global `--quiet` / `-q` flag — suppresses non-error output across all commands
+- Global `--verbose` flag — enables extra diagnostic output
+- Rich `--version --json` output — returns name, version, runtime, and platform metadata
+- `setQuiet()` function in `output.ts` for programmatic quiet mode control
+
+## [0.1.5] - 2026-02-24
+
+### Added
+- Brand palette in `output.ts` (`palette.brand`, `palette.accent`, `palette.muted`) with deep green, amber, and stone gray colors
+- Status icons (`icons.pending`, `icons.active`, `icons.done`, `icons.blocked`) for terminal-compatible list indicators
+- Message format helpers (`fmt.success`, `fmt.error`, `fmt.warning`, `fmt.id`, `fmt.info`) for consistent CLI output
+- Style A custom help screen on `cn --help` with brand colors, structured command listing, and argument display
+
+### Changed
+- All 12 command files migrated from inline color calls to `fmt.*` / `icons.*` helpers for consistent visual output
+- `c.green` now maps to `palette.brand` (deep green) instead of plain chalk green
+- `c.yellow` now maps to `palette.accent` (amber) instead of plain chalk yellow
+
+## [0.1.4] - 2026-02-24
+
+### Added
+- `--add-section` and `--remove-section` flags are now repeatable in `cn update` — add/remove multiple sections in a single command
+
+### Fixed
+- `--remove-section` splices section out entirely for non-inheriting prompts (previously set empty body for all prompts)
+- `cn init` checks for canopy-specific path in `.gitattributes` instead of broad `merge=union` string (avoids skipping setup when other tools already have merge=union)
+- `package.json` formatted for biome 2.4.4 compatibility
+
+### Changed
+- Package renamed to `@os-eco/canopy-cli` with npm publish config (`main`, `files`, `publishConfig`)
+- CI: replaced auto-tag workflow with npm publish workflow (version-check, publish with provenance, auto-tag, GitHub release)
+
+## [0.1.3] - 2026-02-24
+
+### Added
+- `cn prime` command — outputs workflow context for AI agent sessions (`--compact`, `--export`, custom `PRIME.md` support)
+- `cn onboard` command — adds canopy section to CLAUDE.md for AI agent discovery (`--check`, `--stdout`)
+- `src/markers.ts` — marker-based section management for CLAUDE.md onboarding (start/end markers, version detection, replace)
+- `chalk` dependency for colorized terminal output with automatic `NO_COLOR` and TTY detection
+- `commander` dependency for structured CLI argument parsing
+- AGENTS.md file for multi-agent coordination context
+
+### Changed
+- Migrated entire CLI from custom arg-parsing router to Commander register pattern — each command exports `register(program)`
+- `src/index.ts` rewritten: Commander-based entry point with typed options, replaces manual `switch` dispatch
+- `src/output.ts` now uses chalk for color helpers (`c.bold`, `c.dim`, `c.green`, `c.red`, `c.yellow`, `c.cyan`, `c.blue`)
+- No longer zero-dependency — chalk and commander are now runtime dependencies
+- CLAUDE.md updated with canopy onboarding section
+
+### Fixed
+- `--body` support wired into `--add-section` for `cn update` command (body was declared but never assigned)
+- `cn import` now preserves original section heading casing (was lowercasing)
+- `Record<string, unknown>` type annotations added to Commander action `opts` params (fixes TypeScript strict mode)
+
+### Removed
+- `.beads/` directory and all bead-related configuration
+
+## [0.1.2] - 2026-02-23
+
+### Added
+- `--help` / `-h` flag on all subcommands (archive, create, diff, emit, history, import, init, list, pin, unpin, render, schema, show, stats, sync, tree, update, validate)
+- `--description` flag for `cn create` and `cn update`
+- `description` field on the `Prompt` type
+- `cn show` displays description when present
+- README with full CLI reference, composition model docs, and development guide
+
+### Fixed
+- All remaining `process.exit()` calls replaced with `ExitError` (prevents error duplication in lock-guarded blocks)
+- `cn import` now splits on `##` headings by default (`--no-split` to disable, replacing `--split`)
+- Unused import cleanup (`dedupById` in diff.ts, `Section` in update.ts, `errorOut` in list.ts, `join` in sync.ts)
+- Import statement ordering to satisfy Biome linter
+
+### Changed
+- `@biomejs/biome` upgraded from 1.9.4 to 2.4.4
+- `biome.json` updated for v2 configuration format
+
+## [0.1.1] - 2026-02-23
+
+### Added
+- `--section name=body` shorthand for `cn create` and `cn update`
+- `ExitError` class for safe error exits inside lock-guarded blocks
+- Open source governance: LICENSE (MIT), CONTRIBUTING.md, SECURITY.md, CODEOWNERS
+- GitHub templates: bug report, feature request, PR template, dependabot, funding
+- Package metadata: description, keywords, author, license, repository, engines
+
+### Fixed
+- `cn emit --check` now implies `--all` (previously required both flags)
+- `cn emit` resolves pinned versions correctly (uses full record history)
+- `cn schema create` accumulates `--required`/`--optional` sections instead of replacing
+- Lock files are always released on error (ExitError replaces `process.exit` in guarded blocks)
+
+### Changed
+- CI workflows updated to `actions/checkout@v6`
+
+## [0.1.0] - 2026-02-23
+
+### Added
+- Initial release
+- Prompt CRUD (`cn create`, `cn show`, `cn list`, `cn update`, `cn archive`)
+- Section-based composition with single inheritance (`extends`)
+- Section removal via empty body override
+- Version history with structured diffing (`cn history`, `cn diff`)
+- Version pinning (`cn pin`, `cn unpin`)
+- Schema validation with required sections and regex rules
+  (`cn schema create/show/list/rule`, `cn validate`)
+- Emit to plain `.md` files (`cn emit`, `cn emit --all`, `cn emit --check`)
+- Import from existing `.md` files with auto-split by `##` headings (`cn import`)
+- Inheritance tree visualization (`cn tree`)
+- Project statistics (`cn stats`)
+- Advisory file locking for concurrent access (30s stale, 5s timeout, 50ms retry)
+- Atomic writes with dedup-on-read (highest version per ID wins)
+- YAML config (`config.yaml`), JSONL storage (`prompts.jsonl`, `schemas.jsonl`)
+- `merge=union` gitattributes for parallel branch merges
+- `cn sync` — stage and commit `.canopy/` changes
+- `--json` flag on all commands for structured output
+- Zero runtime dependencies (Bun built-ins only)
+- `scripts/version-bump.ts` for atomic version management
+- CI: lint + typecheck + test, auto-tag on version bump
+
+### Fixed
+- Added `.beads` and `.claude` to biome.json ignore patterns

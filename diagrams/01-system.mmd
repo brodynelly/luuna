@@ -1,0 +1,17 @@
+flowchart TD
+    Web["Browser GUI"]
+    TUI["TUI and CLI"]
+    API["Local authenticated API"]
+    Core["Luuna runtime and scheduler"]
+    Records["Memory prompts and tickets"]
+    DB["Run state and evidence"]
+    Pi["Supervised Pi sessions"]
+    Exec["Task worktrees and executors"]
+    Web --> API
+    TUI --> API
+    API --> Core
+    Core --> Records
+    Core --> DB
+    Core --> Pi
+    Pi --> Exec
+    Exec -->|"results"| DB

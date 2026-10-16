@@ -1,0 +1,101 @@
+version: '1'
+domains:
+  cli:
+    allowed_types:
+      - convention
+      - pattern
+      - failure
+      - decision
+      - reference
+      - guide
+      - release_decision
+  architecture:
+    allowed_types:
+      - decision
+      - pattern
+      - reference
+      - guide
+      - release_decision
+  testing:
+    allowed_types:
+      - convention
+      - pattern
+      - failure
+      - guide
+      - flake_symptom
+  typescript:
+    allowed_types:
+      - convention
+      - pattern
+      - failure
+      - decision
+  agents:
+    allowed_types:
+      - failure
+      - pattern
+      - convention
+      - flake_symptom
+  ecosystem:
+    allowed_types:
+      - failure
+      - pattern
+      - convention
+      - decision
+      - reference
+    required_fields:
+      - evidence
+  orchestration:
+    allowed_types:
+      - pattern
+      - decision
+      - convention
+      - reference
+    required_fields:
+      - evidence
+  lint:
+    allowed_types:
+      - decision
+      - convention
+      - failure
+  quality-gates: {}
+  refactoring: {}
+  patterns: {}
+governance:
+  max_entries: 100
+  warn_entries: 150
+  hard_limit: 200
+classification_defaults:
+  shelf_life:
+    tactical: 14
+    observational: 30
+custom_types:
+  release_decision:
+    extends: decision
+    required:
+      - version
+    optional:
+      - breaking
+    summary: '{title} (v{version})'
+  flake_symptom:
+    extends: failure
+    required:
+      - test_path
+    optional:
+      - flake_rate
+    aliases:
+      test_path:
+        - flake_path
+    summary: '{test_path}'
+disabled_types: []
+hooks:
+  pre-record:
+    - ./.mulch/hooks/inject-author-tag.sh
+  pre-prune:
+    - ./.mulch/hooks/prune-digest.sh
+hook_settings:
+  timeout_ms: 5000
+decay:
+  anchor_validity:
+    threshold: 0.5
+    grace_days: 7
+    weight: 1

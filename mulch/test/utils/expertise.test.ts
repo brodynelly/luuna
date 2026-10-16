@@ -1,0 +1,362 @@
+import { afterEach, beforeEach, describe, expect, it } from "bun:test";
+import { mkdtemp, readdir, readFile, rm, writeFile } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import { BUILTIN_DEFS } from "../../src/registry/builtins.ts";
+import { buildCustomTypeDefinition } from "../../src/registry/custom.ts";
+import {
+	buildBuiltinRegistry,
+	resetRegistry,
+	setRegistry,
+	TypeRegistry,
+} from "../../src/registry/type-registry.ts";
+import type { ExpertiseRecord } from "../../src/schemas/record.ts";
+import {
+	appendRecord,
+	countRecords,
+	createExpertiseFile,
+	filterByType,
+	readExpertiseFile,
+	searchRecords,
+	writeExpertiseFile,
+} from "../../src/utils/expertise.ts";
+
+const makeConvention = (content: string): ExpertiseRecord => ({
+	type: "convention",
+	content,
+	classification: "tactical",
+	recorded_at: new Date().toISOString(),
+});
+
+const makePattern = (name: string): ExpertiseRecord => ({
+	type: "pattern",
+	name,
+	description: `Description for ${name}`,
+	classification: "foundational",
+	recorded_at: new Date().toISOString(),
+});
+
+describe("expertise utils", () => {
+	let tmpDir: string;
+
+	beforeEach(async () => {
+		tmpDir = await mkdtemp(join(tmpdir(), "mulch-test-"));
+	});
+
+	afterEach(async () => {
+		await rm(tmpDir, { recursive: true, force: true });
+	});
+
+	describe("readExpertiseFile", () => {
+		it("returns empty array when file does not exist", async () => {
+			const result = await readExpertiseFile(join(tmpDir, "nonexistent.jsonl"));
+			expect(result).toEqual([]);
+		});
+
+		it("returns empty array for an empty file", async () => {
+			const filePath = join(tmpDir, "empty.jsonl");
+			await writeFile(filePath, "", "utf-8");
+			const result = await readExpertiseFile(filePath);
+			expect(result).toEqual([]);
+		});
+
+		it("returns records from valid JSONL", async () => {
+			const filePath = join(tmpDir, "records.jsonl");
+			const record1 = makeConvention("Use single quotes");
+			const record2 = makeConvention("Use semicolons");
+			const content = `${JSON.stringify(record1)}\n${JSON.stringify(record2)}\n`;
+			await writeFile(filePath, content, "utf-8");
+
+			const result = await readExpertiseFile(filePath);
+			expect(result).toHaveLength(2);
+			expect(result[0]).toEqual(record1);
+			expect(result[1]).toEqual(record2);
+		});
+
+		it("handles JSONL with trailing newlines", async () => {
+			const filePath = join(tmpDir, "trailing.jsonl");
+			const record = makeConvention("trailing newline test");
+			await writeFile(filePath, `${JSON.stringify(record)}\n\n\n`, "utf-8");
+
+			const result = await readExpertiseFile(filePath);
+			expect(result).toHaveLength(1);
+			expect(result[0]).toEqual(record);
+		});
+
+		it("rejects malformed JSONL with file:line context", async () => {
+			const filePath = join(tmpDir, "broken.jsonl");
+			const good = makeConvention("ok");
+			// Two valid records, then a corrupted line, then another valid line.
+			const lines = [
+				JSON.stringify(good),
+				JSON.stringify(makeConvention("ok2")),
+				`{"type":"convention","content":"truncated`,
+				JSON.stringify(makeConvention("ok3")),
+			];
+			await writeFile(filePath, `${lines.join("\n")}\n`, "utf-8");
+
+			await expect(readExpertiseFile(filePath)).rejects.toThrow(
+				/Malformed JSONL at .*broken\.jsonl:3/,
+			);
+		});
+
+		it("malformed-line error includes a line preview", async () => {
+			const filePath = join(tmpDir, "preview.jsonl");
+			await writeFile(filePath, "not-json-at-all\n", "utf-8");
+
+			await expect(readExpertiseFile(filePath)).rejects.toThrow(/not-json-at-all/);
+		});
+	});
+
+	describe("appendRecord", () => {
+		it("appends a JSON line to a file", async () => {
+			const filePath = join(tmpDir, "append.jsonl");
+			await createExpertiseFile(filePath);
+
+			const record = makeConvention("appended record");
+			await appendRecord(filePath, record);
+
+			const content = await readFile(filePath, "utf-8");
+			const lines = content.split("\n").filter((l) => l.trim().length > 0);
+			expect(lines).toHaveLength(1);
+			const line0 = lines[0];
+			if (!line0) throw new Error("expected JSONL line");
+			expect(JSON.parse(line0)).toEqual(record);
+		});
+
+		it("appends multiple records", async () => {
+			const filePath = join(tmpDir, "multi.jsonl");
+			await createExpertiseFile(filePath);
+
+			const record1 = makeConvention("first");
+			const record2 = makeConvention("second");
+			await appendRecord(filePath, record1);
+			await appendRecord(filePath, record2);
+
+			const result = await readExpertiseFile(filePath);
+			expect(result).toHaveLength(2);
+			expect(result[0]).toEqual(record1);
+			expect(result[1]).toEqual(record2);
+		});
+	});
+
+	describe("filterByType", () => {
+		it("filters records by type", () => {
+			const records: ExpertiseRecord[] = [
+				makeConvention("conv1"),
+				makePattern("pattern1"),
+				makeConvention("conv2"),
+			];
+
+			const conventions = filterByType(records, "convention");
+			expect(conventions).toHaveLength(2);
+			expect(conventions.every((r) => r.type === "convention")).toBe(true);
+
+			const patterns = filterByType(records, "pattern");
+			expect(patterns).toHaveLength(1);
+			expect(patterns[0]?.type).toBe("pattern");
+		});
+
+		it("returns empty array when no records match", () => {
+			const records: ExpertiseRecord[] = [makeConvention("conv1")];
+			const result = filterByType(records, "failure");
+			expect(result).toEqual([]);
+		});
+
+		it("returns empty array for empty input", () => {
+			const result = filterByType([], "convention");
+			expect(result).toEqual([]);
+		});
+	});
+
+	describe("countRecords", () => {
+		it("returns count of records", () => {
+			const records = [makeConvention("a"), makeConvention("b")];
+			expect(countRecords(records)).toBe(2);
+		});
+
+		it("returns 0 for empty array", () => {
+			expect(countRecords([])).toBe(0);
+		});
+	});
+
+	describe("searchRecords with arrays", () => {
+		it("finds records by tag value", () => {
+			const records: ExpertiseRecord[] = [
+				{
+					type: "convention",
+					content: "Something unrelated",
+					classification: "tactical",
+					recorded_at: new Date().toISOString(),
+					tags: ["esm", "typescript"],
+				},
+				makeConvention("No tags here"),
+			];
+			const matches = searchRecords(records, "esm");
+			expect(matches).toHaveLength(1);
+			expect(matches[0]).toMatchObject({ content: "Something unrelated" });
+		});
+
+		it("finds records by files array value", () => {
+			const records: ExpertiseRecord[] = [
+				{
+					type: "pattern",
+					name: "test-pattern",
+					description: "desc",
+					classification: "tactical",
+					recorded_at: new Date().toISOString(),
+					files: ["src/foo.ts"],
+				},
+			];
+			const matches = searchRecords(records, "foo.ts");
+			expect(matches).toHaveLength(1);
+		});
+	});
+
+	describe("writeExpertiseFile (temp file uniqueness)", () => {
+		it("concurrent writes use unique temp files and all succeed", async () => {
+			const filePath = join(tmpDir, "concurrent.jsonl");
+			await createExpertiseFile(filePath);
+
+			// Run multiple concurrent writes — each should use a unique temp file
+			const writes = Array.from({ length: 5 }, (_, i) =>
+				writeExpertiseFile(filePath, [makeConvention(`write-${i}`)]),
+			);
+
+			await expect(Promise.all(writes)).resolves.toBeDefined();
+
+			// Verify no temp files left behind
+			const files = await readdir(tmpDir);
+			const tmpFiles = files.filter((f) => f.includes(".tmp."));
+			expect(tmpFiles).toHaveLength(0);
+
+			// File should contain valid records from the last write
+			const result = await readExpertiseFile(filePath);
+			expect(result).toHaveLength(1);
+		});
+	});
+
+	describe("writeExpertiseFile (atomic writes)", () => {
+		it("writes records via temp file + rename (no temp file left behind)", async () => {
+			const filePath = join(tmpDir, "atomic.jsonl");
+			await createExpertiseFile(filePath);
+
+			const records = [makeConvention("first"), makeConvention("second")];
+			await writeExpertiseFile(filePath, records);
+
+			// Verify content was written correctly
+			const result = await readExpertiseFile(filePath);
+			expect(result).toHaveLength(2);
+
+			// Verify no temp files left behind
+			const files = await readdir(tmpDir);
+			const tmpFiles = files.filter((f) => f.includes(".tmp."));
+			expect(tmpFiles).toHaveLength(0);
+		});
+
+		it("writes empty file atomically", async () => {
+			const filePath = join(tmpDir, "empty-atomic.jsonl");
+			await createExpertiseFile(filePath);
+			await writeExpertiseFile(filePath, []);
+
+			const content = await readFile(filePath, "utf-8");
+			expect(content).toBe("");
+
+			const files = await readdir(tmpDir);
+			const tmpFiles = files.filter((f) => f.includes(".tmp."));
+			expect(tmpFiles).toHaveLength(0);
+		});
+
+		it("produces valid JSONL that round-trips through read", async () => {
+			const filePath = join(tmpDir, "roundtrip.jsonl");
+			await createExpertiseFile(filePath);
+
+			const records = [makeConvention("Use single quotes"), makePattern("atomic-pattern")];
+			await writeExpertiseFile(filePath, records);
+
+			const result = await readExpertiseFile(filePath);
+			expect(result).toHaveLength(2);
+			expect(result[0]).toMatchObject({ content: "Use single quotes" });
+			expect(result[1]).toMatchObject({ name: "atomic-pattern" });
+		});
+	});
+});
+
+describe("readExpertiseFile — unknown-type policy", () => {
+	let tmpDir: string;
+
+	beforeEach(async () => {
+		tmpDir = await mkdtemp(join(tmpdir(), "mulch-unknown-"));
+	});
+
+	afterEach(async () => {
+		resetRegistry();
+		await rm(tmpDir, { recursive: true, force: true });
+	});
+
+	it("throws a targeted error for unregistered types by default", async () => {
+		const filePath = join(tmpDir, "x.jsonl");
+		await writeFile(
+			filePath,
+			`${JSON.stringify({
+				type: "hypothesis",
+				id: "mx-abc123",
+				statement: "x",
+				classification: "tactical",
+				recorded_at: "2026-01-01T00:00:00Z",
+			})}\n`,
+			"utf-8",
+		);
+
+		await expect(readExpertiseFile(filePath)).rejects.toThrow(
+			/Unknown record type "hypothesis" at .*x\.jsonl:1 \(id=mx-abc123\)/,
+		);
+	});
+
+	it("passes through unknown-type records when allowUnknownTypes is true", async () => {
+		const filePath = join(tmpDir, "x.jsonl");
+		await writeFile(
+			filePath,
+			`${JSON.stringify({
+				type: "hypothesis",
+				statement: "x",
+				classification: "tactical",
+				recorded_at: "2026-01-01T00:00:00Z",
+			})}\n`,
+			"utf-8",
+		);
+
+		const records = await readExpertiseFile(filePath, { allowUnknownTypes: true });
+		expect(records).toHaveLength(1);
+		expect((records[0] as unknown as { type: string }).type).toBe("hypothesis");
+	});
+
+	it("rewrites aliased legacy fields to canonical names at read time", async () => {
+		const customDef = buildCustomTypeDefinition("hypothesis", {
+			required: ["statement"],
+			dedup_key: "statement",
+			summary: "{statement}",
+			aliases: { statement: ["claim"] },
+		});
+		const builtinReg = buildBuiltinRegistry();
+		setRegistry(new TypeRegistry([...BUILTIN_DEFS, customDef], builtinReg.definitions));
+
+		const filePath = join(tmpDir, "x.jsonl");
+		await writeFile(
+			filePath,
+			`${JSON.stringify({
+				type: "hypothesis",
+				claim: "the sky is blue",
+				classification: "tactical",
+				recorded_at: "2026-01-01T00:00:00Z",
+			})}\n`,
+			"utf-8",
+		);
+
+		const records = await readExpertiseFile(filePath);
+		expect(records).toHaveLength(1);
+		const r = records[0] as unknown as Record<string, unknown>;
+		expect(r.statement).toBe("the sky is blue");
+		expect(r.claim).toBeUndefined();
+	});
+});
