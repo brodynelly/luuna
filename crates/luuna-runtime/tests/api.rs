@@ -365,3 +365,108 @@ fn data_directory_ownership_precedes_recovery() {
         RunState::Running
     );
 }
+
+#[tokio::test]
+async fn provider_key_aliases_reach_the_child_by_standard_name_only() {
+    // Synthetic names/values; the fixture reports variable names, never values.
+    std::env::set_var("LUUNA_PI_ANTHROPIC_API_KEY", "synthetic-alias-secret-value");
+    std::env::set_var("GROQ_API_KEY", "synthetic-direct-secret-value");
+    let harness = Harness::new();
+    let run = harness.start("env_names").await;
+    assert_eq!(harness.terminal(&run.id).await.state, RunState::Completed);
+    let (_, events) = harness
+        .request(
+            "GET",
+            &format!("/api/v1/runs/{}/events", run.id),
+            None,
+            true,
+        )
+        .await;
+    let serialized = events.to_string();
+    assert!(
+        !serialized.contains("secret-value"),
+        "values must never persist"
+    );
+    let events = events.as_array().unwrap();
+    let names: Vec<&str> = events
+        .iter()
+        .find(|e| e["type"] == "pi.fixture_env")
+        .and_then(|e| e["payload"]["names"].as_array())
+        .unwrap()
+        .iter()
+        .filter_map(Value::as_str)
+        .collect();
+    assert!(names.contains(&"ANTHROPIC_API_KEY"), "{names:?}");
+    assert!(names.contains(&"GROQ_API_KEY"), "{names:?}");
+    assert!(
+        !names.iter().any(|n| n.starts_with("LUUNA_PI_")),
+        "{names:?}"
+    );
+    let spawned = events
+        .iter()
+        .find(|e| e["type"] == "pi.spawned")
+        .expect("spawn event");
+    let configured: Vec<&str> = spawned["payload"]["provider_credentials"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .filter_map(Value::as_str)
+        .collect();
+    assert!(configured.contains(&"ANTHROPIC_API_KEY") && configured.contains(&"GROQ_API_KEY"));
+    assert!(spawned["payload"]["pid"].as_u64().is_some());
+}
+
+#[cfg(unix)]
+#[tokio::test]
+async fn cancelled_run_records_pid_and_child_is_reaped_before_terminal_event() {
+    let harness = Harness::new();
+    let run = harness.start("slow").await;
+    let mut pid = None;
+    for _ in 0..100 {
+        let (_, events) = harness
+            .request(
+                "GET",
+                &format!("/api/v1/runs/{}/events", run.id),
+                None,
+                true,
+            )
+            .await;
+        if let Some(found) = events
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|e| e["type"] == "pi.spawned")
+            .and_then(|e| e["payload"]["pid"].as_u64())
+        {
+            pid = Some(found);
+            break;
+        }
+        tokio::time::sleep(Duration::from_millis(20)).await;
+    }
+    let pid = pid.expect("pi.spawned must record the child PID");
+    let alive = |pid: u64| {
+        std::process::Command::new("kill")
+            .args(["-0", &pid.to_string()])
+            .status()
+            .map(|s| s.success())
+            .unwrap_or(false)
+    };
+    assert!(alive(pid), "fixture child should be running before cancel");
+    assert_eq!(
+        harness
+            .request(
+                "POST",
+                &format!("/api/v1/runs/{}/cancel", run.id),
+                None,
+                true
+            )
+            .await
+            .0,
+        StatusCode::ACCEPTED
+    );
+    assert_eq!(harness.terminal(&run.id).await.state, RunState::Cancelled);
+    assert!(
+        !alive(pid),
+        "child must be reaped before run.cancelled persists"
+    );
+}

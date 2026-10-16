@@ -18,7 +18,7 @@ if ! command -v rustup >/dev/null; then
   curl --fail --silent --show-error https://sh.rustup.rs -o "$rustup_installer"
   sh "$rustup_installer" -y --no-modify-path --profile minimal --default-toolchain 1.90.0
 fi
-rustup toolchain install 1.90.0 --profile minimal --component rustfmt --component clippy
+rustup toolchain install 1.90.0 --profile minimal --component rustfmt --component clippy --no-self-update
 if ! command -v bun >/dev/null || [ "$(bun --version)" != "1.4.3" ]; then
   npm install --prefix "$luuna_tools_dir/bun" --no-audit --no-fund bun@1.4.3
 fi

@@ -13,6 +13,32 @@ pub const PI_PACKAGE: &str = "@earendil-works/pi-coding-agent";
 pub const PI_VERSION: &str = "1.3.0";
 pub const MAX_RECORD_BYTES: usize = 1024 * 1024;
 
+/// Direct provider API-key variables the isolated child may inherit. Each also
+/// accepts a `LUUNA_PI_` prefixed alias for hosts that reserve the plain name;
+/// the alias takes precedence and is never passed through under its own name.
+pub const PROVIDER_KEY_VARIABLES: [&str; 8] = [
+    "ANTHROPIC_API_KEY",
+    "OPENAI_API_KEY",
+    "GEMINI_API_KEY",
+    "GOOGLE_API_KEY",
+    "MISTRAL_API_KEY",
+    "GROQ_API_KEY",
+    "XAI_API_KEY",
+    "OPENROUTER_API_KEY",
+];
+
+/// Names (never values) of provider credentials the child would receive from
+/// the current process environment, after alias resolution.
+pub fn configured_provider_keys() -> Vec<&'static str> {
+    PROVIDER_KEY_VARIABLES
+        .into_iter()
+        .filter(|name| {
+            std::env::var_os(format!("LUUNA_PI_{name}")).is_some()
+                || std::env::var_os(name).is_some()
+        })
+        .collect()
+}
+
 #[derive(Debug, Error)]
 pub enum EngineError {
     #[error("Pi I/O: {0}")]
@@ -169,23 +195,20 @@ impl PiProcess {
             "all_proxy",
             "no_proxy",
             "NODE_USE_ENV_PROXY",
-            "ANTHROPIC_API_KEY",
-            "OPENAI_API_KEY",
-            "GEMINI_API_KEY",
-            "GOOGLE_API_KEY",
-            "MISTRAL_API_KEY",
-            "GROQ_API_KEY",
-            "XAI_API_KEY",
-            "OPENROUTER_API_KEY",
         ] {
             if let Some(value) = std::env::var_os(name) {
                 command.env(name, value);
             }
         }
-        // Cloud secret bindings can use this non-reserved target. Do not pass
-        // the alias itself into Pi; it consumes the standard provider name.
-        if let Some(value) = std::env::var_os("LUUNA_PI_OPENAI_API_KEY") {
-            command.env("OPENAI_API_KEY", value);
+        // Cloud secret bindings can use the non-reserved `LUUNA_PI_` alias when
+        // the platform reserves the provider's own name. Pi only reads the
+        // standard name, so the alias is mapped and never passed through itself.
+        for name in PROVIDER_KEY_VARIABLES {
+            if let Some(value) =
+                std::env::var_os(format!("LUUNA_PI_{name}")).or_else(|| std::env::var_os(name))
+            {
+                command.env(name, value);
+            }
         }
         command
             .env("HOME", &config.config_dir)
@@ -222,6 +245,11 @@ impl PiProcess {
             stderr_drain,
             pending: HashMap::new(),
         })
+    }
+
+    /// Operating-system process ID of the owned child while it has not been reaped.
+    pub fn pid(&self) -> Option<u32> {
+        self.child.id()
     }
 
     pub async fn command(

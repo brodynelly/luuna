@@ -3,6 +3,7 @@
 Only test code launches this program. Production defaults to the genuine Pi CLI.
 """
 import json
+import os
 import sys
 import time
 
@@ -33,6 +34,11 @@ for line in sys.stdin:
             sys.exit(23)
         if scenario == "wrong_id":
             request_id = "unrecognized-command"
+        if scenario == "env_names":
+            # Names only: proves alias mapping without ever echoing a value.
+            send({"type": "fixture_env", "names": sorted(
+                name for name in os.environ if name.endswith("_API_KEY"))})
+            scenario = "success"
         if scenario == "rejected":
             send({"type": "response", "id": request_id, "command": kind,
                   "success": False, "error": "synthetic rejection"})

@@ -6,7 +6,7 @@ Date: 2026-10-16. This is the implementation sequence from the audited foundatio
 
 Keep the application and all three maintained CLI components in **this monorepo**. Missions, Atlas, and Beacon retain independent package/API boundaries, compatible data formats, and upstream MIT notices. Repository separation is a later maintenance decision, not a prerequisite or the next assignment. Do not create repositories, remove component source, or replace these tools with Rust rewrites to advance a milestone.
 
-[FOUNDATION-STATUS.md](FOUNDATION-STATUS.md) records the observed evidence. Its current Linux baseline is 33 Rust tests, 10 API-client tests, 18 positive/negative schema checks, and 3,092 component tests passing, with Rust formatting/lint and frontend type/build checks passing. Counts describe that audit, not a permanent expected total; future changes must rerun appropriate checks.
+[FOUNDATION-STATUS.md](FOUNDATION-STATUS.md) records the observed evidence. Its current Linux baseline is 35 Rust tests, 10 API-client tests, 18 positive/negative schema checks, and 3,092 component tests passing, with Rust formatting/lint and frontend type/build checks passing, plus an 18-check synthetic smoke-harness run. Counts describe that audit, not a permanent expected total; future changes must rerun appropriate checks.
 
 | Area | Implemented and checked | Partial or not yet demonstrated |
 | --- | --- | --- |
@@ -200,7 +200,7 @@ With `LUUNA_PI_COMMAND` pointing to the installed pinned executable:
 cargo run --locked -p luuna-engine-pi --example probe
 ```
 
-That probe makes **no model request**. For genuine M1 proof, securely set `LUUNA_API_TOKEN`, provider/model and provider credentials in the runtime environment, then run `cargo run --locked -p luuna-runtime`. Launch `npm run dev` or `npm run desktop` separately. The runtime does not automatically load `.env`. See the [runtime README](../crates/luuna-runtime/README.md), [desktop README](../apps/desktop/README.md), and [Pi fixtures](../fixtures/pi-rpc/README.md).
+That probe makes **no model request**. For genuine M1 proof, securely set the provider credential (or its `LUUNA_PI_<NAME>` alias) in the runtime environment, build the runtime, and run `node scripts/m1-smoke.mjs --mode real --provider <provider> --model <model>`, which starts the runtime itself and writes a sanitized report; or start `cargo run --locked -p luuna-runtime` manually with `LUUNA_API_TOKEN`, provider and model set. Launch `npm run dev` or `npm run desktop` separately. The runtime does not automatically load `.env`. See the [runtime README](../crates/luuna-runtime/README.md), [desktop README](../apps/desktop/README.md), and [Pi fixtures](../fixtures/pi-rpc/README.md).
 
 ## Planning ranges, assumptions and critical path
 

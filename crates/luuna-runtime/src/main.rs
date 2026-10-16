@@ -45,9 +45,33 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let shutdown_state = state.clone();
     axum::serve(listener, router(state))
         .with_graceful_shutdown(async move {
-            let _ = tokio::signal::ctrl_c().await;
+            termination_requested().await;
             shutdown_state.shutdown().await;
         })
         .await?;
     Ok(())
+}
+
+/// Ctrl+C and, on Unix, SIGTERM from a supervisor both request the explicit
+/// shutdown path: owned workers are stopped and interruption is persisted.
+async fn termination_requested() {
+    #[cfg(unix)]
+    {
+        let mut terminate =
+            match tokio::signal::unix::signal(tokio::signal::unix::SignalKind::terminate()) {
+                Ok(signal) => signal,
+                Err(_) => {
+                    let _ = tokio::signal::ctrl_c().await;
+                    return;
+                }
+            };
+        tokio::select! {
+            _ = tokio::signal::ctrl_c() => {},
+            _ = terminate.recv() => {},
+        }
+    }
+    #[cfg(not(unix))]
+    {
+        let _ = tokio::signal::ctrl_c().await;
+    }
 }

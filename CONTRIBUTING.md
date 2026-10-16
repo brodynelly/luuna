@@ -49,7 +49,7 @@ Install the pinned Pi package `@earendil-works/pi-coding-agent@1.3.0` in a priva
 | `LUUNA_PI_COMMAND` | Pi executable, default `pi`; may be an absolute path |
 | `LUUNA_PI_ARGS_JSON` | Optional JSON array of launcher arguments, useful with a direct Node executable |
 | `LUUNA_PI_PROVIDER`, `LUUNA_PI_MODEL` | Explicit provider/model defaults; may also be selected per run in the client |
-| `LUUNA_PI_OPENAI_API_KEY` | Optional secure cloud secret target; mapped to Pi's `OPENAI_API_KEY` with precedence over a direct key |
+| `LUUNA_PI_<PROVIDER>_API_KEY` | Optional alias for any supported provider key, such as `LUUNA_PI_ANTHROPIC_API_KEY`, for hosts that reserve the plain name; mapped to Pi's standard variable with precedence over a direct key |
 | `HTTP_PROXY`, `HTTPS_PROXY`, `ALL_PROXY`, `NO_PROXY` | Preserved for provider routing, including lowercase variants and `NODE_USE_ENV_PROXY`; TLS verification remains enabled |
 | Provider-specific API key | Required for the selected provider; use private environment settings |
 | `LUUNA_DATA_DIR` | Private local state/artifacts directory, default `.luuna` |
@@ -67,6 +67,8 @@ cargo run --locked -p luuna-runtime
 In another terminal, run `npm run dev` and open `http://127.0.0.1:1420`, or use `npm run desktop` after installing the native [Tauri prerequisites](https://v2.tauri.app/start/prerequisites/). Connect to `http://127.0.0.1:4242` with the private token. Select an explicit provider/model, send a harmless prompt, inspect the durable event history, and try cancellation. The service offers cursor replay and SSE; the initial UI uses replay polling for reconnection. Closing the UI is a disconnect. Stopping the service interrupts owned work; restart reconciles incomplete attempts rather than claiming completion.
 
 Without a provider key, fixture/protocol checks and the UI connection remain useful, but no successful genuine model run can be claimed. A no-credential error is evidence for the failure path only.
+
+With a built runtime and the private settings exported, `node scripts/m1-smoke.mjs --mode real --provider <provider> --model <model>` runs the M1 checklist end to end and writes a sanitized report (no token or credential values). `--mode fixture` exercises the harness itself against the synthetic fixture and is labeled as such.
 
 ## Review and evidence
 

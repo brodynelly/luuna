@@ -24,16 +24,16 @@ The current architecture and accepted ADRs resolve conflicts in older proposals.
 | Desktop/API client | Real browser-tested connection, history, run/cancel, cursor reconnect; Tauri shell | Native GUI proof, complete project/plan/diff workflow and packaged service lifecycle |
 | Components | Branded private Missions/Atlas/Beacon CLIs with passing standalone suites | Luuna runtime adapters, external edit reconciliation and scoped retrieval/prompt integration |
 
-The recorded Linux foundation checks passed: **33 Rust tests, 10 API-client tests, 18 schema checks, and 3,092 component tests**, plus Rust formatting/lint and frontend type/build checks. A genuine Pi version/RPC handshake and real missing-key failure/cancellation paths were exercised through API/browser. **No successful model response or native GUI launch has been proved.** No remote push or CI outcome is established by these local checks.
+The recorded Linux foundation checks passed: **35 Rust tests, 10 API-client tests, 18 schema checks, and 3,092 component tests**, plus Rust formatting/lint and frontend type/build checks. A genuine Pi version/RPC handshake and real missing-key failure, cancellation, hard-kill restart and browser reconnect paths were exercised through API and Chromium. **No successful model response or native GUI launch has been proved.** The M1 closure attempt on October 16, 2026 was blocked solely by the absent provider credential; see the [status report](docs/FOUNDATION-STATUS.md).
 
 Do not redo completed scaffolding, relax guards, or label the tool-free demo an approved coding workflow. Read the current [status report](docs/FOUNDATION-STATUS.md) for updated evidence and blockers.
 
 ## Next bounded assignment: close genuine M1
 
-**Deliver:** a real provider-backed tool-free Pi request that streams through the local service/client, with correct completion, cancellation/error behavior and durable recovery evidence. Keep repository writing disabled.
+**Deliver:** a real provider-backed tool-free Pi request that streams through the local service/client, with correct completion, cancellation/error behavior and durable recovery evidence. Keep repository writing disabled. The harness `node scripts/m1-smoke.mjs --mode real --provider <p> --model <m>` already encodes these exits and writes a sanitized report; its fixture mode passes 18/18 and its real mode fails only on the missing credential.
 
 1. Inspect relevant instructions, `crates/luuna-engine-pi/`, `crates/luuna-runtime/`, `packages/api-client/`, and `fixtures/pi-rpc/`. Read the installed Pi 1.3.0 protocol docs. Run focused baseline checks before edits.
-2. Check credential **names/presence only** and configured provider access; do not print values or request keys in chat. The audited instance had no compatible key and provider CONNECT requests returned 403. Secure environment configuration and usable network routing are prerequisites; a saved draft does not change a running instance.
+2. Check credential **names/presence only** and configured provider access; do not print values or request keys in chat. Two audited instances had no compatible key. On this cloud platform `api.anthropic.com` is reachable directly while `api.openai.com` is refused by the agent proxy unless allowed in the environment's network settings. Secure environment configuration and usable network routing are prerequisites; a saved draft does not change a running instance.
 3. Reuse Pi `@earendil-works/pi-coding-agent@1.3.0`. Make one small real provider/model request using the current API. Record actual streamed output, ordered events and terminal completion only after `agent_settled`; a prompt acknowledgement or `agent_end` is insufficient.
 4. Cancel a genuinely in-flight request, verify its owned process has stopped/reaped, and persist the cancelled result. Demonstrate provider failure or timeout without converting partial output to success. Keep synthetic protocol/error tests alongside real-provider evidence.
 5. Disconnect/reconnect and restart the runtime. Prove durable event replay and completed/failed/cancelled history, and an interrupted result for an abandoned active attempt. Exercise a native client on a capable host or explicitly retain the native gap.
@@ -41,7 +41,7 @@ Do not redo completed scaffolding, relax guards, or label the tool-free demo an 
 
 **Acceptance:** sanitized genuine model output and run IDs/cursors, provider/Pi/model/platform versions, cancellation/reap and error/restart evidence, relevant green automated checks, and no enabled feature writes. Do not count the credential-free handshake, fixtures, or missing-key rejection as provider success.
 
-If provider access is absent, finish independent regression checks, improve a reproducible private smoke harness if useful, and document the exact missing prerequisite. Do not fabricate credentials, weaken TLS, broaden tool access, or claim M1 complete. Existing Git authentication does not supply a model-provider key. On this cloud platform, use `LUUNA_PI_OPENAI_API_KEY` as the supported private alias when direct `OPENAI_*` secret targets are reserved.
+If provider access is absent, finish independent regression checks, improve the smoke harness if useful, and document the exact missing prerequisite. Do not fabricate credentials, weaken TLS, broaden tool access, or claim M1 complete. Existing Git authentication and the cloud session's own model access do not supply a Pi provider key. On this cloud platform, use the `LUUNA_PI_<PROVIDER>_API_KEY` alias (for example `LUUNA_PI_ANTHROPIC_API_KEY`) when the platform reserves the provider's own variable name; the runtime maps it to the standard name inside the isolated child only.
 
 ## Then implement M2 in three reviewable slices
 
@@ -69,7 +69,7 @@ node scripts/check-hygiene.mjs
 git diff --check
 ```
 
-Focused M1 checks are `cargo test --locked -p luuna-engine-pi -p luuna-runtime -p luuna-storage` and `cargo run --locked -p luuna-engine-pi --example probe`. Set `LUUNA_PI_COMMAND` to the pinned executable. The probe does not call a model.
+Focused M1 checks are `cargo test --locked -p luuna-engine-pi -p luuna-runtime -p luuna-storage`, `cargo run --locked -p luuna-engine-pi --example probe`, and `node scripts/m1-smoke.mjs --mode fixture`. Set `LUUNA_PI_COMMAND` to the pinned executable. Neither the probe nor fixture mode calls a model; only `--mode real` with a configured credential produces M1 evidence.
 
 Start the runtime with private `LUUNA_API_TOKEN` and provider/model/key settings present, using `cargo run --locked -p luuna-runtime`. It reads the process environment, not `.env` automatically. Launch `npm run dev` or `npm run desktop` separately. See the [runtime](crates/luuna-runtime/README.md) and [desktop](apps/desktop/README.md) instructions. On a capable native host, run `cargo check --locked --manifest-path apps/desktop/src-tauri/Cargo.toml`; root Rust tests exclude that separate workspace.
 

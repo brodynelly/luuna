@@ -16,7 +16,7 @@ variables locally; keep credentials out of repository files:
 | `LUUNA_PI_COMMAND` | Pi executable, default `pi`; may be an absolute Node executable |
 | `LUUNA_PI_ARGS_JSON` | Optional JSON array of launcher arguments, e.g. absolute `dist/cli.js` path |
 | `LUUNA_PI_PROVIDER` / `LUUNA_PI_MODEL` | Optional explicit defaults; UI can supply them per run |
-| `LUUNA_PI_OPENAI_API_KEY` | Optional secure cloud binding alias; becomes child `OPENAI_API_KEY` and takes precedence over a direct key |
+| `LUUNA_PI_<PROVIDER>_API_KEY` | Optional alias for any supported provider key (for example `LUUNA_PI_ANTHROPIC_API_KEY`, `LUUNA_PI_OPENAI_API_KEY`) for hosts that reserve the plain name; it becomes the child's standard variable, takes precedence over a direct key, and is never passed through under the alias name |
 | `HTTP_PROXY`, `HTTPS_PROXY`, `ALL_PROXY`, `NO_PROXY` | Preserved for provider routing, including lowercase variants and `NODE_USE_ENV_PROXY`; existing TLS trust variables remain enabled |
 | `LUUNA_DATA_DIR` | Private durable state directory, default `.luuna` |
 | `LUUNA_PORT` | Loopback port, default `4242` |
@@ -47,6 +47,20 @@ At most four demo runs may be active. Prompt acknowledgements and low-level
 `agent_end` events do not complete a run: Pi 1.3.0's `agent_settled` is required.
 Completion means the connectivity request finished, not a feature passed
 validation or a publication was approved.
+
+Each attempt records a `pi.spawned` event with the owned child's PID, the
+required Pi version, and the names (never values) of provider credentials the
+child received. The terminal `run.*` event is persisted only after that child
+has been stopped and reaped, so a PID that is still alive after a terminal event
+is a defect. On Unix, `SIGTERM` and Ctrl+C both take the orderly shutdown path.
+
+`node scripts/m1-smoke.mjs --mode real --provider <p> --model <m>` drives a
+built runtime binary through the full M1 checklist (authentication, SSE
+streaming, settlement before completion, in-flight cancellation with reaping,
+provider failure, hard-kill restart interruption, exclusive ownership, orderly
+shutdown) and writes a sanitized `report.md`/`report.json`. `--mode fixture`
+runs the same checklist against the synthetic fixture and is never provider
+evidence.
 
 `cargo test -p luuna-runtime -p luuna-engine-pi` uses the labeled synthetic
 Python protocol fixture in `fixtures/pi-rpc`. Python 3 is required for these

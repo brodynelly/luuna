@@ -460,6 +460,24 @@ async fn run_worker(
             return;
         }
     };
+    // The owned child's PID lets operators and smoke tests verify it was reaped
+    // after the terminal event. Credential names are recorded, never values.
+    if state
+        .event(
+            &id,
+            "pi.spawned",
+            json!({"pid":process.pid(),"pi_version":PI_VERSION,"provider_credentials":luuna_engine_pi::configured_provider_keys()}),
+        )
+        .is_err()
+    {
+        let _ = process.stop().await;
+        let _ = state.finish(
+            &id,
+            RunState::Failed,
+            json!({"reason":"cannot persist process start"}),
+        );
+        return;
+    }
     let operation = async {
         process
             .command("state-1", "get_state", json!({}))
