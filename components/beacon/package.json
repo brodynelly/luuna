@@ -1,0 +1,76 @@
+{
+	"name": "@luuna/beacon-cli",
+	"version": "0.2.6",
+	"description": "Luuna Beacon \u2014 prompt composition and versioned agent instructions",
+	"type": "module",
+	"bin": {
+		"luuna-beacon": "src/index.ts",
+		"lb": "src/index.ts",
+		"cn": "src/index.ts"
+	},
+	"main": "src/index.ts",
+	"files": [
+		"src",
+		"UPSTREAM.md"
+	],
+	"keywords": [
+		"prompt",
+		"ai",
+		"agent",
+		"cli",
+		"git",
+		"jsonl"
+	],
+	"author": "Jaymin West",
+	"license": "MIT",
+	"repository": {
+		"type": "git",
+		"url": "https://github.com/brodynelly/luuna.git",
+		"directory": "components/beacon"
+	},
+	"engines": {
+		"bun": ">=1.0.0"
+	},
+	"scripts": {
+		"test": "bun test",
+		"test:ci": "bun test --coverage --reporter=junit --reporter-outfile=./junit.xml",
+		"lint": "biome check .",
+		"lint:fix": "biome check --write .",
+		"typecheck": "tsc --noEmit",
+		"check:size": "bun run scripts/check-file-sizes.ts",
+		"check:debt": "bun run scripts/check-debt-markers.ts",
+		"check:dups": "bunx jscpd",
+		"check:deps": "knip --dependencies",
+		"check:coverage": "bun run scripts/check-coverage.ts",
+		"check:agents": "bun run scripts/validate-agents-md.ts",
+		"check:ci-parity": "bun scripts/check-ci-parity.ts",
+		"check:all": "bun scripts/check-all.ts",
+		"verify": "bun run typecheck && bun run check:agents && bun test --timeout 30000",
+		"gen:docs": "bun run scripts/generate-cli-docs.ts",
+		"gen:docs:check": "bun run scripts/generate-cli-docs.ts --check",
+		"report:test-timing": "bun run scripts/report-test-timing.ts",
+		"report:quality-metrics": "bun run scripts/report-quality-metrics.ts",
+		"version:bump": "bun run scripts/version-bump.ts"
+	},
+	"devDependencies": {
+		"@biomejs/biome": "^2.4.14",
+		"@types/bun": "latest",
+		"knip": "^6.14.2",
+		"typescript": "^5.9.0",
+		"yaml": "^2.9.0"
+	},
+	"dependencies": {
+		"ajv": "^8.17.1",
+		"chalk": "^5.6.2",
+		"commander": "^14.0.3"
+	},
+	"private": true,
+	"homepage": "https://github.com/brodynelly/luuna/tree/main/components/beacon",
+	"bugs": {
+		"url": "https://github.com/brodynelly/luuna/issues"
+	},
+	"contributors": [
+		"Luuna contributors"
+	],
+	"packageManager": "bun@1.4.3"
+}

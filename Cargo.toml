@@ -1,0 +1,14 @@
+[workspace]
+members = ["crates/*"]
+exclude = ["apps/desktop/src-tauri"]
+resolver = "2"
+
+[workspace.package]
+version = "0.1.0"
+edition = "2021"
+rust-version = "1.90"
+license = "MIT"
+repository = "https://github.com/brodynelly/luuna"
+
+[profile.dev]
+debug = 1

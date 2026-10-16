@@ -1,7 +1,0 @@
-# .warren/config.yaml — per-project warren defaults.
-
-defaultRole: pi
-defaultBranch: main
-defaultProvider: anthropic
-defaultModel: claude-opus-4-7
-runBranchPrefix: warren

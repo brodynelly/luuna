@@ -1,0 +1,62 @@
+[
+  {
+    "schema": "schemas/plan-revision.schema.json",
+    "fixture": "fixtures/domain/plan.valid.json",
+    "valid": true
+  },
+  {
+    "schema": "schemas/plan-revision.schema.json",
+    "fixture": "fixtures/domain/plan.invalid.json",
+    "valid": false
+  },
+  {
+    "schema": "schemas/approval.schema.json",
+    "fixture": "fixtures/domain/approval.valid.json",
+    "valid": true
+  },
+  {
+    "schema": "schemas/approval.schema.json",
+    "fixture": "fixtures/domain/approval.invalid.json",
+    "valid": false
+  },
+  {
+    "schema": "schemas/assignment.schema.json",
+    "fixture": "fixtures/domain/assignment.valid.json",
+    "valid": true
+  },
+  {
+    "schema": "schemas/assignment.schema.json",
+    "fixture": "fixtures/domain/assignment.invalid.json",
+    "valid": false
+  },
+  {
+    "schema": "schemas/candidate-set.schema.json",
+    "fixture": "fixtures/domain/candidate.valid.json",
+    "valid": true
+  },
+  {
+    "schema": "schemas/candidate-set.schema.json",
+    "fixture": "fixtures/domain/candidate.invalid.json",
+    "valid": false
+  },
+  {
+    "schema": "schemas/review-result.schema.json",
+    "fixture": "fixtures/domain/review.valid.json",
+    "valid": true
+  },
+  {
+    "schema": "schemas/review-result.schema.json",
+    "fixture": "fixtures/domain/review.invalid.json",
+    "valid": false
+  },
+  {
+    "schema": "schemas/publication.schema.json",
+    "fixture": "fixtures/domain/publication.valid.json",
+    "valid": true
+  },
+  {
+    "schema": "schemas/publication.schema.json",
+    "fixture": "fixtures/domain/publication.invalid.json",
+    "valid": false
+  }
+]

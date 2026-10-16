@@ -1,0 +1,14 @@
+{
+  "schema_version": "0.1",
+  "id": "assignment-1",
+  "task_id": "implement",
+  "plan_hash": "sha256:b965316a35b86bab86061d1145dcd34a8a193a05b2e40b79635ebaf2bbef501d",
+  "role": "implementer",
+  "repository_id": "app",
+  "environment_id": "native-1",
+  "context_manifest": [
+    "ticket:ticket-1@1",
+    "plan:plan-1@1"
+  ],
+  "tool_profile": "bounded-write"
+}

@@ -5,8 +5,8 @@
       "id": "S01",
       "url": "https://github.com/earendil-works/pi",
       "checked_date": "2026-10-15",
-      "pinned_version": null,
-      "note": "Primary documentation checked; implementation must pin compatible releases."
+      "pinned_version": "@earendil-works/pi-coding-agent@1.3.0",
+      "note": "Canonical npm distribution pinned for the M1 protocol baseline; provider execution requires separate credentials and validation."
     },
     {
       "id": "S02",
@@ -40,22 +40,22 @@
       "id": "S06",
       "url": "https://github.com/jayminwest/mulch",
       "checked_date": "2026-10-15",
-      "pinned_version": null,
-      "note": "Primary documentation checked; implementation must pin compatible releases."
+      "pinned_version": "0.11.0",
+      "note": "Imported MIT source baseline 0.11.0; maintained as Luuna Atlas under components/atlas. See component manifest/lockfile for the branded version and dependency graph."
     },
     {
       "id": "S07",
       "url": "https://github.com/jayminwest/canopy",
       "checked_date": "2026-10-15",
-      "pinned_version": null,
-      "note": "Primary documentation checked; implementation must pin compatible releases."
+      "pinned_version": "0.2.6",
+      "note": "Imported MIT source baseline 0.2.6; maintained as Luuna Beacon under components/beacon. See component manifest/lockfile for the branded version and dependency graph."
     },
     {
       "id": "S08",
       "url": "https://github.com/jayminwest/seeds",
       "checked_date": "2026-10-15",
-      "pinned_version": null,
-      "note": "Primary documentation checked; implementation must pin compatible releases."
+      "pinned_version": "0.6.0",
+      "note": "Imported MIT source baseline 0.6.0; maintained as Luuna Missions under components/missions. See component manifest/lockfile for the branded version and dependency graph."
     },
     {
       "id": "S09",
@@ -96,15 +96,15 @@
       "id": "S14",
       "url": "https://docs.rs/axum/latest/axum/",
       "checked_date": "2026-10-15",
-      "pinned_version": null,
-      "note": "Primary documentation checked; implementation must pin compatible releases."
+      "pinned_version": "axum@0.8.9",
+      "note": "Implementation dependency selected and locked in Cargo.lock; reference documentation itself is historical."
     },
     {
       "id": "S15",
       "url": "https://docs.rs/tokio/latest/tokio/process/",
       "checked_date": "2026-10-15",
-      "pinned_version": null,
-      "note": "Primary documentation checked; implementation must pin compatible releases."
+      "pinned_version": "tokio@1.53.3",
+      "note": "Implementation dependency selected and locked in Cargo.lock; reference documentation itself is historical."
     },
     {
       "id": "S16",
@@ -117,15 +117,15 @@
       "id": "S17",
       "url": "https://react.dev/learn",
       "checked_date": "2026-10-15",
-      "pinned_version": null,
-      "note": "Primary documentation checked; implementation must pin compatible releases."
+      "pinned_version": "react@19.2.0",
+      "note": "Implementation dependency selected and locked in package-lock.json; reference documentation itself is historical."
     },
     {
       "id": "S18",
       "url": "https://vite.dev/guide/",
       "checked_date": "2026-10-15",
-      "pinned_version": null,
-      "note": "Primary documentation checked; implementation must pin compatible releases."
+      "pinned_version": "vite@7.3.7",
+      "note": "Implementation dependency selected and locked in package-lock.json; reference documentation itself is historical."
     },
     {
       "id": "S19",
@@ -145,8 +145,8 @@
       "id": "S21",
       "url": "https://vitest.dev/guide/",
       "checked_date": "2026-10-15",
-      "pinned_version": null,
-      "note": "Primary documentation checked; implementation must pin compatible releases."
+      "pinned_version": "vitest@4.1.11",
+      "note": "Implementation dependency selected and locked in package-lock.json; reference documentation itself is historical."
     },
     {
       "id": "S22",
@@ -204,5 +204,7 @@
       "pinned_version": null,
       "note": "Primary documentation checked; implementation must pin compatible releases."
     }
-  ]
+  ],
+  "implementation_baseline": "2026-10-16",
+  "source_pack_note": "Original 0.1 references remain historical; implementation pins below do not certify complete adapter or provider compatibility."
 }

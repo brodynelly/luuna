@@ -1,0 +1,91 @@
+{
+  "schemaVersion": 1,
+  "status": "private-maintained-forks",
+  "components": [
+    {
+      "brand": "Luuna Missions",
+      "path": "components/missions",
+      "upstream": {
+        "name": "Seeds",
+        "repository": "https://github.com/jayminwest/seeds",
+        "package": "@os-eco/seeds-cli"
+      },
+      "sourceVersion": "0.6.0",
+      "package": "@luuna/missions-cli",
+      "cli": {
+        "primary": "luuna-missions",
+        "short": "lm",
+        "legacy": [
+          "sd",
+          "seeds"
+        ],
+        "entrypoint": "src/index.ts"
+      },
+      "dataFormatPath": ".seeds/",
+      "interfaces": [
+        "CLI",
+        "JSON output"
+      ],
+      "license": "MIT",
+      "published": false
+    },
+    {
+      "brand": "Luuna Atlas",
+      "path": "components/atlas",
+      "upstream": {
+        "name": "Mulch",
+        "repository": "https://github.com/jayminwest/mulch",
+        "package": "@os-eco/mulch-cli"
+      },
+      "sourceVersion": "0.11.0",
+      "package": "@luuna/atlas-cli",
+      "cli": {
+        "primary": "luuna-atlas",
+        "short": "la",
+        "legacy": [
+          "ml",
+          "mulch"
+        ],
+        "entrypoint": "src/cli.ts"
+      },
+      "dataFormatPath": ".mulch/",
+      "interfaces": [
+        "CLI",
+        "JSON output",
+        "TypeScript library src/index.ts and src/api.ts"
+      ],
+      "license": "MIT",
+      "published": false
+    },
+    {
+      "brand": "Luuna Beacon",
+      "path": "components/beacon",
+      "upstream": {
+        "name": "Canopy",
+        "repository": "https://github.com/jayminwest/canopy",
+        "package": "@os-eco/canopy-cli"
+      },
+      "sourceVersion": "0.2.6",
+      "package": "@luuna/beacon-cli",
+      "cli": {
+        "primary": "luuna-beacon",
+        "short": "lb",
+        "legacy": [
+          "cn"
+        ],
+        "entrypoint": "src/index.ts"
+      },
+      "dataFormatPath": ".canopy/",
+      "interfaces": [
+        "CLI",
+        "JSON output"
+      ],
+      "license": "MIT",
+      "published": false
+    }
+  ],
+  "runtime": {
+    "name": "bun",
+    "version": "1.4.3"
+  }
+}

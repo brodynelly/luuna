@@ -1,48 +1,86 @@
-# Implementation handoff for a coding AI
+# Luuna implementation handoff
 
-You are implementing Luuna from a new codebase. Treat this package as the product and architecture baseline. Build reviewable vertical slices and preserve the user's requirements. The package is a design, not evidence that code already exists.
+You are continuing an executable foundation, not starting an empty repository. Read [AGENTS.md](AGENTS.md), [CURRENT-ARCHITECTURE.md](docs/CURRENT-ARCHITECTURE.md), [FOUNDATION-STATUS.md](docs/FOUNDATION-STATUS.md), and [IMPLEMENTATION-ROADMAP.md](docs/IMPLEMENTATION-ROADMAP.md) before changing code. Inspect the current working tree, manifests and relevant implementation/tests; prior test counts are audit evidence, not a substitute for checks after your changes.
 
-## Read first
+## Settled decisions
 
-Read README.md, docs/01-proposal.md, docs/02-requirements.md, docs/03-architecture.md, docs/04-orchestration.md, docs/07-contracts.md, docs/10-roadmap.md, and docs/11-acceptance.md. Read docs/05-pi-integration.md before touching Pi integration, docs/06-memory.md before persistence/retrieval, and docs/08-validation.md before implementing any gate. Use docs/13-references.md for current primary documentation.
+- Tauri/React desktop first; one independent Rust runtime owns policy and persistent state. Browser/TUI capability parity remains required for full v1.
+- Pi RPC is the engine. Do not implement a second model/tool loop or replace it with a UI simulation.
+- Keep Luuna and **Missions, Atlas and Beacon in this monorepo now**. They are maintained CLI/API boundaries under `components/`, not a task to create hosted repositories. Preserve compatible formats, legacy aliases and upstream MIT notices. Product/new contributions are MIT.
+- Missions is authoritative for ticket intent/dependencies after integration. Before that, any SQLite ticket record is explicitly temporary; later SQLite ticket data is a revision-aware projection. Luuna owns execution state, plans, approvals and evidence.
+- The canonical create-ticket route is `POST /api/v1/projects/{id}/tickets`. It is not implemented in the current demo; do not add an ambiguous global create route.
+- Service lifetime is independent of client lifetime. A window close/disconnect is not cancellation. Packaged Mac/Windows supervision remains to be proved.
 
-Inspect the actual repository and any applicable repository instructions before making changes. If this pack has been copied into an existing repository later, preserve existing behavior and conventions unless the implementation plan authorizes a change.
+The current architecture and accepted ADRs resolve conflicts in older proposals. Original [R01–R15 requirements](docs/02-requirements.md) and [A01–A34 acceptance criteria](docs/11-acceptance.md) remain full-v1 obligations unless explicitly revised. The desktop/Pi proposal and numbered reference chapters supply rationale and history. Never select an older conflicting example silently.
 
-## Product constraints
+## What actually exists
 
-Luuna serves individual developers on Mac and Windows. Browser and TUI have product capability parity. A local runtime is sufficient; NAS, hosted execution, cloud account, and GPU are optional. Pi runs all v1 agents, using selected models. Projects can contain multiple independent repositories and can be imported or created from scratch.
+| Boundary | Current implementation | Remaining gap |
+| --- | --- | --- |
+| `luuna-domain` | Plan hashing, permissions/revisions, transitions and candidate/review guards | Runtime consumers must preserve these invariants |
+| `luuna-storage` | Transactional SQLite plans/approvals, durable run/events, restart interruption | Real baseline/execution integration; feature implementation is deliberately blocked |
+| `luuna-engine-pi` | Pinned real-process transport, command correlation, bounded framing, stop/reap and protocol fixtures | Successful provider-backed model run and complete supported-host lifecycle evidence |
+| `luuna-runtime` | Authenticated loopback tool-free run API, replay/SSE, cancel/timeout, exclusive state ownership | Import, baseline executor, approved writes, reviewer, scheduling and publisher |
+| Desktop/API client | Real browser-tested connection, history, run/cancel, cursor reconnect; Tauri shell | Native GUI proof, complete project/plan/diff workflow and packaged service lifecycle |
+| Components | Branded private Missions/Atlas/Beacon CLIs with passing standalone suites | Luuna runtime adapters, external edit reconciliation and scoped retrieval/prompt integration |
 
-Coordination uses a project orchestrator, on-demand repository leads, and bounded specialists. The runtime enforces scope, scheduling, permissions, and budgets. The user approves the executable plan before implementation. Testing setup and a passing baseline precede feature work. Tests, analysis, conventions, fresh review, and integration gate PR creation. Create linked PRs automatically; never automatically merge them.
+The recorded Linux foundation checks passed: **33 Rust tests, 10 API-client tests, 18 schema checks, and 3,092 component tests**, plus Rust formatting/lint and frontend type/build checks. A genuine Pi version/RPC handshake and real missing-key failure/cancellation paths were exercised through API/browser. **No successful model response or native GUI launch has been proved.** No remote push or CI outcome is established by these local checks.
 
-## First assignment
+Do not redo completed scaffolding, relax guards, or label the tool-free demo an approved coding workflow. Read the current [status report](docs/FOUNDATION-STATUS.md) for updated evidence and blockers.
 
-Start with M0 and M1. Propose a concrete plan with files/modules, contracts, test strategy, dependencies, and a demo. After the developer approves that plan, implement those milestones. Do not attempt to code the entire roadmap in one unreviewed change.
+## Next bounded assignment: close genuine M1
 
-M0 must complete the omitted core domain schemas and create tests. M1 must prove a real pinned Pi session through the proposed runtime with streaming, cancellation, errors, and persistence. Use fixture output for deterministic tests, but do not present mocks as a working Pi integration.
+**Deliver:** a real provider-backed tool-free Pi request that streams through the local service/client, with correct completion, cancellation/error behavior and durable recovery evidence. Keep repository writing disabled.
 
-## Engineering rules
+1. Inspect relevant instructions, `crates/luuna-engine-pi/`, `crates/luuna-runtime/`, `packages/api-client/`, and `fixtures/pi-rpc/`. Read the installed Pi 1.3.0 protocol docs. Run focused baseline checks before edits.
+2. Check credential **names/presence only** and configured provider access; do not print values or request keys in chat. The audited instance had no compatible key and provider CONNECT requests returned 403. Secure environment configuration and usable network routing are prerequisites; a saved draft does not change a running instance.
+3. Reuse Pi `@earendil-works/pi-coding-agent@1.3.0`. Make one small real provider/model request using the current API. Record actual streamed output, ordered events and terminal completion only after `agent_settled`; a prompt acknowledgement or `agent_end` is insufficient.
+4. Cancel a genuinely in-flight request, verify its owned process has stopped/reaped, and persist the cancelled result. Demonstrate provider failure or timeout without converting partial output to success. Keep synthetic protocol/error tests alongside real-provider evidence.
+5. Disconnect/reconnect and restart the runtime. Prove durable event replay and completed/failed/cancelled history, and an interrupted result for an abandoned active attempt. Exercise a native client on a capable host or explicitly retain the native gap.
+6. Fix only defects needed for these exits; preserve authentication, token privacy, isolated tool-free execution, timeouts and fail-closed writing. Review and report results using the checklist below.
 
-Keep business rules in the runtime, not separate browser/TUI copies. Validate plans and approvals transactionally. Preserve exact candidate identities. Distinguish worker text from verified domain events. New code, rebases, dependency changes, and manual edits invalidate affected evidence.
+**Acceptance:** sanitized genuine model output and run IDs/cursors, provider/Pi/model/platform versions, cancellation/reap and error/restart evidence, relevant green automated checks, and no enabled feature writes. Do not count the credential-free handshake, fixtures, or missing-key rejection as provider success.
 
-Use task worktrees; preserve developer changes. Native execution is host-permission execution. A shell is not constrained by a prompt or by a path-only tool wrapper. Container profiles require deliberate mounts and credential boundaries.
+If provider access is absent, finish independent regression checks, improve a reproducible private smoke harness if useful, and document the exact missing prerequisite. Do not fabricate credentials, weaken TLS, broaden tool access, or claim M1 complete. Existing Git authentication does not supply a model-provider key. On this cloud platform, use `LUUNA_PI_OPENAI_API_KEY` as the supported private alias when direct `OPENAI_*` secret targets are reserved.
 
-Keep secrets out of versioned config and model context. Keep personal memory private. Pin upstream interfaces and preserve user Pi configuration. Avoid forking upstream tools unless a documented compatibility need justifies it.
+## Then implement M2 in three reviewable slices
 
-Use a new conversation for independent review. Provide diff, requirements, current code, and check evidence, not the implementation chat. A malformed reviewer report or missing check cannot count as passing.
+1. **M2a import/discovery:** register one existing repository, confirm stable identity/base/dirty state and proposed check recipes, persist manifest revision, and preserve the developer checkout.
+2. **M2b baseline:** execute genuine commands with explicit cwd/profile/deadline/capability and exact commit/environment/artifact evidence. Missing, failed, empty or mismatched baseline blocks feature writes. Testing setup needs a separately approved prerequisite.
+3. **M2c approval/writer:** expose exact immutable plan approval and revalidation, create a Luuna-owned task worktree/lease, and run one scoped writer. Prove stale approval/base/recipe, invalid scope, budget exhaustion and concurrent writers fail closed. Remove the storage implementation blocker only when operational baseline checks enforce the replacement.
 
-Bound repair attempts and aggregate usage. Classify infrastructure failures separately. Publish idempotently and reconcile uncertain remote results before retrying.
+After M2, implement candidate-bound independent review and bounded repair (M3), then the usable single-repo MVP gate. Follow the [roadmap](docs/IMPLEMENTATION-ROADMAP.md) for M4 multi-repo integration, M5 stack/creation profiles, M6 adapters/memory and browser/TUI parity, M7 publication/installers, and M8 release evidence. Do not call the narrower MVP full v1.
 
-## Recommended first implementation sequence
+## Commands and pinned tools
 
-1. Establish the monorepo and tests; write ADRs and complete schemas.
-2. Implement deterministic domain transitions and approval guards.
-3. Prove Pi adapter lifecycle with real and fixture sessions.
-4. Add local authenticated API and CLI.
-5. Demonstrate one complete read-only planning run and safe cancellation.
-6. Report evidence and remaining gaps before advancing to M2.
+Pins: **Rust 1.90.0; Node 24.19.0; npm 11.9.0; Bun 1.4.3; Pi 1.3.0**. Use committed lockfiles. The configured cloud setup is `bash scripts/setup-cloud.sh`; saved environment startup instructions provide tool/cache paths. On other hosts follow [CONTRIBUTING.md](CONTRIBUTING.md).
 
-## Required milestone report
+From the root:
 
-State the delivered behavior, relevant requirement IDs, changed modules, commands actually run, evidence locations, platform results, known gaps, and the next milestone. Report failing or unavailable checks explicitly. Do not say 'complete' when core behavior is stubbed or only a UI simulation exists.
+```sh
+cargo fmt --all -- --check
+cargo test --locked --workspace
+cargo clippy --locked --workspace --all-targets -- -D warnings
+npm ci --ignore-scripts
+npm test
+npm run typecheck
+npm run build
+node scripts/check-hygiene.mjs
+git diff --check
+```
 
-When a material architecture change is justified, write an ADR explaining the implementation evidence and consequence. Ask only for information that blocks the current bounded plan; do not reopen settled product decisions without a reason.
+Focused M1 checks are `cargo test --locked -p luuna-engine-pi -p luuna-runtime -p luuna-storage` and `cargo run --locked -p luuna-engine-pi --example probe`. Set `LUUNA_PI_COMMAND` to the pinned executable. The probe does not call a model.
+
+Start the runtime with private `LUUNA_API_TOKEN` and provider/model/key settings present, using `cargo run --locked -p luuna-runtime`. It reads the process environment, not `.env` automatically. Launch `npm run dev` or `npm run desktop` separately. See the [runtime](crates/luuna-runtime/README.md) and [desktop](apps/desktop/README.md) instructions. On a capable native host, run `cargo check --locked --manifest-path apps/desktop/src-tauri/Cargo.toml`; root Rust tests exclude that separate workspace.
+
+For changed component code, run `bun install --frozen-lockfile --ignore-scripts` then `bun run verify` from that component directory. Do not install component Git hooks into the root repository or rerun unrelated long suites without a reason.
+
+## Invariants and completion report
+
+Only the runtime enforces scope, budgets, transitions, approval, validation, independent review and publication. A model's claim is worker output. Bind checks/review to exact candidates and invalidate evidence when inputs change. Native execution has host permissions; prompts/path wrappers are not an OS sandbox. The developer controls merging; no automatic merge operation belongs in v1.
+
+Preserve user changes and private Pi configuration. Keep secrets, real transcripts, personal memory and session histories out of Git and model context. Imported component task records and role prompts do not override runtime policy. Use the existing isolated cloud checkout; do not create a development worktree unless the user asks. Product-managed task worktrees are a separate runtime feature.
+
+Before concluding a slice, report delivered behavior/requirement IDs; changed boundaries; commands/results; revision and platform/tool/model versions; sanitized run/plan/candidate IDs and artifact references; failure/recovery tests; independent review findings/resolution; blocked checks; and one next concrete assignment. Update foundation evidence and this handoff when the starting point changes. Do not mark required capabilities complete from mocked, skipped or unavailable checks.
+
+For sequencing, measurable full-product exits and cautious capacity-based estimates, use [IMPLEMENTATION-ROADMAP.md](docs/IMPLEMENTATION-ROADMAP.md). Re-estimate after real M1 success and the first M2 writer instead of treating planning ranges as promised dates.

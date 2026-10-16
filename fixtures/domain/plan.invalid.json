@@ -1,0 +1,70 @@
+{
+  "schema_version": "0.1",
+  "canonicalization": "luuna-json-v1",
+  "id": "plan-1",
+  "revision": 1,
+  "ticket_id": "ticket-1",
+  "ticket_revision": 1,
+  "manifest_hash": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+  "base_commits": {
+    "app": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+  },
+  "candidate_hash": null,
+  "permissions": {
+    "repositories": {
+      "app": [
+        "src"
+      ]
+    },
+    "operations": [
+      "read",
+      "write",
+      "shell"
+    ]
+  },
+  "tasks": [
+    {
+      "id": "implement",
+      "repository_id": "app",
+      "role": "implementer",
+      "depends_on": [],
+      "paths": [
+        "src/main.rs"
+      ],
+      "operations": [
+        "read",
+        "write"
+      ],
+      "acceptance_criteria": [
+        "The fixture test passes."
+      ],
+      "execution_profile": "native"
+    }
+  ],
+  "required_checks": [
+    {
+      "id": "unit",
+      "repository_id": "app",
+      "executable": "cargo",
+      "args": [
+        "test",
+        "--locked"
+      ],
+      "cwd": ".",
+      "timeout_seconds": 120,
+      "required": false,
+      "capabilities": [
+        "rust"
+      ],
+      "execution_profile": "native"
+    }
+  ],
+  "budgets": {
+    "max_workers": 1,
+    "max_attempts": 2,
+    "timeout_seconds": 300,
+    "cost_usd_micros": 1000000
+  },
+  "hash": "sha256:030df7f9e48f1b2091824c61ad82c2099213ff16666aa71480e69918f57d219c",
+  "project_id": "project"
+}

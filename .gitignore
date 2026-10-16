@@ -1,0 +1,41 @@
+# Build and dependency outputs
+/target/
+**/target/
+**/node_modules/
+**/dist/
+**/coverage/
+**/test-results/
+**/junit.xml
+*.tsbuildinfo
+*.log
+
+# Credentials and personal configuration
+.env
+.env.*
+!.env.example
+**/.pi/
+**/.claude/
+**/.codex/
+**/.factory/
+
+# Local Luuna runtime data and imported authoring stores
+.luuna/
+**/.seeds/
+**/.mulch/
+**/.canopy/
+**/.warren/
+*.sqlite
+*.sqlite3
+*.sqlite-wal
+*.sqlite-shm
+*.db
+*.db-wal
+*.db-shm
+
+# Local tooling and editors
+.cache/
+.tools/
+.DS_Store
+.idea/
+.vscode/
+*.swp

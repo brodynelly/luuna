@@ -1,44 +1,69 @@
-# Luuna proposal and implementation reference
+# Luuna
 
-Version 0.1 | 15 October 2026 | Design baseline, not implemented software
+Luuna is a local-first software engineering workbench for individual developers. A Tauri desktop client controls an independent Rust runtime that supervises Pi RPC workers, records durable evidence, and enforces approvals before implementation. The developer controls merging.
 
-Luuna is an installable development coordinator for individual developers. It uses Pi agent sessions to plan, implement, test, independently review, and prepare pull requests across related repositories. The developer approves the plan and decides when to merge.
+This repository is being established as an executable foundation. The design documents describe the intended product; they are not evidence that the complete workflow, desktop distribution, provider integration, or full v1 has shipped. Deterministic fixture tests and real provider smoke tests have different purposes and must be reported separately.
 
-Read docs/01-proposal.md first. LUUNA-COMPLETE-REFERENCE.md combines the documents, diagrams, examples, agent roles, and implementation handoff into one reading copy. The PDF presents the same reference material in a paginated format.
+The initial executable slice is a tool-free Pi connectivity demo: authenticated run requests, durable history, event replay/streaming, and cancellation. It does not edit a repository, execute an approved implementation plan, or publish code. The desktop shell connects to a separately started service.
 
-## Reading order
+**Repository decision, October 16, 2026:** keep Missions, Atlas, and Beacon together in `brodynelly/luuna` while building the product. Separate repositories are deferred and are not a prerequisite for implementation. See [ADR 0002](docs/decisions/0002-supporting-components.md).
 
-| File | Purpose |
+## Start here
+
+1. Read [the current architecture](docs/CURRENT-ARCHITECTURE.md) for the decisions that govern new work.
+2. Read [AGENTS.md](AGENTS.md) and [CONTRIBUTING.md](CONTRIBUTING.md) before changing the repository.
+3. Use [AI-START-HERE.md](AI-START-HERE.md) for the implementation handoff and milestone exit criteria.
+4. Consult the [decision records](docs/decisions/) when a historical proposal disagrees with the current architecture.
+5. Use the [implementation roadmap](docs/IMPLEMENTATION-ROADMAP.md) for the next bounded assignment, milestone exits, and planning estimates.
+
+The first implementation targets are M0, deterministic contracts and runtime policy, and M1, a real Pi RPC session with streaming, persistence, errors, and cancellation. A mocked session does not satisfy M1. Deeper orchestration, adapters, publication, and client parity follow evidence from those slices.
+
+## Repository map
+
+| Path | Purpose |
 | --- | --- |
-| docs/01-proposal.md | Product proposal, scope, decisions, and defaults |
-| docs/02-requirements.md | Identified requirements and release boundaries |
-| docs/03-architecture.md | Components, repository graph, persistence, execution |
-| docs/04-orchestration.md | State machine, approvals, concurrency, integration |
-| docs/05-pi-integration.md | Pi boundary, adapters, credentials, session lifecycle |
-| docs/06-memory.md | Three memory uses and context construction |
-| docs/07-contracts.md | Proposed domain models, API, events, examples |
-| docs/08-validation.md | Testing prerequisites, evidence, review, publication |
-| docs/09-experience.md | Onboarding, browser/TUI parity, installation |
-| docs/10-roadmap.md | Milestones, work packages, exit criteria |
-| docs/11-acceptance.md | Release acceptance scenarios |
-| docs/12-decisions-risks.md | Architecture decisions, risks, remaining choices |
-| docs/13-references.md | Primary sources and how an implementing AI should use them |
-| AI-START-HERE.md | Copy-ready implementation handoff |
-| agents/ | Process-role contracts for Pi sessions |
-| diagrams/ | Editable Mermaid sources |
-| schemas/ and examples/ | Proposed validation contracts and illustrative records |
+| `apps/desktop/` | Tauri and React/TypeScript desktop foundation |
+| `crates/` | Rust domain, storage, service, and engine boundaries |
+| `schemas/` | Versioned Luuna domain contracts, distinct from Pi protocol records |
+| `fixtures/`, `tests/` | Deterministic protocol, contract, and integration checks |
+| `agents/` | Process-role contracts; these do not override runtime policy |
+| `docs/CURRENT-ARCHITECTURE.md` | Authoritative technical baseline |
+| `docs/decisions/` | Architecture decisions and explicit release requirements |
+| `components/missions/` | Luuna Missions, the maintained Seeds-derived task CLI |
+| `components/atlas/` | Luuna Atlas, the maintained Mulch-derived knowledge CLI |
+| `components/beacon/` | Luuna Beacon, the maintained Canopy-derived prompt CLI |
 
-## Status and precedence
+Only paths present in the checkout are executable components. The architecture includes later boundaries that need not be empty crates or placeholder packages today.
 
-User requirements in docs/02-requirements.md are binding for the proposed product. Recommended defaults are identified separately. Architecture choices here are a starting baseline; a material change requires an explicit decision record rather than silent divergence.
+## Development
 
-Schemas define Luuna's proposed application contracts. They are not Pi, Mulch, Canopy, Seeds, or GitHub protocol definitions. Example command paths, models, repository names, commit markers, and IDs are illustrative. No credentials, production code, binaries, downloaded upstream source trees, or third-party documentation copies are included.
+Use Rust 1.90.0, as pinned in `rust-toolchain.toml`, and committed lockfiles. Rust validation starts with:
 
-The product is called Luuna. Luuna-ML and luuna-mulch refer to the memory capability. The earlier Luuna-ID ticketing name maps to luuna-seeds in this proposal. Prefixes describe Luuna integration boundaries; they do not imply forks of the referenced upstream tools.
+```sh
+cargo fmt --all -- --check
+cargo test --workspace --locked
+cargo clippy --workspace --all-targets --locked -- -D warnings
+```
 
-## Scope of this delivery
+Consult [CONTRIBUTING.md](CONTRIBUTING.md) for frontend and service commands. Real Pi runs require a tested Pi version and an existing provider/model configuration. Keep credentials in private user configuration or environment bindings; never place them in fixtures or source control.
 
-This package is a complete design and implementation reference. It does not establish that any product feature has been built or tested. See VALIDATION-REPORT.md for checks performed on these documentation artifacts.
-# luuna
-# luuna
-# luuna
+For frontend and schema checks, use Node 24.19.0 (pinned in `.nvmrc`) or newer and npm 11.9.0:
+
+```sh
+npm ci --ignore-scripts
+npm test
+npm run typecheck
+npm run build
+```
+
+With a private `LUUNA_API_TOKEN` of at least 32 bytes set, start the service with `cargo run --locked -p luuna-runtime`. Run `npm run dev` for the browser development client or `npm run desktop` for the native shell after installing Tauri prerequisites. Use the same private token in the client's connection form. See the [runtime configuration](CONTRIBUTING.md#run-the-connectivity-demo) for Pi/provider prerequisites and current limitations.
+
+Linux cloud checks cannot establish Mac or Windows installation support. A frontend build cannot establish a working Tauri distribution. Report the commands and platforms actually exercised.
+
+## Design references and licensing
+
+The [desktop/Pi RPC proposal](LUUNA-Desktop-Pi-RPC-Full-Development-Proposal.md) supplies detailed rationale. The thirteen numbered chapters under `docs/`, [the complete reference](LUUNA-COMPLETE-REFERENCE.md), diagrams, examples, HTML, and PDF remain historical source material. Their original browser/TUI delivery order and conflicting API examples are superseded by the current architecture and decisions. Browser/TUI capability parity remains a full-v1 obligation.
+
+[FOUNDATION-STATUS.md](docs/FOUNDATION-STATUS.md) records the executable foundation checks and remaining milestones. [VALIDATION-REPORT.md](VALIDATION-REPORT.md) concerns the original documentation pack.
+
+Luuna uses the [MIT license](LICENSE). The branded component distributions preserve upstream copyright and MIT notices; see [THIRD-PARTY-NOTICES.md](THIRD-PARTY-NOTICES.md). They are maintained in this monorepo until a verified repository extraction is useful; their presence does not establish independently hosted or published packages. See [SECURITY.md](SECURITY.md) for handling sensitive findings.

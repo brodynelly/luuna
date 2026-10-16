@@ -1,0 +1,11 @@
+{
+  "schema_version": "0.1",
+  "id": "candidate-1",
+  "revision": 1,
+  "plan_hash": "sha256:b965316a35b86bab86061d1145dcd34a8a193a05b2e40b79635ebaf2bbef501d",
+  "repository_commits": {
+    "app": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+  },
+  "dependency_bindings": {},
+  "hash": "sha256:57feb84c21080e96828c80d61d97d93d966ad5b727a6c99d04080fc320929a3f"
+}

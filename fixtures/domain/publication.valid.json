@@ -1,0 +1,10 @@
+{
+  "schema_version": "0.1",
+  "ticket_id": "ticket-1",
+  "candidate_hash": "sha256:57feb84c21080e96828c80d61d97d93d966ad5b727a6c99d04080fc320929a3f",
+  "per_repository_branch": {
+    "app": "luuna/ticket-1"
+  },
+  "pull_request_urls": {},
+  "publication_state": "pending"
+}

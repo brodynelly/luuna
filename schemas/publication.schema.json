@@ -1,0 +1,84 @@
+{
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema_version",
+    "ticket_id",
+    "candidate_hash",
+    "per_repository_branch",
+    "pull_request_urls",
+    "publication_state"
+  ],
+  "properties": {
+    "schema_version": {
+      "const": "0.1"
+    },
+    "ticket_id": {
+      "type": "string",
+      "minLength": 1
+    },
+    "candidate_hash": {
+      "type": "string",
+      "pattern": "^sha256:[a-f0-9]{64}$"
+    },
+    "per_repository_branch": {
+      "type": "object",
+      "minProperties": 1,
+      "propertyNames": {
+        "type": "string",
+        "minLength": 1
+      },
+      "additionalProperties": {
+        "type": "string",
+        "minLength": 1
+      }
+    },
+    "pull_request_urls": {
+      "type": "object",
+      "minProperties": 0,
+      "propertyNames": {
+        "type": "string",
+        "minLength": 1
+      },
+      "additionalProperties": {
+        "type": "string",
+        "format": "uri",
+        "pattern": "^https://"
+      }
+    },
+    "publication_state": {
+      "enum": [
+        "pending",
+        "pushing",
+        "pr_open",
+        "failed",
+        "integrated"
+      ]
+    }
+  },
+  "allOf": [
+    {
+      "if": {
+        "properties": {
+          "publication_state": {
+            "enum": [
+              "pr_open",
+              "integrated"
+            ]
+          }
+        }
+      },
+      "then": {
+        "properties": {
+          "pull_request_urls": {
+            "minProperties": 1,
+            "type": "object"
+          }
+        }
+      }
+    }
+  ],
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "urn:luuna:publication:0.1",
+  "title": "Luuna publication contract"
+}

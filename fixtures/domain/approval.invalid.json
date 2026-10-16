@@ -1,0 +1,21 @@
+{
+  "schema_version": "0.1",
+  "id": "approval-1",
+  "plan_id": "plan-1",
+  "plan_revision": 0,
+  "plan_hash": "sha256:b965316a35b86bab86061d1145dcd34a8a193a05b2e40b79635ebaf2bbef501d",
+  "approved_by": "human",
+  "approved_at": "2026-10-16T00:00:00Z",
+  "permissions": {
+    "repositories": {
+      "app": [
+        "src"
+      ]
+    },
+    "operations": [
+      "read",
+      "write",
+      "shell"
+    ]
+  }
+}

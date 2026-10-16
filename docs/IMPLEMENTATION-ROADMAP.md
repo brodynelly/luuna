@@ -1,0 +1,236 @@
+# Implementation roadmap and AI handoff
+
+Date: 2026-10-16. This is the implementation sequence from the audited foundation to a usable MVP and full v1. It supplements [the current architecture](CURRENT-ARCHITECTURE.md), not a claim that the planned capabilities already exist.
+
+## Starting point
+
+Keep the application and all three maintained CLI components in **this monorepo**. Missions, Atlas, and Beacon retain independent package/API boundaries, compatible data formats, and upstream MIT notices. Repository separation is a later maintenance decision, not a prerequisite or the next assignment. Do not create repositories, remove component source, or replace these tools with Rust rewrites to advance a milestone.
+
+[FOUNDATION-STATUS.md](FOUNDATION-STATUS.md) records the observed evidence. Its current Linux baseline is 33 Rust tests, 10 API-client tests, 18 positive/negative schema checks, and 3,092 component tests passing, with Rust formatting/lint and frontend type/build checks passing. Counts describe that audit, not a permanent expected total; future changes must rerun appropriate checks.
+
+| Area | Implemented and checked | Partial or not yet demonstrated |
+| --- | --- | --- |
+| Repository | MIT/notices, cleaned current tracking, contributor rules, pinned tools/locks, CI definitions | Historical session files remain in earlier commits; remote CI and distribution need separate evidence |
+| Domain/storage | Immutable plan hashing, exact approval/revision/project guards, candidate/review guards, transactional state/events, durable SQLite runs, restart interruption | A real baseline executor is absent; storage deliberately rejects entry to feature implementation |
+| Pi/runtime | Actual Pi 1.3.0 version/RPC handshake, authenticated loopback run API, replay/SSE, timeout/cancel/reap, malformed/error fixtures, durable failed/cancelled attempts | Successful provider-backed model output has **not** been observed; handshake and missing-key failure do not complete M1 |
+| Frontend | Typed client, real service connection, run/history/cancel/reconnect, private in-memory token; browser smoke exercised | Tauri shell exists; native GUI launch, installer, and Mac/Windows results are unverified |
+| Maintained CLIs | Missions, Atlas, Beacon packages with passing standalone tests and compatible legacy aliases | Runtime ticket/knowledge/prompt adapters are not integrated; packages remain private/unpublished |
+| Product workflow | Foundational contracts and negative tests | Import/discovery, actual baseline checks, approved writer worktrees, independent review, multi-repo scheduling, publication, TUI parity and release installation remain planned |
+
+M0 is substantially established, with remaining API/capability/threat-model details completed alongside their first executable consumers. It is not proof of the operational workflow. M1 is partial. Do not restart bootstrap or jump to broad orchestration before closing that gap.
+
+## What counts as a usable product
+
+A **usable single-repository MVP** imports a real repository, discovers and confirms a meaningful baseline, prepares an exact plan, gets human approval, implements a bounded change in a Luuna-owned worktree, runs real required checks, obtains fresh independent review, and preserves evidence through cancellation or restart. The desktop must show the actual state and allow recovery. It must be demonstrated on the chosen Mac/Windows targets before those targets are advertised.
+
+The MVP can deliver reviewable local commits/diffs without automatic PRs, multi-repository orchestration, all stack profiles, complete memory integration, or a TUI. Those omissions must be explicit.
+
+**Full v1** additionally satisfies all R01–R15 and the [acceptance matrix](11-acceptance.md): multi-repository roles and integration, project creation and supported profiles, scoped memory and component adapters, browser/TUI parity, linked automatic PRs, human-only merging, and supported fresh-host installation. Optional remote workers, NAS hosting, GPU inference, semantic retrieval, team/SaaS features, and a full IDE are later work.
+
+## Milestones and measurable exits
+
+Follow the existing M0–M8 naming. Desktop work accompanies real runtime slices rather than becoming a separate simulated product.
+
+### M1 — Finish genuine engine compatibility
+
+**Depends on:** existing foundation, a supported model/provider, private credentials, and usable provider network access.
+
+1. Inspect the installed pinned Pi protocol docs and current adapter. Reuse the credential-free probe and synthetic fixtures.
+2. Complete one small genuine provider-backed request through the authenticated local API. Observe actual text/event streaming and the correct `agent_settled` completion semantics.
+3. Cancel another genuine in-flight request and show that the owned process exits/reaps and the final state is cancelled. Exercise provider failure/timeout without promoting partial output to success.
+4. Disconnect/reconnect the client and stop/restart the service. Replay ordered persisted events, retain completed/failed/cancelled history, and mark an abandoned active attempt interrupted.
+5. Run the native desktop against the same service on a capable host; record any platform gap rather than calling a web build a native launch.
+
+**Exit:** sanitized provider/Pi/model/platform evidence, real output, cancellation/error traces, persistent run IDs/cursors, and unchanged privacy/authentication protections. Missing-key failure already has evidence; it does not substitute for model success. Tool-free success closes connectivity, not repository-writing readiness. Map to R03/R15.
+
+### M2a — Import and read-only discovery
+
+**Depends on:** M1's stable lifecycle and event contract. Read-only fixture/API work can proceed while provider access is being configured.
+
+Register an existing single repository, establish stable identity/remote/base commit, detect dirty state, discover candidate stack/check recipes, and ask the developer to confirm uncertain repository facts. Persist project/manifest revisions and expose them through authenticated API/client contracts. Use canonical `POST /api/v1/projects/{id}/tickets` when ticket creation is introduced.
+
+**Exit:** a real and a synthetic repository import without changing their contents; dirty files remain byte-identical; an invalid or mismatched repository is rejected; replay reconstructs the confirmed map. Discovery proposes commands rather than silently executing arbitrary repository text. This begins R04 and supplies M2 inputs.
+
+### M2b — Baseline and check evidence
+
+**Depends on:** confirmed repository identity and check recipes from M2a.
+
+Build a supervised command executor with executable/argument arrays, explicit cwd/profile, timeouts, capability checks, private artifacts, and process ownership. Record command, environment, exact commit/tree, timestamps, exit/status, and artifact hashes. Establish required baseline evidence before feature writes. Missing testing setup creates a bounded prerequisite workflow requiring its own approval.
+
+**Exit:** genuine passing and deliberately failing fixture baselines; missing executable, empty/missing test setup, cancelled command, and incapable host remain blocked/failed/interrupted as appropriate. A baseline from another commit/environment cannot unlock a writer. Retain the fail-closed storage guard until this evidence is checked transactionally. Map to R08 and support R13.
+
+### M2c — Exact approval and one scoped writer
+
+**Depends on:** M2b; existing plan/approval domain and SQLite guards.
+
+Expose immutable plan revisions and exact-hash approvals through runtime/API/client. Revalidate ticket/manifest/base revision and baseline evidence when scheduling. Create only Luuna-owned branches/worktrees with durable ownership/leases. Execute one bounded writer assignment with declared resources, operation scope, budgets, and model profile. Separate native-host permissions from any advertised isolation mechanism.
+
+**Exit:** one approved fixture feature changes only its managed worktree; the developer checkout is preserved. Missing/stale approval, changed base, changed recipe, unrelated repository/path, stale baseline, second writer, and exceeded budget are rejected. Cancellation/restart preserves unfinished work and invalidates uncertain evidence. Map to R07/R08. A prompt that promises to obey paths is not an OS security boundary.
+
+### M3 — Candidate checks, independent review, repair and recovery
+
+**Depends on:** a real M2 writer and command evidence.
+
+Freeze exact candidate commit/tree identities; bind required checks and structured reviewer results to them. Start the reviewer in a new session with requirements, current code/diff, and evidence, excluding the implementer's conversation. Classify infrastructure failures separately, aggregate attempt/time/cost usage, bound repairs, and pause usefully when exhausted. Every repair/manual edit invalidates affected evidence and review.
+
+**Exit:** a seeded regression is blocked; a stale candidate/review cannot pass; repair exhaustion persists with artifacts; restart does not reset budgets or duplicate work; cancellation covers owned descendants when shell tools are enabled. Demonstrate a complete approved single-repo feature with real checks and independent review. Map to R09/R10.
+
+### MVP gate — Make the single-repository workflow usable
+
+**Depends on:** M1–M3. Develop screens against those working APIs, not alternative frontend state machines.
+
+Complete project import, baseline, plan approval, live execution, diff/evidence/review, history, cancel and recovery flows. Test keyboard access and clear blocked/failure messages. Exercise desktop-to-service reconnection and explicit service shutdown. Smoke native Mac/Windows hosts with declared prerequisites; test backup/migration recovery and document manual service startup limitations.
+
+**Exit:** another developer follows the documented setup and completes the representative fixture workflow without undocumented database edits or fake data. Publish a requirement/evidence report naming MVP omissions. A native package may be a development distribution; signed fresh-host installation remains M7 evidence.
+
+### M4 — Multi-repository coordination
+
+**Depends on:** M3's reliable single-repository execution and candidate guards.
+
+Add confirmed repository relationships, task DAG scheduling, scoped project/repository/specialist roles, leases, bounded concurrency, dependency overrides, and cross-repository candidate sets. Preserve one authoritative runtime.
+
+**Exit:** an API/shared-package/consumer fixture produces three exact candidate commits, independent work runs within limits, incompatible consumer integration blocks completion, and partial failure/restart preserves the graph and evidence. Map to R05/R06; single-repository check success cannot stand in for integration success.
+
+### M5 — New projects and verified stack profiles
+
+**Depends on:** M2's executor/baseline contracts; end-to-end acceptance uses M3/M4 as appropriate.
+
+Add approved scaffolding and check profiles for React/Next.js/TypeScript, Node, Go, Python, Flutter, native Android and iOS. Probe host capabilities; let the developer confirm discovered recipes.
+
+**Exit:** every advertised profile has a genuine scaffold/import baseline on a capable runner. Required Apple/device/emulator checks have real evidence or explicitly block that workflow. Do not call an unavailable platform passing. Map to R04/R13.
+
+### M6 — Integrated components, scoped memory and client parity
+
+**Depends on:** stable project/ticket/run contracts; client parity acceptance depends on the implemented product capabilities.
+
+Integrate Missions tickets/dependencies with serialized revision checks; migrate any temporary SQLite ticket authority into a reconciled projection. Add Atlas user/project/process memory with provenance, isolation, promotion/deletion and lexical retrieval. Render versioned Beacon prompts into explicit Pi resources. Use compatible APIs/data formats rather than independent writable copies or imported historical task records.
+
+Complete browser and TUI actions against a shared capability catalog, alongside the desktop. Include plans, approval, repository views, diff/review, settings, memory, cancel, recovery and publication controls.
+
+**Exit:** external Missions edits cause a detected conflict; stale prompts/schema mismatches fail visibly; private memory never crosses project/export scope; every cataloged action and failure path has parity evidence; reconnect yields the same authoritative state. Map to R02/R14/R15.
+
+### M7 — Publication and portable installation
+
+**Depends on:** M3 evidence gates, M4 candidate sets, and a verified publication credential mechanism.
+
+Implement push/linked PR creation, durable idempotency and remote reconciliation, partial-success recovery, CI observation and human-controlled merge tracking. Ship tested installers/doctor diagnostics and a host-specific independent-service/token/update strategy. Current permission to push this repository is not proof the future product publisher exists.
+
+**Exit:** approved three-repo candidates create linked PRs once, timeout-after-success and partial publication recover without duplicates, failing CI is distinct from integration, and no automatic merge path exists. Clean supported Mac/Windows computers install, configure and run the fixture without NAS/cloud dependence. Map to R01/R11/R12.
+
+### M8 — Full-v1 release evidence
+
+**Depends on:** M4–M7 and every advertised capability's prerequisites.
+
+Run all A01–A34 scenarios, supported-host/version matrix, real-project pilot, failure/recovery drills, migrations/backups, dependency/security review and performance measurements. Inspect resource growth, cancellation latency, event delivery and usage accounting; define targets from observed measurements.
+
+**Exit:** every R01–R15 requirement has passing linked evidence on relevant hosts; unresolved required checks block the v1 label. Document limitations, credential/retention boundaries, installer provenance and reproducible recovery. No required path depends on synthetic model output.
+
+## Requirement coverage
+
+| Requirement | Delivery/evidence ownership |
+| --- | --- |
+| R01 Local Mac/Windows operation | MVP native smoke, M7 fresh-host installs, M8 release matrix |
+| R02 Browser/TUI capability parity | M6 catalog and parity suite, M8 |
+| R03 Pi with selected models | M1 genuine engine/model compatibility, repeated after upgrades |
+| R04 Import and creation | M2a import; M5 approved project scaffolding |
+| R05 Multiple repositories | M4 confirmed graph and integration candidate |
+| R06 Scoped coordination roles | M4 scheduler/assignment traces |
+| R07 Approval before feature writes | M2c runtime negative cases, maintained through M8 |
+| R08 Meaningful passing baseline | M2b prerequisite/baseline evidence |
+| R09 Real checks and fresh review | M3 candidate-bound command/reviewer results |
+| R10 Bounded repair and useful pause | M3 aggregate budgets and recovery drills |
+| R11 Automatic linked PRs | M7 actual remote publication/reconciliation |
+| R12 Developer controls merging | M7/M8 no automatic merge operation |
+| R13 Supported stack profiles | M5 capable-host matrix; unavailable required checks block |
+| R14 Scoped memory | M6 privacy/provenance/deletion tests |
+| R15 Runtime outlives clients | M1 reconnect/restart, MVP native lifecycle, M7 packaged service |
+
+## Implementation process and evidence
+
+Make each M2 substage and each subsequent bounded behavior independently reviewable. Before coding, inspect current code, applicable instructions, relevant schema/API/role contract, and baseline evidence. Describe the behavior, affected files/boundaries, negative cases, and exit command; do not ask the user to repeat accepted architecture decisions.
+
+Implement runtime policy and durable transitions before connecting client actions. Use synthetic fixtures for deterministic failure cases and real tools/providers for compatibility evidence. Run relevant checks, get independent review, fix material findings, and update status and handoff before advancing. Add crates/packages when a real implementation needs them. Keep all components in the monorepo.
+
+Each completion report must identify:
+
+- Revision and dirty-state context; delivered behavior and requirement IDs.
+- Commands actually run, exit results, counts, OS/architecture and pinned tool/provider/model versions.
+- Run/attempt IDs, event cursors, exact plan/candidate hashes, and sanitized artifact locations.
+- Negative/failure/recovery cases exercised; independent reviewer findings and resolution.
+- Passing, failing, blocked and unavailable checks separately, with the next concrete assignment.
+
+Commit only sanitized summaries, synthetic fixtures and useful reproducible tests. Keep tokens, keys, personal paths, private provider transcripts and raw local state out of Git. Record private evidence references without copying secrets. A documentation report cannot replace missing execution evidence.
+
+## Reproducible starting commands
+
+Pins: Rust **1.90.0**, Node **24.19.0**, npm **11.9.0**, Bun **1.4.3**, Pi **1.3.0**. Root and native Cargo workspaces have separate locks; root npm, Pi and each Bun component also have their own committed locks.
+
+For the configured cloud checkout, `bash scripts/setup-cloud.sh` installs frozen dependencies and builds the runtime without component lifecycle hooks. Use the saved environment startup instructions for tool/cache paths. On other hosts follow [CONTRIBUTING.md](../CONTRIBUTING.md) and platform prerequisites rather than assuming `/workspace` exists.
+
+From the repository root:
+
+```sh
+cargo fmt --all -- --check
+cargo test --locked --workspace
+cargo clippy --locked --workspace --all-targets -- -D warnings
+npm ci --ignore-scripts
+npm test
+npm run typecheck
+npm run build
+node scripts/check-hygiene.mjs
+git diff --check
+```
+
+For a changed component, run in its own directory:
+
+```sh
+bun install --frozen-lockfile --ignore-scripts
+bun run verify
+```
+
+Run the native check on a capable host; root Rust checks exclude that workspace:
+
+```sh
+cargo check --locked --manifest-path apps/desktop/src-tauri/Cargo.toml
+```
+
+With `LUUNA_PI_COMMAND` pointing to the installed pinned executable:
+
+```sh
+cargo run --locked -p luuna-engine-pi --example probe
+```
+
+That probe makes **no model request**. For genuine M1 proof, securely set `LUUNA_API_TOKEN`, provider/model and provider credentials in the runtime environment, then run `cargo run --locked -p luuna-runtime`. Launch `npm run dev` or `npm run desktop` separately. The runtime does not automatically load `.env`. See the [runtime README](../crates/luuna-runtime/README.md), [desktop README](../apps/desktop/README.md), and [Pi fixtures](../fixtures/pi-rpc/README.md).
+
+## Planning ranges, assumptions and critical path
+
+These are engineering estimates from this foundation, **not promised dates**. Assume one experienced full-time engineer using AI assistance, about 40 scheduled hours/week with **30 focused engineering hours**, a stable model/provider budget, Mac and Windows capable hosts, and timely feedback. AI assistance is included in the assumption; it does not remove integration, review, native packaging, or failure-testing work. Waiting for credentials, network changes, host access, signing, or external service approval adds elapsed time.
+
+The earlier desktop proposal estimated **372–600 hours from scratch** for a meaningful single-repository MVP. Some bootstrap work now exists, but its successful model/native paths remain unproven. Use the following remaining-work range provisionally and re-estimate after M1 and the first real M2 writer.
+
+| Remaining work to a usable single-repo MVP | Focused hours before contingency |
+| --- | ---: |
+| Genuine M1 compatibility and evidence | 24–48 |
+| M2a/M2b/M2c import, baseline, approval and scoped writer | 104–176 |
+| M3 independent review, repair and recovery | 64–104 |
+| MVP client completion, native smoke and end-to-end hardening | 64–104 |
+| Subtotal | 256–432 |
+| Technical uncertainty allowance, approximately 20% | 51–86 |
+| **Planning range** | **310–520** |
+
+That is about **8–13 full 40-hour engineering weeks**, or **11–18 elapsed workweeks at 30 focused hours/week** under these assumptions. A connectivity preview can arrive sooner; it is not the usable MVP defined above.
+
+| Additional work after the MVP to full v1 | Focused hours before contingency |
+| --- | ---: |
+| M4 multi-repository scheduler and integration | 96–160 |
+| M5 creation and complete stack-profile matrix | 128–224 |
+| M6 component/memory integration and browser/TUI parity | 128–224 |
+| M7 linked publication, service packaging and installers | 96–168 |
+| M8 pilot, acceptance, security/recovery and release hardening | 80–144 |
+| Subtotal | 528–920 |
+| Technical uncertainty allowance, approximately 20% | 106–184 |
+| **Additional planning range** | **640–1,110** |
+
+The combined remaining full-v1 range is roughly **950–1,630 focused hours**, about **24–41 full engineering weeks** or **32–55 elapsed workweeks at the assumed focused capacity**. Treat the upper range seriously: native/mobile profiles, TUI parity, independent service installation and publication recovery are substantial product work. Requirements changes or missing platforms can exceed this range.
+
+The execution critical path is **genuine M1 → import/baseline → exact approval/scoped writer → candidate checks/fresh review → reliable multi-repo integration**. Full-v1 release also depends on client parity, profile/platform proof and publication/installers. Stack/client contracts can be prepared alongside core work once stable, but one engineer's parallel tasks do not create extra capacity. Re-estimate from measured milestone throughput and preserve required gates; if time is short, narrow the MVP scope explicitly rather than declaring full v1 early.

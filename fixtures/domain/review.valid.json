@@ -1,0 +1,11 @@
+{
+  "schema_version": "0.1",
+  "id": "review-1",
+  "candidate_hash": "sha256:57feb84c21080e96828c80d61d97d93d966ad5b727a6c99d04080fc320929a3f",
+  "reviewer_session": "fresh-reviewer-1",
+  "findings": [],
+  "verdict": "passed",
+  "evidence": [
+    "artifact:check-unit.log"
+  ]
+}
