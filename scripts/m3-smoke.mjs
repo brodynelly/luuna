@@ -437,7 +437,7 @@ evidence.checkout_after_run = checkoutAfter;
 let fixtureAfter;
 try { fixtureAfter = fixtureCheckoutState(); } catch (error) { fixtureAfter = { error: error.message }; }
 evidence.developer_checkout_after_run = fixtureAfter;
-record("the developer checkout was still untouched once every process of the run had stopped", !fixtureAfter.error && fixtureUnchanged(fixtureAfter), fixtureAfter.error ? `unreadable: ${fixtureAfter.error}` : `head=${String(fixtureAfter.head).slice(0, 12)} tracked_changes=${JSON.stringify(fixtureAfter.tracked)} untracked=${JSON.stringify(fixtureAfter.untracked)}, Git metadata ${fixtureAfter.metadata_digest === fixtureAfterBaseline?.metadata_digest ? "unchanged" : "changed or unreadable"}, ignored files ${fixtureAfter.ignored_digest === fixtureAfterBaseline?.ignored_digest ? `unchanged (${fixtureAfter.ignored_files})` : "changed or unreadable"}`);
+record("the developer checkout was still untouched once every process of the run had stopped", !fixtureAfter.error && fixtureUnchanged(fixtureAfter), fixtureAfter.error ? `unreadable: ${fixtureAfter.error}` : `head=${String(fixtureAfter.head).slice(0, 12)} tracked_changes=${JSON.stringify(fixtureAfter.tracked)} untracked=${JSON.stringify(fixtureAfter.untracked)}, Git metadata ${fixtureAfter.metadata_digest === fixtureAfterBaseline?.metadata_digest ? "unchanged" : "changed or unreadable"}, ignored files ${fixtureAfter.ignored_digest === fixtureAfterBaseline?.ignored_digest ? `unchanged (${fixtureAfter.ignored_files})` : "changed or unreadable"}, untracked contents ${fixtureAfter.untracked_digest === fixtureAfterBaseline?.untracked_digest ? `unchanged (${fixtureAfter.untracked_files})` : "changed or unreadable"}`);
 const sameMetadata = checkoutAfter.git_metadata_digest.startsWith("sha256:") && checkoutAfter.git_metadata_digest === evidence.environment?.git_metadata_digest;
 const sameIgnored = checkoutAfter.ignored_digest.startsWith("sha256:") && checkoutAfter.ignored_digest === evidence.environment?.ignored_digest;
 const sameObjects = checkoutAfter.git_objects_digest.startsWith("sha256:") && checkoutAfter.git_objects_digest === evidence.environment?.git_objects_digest;
@@ -943,7 +943,7 @@ async function hardKillDuringReviewReservesSpend(name) {
 /** The fixture (developer) checkout's HEAD, tracked changes and untracked files. */
 /**
  * The developer checkout as a check could damage it: HEAD, tracked and untracked content, and what
- * porcelain status does not show, its Git metadata (config, HEAD, refs, reflogs, hooks, info, alternates)
+ * porcelain status does not show, the contents of every untracked file, its Git metadata (config, HEAD, refs, reflogs, hooks, info, alternates)
  * and every ignored file. Luuna's own worktrees are detached and it writes no ref or config here,
  * so none of these may change during a run. A digest that cannot be read is reported as such and
  * fails the comparison.
@@ -957,6 +957,13 @@ function fixtureCheckoutState() {
   try {
     state.metadata_digest = pathsDigest(git(fixtureRepo, "rev-parse", "--absolute-git-dir"), ["config", "HEAD", "packed-refs", "info", "hooks", "refs", "logs", "objects/info", "shallow"]);
   } catch (error) { state.metadata_digest = `unavailable: ${error.message}`; }
+  // Porcelain status collapses an untracked directory (the baseline's `__pycache__/`, say) to one
+  // entry, so the paths and contents of every untracked file are hashed individually as well.
+  try {
+    const untracked = git(fixtureRepo, "ls-files", "--others", "--exclude-standard", "-z").split("\0").filter(Boolean);
+    state.untracked_digest = pathsDigest(fixtureRepo, untracked);
+    state.untracked_files = untracked.length;
+  } catch (error) { state.untracked_digest = `unavailable: ${error.message}`; }
   try {
     const ignored = git(fixtureRepo, "ls-files", "--others", "--ignored", "--exclude-standard", "--directory", "-z").split("\0").filter(Boolean).map((rel) => rel.replace(/\/$/, ""));
     state.ignored_digest = pathsDigest(fixtureRepo, ignored);
@@ -967,7 +974,7 @@ function fixtureCheckoutState() {
 
 /** Whether `state` matches the developer checkout recorded after the baseline. */
 function fixtureUnchanged(state) {
-  const digests = ["metadata_digest", "ignored_digest"].every((key) => String(state[key]).startsWith("sha256:") && state[key] === fixtureAfterBaseline?.[key]);
+  const digests = ["metadata_digest", "ignored_digest", "untracked_digest"].every((key) => String(state[key]).startsWith("sha256:") && state[key] === fixtureAfterBaseline?.[key]);
   return state.head !== undefined && state.head === developerHead && state.tracked === "" && JSON.stringify(state.untracked) === JSON.stringify(untrackedAfterBaseline ?? []) && digests;
 }
 
@@ -976,7 +983,7 @@ async function developerCheckoutUntouched() {
   const { head, tracked, untracked } = now;
   const worktrees = Object.values(evidence.scenarios).map((item) => item.run_id).filter(Boolean);
   evidence.developer_checkout = { head_before: developerHead, head_after: head, tracked_changes: tracked, untracked_after_baseline: untrackedAfterBaseline, untracked_after_runs: untracked, metadata_after_baseline: fixtureAfterBaseline?.metadata_digest, metadata_after_runs: now.metadata_digest, ignored_after_baseline: fixtureAfterBaseline?.ignored_digest, ignored_after_runs: now.ignored_digest, runs: worktrees.length };
-  record("developer checkout HEAD, tracked content, untracked and ignored files and Git metadata are untouched by every writer, check, repair and review", fixtureUnchanged(now), `head=${head.slice(0, 12)} tracked_changes=${JSON.stringify(tracked)} untracked_after_baseline=${JSON.stringify(untrackedAfterBaseline)} untracked_after_runs=${JSON.stringify(untracked)} Git metadata ${now.metadata_digest === fixtureAfterBaseline?.metadata_digest ? "unchanged" : "changed or unreadable"}, ignored files ${now.ignored_digest === fixtureAfterBaseline?.ignored_digest ? `unchanged (${now.ignored_files})` : "changed or unreadable"}`);
+  record("developer checkout HEAD, tracked content, untracked and ignored files and Git metadata are untouched by every writer, check, repair and review", fixtureUnchanged(now), `head=${head.slice(0, 12)} tracked_changes=${JSON.stringify(tracked)} untracked_after_baseline=${JSON.stringify(untrackedAfterBaseline)} untracked_after_runs=${JSON.stringify(untracked)} Git metadata ${now.metadata_digest === fixtureAfterBaseline?.metadata_digest ? "unchanged" : "changed or unreadable"}, ignored files ${now.ignored_digest === fixtureAfterBaseline?.ignored_digest ? `unchanged (${now.ignored_files})` : "changed or unreadable"}, untracked contents ${now.untracked_digest === fixtureAfterBaseline?.untracked_digest ? `unchanged (${now.untracked_files})` : "changed or unreadable"}`);
 }
 
 async function gracefulShutdown() {
