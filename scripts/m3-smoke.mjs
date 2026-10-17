@@ -314,6 +314,10 @@ async function startRuntime(label) {
   // link; every chunk is written through that descriptor, so a later swap of the file or the root
   // cannot redirect a write.
   const logFd = openOwnedFile(`runtime-${label}.log`, fsConstants.O_APPEND);
+  // Hash the binary immediately before each spawn: a rebuild or replacement during the run must
+  // not let a different binary execute a later scenario under the initially recorded identity.
+  let binarySha;
+  try { binarySha = createHash("sha256").update(readFileSync(runtimeBinary)).digest("hex"); } catch { binarySha = "unreadable"; }
   const child = spawn(runtimeBinary, [], { env, stdio: ["ignore", "ignore", "pipe"] });
   startingRuntime = child;
   let stderr = "";
@@ -335,6 +339,10 @@ async function startRuntime(label) {
           evidence.environment.runtime_build_rustc = health.build_rustc ?? "not reported";
         }
         record(`runtime ${label} start`, health.status === "ok", `health ${JSON.stringify(health)}`);
+        if (label !== "initial") {
+          const env0 = evidence.environment;
+          record(`runtime ${label} is the same revision-bound binary as the initial start`, binarySha === env0.runtime_binary_sha256 && health.build_identity === env0.expected_build_identity && health.build_rustc === env0.runtime_build_rustc, `sha256 ${binarySha.slice(0, 16)}… (initial ${String(env0.runtime_binary_sha256).slice(0, 16)}…), identity ${health.build_identity === env0.expected_build_identity ? "matches" : "differs"}, rustc ${health.build_rustc}`);
+        }
         if (typeof logFd !== "number") record(`runtime ${label} log was created inside the output root`, false, logFd);
         startingRuntime = null;
         return child;
@@ -624,7 +632,11 @@ async function hardKillDuringReviewReservesSpend(name) {
   const before = await api("GET", `/runs/${runId}/candidate`);
   const costBefore = before.body?.evidence?.cost_usd_micros ?? 0;
   runtime.kill("SIGKILL");
-  await waitForExit(runtime, 10_000);
+  const killed = await waitForExit(runtime, 10_000);
+  // A runtime whose exit is not observed may still own the port and the output tree: the scenario
+  // fails here and `runtime` keeps the old handle, so the final cleanup stops it again.
+  record(`${name}: the hard-killed runtime exited before the restart`, killed.exited, killed.exited ? "exit observed" : "exit NOT observed within 10s");
+  if (!killed.exited) throw new Error("the hard-killed runtime did not exit; restart not attempted");
   // The synthetic reviewer holds for 60s without reading stdin, so only a real Pi child can notice the closed pipe promptly.
   const childExit = await waitUntil(() => typeof pid !== "number" || !processAlive(pid), mode === "fixture" ? 75_000 : 20_000);
   // A PID alone cannot prove ownership once the runtime is gone, so an orphan is
@@ -983,6 +995,10 @@ function quarantineLeaks(scan) {
   if (scan.traversal_incomplete) return clearOutputRoot();
   const targets = [...scan.leaking_files, ...scan.unreadable_files];
   if (targets.length === 0) return { removed: [], failed: [] };
+  // Without directory-relative, non-following handles a path-based unlink can be redirected by a
+  // root renamed and replaced with a link between check and use: nothing is deleted, and every
+  // target is reported as still present, which fails the run.
+  if (outFd === null) return { removed: [], failed: [...new Set([...targets, "data"])].map((entry) => `${entry} (not touched: destructive cleanup needs held directory handles on this platform)`) };
   const removed = [];
   const failed = [];
   // Presence is judged without following links: a dangling symlink is still an entry to
@@ -992,28 +1008,23 @@ function quarantineLeaks(scan) {
   for (const entry of new Set([...targets, "data"])) {
     const parts = entry.split(path.sep).filter(Boolean);
     if (parts.length === 0 || parts.some((part) => part === "." || part === "..")) { failed.push(`${entry} (not a path inside the output directory)`); continue; }
-    // With held handles every parent component is opened without following, relative to the held
-    // root, so neither a renamed root nor a component replaced by a link can redirect the removal.
+    // Every parent component is opened without following, relative to the held root, so neither
+    // a renamed root nor a component replaced by a link can redirect the removal.
     const opened = [];
     let parentFd = outFd;
     let refused = null;
     let gone = false;
-    if (outFd !== null) {
-      for (const part of parts.slice(0, -1)) {
-        try { parentFd = openHeldDir(heldPath(parentFd, part)); opened.push(parentFd); }
-        catch (error) { if (error?.code === "ENOENT") gone = true; else refused = `${part} is not a real directory`; break; }
-      }
+    for (const part of parts.slice(0, -1)) {
+      try { parentFd = openHeldDir(heldPath(parentFd, part)); opened.push(parentFd); }
+      catch (error) { if (error?.code === "ENOENT") gone = true; else refused = `${part} is not a real directory`; break; }
     }
     try {
       if (gone) { removed.push(entry); continue; }
-      const target = outFd !== null ? heldPath(parentFd, parts.at(-1)) : path.resolve(out, entry);
+      const target = heldPath(parentFd, parts.at(-1));
       let error = null;
       for (let attempt = 0; !refused && attempt < 5 && present(target); attempt += 1) {
-        // Without held handles, re-verify the pinned root and the path before every step.
-        if (outFd === null) { refused = unpinnedReason(target); if (refused) break; }
         try {
           const stat = lstatSync(target);
-          if (stat.isDirectory() && outFd === null) { refused = "recursive cleanup needs held directory handles on this platform"; break; }
           if (attempt > 0) {
             // A file a lingering process still holds, or one with stripped permissions: make it
             // writable and blank its contents so the value is gone even if unlinking fails, then
@@ -1033,7 +1044,7 @@ function quarantineLeaks(scan) {
             }
             Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 200 * attempt);
           }
-          if (outFd !== null) removeHeld(parentFd, parts.at(-1), budget); else unlinkSync(target);
+          removeHeld(parentFd, parts.at(-1), budget);
           error = null;
         } catch (caught) { error = caught; }
       }
