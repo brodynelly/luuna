@@ -564,6 +564,41 @@ async fn cancelling_a_baseline_reaps_the_check_and_records_cancellation() {
 }
 
 #[tokio::test]
+async fn a_check_that_changes_the_checkout_cannot_produce_passed_evidence() {
+    let harness = Harness::new();
+    let repo = tempfile::tempdir().unwrap();
+    clean_repository(repo.path());
+    register(&harness, repo.path()).await;
+    harness
+        .confirm(
+            "fixture",
+            0,
+            vec![check(
+                "mutate",
+                "open('README.md', 'a').write('mutated by a check'); print('ran 1 test')",
+                true,
+                30,
+            )],
+        )
+        .await;
+    let run = harness.baseline("fixture", false).await;
+    let id = run["id"].as_str().unwrap().to_owned();
+    let terminal = harness.terminal(&id).await;
+    assert_eq!(terminal["state"], "failed", "{terminal}");
+    let (_, baselines) = harness
+        .request("GET", "/api/v1/projects/fixture/baselines", None)
+        .await;
+    assert_eq!(baselines[0]["status"], "failed", "{baselines}");
+    let reason = baselines[0]["reason"].as_str().unwrap();
+    assert!(
+        reason.contains("changed during the baseline") && reason.contains("1 unstaged"),
+        "{reason}"
+    );
+    // The check itself passed; only the re-inspection withheld the verdict.
+    assert_eq!(baselines[0]["results"][0]["status"], "passed");
+}
+
+#[tokio::test]
 async fn restart_interrupts_a_running_baseline() {
     let harness = Harness::new();
     let repo = tempfile::tempdir().unwrap();

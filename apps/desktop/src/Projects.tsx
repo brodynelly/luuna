@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState } from "react";
 import type { FormEvent } from "react";
 import type { BaselineEvidence, Discovery, EventEnvelope, LuunaClient, ProjectRecord, ProjectView } from "@luuna/api-client";
-import { mergeEvents } from "@luuna/api-client";
+import { isTerminal, mergeEvents } from "@luuna/api-client";
 
 function message(error: unknown): string {
   return error instanceof Error ? error.message : "The runtime could not be reached.";
@@ -107,11 +107,26 @@ export function Projects({ client }: { client: LuunaClient | null }) {
   useEffect(() => {
     if (!client || !selected || !baselineInFlight) return;
     const controller = new AbortController();
+    const pending = pendingBaselineRun;
     const timer = setTimeout(() => {
-      client.listBaselines(selected, controller.signal).then((recorded) => {
+      // A run can settle before any baseline record exists (inspection or identity
+      // failure), so the run itself is polled too; otherwise the button never returns.
+      Promise.all([
+        client.listBaselines(selected, controller.signal),
+        pending ? client.run(pending, controller.signal) : Promise.resolve(null),
+      ]).then(([recorded, run]) => {
         if (controller.signal.aborted) return;
         setBaselines(recorded);
-        if (pendingBaselineRun && recorded.some((baseline) => baseline.run_id === pendingBaselineRun && baseline.status !== "running")) setPendingBaselineRun(null);
+        if (!pending) return;
+        const recordSettled = recorded.some((baseline) => baseline.run_id === pending && baseline.status !== "running");
+        const runSettled = run !== null && isTerminal(run.state);
+        if (recordSettled || runSettled) {
+          setPendingBaselineRun(null);
+          if (!recordSettled && run !== null) {
+            const reason = run.metadata.reason;
+            setError(typeof reason === "string" && reason ? `Baseline run ${run.state}: ${reason}` : `Baseline run ${run.state} before a baseline was recorded`);
+          }
+        }
       }).catch(() => undefined);
     }, 1500);
     return () => { controller.abort(); clearTimeout(timer); };

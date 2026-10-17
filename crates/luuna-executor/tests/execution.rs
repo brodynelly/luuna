@@ -125,6 +125,7 @@ async fn missing_executable_capability_cwd_and_empty_suite_are_blocked() {
     let empty_path = tempfile::tempdir().unwrap();
     let incapable = Executor {
         search_path: Some(empty_path.path().as_os_str().to_owned()),
+        ..Executor::default()
     };
     let mut needs_cargo = spec(dir.path(), &[], 30);
     needs_cargo.capabilities = vec!["cargo".into(), "test".into()];
@@ -272,4 +273,111 @@ async fn repository_relative_executables_resolve_inside_the_checkout_only() {
         .as_deref()
         .unwrap_or("")
         .contains("outside the repository"));
+}
+
+#[tokio::test]
+async fn a_descendant_holding_the_pipes_cannot_keep_the_check_open() {
+    let dir = tempfile::tempdir().unwrap();
+    let marker = dir.path().join("grandchild.pid");
+    let (_tx, cancel) = watch::channel(false);
+    let executor = Executor {
+        drain_grace: Duration::from_secs(1),
+        ..Executor::default()
+    };
+    let started = std::time::Instant::now();
+    let execution = executor
+        .execute(
+            &spec(
+                dir.path(),
+                &[
+                    "-c",
+                    &format!(
+                        "import subprocess, sys\np = subprocess.Popen([sys.executable, '-c', 'import time; time.sleep(60)'])\nopen({marker:?}, 'w').write(str(p.pid))\nprint('leader done')",
+                    ),
+                ],
+                60,
+            ),
+            cancel,
+            None,
+        )
+        .await
+        .unwrap();
+    assert!(
+        started.elapsed() < Duration::from_secs(30),
+        "drain must be bounded, took {:?}",
+        started.elapsed()
+    );
+    assert_eq!(execution.status, CheckStatus::Failed, "{execution:?}");
+    let reason = execution.reason.clone().unwrap_or_default();
+    assert!(reason.contains("descendant"), "{reason}");
+    if cfg!(unix) {
+        let grandchild: u32 = std::fs::read_to_string(&marker)
+            .unwrap()
+            .trim()
+            .parse()
+            .unwrap();
+        tokio::time::sleep(Duration::from_millis(200)).await;
+        assert!(
+            !alive(grandchild),
+            "grandchild must be reaped with the group"
+        );
+    }
+}
+
+#[cfg(unix)]
+#[tokio::test]
+async fn artifacts_are_private_even_under_a_permissive_directory_and_umask() {
+    use std::os::unix::fs::PermissionsExt;
+    let dir = tempfile::tempdir().unwrap();
+    let artifact_dir = dir.path().join(".luuna-artifacts");
+    std::fs::create_dir(&artifact_dir).unwrap();
+    std::fs::set_permissions(&artifact_dir, std::fs::Permissions::from_mode(0o755)).unwrap();
+    let (_tx, cancel) = watch::channel(false);
+    let execution = Executor::default()
+        .execute(
+            &spec(dir.path(), &["-c", "print('private')"], 30),
+            cancel,
+            None,
+        )
+        .await
+        .unwrap();
+    assert_eq!(execution.status, CheckStatus::Passed);
+    let mode =
+        |path: &std::path::Path| std::fs::metadata(path).unwrap().permissions().mode() & 0o777;
+    assert_eq!(mode(&artifact_dir), 0o700);
+    for artifact in &execution.artifacts {
+        assert_eq!(mode(&artifact.path), 0o600, "{}", artifact.path.display());
+    }
+}
+
+#[cfg(unix)]
+#[tokio::test]
+async fn version_probes_never_see_secrets() {
+    use std::os::unix::fs::PermissionsExt;
+    std::env::set_var("FIXTURE_FAKE_API_KEY", "synthetic-secret-value");
+    std::env::set_var("LUUNA_FIXTURE_PRIVATE", "synthetic-private-value");
+    let dir = tempfile::tempdir().unwrap();
+    let tools = dir.path().join("tools");
+    std::fs::create_dir(&tools).unwrap();
+    // A repository-relative executable named like a known tool is version-probed.
+    let fake_cargo = tools.join("cargo");
+    std::fs::write(
+        &fake_cargo,
+        "#!/bin/sh\necho \"cargo-fixture key=${FIXTURE_FAKE_API_KEY:-absent} private=${LUUNA_FIXTURE_PRIVATE:-absent}\"\n",
+    )
+    .unwrap();
+    std::fs::set_permissions(&fake_cargo, std::fs::Permissions::from_mode(0o755)).unwrap();
+    let mut probe_spec = spec(dir.path(), &[], 30);
+    probe_spec.executable = "./tools/cargo".into();
+    probe_spec.capabilities = vec![];
+    match Executor::default().probe(&probe_spec).await {
+        luuna_executor::Probe::Resolved { tool_version, .. } => {
+            let version = tool_version.unwrap_or_default();
+            assert!(version.contains("cargo-fixture"), "{version}");
+            assert!(version.contains("key=absent"), "{version}");
+            assert!(version.contains("private=absent"), "{version}");
+            assert!(!version.contains("synthetic"), "{version}");
+        }
+        other => panic!("probe must resolve: {other:?}"),
+    }
 }

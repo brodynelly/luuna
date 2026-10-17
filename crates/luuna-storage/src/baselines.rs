@@ -261,6 +261,19 @@ impl Store {
                     )))
                 })?;
             evidence.authorizes(&plan, repository_id, environment_fingerprint)?;
+            // The verdict and its run settle in separate writes; evidence whose run
+            // never reached `completed` (a crash in between, later interrupted) is
+            // not a settled baseline.
+            let baseline_run = crate::get_run(&tx, &evidence.run_id)?
+                .ok_or_else(|| StorageError::NotFound(evidence.run_id.clone()))?;
+            if baseline_run.state != RunState::Completed {
+                return Err(StorageError::Domain(DomainError::BaselineRequired(
+                    format!(
+                        "baseline {} belongs to run {} which settled as {:?}, not completed",
+                        evidence.id, evidence.run_id, baseline_run.state
+                    ),
+                )));
+            }
             baselines.insert(repository_id.clone(), evidence.id.clone());
         }
         transition(
@@ -284,21 +297,31 @@ impl Store {
     }
 }
 
-/// Called by startup recovery: a baseline still running when the runtime
-/// stopped can never be reported passed.
+/// Called by startup recovery after active runs were interrupted in the same
+/// transaction: a baseline still running when the runtime stopped, or one whose
+/// verdict was written but whose run never settled, can never be reported passed.
 pub(crate) fn interrupt_running_baselines(tx: &rusqlite::Transaction<'_>) -> Result<usize> {
-    let mut statement = tx.prepare("SELECT id FROM baselines WHERE status='running'")?;
+    let mut statement = tx.prepare(
+        "SELECT b.id, b.status FROM baselines b JOIN runs r ON r.id=b.run_id \
+         WHERE b.status='running' OR (b.status='passed' AND r.state=?1)",
+    )?;
     let ids = statement
-        .query_map([], |r| r.get::<_, String>(0))?
+        .query_map([crate::state_json(RunState::Interrupted)?], |r| {
+            Ok((r.get::<_, String>(0)?, r.get::<_, String>(1)?))
+        })?
         .collect::<std::result::Result<Vec<_>, _>>()?;
     drop(statement);
     let finished_at = now();
-    for id in &ids {
+    for (id, previous) in &ids {
         let mut evidence =
             load_baseline(tx, id)?.ok_or_else(|| StorageError::NotFound(id.clone()))?;
         evidence.status = BaselineStatus::Interrupted;
         evidence.finished_at = Some(finished_at.clone());
-        evidence.reason = Some("runtime restarted before the baseline finished".into());
+        evidence.reason = Some(if previous == "passed" {
+            "runtime restarted before the baseline run settled; the verdict is not evidence".into()
+        } else {
+            "runtime restarted before the baseline finished".into()
+        });
         let mut stored = evidence.clone();
         stored.results.clear();
         tx.execute(

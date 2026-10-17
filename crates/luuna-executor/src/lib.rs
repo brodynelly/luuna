@@ -31,6 +31,8 @@ pub const MAX_ARTIFACT_BYTES: u64 = 16 * 1024 * 1024;
 pub const EXCERPT_BYTES: usize = 4096;
 const VERSION_PROBE_TIMEOUT: Duration = Duration::from_secs(15);
 const REAP_TIMEOUT: Duration = Duration::from_secs(10);
+/// Default grace for descendants that keep a pipe open after the child exits.
+pub const DRAIN_GRACE: Duration = Duration::from_secs(5);
 
 #[derive(Debug, Error)]
 pub enum ExecutorError {
@@ -101,10 +103,22 @@ pub enum Probe {
     Unavailable(String),
 }
 
-#[derive(Debug, Clone, Default)]
+#[derive(Debug, Clone)]
 pub struct Executor {
     /// Overrides `PATH` for executable and capability resolution (tests, profiles).
     pub search_path: Option<OsString>,
+    /// How long output pipes may stay open after the direct child has exited
+    /// before the remaining process group is terminated and capture stops.
+    pub drain_grace: Duration,
+}
+
+impl Default for Executor {
+    fn default() -> Self {
+        Self {
+            search_path: None,
+            drain_grace: DRAIN_GRACE,
+        }
+    }
 }
 
 /// Host capabilities a recipe may declare. Unknown names are descriptive tags.
@@ -159,6 +173,48 @@ pub fn is_secret_or_reserved(name: &str) -> bool {
         ]
         .iter()
         .any(|marker| upper.contains(marker))
+}
+
+/// Every process the executor starts, probes included, sees a cleared
+/// environment with Luuna configuration, `GIT_*` and credential-shaped
+/// variables removed; nothing repository-controlled runs with inherited secrets.
+fn sanitized_environment(command: &mut Command) -> &mut Command {
+    command.env_clear().envs(
+        std::env::vars_os().filter(|(name, _)| !is_secret_or_reserved(&name.to_string_lossy())),
+    )
+}
+
+/// Private artifact storage: directories 0700 and files 0600 on Unix even when
+/// the parent directory or umask is permissive.
+fn create_private_dir(path: &Path) -> std::io::Result<()> {
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::{DirBuilderExt, PermissionsExt};
+        std::fs::DirBuilder::new()
+            .recursive(true)
+            .mode(0o700)
+            .create(path)?;
+        std::fs::set_permissions(path, std::fs::Permissions::from_mode(0o700))
+    }
+    #[cfg(not(unix))]
+    {
+        std::fs::create_dir_all(path)
+    }
+}
+
+async fn create_private_file(path: &Path) -> std::io::Result<tokio::fs::File> {
+    let mut options = tokio::fs::OpenOptions::new();
+    options.write(true).create(true).truncate(true);
+    #[cfg(unix)]
+    options.mode(0o600);
+    let file = options.open(path).await?;
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        file.set_permissions(std::fs::Permissions::from_mode(0o600))
+            .await?;
+    }
+    Ok(file)
 }
 
 impl Executor {
@@ -251,7 +307,7 @@ impl Executor {
             return None;
         }
         let mut command = Command::new(resolved);
-        command
+        sanitized_environment(&mut command)
             .arg("--version")
             .stdin(Stdio::null())
             .stdout(Stdio::piped())
@@ -383,7 +439,7 @@ impl Executor {
         let tool_version = self.tool_version(&resolved, &tool_name).await;
         let fingerprint = Self::fingerprint(&resolved, tool_version.as_deref());
 
-        std::fs::create_dir_all(&spec.artifact_dir)?;
+        create_private_dir(&spec.artifact_dir)?;
         let stdout_path = spec
             .artifact_dir
             .join(format!("{}.stdout.log", spec.recipe_id));
@@ -392,14 +448,9 @@ impl Executor {
             .join(format!("{}.stderr.log", spec.recipe_id));
 
         let mut command = Command::new(&resolved);
-        command
+        sanitized_environment(&mut command)
             .args(&spec.args)
             .current_dir(&cwd)
-            .env_clear()
-            .envs(
-                std::env::vars_os()
-                    .filter(|(name, _)| !is_secret_or_reserved(&name.to_string_lossy())),
-            )
             .env("CI", "true")
             .env("LUUNA_CHECK", &spec.recipe_id)
             .stdin(Stdio::null())
@@ -468,8 +519,43 @@ impl Executor {
         if !matches!(outcome, Outcome::Exited(_)) {
             terminate(&mut child, pid).await;
         }
-        let stdout_capture = stdout_task.await.unwrap_or_else(|e| Err(e.to_string()));
-        let stderr_capture = stderr_task.await.unwrap_or_else(|e| Err(e.to_string()));
+        // The pipes close only when every holder exits. A descendant that
+        // inherited them must not keep the baseline open: after the grace the
+        // whole group is terminated, and capture is abandoned if it still hangs.
+        let mut stdout_task = stdout_task;
+        let mut stderr_task = stderr_task;
+        let mut stdout_slot = None;
+        let mut stderr_slot = None;
+        let drained = tokio::select! {
+            biased;
+            _ = cancel.changed(), if !matches!(outcome, Outcome::Cancelled) => false,
+            joined = tokio::time::timeout(self.drain_grace, async {
+                settle(&mut stdout_task, &mut stdout_slot).await;
+                settle(&mut stderr_task, &mut stderr_slot).await;
+            }) => joined.is_ok(),
+        };
+        let held_open = !drained;
+        if held_open {
+            terminate(&mut child, pid).await;
+            let _ = tokio::time::timeout(REAP_TIMEOUT, async {
+                settle(&mut stdout_task, &mut stdout_slot).await;
+                settle(&mut stderr_task, &mut stderr_slot).await;
+            })
+            .await;
+            for (task, slot, name) in [
+                (&stdout_task, &mut stdout_slot, "stdout"),
+                (&stderr_task, &mut stderr_slot, "stderr"),
+            ] {
+                if slot.is_none() {
+                    task.abort();
+                    *slot = Some(Err(format!(
+                        "{name} pipe was held open by a surviving descendant"
+                    )));
+                }
+            }
+        }
+        let stdout_capture = stdout_slot.unwrap_or_else(|| Err("stdout capture lost".into()));
+        let stderr_capture = stderr_slot.unwrap_or_else(|| Err("stderr capture lost".into()));
         let finished_at = now();
         let mut artifacts = Vec::new();
         let mut excerpts = [String::new(), String::new()];
@@ -503,6 +589,14 @@ impl Executor {
                 Some(format!(
                     "output capture failed: {}",
                     capture_error.unwrap_or_default()
+                )),
+            ),
+            Outcome::Exited(status) if held_open => (
+                CheckStatus::Failed,
+                status.code(),
+                Some(format!(
+                    "a descendant process kept the output open for {}s after the command exited; process group terminated",
+                    self.drain_grace.as_secs()
                 )),
             ),
             Outcome::Cancelled => (
@@ -602,6 +696,16 @@ async fn terminate(child: &mut Child, pid: Option<u32>) {
     let _ = tokio::time::timeout(REAP_TIMEOUT, child.wait()).await;
 }
 
+/// Await a capture task once, keeping its result; a settled slot is never re-polled.
+async fn settle(
+    task: &mut tokio::task::JoinHandle<Result<Captured, String>>,
+    slot: &mut Option<Result<Captured, String>>,
+) {
+    if slot.is_none() {
+        *slot = Some(task.await.unwrap_or_else(|e| Err(e.to_string())));
+    }
+}
+
 struct Captured {
     sha256: String,
     bytes: u64,
@@ -618,7 +722,7 @@ async fn capture(
     stream: &'static str,
     progress: Option<mpsc::UnboundedSender<Progress>>,
 ) -> Result<Captured, String> {
-    let mut file = tokio::fs::File::create(&path)
+    let mut file = create_private_file(&path)
         .await
         .map_err(|e| e.to_string())?;
     let mut hasher = Sha256::new();

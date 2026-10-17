@@ -179,6 +179,97 @@ fn record_baseline(store: &mut Store, id: &str, identity: BaselineIdentity, stat
     let aggregate =
         BaselineStatus::from_results(&store.get_baseline(id).unwrap().unwrap().results, 1);
     store.finish_baseline(id, aggregate, None).unwrap();
+    settle_run(store, &run_id, RunState::Completed);
+}
+
+/// Drive a baseline run through `running` to its terminal state, as the worker does.
+fn settle_run(store: &mut Store, run_id: &str, terminal: RunState) {
+    let run = store.get_run(run_id).unwrap().unwrap();
+    let run = store
+        .transition_run(
+            &run.id,
+            run.revision,
+            RunState::Running,
+            "run.running",
+            serde_json::json!({}),
+        )
+        .unwrap();
+    store
+        .transition_run(
+            &run.id,
+            run.revision,
+            terminal,
+            "run.settled",
+            serde_json::json!({}),
+        )
+        .unwrap();
+}
+
+#[test]
+fn a_passed_verdict_whose_run_never_settled_is_not_evidence() {
+    let Fixture {
+        mut store,
+        run,
+        plan,
+    } = approved_workflow();
+    // The crash window: the verdict committed, the run still running.
+    store
+        .create_run(
+            "baseline-run-crash",
+            "project",
+            serde_json::json!({"kind":"baseline"}),
+        )
+        .unwrap();
+    let crash_run = store.get_run("baseline-run-crash").unwrap().unwrap();
+    store
+        .transition_run(
+            &crash_run.id,
+            crash_run.revision,
+            RunState::Running,
+            "run.running",
+            serde_json::json!({}),
+        )
+        .unwrap();
+    let identity = identity(&plan);
+    store
+        .start_baseline(&evidence("crash", "baseline-run-crash", identity.clone()))
+        .unwrap();
+    store
+        .record_check_result(
+            "crash",
+            &result(
+                "crash-unit",
+                "baseline-run-crash",
+                &identity,
+                CheckStatus::Passed,
+            ),
+        )
+        .unwrap();
+    store
+        .finish_baseline("crash", BaselineStatus::Passed, None)
+        .unwrap();
+    let error = store
+        .begin_implementation(&run.id, run.revision, HOST)
+        .unwrap_err();
+    assert!(error.to_string().contains("not completed"), "{error}");
+    // Startup recovery reconciles the window: the run and its verdict are interrupted.
+    assert_eq!(store.interrupt_active_runs().unwrap(), 1);
+    let reconciled = store.get_baseline("crash").unwrap().unwrap();
+    assert_eq!(reconciled.status, BaselineStatus::Interrupted);
+    assert!(reconciled.reason.unwrap().contains("run settled"));
+    assert_eq!(
+        store.get_run("baseline-run-crash").unwrap().unwrap().state,
+        RunState::Interrupted
+    );
+    assert!(store
+        .begin_implementation(&run.id, run.revision, HOST)
+        .is_err());
+    // A properly settled pass still authorizes.
+    record_baseline(&mut store, "settled", identity, CheckStatus::Passed);
+    let run = store
+        .begin_implementation(&run.id, run.revision, HOST)
+        .unwrap();
+    assert_eq!(run.state, RunState::Implementing);
 }
 
 #[test]

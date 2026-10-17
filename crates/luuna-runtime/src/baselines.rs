@@ -280,11 +280,35 @@ async fn baseline_worker(state: AppState, job: BaselineJob, cancel: watch::Recei
         }
     };
 
+    // A baseline binds to an exact commit; a dirty checkout is not that commit.
+    // Decided before any probe so nothing repository-controlled runs for a
+    // checkout or profile the baseline would refuse anyway.
+    let blocked_reason = if job.execution == ExecutionProfile::Container {
+        Some(
+            "container execution profile is not implemented; only native execution runs".to_owned(),
+        )
+    } else if !observation.dirty.is_clean() {
+        let dirty = &observation.dirty;
+        Some(format!(
+            "checkout is not at an exact commit: {} staged, {} unstaged, {} untracked and {} conflicted paths; commit or stash developer changes before running a baseline",
+            dirty.staged, dirty.unstaged, dirty.untracked, dirty.conflicted
+        ))
+    } else if job.required.is_empty() {
+        Some("manifest declares no required check for this repository".to_owned())
+    } else {
+        None
+    };
+
     // Probe every recipe first so the baseline's environment fingerprint is fixed
     // before any command runs.
     let artifacts = artifact_dir(&state, &job.run_id);
     let mut parts = Vec::new();
-    for recipe in &job.recipes {
+    let probed: &[ManifestCheck] = if blocked_reason.is_none() {
+        &job.recipes
+    } else {
+        &[]
+    };
+    for recipe in probed {
         let part = match state
             .executor
             .probe(&spec_for(&job, recipe, &artifacts))
@@ -336,22 +360,6 @@ async fn baseline_worker(state: AppState, job: BaselineJob, cancel: watch::Recei
         }),
     );
 
-    // A baseline binds to an exact commit; a dirty checkout is not that commit.
-    let blocked_reason = if job.execution == ExecutionProfile::Container {
-        Some(
-            "container execution profile is not implemented; only native execution runs".to_owned(),
-        )
-    } else if !observation.dirty.is_clean() {
-        let dirty = &observation.dirty;
-        Some(format!(
-            "checkout is not at an exact commit: {} staged, {} unstaged, {} untracked and {} conflicted paths; commit or stash developer changes before running a baseline",
-            dirty.staged, dirty.unstaged, dirty.untracked, dirty.conflicted
-        ))
-    } else if job.required.is_empty() {
-        Some("manifest declares no required check for this repository".to_owned())
-    } else {
-        None
-    };
     if let Some(reason) = blocked_reason {
         let _ = state.store.lock().map(|mut store| {
             store.finish_baseline(&baseline_id, BaselineStatus::Blocked, Some(&reason))
@@ -496,12 +504,52 @@ async fn baseline_worker(state: AppState, job: BaselineJob, cancel: watch::Recei
         .filter(|r| job.required.contains(&r.recipe_id))
         .cloned()
         .collect();
-    let status = if cancelled {
+    let mut status = if cancelled {
         BaselineStatus::Cancelled
     } else {
         BaselineStatus::from_results(&required_results, job.required.len())
     };
+    // Checks ran against the working tree. A pass is evidence for the recorded
+    // commit only if the checkout is still that commit, clean, with the same
+    // identity, once every check has finished.
+    let mut drift = None;
+    if status == BaselineStatus::Passed {
+        match state.git.inspect(&root).await {
+            Ok(after) => {
+                if after.head_commit != identity.commit {
+                    drift = Some(format!(
+                        "HEAD moved from {} to {} while checks ran",
+                        identity.commit, after.head_commit
+                    ));
+                } else if !after.dirty.is_clean() {
+                    let dirty = &after.dirty;
+                    drift = Some(format!(
+                        "working tree was modified while checks ran: {} staged, {} unstaged, {} untracked and {} conflicted paths",
+                        dirty.staged, dirty.unstaged, dirty.untracked, dirty.conflicted
+                    ));
+                } else if let Err(error) = job
+                    .registration
+                    .observation
+                    .identity
+                    .matches(&after.identity)
+                {
+                    drift = Some(format!(
+                        "repository identity changed while checks ran: {error}"
+                    ));
+                }
+            }
+            Err(error) => {
+                drift = Some(format!(
+                    "repository could not be re-inspected after the checks: {error}"
+                ));
+            }
+        }
+        if drift.is_some() {
+            status = BaselineStatus::Failed;
+        }
+    }
     let reason = match status {
+        _ if drift.is_some() => drift.map(|d| format!("checkout changed during the baseline: {d}")),
         BaselineStatus::Passed => None,
         BaselineStatus::Cancelled => {
             Some("cancelled before every required check finished".to_owned())

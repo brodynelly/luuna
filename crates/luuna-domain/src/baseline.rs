@@ -216,13 +216,28 @@ impl BaselineEvidence {
                 "baseline was recorded in a different environment".into(),
             ));
         }
-        if self.results.is_empty()
-            || self.results.len() < self.required_checks.len()
-            || self.results.iter().any(|r| r.status != CheckStatus::Passed)
-        {
+        // Every required recipe needs its own passed result bound to this exact
+        // identity and environment; optional results never count either way.
+        let candidate_hash = self.identity.hash()?;
+        if self.required_checks.is_empty() {
             return Err(DomainError::BaselineRequired(
-                "baseline lacks a passed result for every required check".into(),
+                "baseline declares no required check".into(),
             ));
+        }
+        for required in &self.required_checks {
+            let satisfied = self.results.iter().any(|r| {
+                r.recipe_id == *required
+                    && r.status == CheckStatus::Passed
+                    && r.exit_code == Some(0)
+                    && r.candidate_hash == candidate_hash
+                    && r.commit == self.identity.commit
+                    && r.environment_fingerprint == self.environment_fingerprint
+            });
+            if !satisfied {
+                return Err(DomainError::BaselineRequired(format!(
+                    "baseline lacks a passed result for required check {required} bound to its commit and environment"
+                )));
+            }
         }
         Ok(())
     }
@@ -372,8 +387,29 @@ mod tests {
         let mut lying = good.clone();
         lying.results[0].status = CheckStatus::Failed;
         assert!(lying.authorizes(&plan, "app", &fingerprint).is_err());
-        let mut incomplete = good;
+        let mut incomplete = good.clone();
         incomplete.required_checks.push("lint".into());
         assert!(incomplete.authorizes(&plan, "app", &fingerprint).is_err());
+        // An unrelated passed result cannot stand in for a missing required one.
+        let mut substituted = incomplete.clone();
+        let mut extra = result(&id, CheckStatus::Passed, Some(0));
+        extra.recipe_id = "docs".into();
+        substituted.results.push(extra);
+        assert!(substituted.authorizes(&plan, "app", &fingerprint).is_err());
+        // A failed optional recipe does not withhold authorization.
+        let mut optional_failed = good.clone();
+        let mut optional = result(&id, CheckStatus::Failed, Some(1));
+        optional.recipe_id = "bench".into();
+        optional_failed.results.push(optional);
+        optional_failed
+            .authorizes(&plan, "app", &fingerprint)
+            .unwrap();
+        // A required result recorded against another commit or host is not evidence.
+        let mut other_commit = good.clone();
+        other_commit.results[0].commit = "c".repeat(40);
+        assert!(other_commit.authorizes(&plan, "app", &fingerprint).is_err());
+        let mut other_host = good;
+        other_host.results[0].environment_fingerprint = format!("sha256:{}", "f".repeat(64));
+        assert!(other_host.authorizes(&plan, "app", &fingerprint).is_err());
     }
 }

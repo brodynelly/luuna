@@ -363,7 +363,7 @@ impl Store {
     }
 }
 
-fn get_run(connection: &Connection, id: &str) -> Result<Option<RunRecord>> {
+pub(crate) fn get_run(connection: &Connection, id: &str) -> Result<Option<RunRecord>> {
     let row = connection.query_row("SELECT id,project_id,state,revision,metadata,created_at,updated_at FROM runs WHERE id=?1", [id],
         |r| Ok((r.get::<_, String>(0)?,r.get::<_, String>(1)?,r.get::<_, String>(2)?,r.get::<_, u64>(3)?,
             r.get::<_, String>(4)?,r.get::<_, String>(5)?,r.get::<_, String>(6)?))).optional()?;
@@ -496,7 +496,7 @@ fn append_envelope(
 pub(crate) fn now() -> String {
     Utc::now().to_rfc3339_opts(SecondsFormat::Millis, true)
 }
-fn state_json(state: RunState) -> Result<String> {
+pub(crate) fn state_json(state: RunState) -> Result<String> {
     Ok(serde_json::to_string(&state)?)
 }
 
