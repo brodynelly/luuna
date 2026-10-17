@@ -132,6 +132,20 @@ async fn rejects_invalid_and_non_root_paths() {
 }
 
 #[tokio::test]
+async fn output_limit_is_enforced_while_reading() {
+    let dir = tempfile::tempdir().unwrap();
+    synthetic_repository(dir.path());
+    let inspector = GitInspector {
+        max_output_bytes: 8,
+        ..GitInspector::default()
+    };
+    assert!(matches!(
+        inspector.inspect(dir.path()).await,
+        Err(GitError::Oversized)
+    ));
+}
+
+#[tokio::test]
 async fn repository_fsmonitor_configuration_is_not_executed() {
     let dir = tempfile::tempdir().unwrap();
     synthetic_repository(dir.path());

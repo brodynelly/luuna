@@ -112,11 +112,14 @@ fn derive_project_id(name: &str) -> String {
         }
     }
     let id = id.trim_end_matches('-').to_owned();
-    if id.is_empty() || !id.as_bytes()[0].is_ascii_lowercase() {
-        format!("p-{id}").trim_end_matches('-').to_owned()
+    let mut id = if id.is_empty() || !id.as_bytes()[0].is_ascii_lowercase() {
+        format!("p-{id}")
     } else {
         id
-    }
+    };
+    // The prefix may push a 64-character slug past the ID limit.
+    id.truncate(64);
+    id.trim_end_matches('-').to_owned()
 }
 
 fn view(state: &AppState, id: &str) -> Result<ProjectView, ApiError> {
@@ -356,5 +359,10 @@ mod tests {
         assert_eq!(derive_project_id("My App 2"), "my-app-2");
         assert_eq!(derive_project_id("42 things"), "p-42-things");
         assert_eq!(derive_project_id("***"), "p");
+        let digits = derive_project_id(&"7".repeat(80));
+        assert_eq!(digits.len(), 64);
+        assert!(luuna_domain::valid_project_id(&digits));
+        let long = derive_project_id(&format!("{}-x", "a".repeat(63)));
+        assert!(luuna_domain::valid_project_id(&long));
     }
 }

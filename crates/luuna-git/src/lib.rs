@@ -14,10 +14,9 @@ use std::{
     time::Duration,
 };
 use thiserror::Error;
-use tokio::process::Command;
+use tokio::{io::AsyncReadExt, process::Command};
 
 pub const MAX_OUTPUT_BYTES: usize = 8 * 1024 * 1024;
-const MAX_BRANCHES: usize = 200;
 const MAX_ROOT_COMMITS: usize = 64;
 
 #[derive(Debug, Error)]
@@ -40,7 +39,7 @@ pub enum GitError {
     Command { command: String, detail: String },
     #[error("git {0} timed out")]
     Timeout(String),
-    #[error("git output exceeded {MAX_OUTPUT_BYTES} bytes")]
+    #[error("git output exceeded the configured limit")]
     Oversized,
     #[error("I/O: {0}")]
     Io(#[from] std::io::Error),
@@ -50,6 +49,8 @@ pub enum GitError {
 pub struct GitInspector {
     pub program: PathBuf,
     pub command_timeout: Duration,
+    /// Per-stream output cap enforced while reading; the child is killed beyond it.
+    pub max_output_bytes: usize,
 }
 
 impl Default for GitInspector {
@@ -57,6 +58,7 @@ impl Default for GitInspector {
         Self {
             program: PathBuf::from("git"),
             command_timeout: Duration::from_secs(30),
+            max_output_bytes: MAX_OUTPUT_BYTES,
         }
     }
 }
@@ -82,31 +84,62 @@ impl GitInspector {
             "core.hooksPath=/dev/null",
         ]);
         command.args(args);
+        // Every inherited GIT_* variable (GIT_DIR, GIT_COMMON_DIR, GIT_OBJECT_DIRECTORY,
+        // GIT_CONFIG_*, ...) could redirect inspection away from the path given to -C.
+        for (name, _) in std::env::vars_os() {
+            if name.to_string_lossy().starts_with("GIT_") {
+                command.env_remove(&name);
+            }
+        }
         command
             .env("GIT_OPTIONAL_LOCKS", "0")
             .env("GIT_TERMINAL_PROMPT", "0")
             .env("LC_ALL", "C")
-            .env_remove("GIT_DIR")
-            .env_remove("GIT_WORK_TREE")
-            .env_remove("GIT_INDEX_FILE")
             .stdin(Stdio::null())
             .stdout(Stdio::piped())
             .stderr(Stdio::piped())
             .kill_on_drop(true);
         let name = args.first().copied().unwrap_or("git").to_owned();
-        let output = tokio::time::timeout(self.command_timeout, command.output())
-            .await
-            .map_err(|_| GitError::Timeout(name))??;
-        if output.stdout.len() > MAX_OUTPUT_BYTES {
+        let mut child = command.spawn()?;
+        let mut stdout_pipe = child.stdout.take().expect("stdout is piped");
+        let mut stderr_pipe = child.stderr.take().expect("stderr is piped");
+        let limit = self.max_output_bytes as u64 + 1;
+        let read = async {
+            let mut stdout = Vec::new();
+            let mut stderr = Vec::new();
+            let mut stdout_reader = (&mut stdout_pipe).take(limit);
+            let mut stderr_reader = (&mut stderr_pipe).take(limit);
+            let (out, err) = tokio::join!(
+                stdout_reader.read_to_end(&mut stdout),
+                stderr_reader.read_to_end(&mut stderr),
+            );
+            out?;
+            err?;
+            Ok::<_, std::io::Error>((stdout, stderr))
+        };
+        let (stdout, stderr) = match tokio::time::timeout(self.command_timeout, read).await {
+            Ok(result) => result?,
+            Err(_) => {
+                let _ = child.kill().await;
+                return Err(GitError::Timeout(name));
+            }
+        };
+        // The streams were capped while reading; a child still writing is stopped here.
+        if stdout.len() > self.max_output_bytes || stderr.len() > self.max_output_bytes {
+            let _ = child.kill().await;
             return Err(GitError::Oversized);
         }
+        let status = match tokio::time::timeout(self.command_timeout, child.wait()).await {
+            Ok(status) => status?,
+            Err(_) => {
+                let _ = child.kill().await;
+                return Err(GitError::Timeout(name));
+            }
+        };
         Ok(Output {
-            status: output.status.code(),
-            stdout: output.stdout,
-            stderr: String::from_utf8_lossy(&output.stderr)
-                .chars()
-                .take(400)
-                .collect(),
+            status: status.code(),
+            stdout,
+            stderr: String::from_utf8_lossy(&stderr).chars().take(400).collect(),
         })
     }
 
@@ -228,12 +261,7 @@ impl GitInspector {
         let local_branches = self
             .expect(
                 &canonical,
-                &[
-                    "for-each-ref",
-                    "--format=%(refname:short)",
-                    &format!("--count={MAX_BRANCHES}"),
-                    "refs/heads/",
-                ],
+                &["for-each-ref", "--format=%(refname:short)", "refs/heads/"],
             )
             .await?
             .lines()

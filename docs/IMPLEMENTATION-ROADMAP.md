@@ -6,7 +6,7 @@ Date: 2026-10-16. This is the implementation sequence from the audited foundatio
 
 Keep the application and all three maintained CLI components in **this monorepo**. Missions, Atlas, and Beacon retain independent package/API boundaries, compatible data formats, and upstream MIT notices. Repository separation is a later maintenance decision, not a prerequisite or the next assignment. Do not create repositories, remove component source, or replace these tools with Rust rewrites to advance a milestone.
 
-[FOUNDATION-STATUS.md](FOUNDATION-STATUS.md) records the observed evidence. Its current Linux baseline is 57 Rust tests, 13 API-client tests, 18 positive/negative schema checks, and 3,092 component tests passing, with Rust formatting/lint and frontend type/build checks passing, plus an 18-check synthetic smoke-harness run, the 19-check genuine OpenRouter run and the 15-check M2a browser smoke. Counts describe that audit, not a permanent expected total; future changes must rerun appropriate checks.
+[FOUNDATION-STATUS.md](FOUNDATION-STATUS.md) records the observed evidence. Its current Linux baseline is 58 Rust tests, 13 API-client tests, 18 positive/negative schema checks, and 3,092 component tests passing, with Rust formatting/lint and frontend type/build checks passing, plus an 18-check synthetic smoke-harness run, the 19-check genuine OpenRouter run and the 15-check M2a browser smoke. Counts describe that audit, not a permanent expected total; future changes must rerun appropriate checks.
 
 | Area | Implemented and checked | Partial or not yet demonstrated |
 | --- | --- | --- |
