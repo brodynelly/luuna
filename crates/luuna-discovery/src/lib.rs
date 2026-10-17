@@ -189,6 +189,10 @@ pub fn discover(request: DiscoveryRequest) -> Result<Discovery, DiscoveryError> 
     })
 }
 
+const CONVENTIONAL_BRANCHES: [&str; 4] = ["main", "master", "trunk", "develop"];
+
+/// Only `refs/remotes/origin/HEAD` or a conventional current branch is proposed
+/// silently; a checked-out feature branch always raises a question.
 fn propose_default_branch(
     observation: &RepositoryObservation,
     id: &str,
@@ -200,46 +204,52 @@ fn propose_default_branch(
             .push(format!("{id}:refs/remotes/origin/HEAD -> {branch}"));
         return branch.clone();
     }
-    if let Some(branch) = &observation.branch {
+    let current = observation.branch.as_deref();
+    if let Some(branch) = current.filter(|b| CONVENTIONAL_BRANCHES.contains(b)) {
         facts.evidence.push(format!("{id}:HEAD -> {branch}"));
-        return branch.clone();
+        return branch.to_owned();
     }
-    for candidate in ["main", "master", "trunk", "develop"] {
+    let position = match current {
+        Some(branch) => format!("HEAD is on `{branch}`, which is not a conventional default"),
+        None => "HEAD is detached".to_owned(),
+    };
+    for candidate in CONVENTIONAL_BRANCHES {
         if observation.local_branches.iter().any(|b| b == candidate) {
             facts.question(
                 id,
                 "default-branch",
-                format!("HEAD is detached; `{candidate}` was assumed from local branches"),
+                format!("{position}; `{candidate}` was assumed from local branches"),
             );
             return candidate.to_owned();
         }
     }
-    let fallback = observation
-        .local_branches
-        .first()
-        .cloned()
+    let fallback = current
+        .map(ToOwned::to_owned)
+        .or_else(|| observation.local_branches.first().cloned())
         .unwrap_or_else(|| "main".into());
     facts.question(
         id,
         "default-branch",
-        format!(
-            "HEAD is detached and no conventional branch exists; `{fallback}` is a placeholder"
-        ),
+        format!("{position} and no conventional branch exists; `{fallback}` is a placeholder"),
     );
     fallback
 }
 
+/// Reads a regular file directly under the root. Symlinks are refused so a
+/// repository cannot point a manifest name at data outside its registered root.
 fn read_bounded(root: &Path, name: &str) -> Option<String> {
     let path = root.join(name);
-    let metadata = std::fs::metadata(&path).ok()?;
-    if !metadata.is_file() || metadata.len() > MAX_MANIFEST_FILE_BYTES {
+    let metadata = std::fs::symlink_metadata(&path).ok()?;
+    if !metadata.file_type().is_file() || metadata.len() > MAX_MANIFEST_FILE_BYTES {
         return None;
     }
     std::fs::read_to_string(path).ok()
 }
 
 fn exists(root: &Path, name: &str) -> bool {
-    root.join(name).exists()
+    std::fs::symlink_metadata(root.join(name))
+        .map(|m| !m.file_type().is_symlink())
+        .unwrap_or(false)
 }
 
 fn excerpt(value: &str) -> String {
@@ -337,32 +347,65 @@ fn node(root: &Path, id: &str, facts: &mut Facts) {
             return;
         }
     };
-    let manager = if exists(root, "bun.lock") || exists(root, "bun.lockb") {
+    let from_lockfile = if exists(root, "bun.lock") || exists(root, "bun.lockb") {
         facts.evidence.push(format!("{id}:bun.lock"));
-        "bun"
+        Some("bun")
     } else if exists(root, "pnpm-lock.yaml") {
         facts.evidence.push(format!("{id}:pnpm-lock.yaml"));
-        "pnpm"
+        Some("pnpm")
     } else if exists(root, "yarn.lock") {
         facts.evidence.push(format!("{id}:yarn.lock"));
-        "yarn"
+        Some("yarn")
     } else if exists(root, "package-lock.json") {
         facts.evidence.push(format!("{id}:package-lock.json"));
-        "npm"
+        Some("npm")
     } else {
-        facts.question(
-            id,
-            "node-lockfile",
-            "no package manager lockfile was found; npm was assumed",
-        );
-        "npm"
+        None
     };
-    if let Some(declared) = package["packageManager"].as_str() {
+    // An explicit packageManager declaration wins over lockfile inference.
+    let declared = package["packageManager"].as_str().and_then(|value| {
+        let name = value.split('@').next().unwrap_or("");
+        let known = ["npm", "pnpm", "yarn", "bun"]
+            .into_iter()
+            .find(|known| *known == name);
         facts.evidence.push(format!(
             "{id}:package.json#packageManager = {}",
-            excerpt(declared)
+            excerpt(value)
         ));
-    }
+        if known.is_none() {
+            facts.question(
+                id,
+                "node-package-manager",
+                format!(
+                    "packageManager `{}` is not a supported manager",
+                    excerpt(value)
+                ),
+            );
+        }
+        known
+    });
+    let manager = match (declared, from_lockfile) {
+        (Some(declared), Some(lockfile)) if declared != lockfile => {
+            facts.question(
+                id,
+                "node-package-manager",
+                format!(
+                    "package.json declares {declared} but a {lockfile} lockfile is present; {declared} was proposed"
+                ),
+            );
+            declared
+        }
+        (Some(declared), _) => declared,
+        (None, Some(lockfile)) => lockfile,
+        (None, None) => {
+            facts.question(
+                id,
+                "node-lockfile",
+                "no package manager lockfile or packageManager declaration was found; npm was assumed",
+            );
+            "npm"
+        }
+    };
     if exists(root, "tsconfig.json") {
         facts.profile("typescript", format!("{id}:tsconfig.json"));
     }
@@ -553,17 +596,36 @@ fn dart(root: &Path, id: &str, facts: &mut Facts) {
     }
 }
 
+/// Gradle alone means a JVM project; only an Android plugin selects the Android profile.
 fn android(root: &Path, id: &str, facts: &mut Facts) {
     let wrapper = exists(root, "gradlew");
-    let gradle = wrapper
-        || exists(root, "build.gradle")
-        || exists(root, "build.gradle.kts")
-        || exists(root, "settings.gradle")
-        || exists(root, "settings.gradle.kts");
-    if !gradle {
+    let present: Vec<&str> = [
+        "build.gradle",
+        "build.gradle.kts",
+        "settings.gradle",
+        "settings.gradle.kts",
+    ]
+    .into_iter()
+    .filter(|name| exists(root, name))
+    .collect();
+    if !wrapper && present.is_empty() {
         return;
     }
-    facts.profile("android", format!("{id}:gradle"));
+    let android_plugin = present.iter().find(|name| {
+        read_bounded(root, name)
+            .is_some_and(|text| text.contains("com.android") || text.contains("android {"))
+    });
+    let capabilities: &[&str] = match android_plugin {
+        Some(file) => {
+            facts.profile("android", format!("{id}:{file}#com.android"));
+            &["jdk", "android-sdk"]
+        }
+        None => {
+            let evidence = present.first().copied().unwrap_or("gradlew");
+            facts.profile("gradle", format!("{id}:{evidence}"));
+            &["jdk"]
+        }
+    };
     if wrapper {
         facts.check(
             Recipe {
@@ -572,20 +634,24 @@ fn android(root: &Path, id: &str, facts: &mut Facts) {
                 args: &["test"],
                 required: true,
                 timeout_seconds: 3600,
-                capabilities: &["jdk", "android-sdk"],
+                capabilities,
             },
             vec![format!("{id}:gradlew")],
             Confidence::Inferred,
         );
         facts.question(
             id,
-            "android-host",
-            "Gradle tests need a JDK and Android SDK on the execution host; Windows hosts use gradlew.bat",
+            "gradle-host",
+            if android_plugin.is_some() {
+                "Gradle tests need a JDK and Android SDK on the execution host; Windows hosts use gradlew.bat"
+            } else {
+                "Gradle tests need a JDK on the execution host; Windows hosts use gradlew.bat"
+            },
         );
     } else {
         facts.question(
             id,
-            "android-wrapper",
+            "gradle-wrapper",
             "Gradle build files exist without a wrapper; supply the gradle executable and recipe",
         );
     }
@@ -748,6 +814,109 @@ mod tests {
             vec!["unrecognized"]
         );
         assert!(!discovery.manifest_problems.is_empty());
+    }
+
+    #[test]
+    fn declared_package_manager_wins_and_conflicts_are_questions() {
+        let dir = tempfile::tempdir().unwrap();
+        fs::write(
+            dir.path().join("package.json"),
+            r#"{"packageManager":"pnpm@9.1.0","scripts":{"test":"vitest run"}}"#,
+        )
+        .unwrap();
+        fs::write(dir.path().join("package-lock.json"), "{}").unwrap();
+        let discovery = discover(request(
+            dir.path(),
+            observation(dir.path(), Some("main"), None),
+        ))
+        .unwrap();
+        let test = discovery.repositories[0]
+            .proposed_checks
+            .iter()
+            .find(|c| c.check.id == "pnpm-test")
+            .unwrap();
+        assert_eq!(test.check.executable, "pnpm");
+        assert!(discovery
+            .questions
+            .iter()
+            .any(|q| q.topic == "node-package-manager" && q.detail.contains("npm lockfile")));
+    }
+
+    #[test]
+    fn gradle_without_an_android_plugin_is_a_jvm_project_and_symlinks_are_ignored() {
+        let dir = tempfile::tempdir().unwrap();
+        fs::write(dir.path().join("build.gradle.kts"), "plugins { java }\n").unwrap();
+        fs::write(dir.path().join("gradlew"), "#!/bin/sh\n").unwrap();
+        let outside = tempfile::tempdir().unwrap();
+        fs::write(
+            outside.path().join("package.json"),
+            r#"{"scripts":{"test":"leak"}}"#,
+        )
+        .unwrap();
+        #[cfg(unix)]
+        std::os::unix::fs::symlink(
+            outside.path().join("package.json"),
+            dir.path().join("package.json"),
+        )
+        .unwrap();
+        let discovery = discover(request(
+            dir.path(),
+            observation(dir.path(), Some("main"), None),
+        ))
+        .unwrap();
+        let repo = &discovery.repositories[0];
+        assert_eq!(repo.profiles, vec!["gradle"]);
+        let gradle = repo
+            .proposed_checks
+            .iter()
+            .find(|c| c.check.id == "gradle-test")
+            .unwrap();
+        assert_eq!(gradle.check.capabilities, vec!["jdk"]);
+        assert!(
+            !repo.evidence.iter().any(|e| e.contains("package.json")),
+            "{:?}",
+            repo.evidence
+        );
+        let android = tempfile::tempdir().unwrap();
+        fs::write(
+            android.path().join("build.gradle"),
+            "plugins { id 'com.android.application' }\n",
+        )
+        .unwrap();
+        let discovery = discover(request(
+            android.path(),
+            observation(android.path(), Some("main"), None),
+        ))
+        .unwrap();
+        assert_eq!(discovery.repositories[0].profiles, vec!["android"]);
+    }
+
+    #[test]
+    fn a_checked_out_feature_branch_is_never_a_silent_default() {
+        let dir = tempfile::tempdir().unwrap();
+        fs::write(dir.path().join("go.mod"), "module example.invalid/x\n").unwrap();
+        let mut feature = observation(dir.path(), Some("feature/login"), None);
+        feature.local_branches = vec!["feature/login".into(), "main".into()];
+        let discovery = discover(request(dir.path(), feature)).unwrap();
+        assert_eq!(
+            discovery.proposed_manifest.repositories[0].default_branch,
+            "main"
+        );
+        assert!(discovery
+            .questions
+            .iter()
+            .any(|q| q.topic == "default-branch" && q.detail.contains("feature/login")));
+        let mut only_feature = observation(dir.path(), Some("feature/login"), None);
+        only_feature.local_branches = vec!["feature/login".into()];
+        let discovery = discover(request(dir.path(), only_feature)).unwrap();
+        assert_eq!(
+            discovery.proposed_manifest.repositories[0].default_branch,
+            "feature/login"
+        );
+        assert!(discovery
+            .questions
+            .iter()
+            .any(|q| q.topic == "default-branch"));
     }
 
     #[test]

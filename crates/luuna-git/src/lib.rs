@@ -18,7 +18,7 @@ use tokio::process::Command;
 
 pub const MAX_OUTPUT_BYTES: usize = 8 * 1024 * 1024;
 const MAX_BRANCHES: usize = 200;
-const MAX_ROOT_COMMITS: usize = 16;
+const MAX_ROOT_COMMITS: usize = 64;
 
 #[derive(Debug, Error)]
 pub enum GitError {
@@ -32,6 +32,8 @@ pub enum GitError {
     NotRoot(String),
     #[error("repository has no commits on HEAD")]
     Unborn,
+    #[error("repository has {0} root commits; more than {MAX_ROOT_COMMITS} cannot form a stable identity")]
+    TooManyRoots(usize),
     #[error("{0}")]
     Identity(#[from] luuna_domain::DomainError),
     #[error("git {command} failed: {detail}")]
@@ -214,12 +216,15 @@ impl GitInspector {
                 .lines()
                 .map(str::trim)
                 .filter(|l| !l.is_empty())
-                .take(MAX_ROOT_COMMITS)
                 .map(ToOwned::to_owned)
                 .collect()
         };
         root_commits.sort();
         root_commits.dedup();
+        // Identity must cover every root; truncating would let a history change slip past.
+        if root_commits.len() > MAX_ROOT_COMMITS {
+            return Err(GitError::TooManyRoots(root_commits.len()));
+        }
         let local_branches = self
             .expect(
                 &canonical,
@@ -286,8 +291,9 @@ pub fn strip_verbatim_prefix(path: &Path) -> PathBuf {
     path.to_path_buf()
 }
 
-/// Strip user information from URL-style remotes so tokens never persist.
+/// Strip user information, query strings and fragments from remotes so tokens never persist.
 pub fn redact_remote(remote: &str) -> String {
+    let remote = remote.split(['?', '#']).next().unwrap_or(remote);
     if let Some((scheme, rest)) = remote.split_once("://") {
         if let Some((authority, path)) = rest.split_once('/') {
             let host = authority.rsplit('@').next().unwrap_or(authority);
@@ -373,6 +379,14 @@ mod tests {
             "git@github.com:org/repo.git"
         );
         assert_eq!(redact_remote("https://x@host"), "https://host");
+        assert_eq!(
+            redact_remote("https://host/org/repo.git?access_token=secret#frag"),
+            "https://host/org/repo.git"
+        );
+        assert_eq!(
+            redact_remote("git@github.com:org/repo.git?token=secret"),
+            "git@github.com:org/repo.git"
+        );
     }
 
     #[test]

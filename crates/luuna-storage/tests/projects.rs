@@ -197,9 +197,15 @@ fn stale_revision_identity_remote_and_branch_mismatches_fail_closed() {
     store
         .confirm_manifest("fixture", 0, &manifest(1), &fresh())
         .unwrap();
+    let mut renamed = manifest(2);
+    renamed.name = "Fixture renamed".into();
     store
-        .confirm_manifest("fixture", 1, &manifest(2), &fresh())
+        .confirm_manifest("fixture", 1, &renamed, &fresh())
         .unwrap();
+    assert_eq!(
+        store.get_project("fixture").unwrap().unwrap().name,
+        "Fixture renamed"
+    );
     assert_eq!(
         store.get_manifest("fixture", 1).unwrap().unwrap().revision,
         1
@@ -223,9 +229,14 @@ fn local_only_repositories_use_an_explicit_identity_and_registration_validates_i
     store
         .register_project("fixture", "Fixture", &[("app".into(), observation(None))])
         .unwrap();
+    let fresh_local = BTreeMap::from([("app".to_owned(), observation(None))]);
+    // Without an origin, an arbitrary URL would record a false identity.
+    assert!(matches!(
+        store.confirm_manifest("fixture", 0, &manifest(1), &fresh_local),
+        Err(StorageError::Invalid(_))
+    ));
     let mut local = manifest(1);
     local.repositories[0].remote = "local:app".into();
-    let fresh_local = BTreeMap::from([("app".to_owned(), observation(None))]);
     store
         .confirm_manifest("fixture", 0, &local, &fresh_local)
         .unwrap();

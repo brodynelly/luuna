@@ -30,6 +30,9 @@ export function Projects({ client }: { client: LuunaClient | null }) {
   useEffect(() => () => operation.current?.abort(), []);
 
   useEffect(() => {
+    // A request started against the previous runtime must not repopulate this one.
+    operation.current?.abort();
+    setBusy(false);
     setProjects([]);
     setSelected(null);
     setView(null);

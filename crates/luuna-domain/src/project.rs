@@ -222,9 +222,8 @@ fn validate_check(check: &ManifestCheck) -> Result<(), DomainError> {
         .next()
         .unwrap_or(executable)
         .to_ascii_lowercase();
-    if SHELL_EXECUTABLES.contains(&base.as_str())
-        && !check.capabilities.iter().any(|c| c == "shell")
-    {
+    let base = base.strip_suffix(".exe").unwrap_or(&base);
+    if SHELL_EXECUTABLES.contains(&base) && !check.capabilities.iter().any(|c| c == "shell") {
         return invalid("a shell recipe must declare the shell capability explicitly");
     }
     if check.args.len() > 64
@@ -269,6 +268,8 @@ pub fn valid_remote_identity(value: &str) -> bool {
     !value.is_empty()
         && value.len() <= 512
         && !value.bytes().any(|b| b <= 32 || b == 127)
+        && !value.contains('?')
+        && !value.contains('#')
         && !remote_has_userinfo(value)
 }
 
@@ -517,6 +518,9 @@ mod tests {
             .capabilities
             .push("shell".into());
         shell.validate().unwrap();
+        let mut windows_shell = manifest();
+        windows_shell.repositories[0].checks[0].executable = "PowerShell.exe".into();
+        assert!(windows_shell.validate().is_err());
         let mut absolute = manifest();
         absolute.repositories[0].checks[0].executable = "/usr/bin/flutter".into();
         assert!(absolute.validate().is_err());
@@ -526,6 +530,9 @@ mod tests {
         let mut secret = manifest();
         secret.repositories[0].remote = "https://user:token@github.com/x/y.git".into();
         assert!(secret.validate().is_err());
+        let mut query = manifest();
+        query.repositories[0].remote = "https://github.com/x/y.git?access_token=t".into();
+        assert!(query.validate().is_err());
         let mut branch = manifest();
         branch.repositories[0].default_branch = "feature..bad".into();
         assert!(branch.validate().is_err());

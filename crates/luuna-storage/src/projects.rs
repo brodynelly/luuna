@@ -261,13 +261,20 @@ impl Store {
                 .observation
                 .identity
                 .matches(&observed.identity)?;
-            if let Some(remote) = &observed.identity.remote {
-                if &repository.remote != remote {
+            match &observed.identity.remote {
+                Some(remote) if &repository.remote != remote => {
                     return Err(StorageError::Invalid(format!(
                         "repository {} remote {} does not match the observed origin",
                         repository.id, repository.remote
                     )));
                 }
+                None if !repository.remote.starts_with("local:") => {
+                    return Err(StorageError::Invalid(format!(
+                        "repository {} has no origin remote; its manifest identity must start with local:",
+                        repository.id
+                    )));
+                }
+                _ => {}
             }
             if !observed.has_branch(&repository.default_branch) {
                 return Err(StorageError::Invalid(format!(
@@ -290,9 +297,17 @@ impl Store {
                 confirmed_at
             ],
         )?;
+        // The project record follows the confirmed manifest so both names agree.
         tx.execute(
-            "UPDATE projects SET revision=?1,manifest_hash=?2,updated_at=?3 WHERE id=?4 AND revision=?5",
-            params![manifest.revision, hash, confirmed_at, project_id, expected_revision],
+            "UPDATE projects SET revision=?1,manifest_hash=?2,updated_at=?3,name=?4 WHERE id=?5 AND revision=?6",
+            params![
+                manifest.revision,
+                hash,
+                confirmed_at,
+                manifest.name,
+                project_id,
+                expected_revision
+            ],
         )?;
         append_project_event(
             &tx,
