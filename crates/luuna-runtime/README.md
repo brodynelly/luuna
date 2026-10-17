@@ -27,7 +27,8 @@ cloud platform authentication, user Pi profiles, and model settings files are
 not integrated. Missing provider credentials produce a persisted failed run.
 
 `GET /api/v1/health` is public. Its `pi_version` field reports the required
-supported version; the CLI is checked when starting a run. All other endpoints
+supported version; the CLI is checked when starting a run. Its `build_identity`
+field is the content digest of the sources the binary was built from. All other endpoints
 require `Authorization: Bearer <token>`:
 
 - `GET /api/v1/runs`: persisted run records.
