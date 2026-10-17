@@ -978,9 +978,19 @@ fn known_secrets(state: &AppState) -> Vec<String> {
 /// developer confirmed remains the boundary on what a check may read.
 fn redact_secrets(text: &str, known: &[String]) -> String {
     let mut output = text.to_owned();
-    for secret in known.iter().filter(|secret| secret.len() >= 8) {
-        if output.contains(secret.as_str()) {
-            output = output.replace(secret.as_str(), "[redacted credential]");
+    // Longest values first and deduplicated: replacing a shorter value that is a
+    // prefix of a longer one would otherwise leave the longer one's remainder
+    // in the clear (`abcdefgh` before `abcdefgh-suffix` yields `[…]-suffix`).
+    let mut ordered: Vec<&str> = known
+        .iter()
+        .map(String::as_str)
+        .filter(|secret| secret.len() >= 8)
+        .collect();
+    ordered.sort_by(|a, b| b.len().cmp(&a.len()).then_with(|| a.cmp(b)));
+    ordered.dedup();
+    for secret in ordered {
+        if output.contains(secret) {
+            output = output.replace(secret, "[redacted credential]");
         }
     }
     output = redact_pem_blocks(&output);
@@ -1837,6 +1847,18 @@ mod redaction_tests {
         let mut small = 500u64;
         assert!(read_verified_tail(&path, expected, &mut small, &[]).is_none());
         assert_eq!(small, 500, "a rejected file is not charged");
+    }
+
+    #[test]
+    fn overlapping_known_values_are_redacted_longest_first() {
+        let known = vec![
+            "abcdefgh".to_owned(),
+            "abcdefgh-private-suffix".to_owned(),
+            "abcdefgh".to_owned(),
+        ];
+        let out = redact_secrets("key=abcdefgh-private-suffix other=abcdefgh", &known);
+        assert_eq!(out, "key=[redacted credential] other=[redacted credential]");
+        assert!(!out.contains("suffix"));
     }
 
     #[test]

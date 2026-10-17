@@ -46,6 +46,10 @@ const PROJECT = "m3-smoke";
 const REQUEST_TIMEOUT_MS = 30_000;
 // Largest file the leak scan will read; anything bigger is an unscannable target that fails the run.
 const SCAN_FILE_LIMIT = 512 * 1024 * 1024;
+// Aggregate scan budget: bytes read and files opened across the whole output tree. Anything
+// left unscanned when a budget is spent is a scan failure and is quarantined.
+const SCAN_TOTAL_LIMIT = 2 * 1024 * 1024 * 1024;
+const SCAN_FILE_COUNT_LIMIT = 20_000;
 const CREDENTIAL_NAMES = ["ANTHROPIC_API_KEY", "OPENAI_API_KEY", "GEMINI_API_KEY", "GOOGLE_API_KEY", "MISTRAL_API_KEY", "GROQ_API_KEY", "XAI_API_KEY", "OPENROUTER_API_KEY"];
 
 // Fixture mode: the synthetic writer/reviewer read their scenario from
@@ -758,20 +762,34 @@ function scanForCredentialValues() {
   walk(out);
   let leaks = metadataHits.length;
   const leaking = [...metadataHits];
+  // The in-memory report is checked before it is written; its hit is recorded as a flag,
+  // never as a path, so a filesystem entry that happens to be named "report" is still a
+  // path to quarantine.
   const reportText = JSON.stringify(evidence) + markdown({ ...evidence, verdict: "" });
-  for (const value of values) if (reportText.includes(value)) { leaks += 1; leaking.push("report"); }
+  const reportLeaks = values.some((value) => reportText.includes(value));
+  if (reportLeaks) leaks += 1;
+  // Aggregate budgets bound the whole scan; every file left unscanned is a failure.
+  let scannedBytes = 0;
+  let scannedFiles = 0;
   for (const file of files) {
+    const relative = path.relative(out, file);
+    if (scannedFiles >= SCAN_FILE_COUNT_LIMIT || scannedBytes >= SCAN_TOTAL_LIMIT) { unreadable.push(relative); continue; }
     let hit;
-    try { hit = fileContainsAny(file, values); } catch { unreadable.push(path.relative(out, file)); continue; }
-    if (hit) { leaks += 1; leaking.push(path.relative(out, file)); }
+    try {
+      const result = fileContainsAny(file, values, SCAN_TOTAL_LIMIT - scannedBytes);
+      hit = result.hit;
+      scannedBytes += result.bytes;
+      scannedFiles += 1;
+    } catch { unreadable.push(relative); continue; }
+    if (hit) { leaks += 1; leaking.push(relative); }
   }
   // A file that could not be scanned is not evidence of anything; it fails the scan.
-  return { values_checked: values.length, files_scanned: files.length - unreadable.length, unreadable_files: unreadable, leaks: leaks + unreadable.length, leaking_files: [...new Set(leaking)] };
+  return { values_checked: values.length, files_scanned: scannedFiles, scanned_bytes: scannedBytes, unreadable_files: unreadable, leaks: leaks + unreadable.length, report_leaks: reportLeaks, leaking_files: [...new Set(leaking)] };
 }
 
 /** Deletes every flagged or unscannable file plus the durable state and verifies each is gone; returns what was removed and what was not. */
 function quarantineLeaks(scan) {
-  const targets = [...scan.leaking_files, ...scan.unreadable_files].filter((entry) => entry !== "report");
+  const targets = [...scan.leaking_files, ...scan.unreadable_files];
   if (targets.length === 0) return { removed: [], failed: [] };
   const removed = [];
   const failed = [];
@@ -820,28 +838,33 @@ function quarantineLeaks(scan) {
   return { removed, failed };
 }
 
-/** Streams a file through a sliding window so a value spanning two chunks is still found; bounded by size and growth. */
-function fileContainsAny(file, values) {
-  if (values.length === 0) return false;
+/** Streams a file through a sliding window so a value spanning two chunks is still found; bounded by size, growth and the remaining aggregate budget. Returns `{ hit, bytes }`. */
+function fileContainsAny(file, values, remainingBudget) {
+  // A non-following open cannot be guaranteed without O_NOFOLLOW (Windows): such a file is
+  // unscannable rather than opened through a possible replacement link.
+  if (fsConstants.O_NOFOLLOW === undefined) throw new Error("no non-following open on this platform");
+  if (values.length === 0) return { hit: false, bytes: 0 };
   const overlap = Math.max(...values.map((value) => Buffer.byteLength(value, "latin1"))) - 1;
   // Open without following a link and without blocking, then judge the opened
   // handle: a FIFO or device swapped into the path is a scan failure, not a hang.
-  const fd = openSync(file, fsConstants.O_RDONLY | (fsConstants.O_NOFOLLOW ?? 0) | (fsConstants.O_NONBLOCK ?? 0));
+  const fd = openSync(file, fsConstants.O_RDONLY | fsConstants.O_NOFOLLOW | (fsConstants.O_NONBLOCK ?? 0));
   try {
     const opened = fstatSync(fd);
     if (!opened.isFile()) throw new Error("not a regular file");
     if (opened.size > SCAN_FILE_LIMIT) throw new Error(`exceeds the ${SCAN_FILE_LIMIT} byte scan limit`);
+    if (opened.size > remainingBudget) throw new Error("exceeds the remaining aggregate scan budget");
     const chunk = Buffer.alloc(1024 * 1024);
     let carry = "";
     let total = 0;
     for (;;) {
       const read = readSync(fd, chunk, 0, chunk.length, null);
-      if (read === 0) return false;
+      if (read === 0) return { hit: false, bytes: total };
       total += read;
       // A file that keeps growing past its opened size is unscannable, not a hang.
       if (total > opened.size + chunk.length) throw new Error("grew while being scanned");
+      if (total > remainingBudget) throw new Error("exceeds the remaining aggregate scan budget");
       const window = carry + chunk.toString("latin1", 0, read);
-      if (values.some((value) => window.includes(value))) return true;
+      if (values.some((value) => window.includes(value))) return { hit: true, bytes: total };
       carry = overlap > 0 ? window.slice(-overlap) : "";
     }
   } finally {
