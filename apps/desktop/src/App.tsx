@@ -237,6 +237,6 @@ export function App() {
         </div>
       </div>
     </main>
-    <footer>Luuna · Local-first engineering workbench<span>M0 / M1 foundation · M2a import</span></footer>
+    <footer>Luuna · Local-first engineering workbench<span>M0 / M1 foundation · M2a import · M2b baseline</span></footer>
   </div>;
 }
