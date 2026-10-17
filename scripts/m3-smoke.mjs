@@ -149,6 +149,7 @@ const base = `http://127.0.0.1:${port}`;
 let runtime = null;
 let developerHead = null;
 let untrackedAfterBaseline = null;
+let finalStop = { exited: false };
 
 try {
   evidence.environment = environment();
@@ -164,13 +165,17 @@ try {
 } catch (error) {
   record("harness", false, `unexpected harness failure: ${error instanceof Error ? error.stack ?? error.message : String(error)}`);
 } finally {
-  await stopRuntime(runtime);
+  finalStop = await stopRuntime(runtime);
 }
 
 evidence.finished_at = new Date().toISOString();
 evidence.checks = checks;
 evidence.notes = notes;
+// The scan only means something once nothing else can write under the output tree:
+// a runtime whose exit was not observed fails the run and the scan is not trusted.
+record("the runtime exited before the leak scan", finalStop.exited, finalStop.exited ? "exit observed" : "the runtime did not exit after SIGTERM and SIGKILL; the leak scan below cannot establish what remains on disk");
 evidence.leak_scan = scanForCredentialValues();
+if (!finalStop.exited) { evidence.leak_scan.leaks += 1; evidence.leak_scan.untrusted = "runtime still running during the scan"; }
 record("no credential value appears in the report, runtime logs or durable state", evidence.leak_scan.leaks === 0, `${evidence.leak_scan.files_scanned} files scanned against ${evidence.leak_scan.values_checked} configured values`);
 // A file that carries a configured value, or that could not be scanned, must not
 // outlive the run: remove it (and the durable state, whose contents it may have
@@ -203,14 +208,14 @@ function ticket(title, intent, acceptance_criteria, paths, maxAttempts) {
  * Orderly shutdown first (so the runtime can stop its own process groups),
  * then an awaited hard kill; the scan below must not race a dying child.
  */
+/** Stops the runtime and reports whether its exit was observed. */
 async function stopRuntime(child) {
-  if (!child || child.exitCode !== null || child.signalCode !== null) return;
+  if (!child || child.exitCode !== null || child.signalCode !== null) return { exited: true };
   child.kill(process.platform === "win32" ? undefined : "SIGTERM");
   const orderly = await waitForExit(child, 15_000);
-  if (!orderly.exited) {
-    child.kill("SIGKILL");
-    await waitForExit(child, 10_000);
-  }
+  if (orderly.exited) return { exited: true };
+  child.kill("SIGKILL");
+  return { exited: (await waitForExit(child, 10_000)).exited };
 }
 
 async function startRuntime(label) {
@@ -847,7 +852,9 @@ function fileContainsAny(file, values, remainingBudget) {
   // unscannable rather than opened through a possible replacement link.
   if (fsConstants.O_NOFOLLOW === undefined) throw new Error("no non-following open on this platform");
   if (values.length === 0) return { hit: false, bytes: 0 };
-  const overlap = Math.max(...values.map((value) => Buffer.byteLength(value, "latin1"))) - 1;
+  // Compare UTF-8 bytes, not decoded text, so a value with non-ASCII characters is found.
+  const needles = values.map((value) => Buffer.from(value, "utf8"));
+  const overlap = Math.max(...needles.map((needle) => needle.length)) - 1;
   // Open without following a link and without blocking, then judge the opened
   // handle: a FIFO or device swapped into the path is a scan failure, not a hang.
   const fd = openSync(file, fsConstants.O_RDONLY | fsConstants.O_NOFOLLOW | (fsConstants.O_NONBLOCK ?? 0));
@@ -857,7 +864,7 @@ function fileContainsAny(file, values, remainingBudget) {
     if (opened.size > SCAN_FILE_LIMIT) throw new Error(`exceeds the ${SCAN_FILE_LIMIT} byte scan limit`);
     if (opened.size > remainingBudget) throw new Error("exceeds the remaining aggregate scan budget");
     const chunk = Buffer.alloc(1024 * 1024);
-    let carry = "";
+    let carry = Buffer.alloc(0);
     let total = 0;
     for (;;) {
       const read = readSync(fd, chunk, 0, chunk.length, null);
@@ -866,9 +873,9 @@ function fileContainsAny(file, values, remainingBudget) {
       // A file that keeps growing past its opened size is unscannable, not a hang.
       if (total > opened.size + chunk.length) throw new Error("grew while being scanned");
       if (total > remainingBudget) throw new Error("exceeds the remaining aggregate scan budget");
-      const window = carry + chunk.toString("latin1", 0, read);
-      if (values.some((value) => window.includes(value))) return { hit: true, bytes: total };
-      carry = overlap > 0 ? window.slice(-overlap) : "";
+      const window = Buffer.concat([carry, chunk.subarray(0, read)]);
+      if (needles.some((needle) => window.indexOf(needle) !== -1)) return { hit: true, bytes: total };
+      carry = overlap > 0 ? Buffer.from(window.subarray(Math.max(0, window.length - overlap))) : Buffer.alloc(0);
     }
   } finally {
     closeSync(fd);
