@@ -16,7 +16,7 @@
 // supported names (or their LUUNA_PI_ aliases) to the isolated Pi children. The
 // report records credential names only and is scanned for leaked values.
 import { spawn, execFileSync } from "node:child_process";
-import { mkdirSync, writeFileSync, readFileSync, readdirSync, statSync, existsSync } from "node:fs";
+import { mkdirSync, writeFileSync, readdirSync, statSync, existsSync, openSync, readSync, closeSync } from "node:fs";
 import { randomBytes } from "node:crypto";
 import { tmpdir, platform, release, arch, devNull } from "node:os";
 import path from "node:path";
@@ -468,8 +468,9 @@ async function hardKillDuringReviewReservesSpend(name) {
   await waitForExit(runtime, 10_000);
   // The synthetic reviewer holds for 60s without reading stdin, so only a real Pi child can notice the closed pipe promptly.
   const childExit = await waitUntil(() => typeof pid !== "number" || !processAlive(pid), mode === "fixture" ? 75_000 : 20_000);
+  // A PID alone cannot prove ownership once the runtime is gone, so an orphan is
+  // reported (and fails the check below) rather than killed by a possibly recycled PID.
   const orphaned = typeof pid === "number" && processAlive(pid);
-  if (orphaned) { try { process.kill(pid, "SIGKILL"); } catch { /* already gone */ } }
   runtime = await startRuntime("restarted");
   const after = await candidateSettled(runId);
   const events = await eventsOf(runId);
@@ -656,24 +657,42 @@ function scanForCredentialValues() {
   const walk = (dir) => {
     for (const entry of readdirSafe(dir)) {
       const full = path.join(dir, entry.name);
-      if (entry.isDirectory()) { if (entry.name !== ".git") walk(full); } else if (entry.isFile() && !full.startsWith(fixtureRepo) && fileSize(full) <= 8 * 1024 * 1024) files.push(full);
+      if (entry.isDirectory()) { if (entry.name !== ".git") walk(full); } else if (entry.isFile() && !full.startsWith(fixtureRepo)) files.push(full);
     }
   };
   walk(out);
   let leaks = 0;
   const leaking = [];
+  const unreadable = [];
   const reportText = JSON.stringify(evidence) + markdown({ ...evidence, verdict: "" });
   for (const value of values) if (reportText.includes(value)) { leaks += 1; leaking.push("report"); }
   for (const file of files) {
-    let content;
-    try { content = readFileSync(file, "latin1"); } catch { continue; }
-    for (const value of values) if (content.includes(value)) { leaks += 1; leaking.push(path.relative(out, file)); }
+    let hit;
+    try { hit = fileContainsAny(file, values); } catch { unreadable.push(path.relative(out, file)); continue; }
+    if (hit) { leaks += 1; leaking.push(path.relative(out, file)); }
   }
-  return { values_checked: values.length, files_scanned: files.length, leaks, leaking_files: [...new Set(leaking)] };
+  // A file that could not be scanned is not evidence of anything; it fails the scan.
+  return { values_checked: values.length, files_scanned: files.length - unreadable.length, unreadable_files: unreadable, leaks: leaks + unreadable.length, leaking_files: [...new Set(leaking)] };
 }
 
-function fileSize(file) {
-  try { return statSync(file).size; } catch { return Infinity; }
+/** Streams a file of any size through a sliding window so a value spanning two chunks is still found. */
+function fileContainsAny(file, values) {
+  if (values.length === 0) return false;
+  const overlap = Math.max(...values.map((value) => Buffer.byteLength(value, "latin1"))) - 1;
+  const fd = openSync(file, "r");
+  try {
+    const chunk = Buffer.alloc(1024 * 1024);
+    let carry = "";
+    for (;;) {
+      const read = readSync(fd, chunk, 0, chunk.length, null);
+      if (read === 0) return false;
+      const window = carry + chunk.toString("latin1", 0, read);
+      if (values.some((value) => window.includes(value))) return true;
+      carry = overlap > 0 ? window.slice(-overlap) : "";
+    }
+  } finally {
+    closeSync(fd);
+  }
 }
 
 function readdirSafe(dir) {
