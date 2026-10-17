@@ -135,6 +135,9 @@ async fn managed_operations_never_execute_configured_content_filters() {
         let developer = tempfile::tempdir().unwrap();
         let private = tempfile::tempdir().unwrap();
         repository(developer.path());
+        // Exercise normal checkout CRLF conversion on every host; it is
+        // independent of repository-configured executable content filters.
+        git(developer.path(), &["config", "core.autocrlf", "true"]);
         fs::write(
             developer.path().join(".gitattributes"),
             "*.py filter=unsafe\n",
@@ -167,8 +170,10 @@ async fn managed_operations_never_execute_configured_content_filters() {
             .unwrap();
         assert!(!marker.exists(), "checkout executed a filter");
         assert_eq!(
-            fs::read(worktree.join("src/main.py")).unwrap(),
-            b"print('fixture')\n"
+            fs::read_to_string(worktree.join("src/main.py"))
+                .unwrap()
+                .replace("\r\n", "\n"),
+            "print('fixture')\n"
         );
         fs::write(worktree.join("src/main.py"), "print('candidate')\n").unwrap();
         assert_eq!(inspector.changed_paths(&worktree).await.unwrap().len(), 1);
