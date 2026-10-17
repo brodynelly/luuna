@@ -20,11 +20,15 @@ struct Harness {
 }
 impl Harness {
     fn new() -> Self {
+        Self::with_pi(
+            PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+                .join("../../fixtures/pi-rpc/mock_pi.py")
+                .canonicalize()
+                .unwrap(),
+        )
+    }
+    fn with_pi(script: PathBuf) -> Self {
         let root = std::env::temp_dir().join(format!("luuna-writer-test-{}", uuid::Uuid::new_v4()));
-        let script = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
-            .join("../../fixtures/pi-rpc/mock_pi.py")
-            .canonicalize()
-            .unwrap();
         let state = AppState::open(RuntimeConfig {
             data_dir: root.clone(),
             pi_program: python().into(),
@@ -670,6 +674,37 @@ async fn budgets_fail_closed_on_cost_attempts_and_empty_results() {
         harness.implement(&run_two).await.0,
         StatusCode::CONFLICT,
         "a failed workflow is not approved"
+    );
+}
+
+#[tokio::test]
+async fn writer_startup_is_bounded_by_the_approved_timeout() {
+    // A Pi that never answers its startup version probe: without the workflow
+    // deadline, startup would wait out the engine's own 15-second probe limit.
+    let pi = tempfile::tempdir().unwrap();
+    let script = pi.path().join("stalled_pi.py");
+    std::fs::write(&script, "import time\ntime.sleep(60)\n").unwrap();
+    let harness = Harness::with_pi(script);
+    let repo = tempfile::tempdir().unwrap();
+    ready(&harness, repo.path()).await;
+    let (run, _) = harness
+        .approved(repo.path(), "write_in_scope", json!({"timeout_seconds": 2}))
+        .await;
+    let started = std::time::Instant::now();
+    assert_eq!(harness.implement(&run).await.0, StatusCode::ACCEPTED);
+    let settled = harness.settled(&run).await;
+    assert!(started.elapsed() < Duration::from_secs(10), "{settled}");
+    assert_eq!(settled["state"], "failed", "{settled}");
+    let (_, attempts) = harness
+        .request("GET", &format!("/api/v1/runs/{run}/attempts"), None)
+        .await;
+    let reason = attempts[0]["payload"]["reason"]
+        .as_str()
+        .unwrap_or_default();
+    assert!(reason.contains("during writer startup"), "{attempts}");
+    assert!(
+        attempts[0]["payload"]["elapsed_seconds"].as_u64().unwrap() >= 1,
+        "startup time is charged: {attempts}"
     );
 }
 

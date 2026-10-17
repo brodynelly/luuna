@@ -1644,7 +1644,9 @@ async fn writer_worker(state: AppState, job: WriterJob, mut cancel: watch::Recei
     }
     // Preparation (reading repair feedback) is charged against the approved
     // timeout, so an attempt left with no approved time settles here, before
-    // any worktree is created or Pi is started outside the deadline.
+    // any worktree is created or Pi is started outside the deadline. What
+    // remains bounds everything from here on, startup included: worktree
+    // creation, Pi's spawn and version probe, and the session itself.
     let spent = state
         .store
         .lock()
@@ -1679,6 +1681,23 @@ async fn writer_worker(state: AppState, job: WriterJob, mut cancel: watch::Recei
             return;
         }
     }
+    let remaining = Duration::from_secs(
+        job.plan
+            .budgets
+            .timeout_seconds
+            .saturating_sub(spent.unwrap_or(u64::MAX)),
+    );
+    let started = std::time::Instant::now();
+    let deadline = tokio::time::Instant::now() + remaining;
+    let startup_exceeded = |started: std::time::Instant| {
+        (
+            format!(
+                "budget exceeded: timeout_seconds {} elapsed during writer startup",
+                job.plan.budgets.timeout_seconds
+            ),
+            json!({"elapsed_seconds": started.elapsed().as_secs().saturating_add(preparation_seconds)}),
+        )
+    };
     // Lease first so the path is reserved durably, then create the worktree.
     let attempt_dir = state.config.data_dir.join("attempts").join(&job.attempt.id);
     let worktree = state
@@ -1723,20 +1742,36 @@ async fn writer_worker(state: AppState, job: WriterJob, mut cancel: watch::Recei
     }
     let lease_id = lease.id.clone();
     let root = PathBuf::from(&job.registration.local_path);
-    if let Err(error) = state
-        .git
-        .add_detached_worktree(&root, &worktree, &base)
-        .await
+    match tokio::time::timeout_at(
+        deadline,
+        state.git.add_detached_worktree(&root, &worktree, &base),
+    )
+    .await
     {
-        settle(
-            &state,
-            AttemptState::Failed,
-            RunState::Failed,
-            Some((&lease_id, LeaseState::Released, None)),
-            &format!("cannot create worktree: {error}"),
-            json!({}),
-        );
-        return;
+        Ok(Ok(())) => {}
+        Ok(Err(error)) => {
+            settle(
+                &state,
+                AttemptState::Failed,
+                RunState::Failed,
+                Some((&lease_id, LeaseState::Released, None)),
+                &format!("cannot create worktree: {error}"),
+                json!({}),
+            );
+            return;
+        }
+        Err(_) => {
+            let (reason, usage) = startup_exceeded(started);
+            settle(
+                &state,
+                AttemptState::Failed,
+                RunState::Failed,
+                Some((&lease_id, LeaseState::Released, None)),
+                &reason,
+                usage,
+            );
+            return;
+        }
     }
     let _ = state.event(
         &job.run_id,
@@ -1789,6 +1824,11 @@ async fn writer_worker(state: AppState, job: WriterJob, mut cancel: watch::Recei
             settle(&state, AttemptState::Cancelled, RunState::Cancelled, Some((&lease_id, LeaseState::Released, None)), "cancelled during startup; worktree preserved", json!({}));
             return;
         }
+        _ = tokio::time::sleep_until(deadline) => {
+            let (reason, usage) = startup_exceeded(started);
+            settle(&state, AttemptState::Failed, RunState::Failed, Some((&lease_id, LeaseState::Released, None)), &format!("{reason}; worktree preserved"), usage);
+            return;
+        }
         spawned = PiProcess::spawn(&config) => spawned,
     };
     let mut process = match spawned {
@@ -1810,7 +1850,6 @@ async fn writer_worker(state: AppState, job: WriterJob, mut cancel: watch::Recei
         "pi.spawned",
         json!({"pid": process.pid(), "pi_version": PI_VERSION, "tools": tools, "scope_guard": guard.to_string_lossy(), "scope": scope, "provider_credentials": luuna_engine_pi::configured_provider_keys()}),
     );
-    let started = std::time::Instant::now();
     let budgets = job.plan.budgets.clone();
     let previous_usage = match state
         .store
@@ -1840,10 +1879,6 @@ async fn writer_worker(state: AppState, job: WriterJob, mut cancel: watch::Recei
             .saturating_add(preparation_seconds),
         cost_usd_micros: previous_usage.cost_usd_micros,
     };
-    let remaining_seconds = budgets
-        .timeout_seconds
-        .saturating_sub(previous_usage.elapsed_seconds)
-        .saturating_sub(preparation_seconds);
     let mut writer_cost = 0u64;
     let mut session_usage = luuna_engine_pi::SessionUsage::default();
     let operation = async {
@@ -1929,7 +1964,7 @@ async fn writer_worker(state: AppState, job: WriterJob, mut cancel: watch::Recei
     let outcome = tokio::select! {
         biased;
         _ = cancel.changed() => Outcome::Cancelled,
-        result = tokio::time::timeout(Duration::from_secs(remaining_seconds), operation) => match result {
+        result = tokio::time::timeout_at(deadline, operation) => match result {
             Ok(Ok(())) => Outcome::Settled,
             Ok(Err(error)) => Outcome::Failed(error),
             Err(_) => Outcome::Timeout,

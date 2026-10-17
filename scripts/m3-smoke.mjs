@@ -134,7 +134,11 @@ const fixtureRepo = path.join(out, "fixture-repo");
 // scans, redacts and may delete files under it, so it must own every file there.
 if (readdirSync(out).length > 0) fail(`output directory is not empty; use a fresh or empty --out: ${out}`);
 const port = Number(options.port ?? 4248);
-const runtimeBinary = path.resolve(options.runtime ?? path.join(repository, "target", "debug", process.platform === "win32" ? "luuna-runtime.exe" : "luuna-runtime"));
+// The harness builds the runtime itself (see `buildRuntime`), so no externally supplied or stale
+// binary, command-line `--config` or inherited build environment can stand in for the revision.
+if (options.runtime !== undefined) fail("--runtime is not accepted: the harness builds the runtime from this checkout itself");
+const runtimeTarget = path.join(repository, "target", "m3-smoke");
+const runtimeBinary = path.join(runtimeTarget, "debug", process.platform === "win32" ? "luuna-runtime.exe" : "luuna-runtime");
 const token = randomBytes(36).toString("base64url");
 const runTimeoutSeconds = Number(options["run-timeout"] ?? process.env.LUUNA_RUN_TIMEOUT_SECONDS ?? 600);
 const python = process.platform === "win32" ? "python" : "python3";
@@ -153,6 +157,39 @@ const RUNTIME_LOG_LIMIT = 16 * 1024 * 1024;
 // Deepest directory nesting the scan descends into (one call frame and one descriptor per level).
 const SCAN_DEPTH_LIMIT = 128;
 const CREDENTIAL_NAMES = ["ANTHROPIC_API_KEY", "OPENAI_API_KEY", "GEMINI_API_KEY", "GOOGLE_API_KEY", "MISTRAL_API_KEY", "GROQ_API_KEY", "XAI_API_KEY", "OPENROUTER_API_KEY"];
+const NPM_INSTALL_TIMEOUT_MS = 10 * 60_000;
+const RUNTIME_BUILD_TIMEOUT_MS = 30 * 60_000;
+
+/** This process's environment without any provider credential or LUUNA_PI_ alias. */
+function credentialFreeEnv() {
+  return Object.fromEntries(Object.entries(process.env).filter(([name]) => !CREDENTIAL_NAMES.includes(name) && !name.startsWith("LUUNA_PI_")));
+}
+
+/**
+ * Builds the runtime from this checkout with a fixed invocation: `cargo build --locked -p
+ * luuna-runtime`, no command-line `--config`, its own target directory, and only the environment a
+ * build needs to locate the toolchain, the Cargo home and the network. Nothing else the harness
+ * inherits (RUSTFLAGS, CARGO_*, RUSTC_*, RUSTUP_TOOLCHAIN, CC/CFLAGS/AR and friends, credentials)
+ * reaches Cargo, so the evidence binary cannot be shaped by them. Cargo config files are still
+ * read and are checked separately (`config-overrides`).
+ */
+function buildRuntime() {
+  const keep = new Set([
+    "PATH", "HOME", "USER", "LOGNAME", "LANG", "LC_ALL", "TMPDIR", "TERM", "RUSTUP_HOME", "CARGO_HOME",
+    "HTTP_PROXY", "HTTPS_PROXY", "NO_PROXY", "http_proxy", "https_proxy", "no_proxy",
+    "SSL_CERT_FILE", "SSL_CERT_DIR", "NIX_SSL_CERT_FILE", "CURL_CA_BUNDLE", "CARGO_HTTP_CAINFO",
+    "SystemRoot", "SYSTEMROOT", "windir", "PATHEXT", "USERPROFILE", "APPDATA", "LOCALAPPDATA", "ProgramData", "TEMP", "TMP", "ComSpec",
+  ]);
+  const env = Object.fromEntries(Object.entries(process.env).filter(([name]) => keep.has(name)));
+  env.CARGO_TARGET_DIR = runtimeTarget;
+  const startedAt = Date.now();
+  try {
+    execFileSync("cargo", ["build", "--locked", "-p", "luuna-runtime"], { cwd: repository, env, stdio: ["ignore", "ignore", "pipe"], timeout: RUNTIME_BUILD_TIMEOUT_MS, killSignal: "SIGKILL", maxBuffer: 64 * 1024 * 1024 });
+  } catch (error) {
+    throw new Error(`the harness could not build the runtime: ${String(error.stderr ?? error.message).trim().split("\n").slice(-5).join(" | ")}`);
+  }
+  return { command: "cargo build --locked -p luuna-runtime", target_dir: runtimeTarget, environment: Object.keys(env).sort(), seconds: Math.round((Date.now() - startedAt) / 1000) };
+}
 
 // Fixture mode: the synthetic writer/reviewer read their scenario from
 // `fixture:<name>` markers in the acceptance criteria. The required check is a
@@ -259,13 +296,17 @@ let startingRuntime = null;
 const piTreeChangedAfter = [];
 
 try {
+  evidence.runtime_build = buildRuntime();
   evidence.environment = environment();
   const pi = evidence.environment.pi_provenance;
   record("the Pi tree is byte-identical to a fresh install of tools/pi/package-lock.json (every tarball integrity-checked by npm)", mode === "fixture" ? true : pi?.verified === true, mode === "fixture" ? "synthetic fixture tracked in the clean checkout; not provider evidence" : pi?.verified ? `@earendil-works/pi-coding-agent ${pi.package.version}, ${pi.package.tree_entries} entries, tree ${pi.package.tree_digest.slice(0, 16)}…, launcher sha256 ${pi.launcher.sha256.slice(0, 16)}…` : `not verified: ${pi?.error ?? "no provenance recorded"}`);
   // The runtime forwards the provider credential to every Pi it starts, so an unverified Pi
   // (a modified tree, launcher or entrypoint) never receives it: the run stops before any start.
   if (mode === "real" && pi?.verified !== true) throw new Error("Pi provenance not verified; the runtime and every provider session were not started");
-  runtime = await startRuntime("initial");
+  // The first start carries no provider credential: the binary's provenance is checked on that
+  // credential-free process, and only a binary that passes every check is started with them.
+  const provenanceFrom = checks.length;
+  runtime = await startRuntime("initial", { credentials: false });
   const identity = evidence.environment.runtime_build_identity;
   // The harness and every other tracked file that defines the evidence must equal the recorded
   // revision too, or a locally weakened probe could pass under that revision's name.
@@ -277,6 +318,11 @@ try {
   const toolchainRustc = pinnedRustcSha256(pinned);
   evidence.environment.pinned_rustc_sha256 = toolchainRustc;
   record("the runtime binary was compiled with the toolchain pinned in rust-toolchain.toml (the compiler executable's bytes, not its self-report), no compiler wrapper, no RUSTFLAGS, no profile overrides and no Cargo config overrides", pinned !== null && String(evidence.environment.runtime_build_rustc).split(" ")[0] === pinned && /^[0-9a-f]{64}$/.test(toolchainRustc) && evidence.environment.runtime_build_rustc_sha256 === toolchainRustc && evidence.environment.runtime_build_rustc_wrapper === "none" && / rustflags=none overrides=none config-overrides=none$/.test(String(evidence.environment.runtime_build_flags)) && evidence.environment.cargo_dependency_overrides.length === 0, `pinned ${pinned ?? "unreadable"}, binary built by rustc ${evidence.environment.runtime_build_rustc} (sha256 ${String(evidence.environment.runtime_build_rustc_sha256).slice(0, 16)}…, pinned toolchain rustc ${String(toolchainRustc).slice(0, 16)}…), wrapper ${evidence.environment.runtime_build_rustc_wrapper}, ${evidence.environment.runtime_build_flags}, Cargo config overrides now: ${evidence.environment.cargo_dependency_overrides.join(", ") || "none"}`);
+  const failedProvenance = checks.slice(provenanceFrom).filter((check) => !check.ok).map((check) => check.name);
+  if (failedProvenance.length > 0) throw new Error(`runtime provenance not established (${failedProvenance.join("; ")}); no provider credential was given to it`);
+  const verified = await stopRuntime(runtime);
+  if (!verified.exited) throw new Error("the credential-free verification runtime did not exit; the credentialed runtime was not started");
+  runtime = await startRuntime("credentialed");
   await registerProjectAndBaseline();
   await scenario("feature", approvedFeatureIsCheckedAndIndependentlyReviewed);
   await scenario("repair", failingCheckRequiresManualRepairAndFreshEvidence);
@@ -385,10 +431,11 @@ async function stopRuntime(child) {
   return { exited: (await waitForExit(child, 10_000)).exited };
 }
 
-async function startRuntime(label) {
+async function startRuntime(label, { credentials = true } = {}) {
   const env = { ...process.env };
   delete env.LUUNA_PI_PROVIDER;
   delete env.LUUNA_PI_MODEL;
+  if (!credentials) for (const name of CREDENTIAL_NAMES) { delete env[name]; delete env[`LUUNA_PI_${name}`]; }
   Object.assign(env, {
     LUUNA_API_TOKEN: token,
     LUUNA_DATA_DIR: dataDir,
@@ -405,6 +452,11 @@ async function startRuntime(label) {
   // not let a different binary execute a later scenario under the initially recorded identity.
   let binarySha;
   try { binarySha = createHash("sha256").update(readFileSync(runtimeBinary)).digest("hex"); } catch { binarySha = "unreadable"; }
+  // A credentialed start is refused unless the bytes about to execute are the ones whose provenance
+  // the credential-free start established.
+  if (credentials && label !== "initial" && (binarySha !== evidence.environment?.runtime_binary_sha256 || ![binarySha, "unavailable on this platform"].includes(evidence.environment?.runtime_running_sha256))) {
+    throw new Error(`runtime ${label} not started: its binary is not the one verified by the credential-free start`);
+  }
   const child = spawn(runtimeBinary, [], { env, stdio: ["ignore", "ignore", "pipe"] });
   startingRuntime = child;
   // stderr is drained for the child's whole life but retained only as a fixed-size tail in memory
@@ -433,7 +485,12 @@ async function startRuntime(label) {
   while (Date.now() < deadline) {
     // A child that never spawned or already exited leaves nothing to stop.
     if (spawnError) { startingRuntime = null; throw new Error(`runtime could not be spawned (${spawnError.code ?? spawnError.message}): ${runtimeBinary}`); }
-    if (child.exitCode !== null || child.signalCode !== null) { startingRuntime = null; throw new Error(`runtime exited early (${child.exitCode ?? child.signalCode}): ${stderr.trim()}`); }
+    if (child.exitCode !== null || child.signalCode !== null) {
+      // Its last stderr chunk may still be queued after 'exit': it stays tracked until 'close', so
+      // the final cleanup waits for it before the leak scan.
+      if ((await waitForExit(child, 10_000)).exited) startingRuntime = null;
+      throw new Error(`runtime exited early (${child.exitCode ?? child.signalCode}): ${stderr.trim()}`);
+    }
     try {
       const response = await fetch(`${base}/api/v1/health`, { signal: AbortSignal.timeout(5_000) });
       if (response.ok) {
@@ -1004,8 +1061,13 @@ function environment() {
   Object.assign(info, checkoutState());
   try { info.python_version = execFileSync(python, ["--version"], { encoding: "utf8" }).trim(); } catch (error) { info.python_version = `unavailable: ${error.message}`; }
   if (mode === "real") {
-    try { info.pi_version = execFileSync(profile.pi, [...profile.piArgs, "--version"], { encoding: "utf8" }).trim(); } catch (error) { info.pi_version = `unavailable: ${error.message}`; }
     info.pi_provenance = piProvenance();
+    // The launcher runs only once its provenance is verified, and without any provider credential.
+    if (info.pi_provenance.verified) {
+      try { info.pi_version = execFileSync(profile.pi, [...profile.piArgs, "--version"], { encoding: "utf8", env: credentialFreeEnv(), timeout: 30_000, killSignal: "SIGKILL" }).trim(); } catch (error) { info.pi_version = `unavailable: ${error.message}`; }
+    } else {
+      info.pi_version = "not run: Pi provenance not verified";
+    }
   } else {
     info.pi_version = "synthetic fixture reporting 1.3.0";
   }
@@ -1119,12 +1181,13 @@ function piProvenance() {
       ? path.join(path.dirname(process.execPath), "node_modules", "npm", "bin", "npm-cli.js")
       : path.join(path.dirname(path.dirname(process.execPath)), "lib", "node_modules", "npm", "bin", "npm-cli.js");
     if (!existsSync(npmCli)) throw new Error(`no npm bundled with ${process.execPath} (expected ${npmCli})`);
-    const env = Object.fromEntries(Object.entries(process.env).filter(([name]) => !CREDENTIAL_NAMES.includes(name) && !name.startsWith("LUUNA_PI_")));
-    result.npm = { node: process.execPath, cli: realpathSync(npmCli), version: execFileSync(process.execPath, [npmCli, "--version"], { env, encoding: "utf8", stdio: ["ignore", "pipe", "ignore"] }).trim() };
+    const env = credentialFreeEnv();
+    result.npm = { node: process.execPath, cli: realpathSync(npmCli), version: execFileSync(process.execPath, [npmCli, "--version"], { env, encoding: "utf8", stdio: ["ignore", "pipe", "ignore"], timeout: 30_000, killSignal: "SIGKILL" }).trim() };
     const work = realpathSync(mkdtempSync(path.join(tmpdir(), "luuna-pi-provenance-")));
     try {
       for (const file of ["package.json", "package-lock.json"]) writeFileSync(path.join(work, file), readFileSync(path.join(repository, "tools", "pi", file)));
-      execFileSync(process.execPath, [npmCli, "ci", "--ignore-scripts", "--no-audit", "--no-fund", "--loglevel=error"], { cwd: work, env, stdio: ["ignore", "ignore", "pipe"] });
+      // Bounded: a stalled registry, proxy or cache leaves provenance unverified instead of hanging.
+      execFileSync(process.execPath, [npmCli, "ci", "--ignore-scripts", "--no-audit", "--no-fund", "--loglevel=error"], { cwd: work, env, stdio: ["ignore", "ignore", "pipe"], timeout: NPM_INSTALL_TIMEOUT_MS, killSignal: "SIGKILL" });
       const expected = treeDigest(path.join(work, "node_modules"));
       const actual = treeDigest(result.package.node_modules);
       result.package.tree_entries = actual.entries.length;
@@ -1201,8 +1264,26 @@ function buildIdentity() {
 
 /** Configured values, deduplicated and longest first: redacting a shorter value that is part of a
  *  longer one first would leave the longer one's remainder in the clear. */
+/** The `user:password` and `password` of every URL userinfo carrying a password, raw and percent-decoded. */
+function urlCredentials(text) {
+  const found = [];
+  for (const match of String(text).matchAll(/:\/\/([^\s\/?#"'@]*)@/g)) {
+    const userinfo = match[1];
+    const colon = userinfo.indexOf(":");
+    if (colon < 0 || colon === userinfo.length - 1) continue;
+    for (const form of [userinfo, userinfo.slice(colon + 1)]) {
+      found.push(form);
+      try { const decoded = decodeURIComponent(form); if (decoded !== form) found.push(decoded); } catch { /* invalid escape: raw form only */ }
+    }
+  }
+  return found;
+}
+
 function configuredValues() {
-  const raw = [token, ...CREDENTIAL_NAMES.flatMap((name) => [process.env[name], process.env[`LUUNA_PI_${name}`]])].filter((value) => typeof value === "string" && value.length > 0);
+  // Provider credentials, the service token, and the credentials of every inherited URL value
+  // (`HTTP_PROXY=http://user:password@host`), which Pi and native checks inherit.
+  const inherited = Object.values(process.env).flatMap((value) => urlCredentials(value ?? ""));
+  const raw = [token, ...CREDENTIAL_NAMES.flatMap((name) => [process.env[name], process.env[`LUUNA_PI_${name}`]]), ...inherited].filter((value) => typeof value === "string" && value.length > 0);
   // A value with quotes, backslashes or control characters appears JSON-escaped in reports and
   // logs, so the escaped form is scanned for and redacted as well.
   const values = raw.flatMap((value) => [value, JSON.stringify(value).slice(1, -1)]).filter((value) => value.length > 0);

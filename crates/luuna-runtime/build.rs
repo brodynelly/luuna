@@ -189,7 +189,12 @@ fn main() {
     // names that matter here are ASCII. Cargo sets `RUSTC_LINKER` for build
     // scripts whenever a linker is configured (`target.<triple>.linker` or
     // `CARGO_TARGET_<TRIPLE>_LINKER`); a substituted linker can change the
-    // binary, so it is reported as an override.
+    // binary, so it is reported as an override. So is any C toolchain setting
+    // the `cc` crate honours (`luuna-storage` compiles the bundled SQLite with
+    // it): the compiler, archiver and flags, plain or per target.
+    const C_TOOLCHAIN: [&str; 9] = [
+        "CC", "CXX", "AR", "RANLIB", "CFLAGS", "CXXFLAGS", "CPPFLAGS", "ARFLAGS", "LDFLAGS",
+    ];
     let mut overrides: Vec<String> = std::env::vars_os()
         .map(|(name, _)| name.to_string_lossy().into_owned())
         .filter(|name| {
@@ -198,6 +203,16 @@ fn main() {
                     && (name.ends_with("_RUSTFLAGS") || name.ends_with("_LINKER")))
                 || name == "CARGO_BUILD_RUSTFLAGS"
                 || name == "RUSTC_LINKER"
+                || name.starts_with("CRATE_CC_")
+                || C_TOOLCHAIN.iter().any(|tool| {
+                    name == tool
+                        || ["TARGET_", "HOST_"]
+                            .iter()
+                            .any(|scope| name.strip_prefix(scope) == Some(tool))
+                        || name
+                            .strip_prefix(tool)
+                            .is_some_and(|rest| rest.starts_with('_') || rest.starts_with('-'))
+                })
         })
         .collect();
     overrides.sort();
