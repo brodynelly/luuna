@@ -1112,6 +1112,12 @@ async fn reviewer_startup_is_bounded_by_the_remaining_workflow_time() {
             .contains("deadline exceeded during reviewer startup"),
         "{result}"
     );
+    // The stalled startup spent the remaining approved time, and that time is
+    // charged to the candidate, so a repair cannot reuse it.
+    assert!(
+        result["evidence"]["elapsed_seconds"].as_u64().unwrap_or(0) >= 8,
+        "{result}"
+    );
 }
 
 #[tokio::test]

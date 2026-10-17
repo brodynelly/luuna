@@ -468,6 +468,12 @@ async fn pipeline(
         charged_seconds = seconds;
         plan.budgets.check(usage).map_err(|e| e.to_string())
     };
+    // Every exit from the pipeline is charged: a check, guard installation or
+    // reviewer startup that fails (a stalled guard write that ran into the
+    // deadline included) still spent approved time, which is persisted before
+    // the stage settles, so a later repair cannot reuse it. A charge that
+    // exhausts the budget pauses the workflow in the same transaction.
+    let outcome = async {
     if execution != ExecutionProfile::Native {
         return Err("testing blocked: container profile is unavailable".into());
     }
@@ -759,4 +765,10 @@ async fn pipeline(
         .finish_candidate_review(id, run.revision, hash, &review)
         .map_err(|e| e.to_string())?;
     Ok(())
+    }
+    .await;
+    if outcome.is_err() {
+        let _ = charge(0);
+    }
+    outcome
 }

@@ -355,6 +355,7 @@ const base = `http://127.0.0.1:${port}`;
 let runtime = null;
 let developerHead = null;
 let untrackedAfterBaseline = null;
+let fixtureAfterBaseline = null;
 let finalStop = { exited: false };
 // A runtime that is starting is tracked here until it is healthy, so a start that fails while the
 // child is still alive leaves the final cleanup a handle to stop and await.
@@ -430,17 +431,20 @@ evidence.checkout_after_run = checkoutAfter;
 let fixtureAfter;
 try { fixtureAfter = fixtureCheckoutState(); } catch (error) { fixtureAfter = { error: error.message }; }
 evidence.developer_checkout_after_run = fixtureAfter;
-record("the developer checkout was still untouched once every process of the run had stopped", fixtureAfter.head !== undefined && fixtureAfter.head === developerHead && fixtureAfter.tracked === "" && JSON.stringify(fixtureAfter.untracked) === JSON.stringify(untrackedAfterBaseline ?? []), fixtureAfter.error ? `unreadable: ${fixtureAfter.error}` : `head=${String(fixtureAfter.head).slice(0, 12)} tracked_changes=${JSON.stringify(fixtureAfter.tracked)} untracked=${JSON.stringify(fixtureAfter.untracked)}`);
+record("the developer checkout was still untouched once every process of the run had stopped", !fixtureAfter.error && fixtureUnchanged(fixtureAfter), fixtureAfter.error ? `unreadable: ${fixtureAfter.error}` : `head=${String(fixtureAfter.head).slice(0, 12)} tracked_changes=${JSON.stringify(fixtureAfter.tracked)} untracked=${JSON.stringify(fixtureAfter.untracked)}, Git metadata ${fixtureAfter.metadata_digest === fixtureAfterBaseline?.metadata_digest ? "unchanged" : "changed or unreadable"}, ignored files ${fixtureAfter.ignored_digest === fixtureAfterBaseline?.ignored_digest ? `unchanged (${fixtureAfter.ignored_files})` : "changed or unreadable"}`);
 const sameMetadata = checkoutAfter.git_metadata_digest.startsWith("sha256:") && checkoutAfter.git_metadata_digest === evidence.environment?.git_metadata_digest;
 const sameIgnored = checkoutAfter.ignored_digest.startsWith("sha256:") && checkoutAfter.ignored_digest === evidence.environment?.ignored_digest;
 const sameObjects = checkoutAfter.git_objects_digest.startsWith("sha256:") && checkoutAfter.git_objects_digest === evidence.environment?.git_objects_digest;
 record("the Luuna checkout was still the recorded revision, clean, with the same build inputs, Git metadata, history and ignored files once every process of the run had stopped", checkoutAfter.git_revision === evidence.environment?.git_revision && checkoutAfter.git_dirty === false && checkoutAfter.build_identity === evidence.environment?.expected_build_identity && sameMetadata && sameObjects && sameIgnored, `revision ${checkoutAfter.git_revision}, ${checkoutAfter.git_dirty === false ? "clean" : checkoutAfter.git_dirty === null ? "status unknown" : `modified: ${checkoutAfter.git_dirty_paths}`}, build inputs ${checkoutAfter.build_identity === evidence.environment?.expected_build_identity ? "unchanged" : "changed"}, Git metadata (config, HEAD, refs, hooks, info, alternates) ${sameMetadata ? "unchanged" : "changed or unreadable"}, objects reachable from every ref ${sameObjects ? "unchanged and intact (fsck --full)" : "changed, corrupt or unreadable"}, ignored files outside target/node_modules/dist ${sameIgnored ? `unchanged (${checkoutAfter.ignored_files})` : "changed or unreadable"}`);
-record("no process of the run outlived it before the leak scan (Linux child subreaper; survivors killed)", strays.contained || process.platform !== "linux", strays.contained ? `${strays.killed} surviving process(es) killed and reaped` : process.platform === "linux" ? `not contained: ${strays.reason}` : `unavailable on ${process.platform}: descendants that detach from the runtime are not tracked`);
+// Containment is required on every platform: without a subreaper (macOS, Windows) a detached
+// descendant of a check could keep writing under the output tree after the scan, so the check
+// fails there and the scan below is marked untrusted rather than accepted.
+record("no process of the run outlived it before the leak scan (Linux child subreaper; survivors killed)", strays.contained, strays.contained ? `${strays.killed} surviving process(es) killed and reaped` : process.platform === "linux" ? `not contained: ${strays.reason}` : `unavailable on ${process.platform}: descendants that detach from the runtime are not tracked, so this run cannot establish containment`);
 evidence.leak_scan = scanForCredentialValues();
 // Held handles are required where they exist (Linux); elsewhere the weaker fallback is recorded, not hidden.
 record("the leak scan and quarantine resolved paths through held directory handles where the platform provides them", evidence.leak_scan.held_handles || process.platform !== "linux", evidence.leak_scan.held_handles ? "/proc/self/fd handles" : `unavailable on ${process.platform}: pinned-root path checks only, recursive cleanup refused`);
 if (!finalStop.exited) { evidence.leak_scan.leaks += 1; evidence.leak_scan.untrusted = "runtime still running during the scan"; }
-else if (!strays.contained && process.platform === "linux") { evidence.leak_scan.leaks += 1; evidence.leak_scan.untrusted = "a process of the run may still have been running during the scan"; }
+else if (!strays.contained) { evidence.leak_scan.leaks += 1; evidence.leak_scan.untrusted = "a process of the run may still have been running during the scan"; }
 record("no credential value appears in the report, runtime logs or durable state", evidence.leak_scan.leaks === 0, `${evidence.leak_scan.files_scanned} files scanned against ${evidence.leak_scan.values_checked} configured values`);
 // A file that carries a configured value, or that could not be scanned, must not
 // outlive the run: remove it (and the durable state, whose contents it may have
@@ -622,11 +626,9 @@ async function startRuntime(label, { credentials = true } = {}) {
 function git(cwd, ...args) {
   const noHooks = path.join(out, "no-hooks");
   mkdirSync(noHooks, { recursive: true });
-  const env = {};
-  for (const [name, value] of Object.entries(process.env)) {
-    if (name.startsWith("GIT_") || CREDENTIAL_NAMES.includes(name) || name.startsWith("LUUNA_PI_")) continue;
-    env[name] = value;
-  }
+  // Built from the host-tool allowlist: no credential of any kind (a provider key, a GitHub
+  // token, a password, an authenticated proxy URL) reaches Git or anything it could execute.
+  const env = toolEnv();
   Object.assign(env, { GIT_CONFIG_NOSYSTEM: "1", GIT_CONFIG_GLOBAL: devNull, GIT_TEMPLATE_DIR: noHooks, GIT_AUTHOR_NAME: "Fixture", GIT_AUTHOR_EMAIL: "fixture@example.invalid", GIT_COMMITTER_NAME: "Fixture", GIT_COMMITTER_EMAIL: "fixture@example.invalid" });
   const config = ["-c", `core.hooksPath=${noHooks}`, "-c", "core.fsmonitor=false", "-c", "commit.gpgsign=false"];
   try {
@@ -683,6 +685,7 @@ async function registerProjectAndBaseline() {
   // Baselines run in the developer checkout by design (M2b) and may leave build
   // output such as __pycache__; everything after this point must add nothing.
   untrackedAfterBaseline = git(fixtureRepo, "status", "--porcelain").split("\n").filter((line) => line.startsWith("??")).sort();
+  fixtureAfterBaseline = fixtureCheckoutState();
 }
 
 async function scenario(name, body) {
@@ -926,20 +929,42 @@ async function hardKillDuringReviewReservesSpend(name) {
 }
 
 /** The fixture (developer) checkout's HEAD, tracked changes and untracked files. */
+/**
+ * The developer checkout as a check could damage it: HEAD, tracked and untracked content, and what
+ * porcelain status does not show, its Git metadata (config, HEAD, refs, hooks, info, alternates)
+ * and every ignored file. Luuna's own worktrees are detached and it writes no ref or config here,
+ * so none of these may change during a run. A digest that cannot be read is reported as such and
+ * fails the comparison.
+ */
 function fixtureCheckoutState() {
-  return {
+  const state = {
     head: git(fixtureRepo, "rev-parse", "HEAD"),
     tracked: git(fixtureRepo, "status", "--porcelain", "--untracked-files=no"),
     untracked: git(fixtureRepo, "status", "--porcelain").split("\n").filter((line) => line.startsWith("??")).sort(),
   };
+  try {
+    state.metadata_digest = pathsDigest(git(fixtureRepo, "rev-parse", "--absolute-git-dir"), ["config", "HEAD", "packed-refs", "info", "hooks", "refs", "objects/info", "shallow"]);
+  } catch (error) { state.metadata_digest = `unavailable: ${error.message}`; }
+  try {
+    const ignored = git(fixtureRepo, "ls-files", "--others", "--ignored", "--exclude-standard", "--directory", "-z").split("\0").filter(Boolean).map((rel) => rel.replace(/\/$/, ""));
+    state.ignored_digest = pathsDigest(fixtureRepo, ignored);
+    state.ignored_files = ignored.length;
+  } catch (error) { state.ignored_digest = `unavailable: ${error.message}`; }
+  return state;
+}
+
+/** Whether `state` matches the developer checkout recorded after the baseline. */
+function fixtureUnchanged(state) {
+  const digests = ["metadata_digest", "ignored_digest"].every((key) => String(state[key]).startsWith("sha256:") && state[key] === fixtureAfterBaseline?.[key]);
+  return state.head !== undefined && state.head === developerHead && state.tracked === "" && JSON.stringify(state.untracked) === JSON.stringify(untrackedAfterBaseline ?? []) && digests;
 }
 
 async function developerCheckoutUntouched() {
-  const { head, tracked, untracked } = fixtureCheckoutState();
+  const now = fixtureCheckoutState();
+  const { head, tracked, untracked } = now;
   const worktrees = Object.values(evidence.scenarios).map((item) => item.run_id).filter(Boolean);
-  const untrackedUnchanged = JSON.stringify(untracked) === JSON.stringify(untrackedAfterBaseline ?? []);
-  evidence.developer_checkout = { head_before: developerHead, head_after: head, tracked_changes: tracked, untracked_after_baseline: untrackedAfterBaseline, untracked_after_runs: untracked, runs: worktrees.length };
-  record("developer checkout HEAD, tracked content and untracked files are untouched by every writer, check, repair and review", head === developerHead && tracked === "" && untrackedUnchanged, `head=${head.slice(0, 12)} tracked_changes=${JSON.stringify(tracked)} untracked_after_baseline=${JSON.stringify(untrackedAfterBaseline)} untracked_after_runs=${JSON.stringify(untracked)}`);
+  evidence.developer_checkout = { head_before: developerHead, head_after: head, tracked_changes: tracked, untracked_after_baseline: untrackedAfterBaseline, untracked_after_runs: untracked, metadata_after_baseline: fixtureAfterBaseline?.metadata_digest, metadata_after_runs: now.metadata_digest, ignored_after_baseline: fixtureAfterBaseline?.ignored_digest, ignored_after_runs: now.ignored_digest, runs: worktrees.length };
+  record("developer checkout HEAD, tracked content, untracked and ignored files and Git metadata are untouched by every writer, check, repair and review", fixtureUnchanged(now), `head=${head.slice(0, 12)} tracked_changes=${JSON.stringify(tracked)} untracked_after_baseline=${JSON.stringify(untrackedAfterBaseline)} untracked_after_runs=${JSON.stringify(untracked)} Git metadata ${now.metadata_digest === fixtureAfterBaseline?.metadata_digest ? "unchanged" : "changed or unreadable"}, ignored files ${now.ignored_digest === fixtureAfterBaseline?.ignored_digest ? `unchanged (${now.ignored_files})` : "changed or unreadable"}`);
 }
 
 async function gracefulShutdown() {
