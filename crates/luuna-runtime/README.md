@@ -31,7 +31,8 @@ supported version; the CLI is checked when starting a run. Its `build_identity`
 field is the content digest of the sources the binary was built from, and
 `build_rustc` names the compiler release and commit that built it
 (`build_rustc_wrapper` any compiler wrapper Cargo used, or `none`; `build_flags`
-the profile, opt-level, debug setting, effective RUSTFLAGS and any profile overrides). All other endpoints
+the profile, opt-level, debug setting, effective RUSTFLAGS, any profile overrides and any
+Cargo config dependency overrides). All other endpoints
 require `Authorization: Bearer <token>`:
 
 - `GET /api/v1/runs`: persisted run records.
