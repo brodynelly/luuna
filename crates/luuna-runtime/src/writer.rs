@@ -791,9 +791,10 @@ const REPAIR_FEEDBACK_READ_SECONDS: u64 = 30;
 /// Runs the blocking artifact read with a deadline and the repair's own
 /// cancellation: a read stalled on a hung filesystem (which the byte budget
 /// cannot bound) or a cancelled repair yields feedback without quoted output, so
-/// the claimed attempt always reaches its writer and can settle. The blocking
-/// thread itself cannot be interrupted and finishes or stalls on its own; its
-/// result is discarded.
+/// the claimed attempt always reaches its writer and can settle. The read runs on
+/// a detached OS thread rather than Tokio's blocking pool: a stalled read cannot
+/// be interrupted, and the runtime's teardown waits for pool tasks but not for
+/// detached threads, so shutdown never hangs on it. A late result is discarded.
 async fn bounded_feedback_read<F>(
     read: F,
     limit: Duration,
@@ -802,7 +803,16 @@ async fn bounded_feedback_read<F>(
 where
     F: FnOnce() -> serde_json::Map<String, Value> + Send + 'static,
 {
-    let reading = tokio::time::timeout(limit, tokio::task::spawn_blocking(read));
+    let (sender, receiver) = tokio::sync::oneshot::channel();
+    let spawned = std::thread::Builder::new()
+        .name("luuna-repair-feedback".into())
+        .spawn(move || {
+            let _ = sender.send(read());
+        });
+    if spawned.is_err() {
+        return serde_json::Map::new();
+    }
+    let reading = tokio::time::timeout(limit, receiver);
     let cancelled = async move {
         loop {
             if *cancel.borrow_and_update() {
@@ -2036,6 +2046,24 @@ mod redaction_tests {
         assert!(!text.contains(secret));
         assert!(text.contains("more omitted"));
         assert!(text.contains("changes_required"));
+    }
+
+    #[test]
+    fn a_stalled_feedback_read_does_not_hold_runtime_shutdown() {
+        let runtime = tokio::runtime::Runtime::new().unwrap();
+        let (_tx, rx) = watch::channel(false);
+        let out = runtime.block_on(bounded_feedback_read(
+            || {
+                std::thread::sleep(Duration::from_secs(30));
+                serde_json::Map::new()
+            },
+            Duration::from_millis(50),
+            rx,
+        ));
+        assert!(out.is_empty());
+        let started = std::time::Instant::now();
+        drop(runtime);
+        assert!(started.elapsed() < Duration::from_secs(2));
     }
 
     #[tokio::test]
