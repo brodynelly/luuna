@@ -1155,17 +1155,20 @@ fn known_secrets(state: &AppState) -> Vec<String> {
     // credential embedded in a URL value (`HTTP_PROXY=http://user:pass@host`)
     // reaches them; its userinfo is redacted as an exact value too.
     // `vars_os`: a non-UTF-8 name or value must not panic here, after the
-    // repair is claimed; such entries are skipped.
-    for (name, value) in std::env::vars_os() {
-        let (Some(name), Some(value)) = (name.to_str(), value.to_str()) else {
-            continue;
-        };
-        if luuna_executor::is_secret_or_reserved(name) {
-            continue;
-        }
-        secrets.extend(url_credentials(value));
-    }
+    // repair is claimed. The name is judged lossily, exactly as the executor
+    // judges it when deciding what checks inherit, so every inherited value is
+    // considered; a value is read lossily too, keeping its valid credential text.
+    secrets.extend(inherited_url_credentials(std::env::vars_os()));
     secrets
+}
+
+/// The URL credentials of every variable a check inherits.
+fn inherited_url_credentials(
+    vars: impl Iterator<Item = (std::ffi::OsString, std::ffi::OsString)>,
+) -> Vec<String> {
+    vars.filter(|(name, _)| !luuna_executor::is_secret_or_reserved(&name.to_string_lossy()))
+        .flat_map(|(_, value)| url_credentials(&value.to_string_lossy()))
+        .collect()
 }
 
 /// The `user:password` and `password` parts of every URL userinfo in `text`
@@ -2404,6 +2407,18 @@ mod redaction_tests {
             vec!["alice:s3cr3t-pw".to_owned(), "s3cr3t-pw".to_owned()]
         );
         assert!(url_credentials("https://example.com/a@b").is_empty());
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn values_under_non_utf8_names_are_still_known() {
+        use std::ffi::OsString;
+        use std::os::unix::ffi::OsStringExt;
+        let vars = vec![(
+            OsString::from_vec(b"PROXY_\xff".to_vec()),
+            OsString::from("http://alice:s3cr3t-pw@proxy"),
+        )];
+        assert!(inherited_url_credentials(vars.into_iter()).contains(&"s3cr3t-pw".to_owned()));
     }
 
     #[test]

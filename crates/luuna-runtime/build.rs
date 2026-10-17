@@ -31,7 +31,7 @@ fn collect(root: &Path, dir: &Path, files: &mut Vec<String>) {
 /// beyond the repository's own manifests: a `paths` dependency override, a
 /// `patch` table, a source `replace-with`, a `profile` setting (overflow
 /// checks, panic strategy, LTO, ...) or an `include` of further config that is
-/// not read here. TOML can spell these keys as table headers, dotted keys,
+/// not read here, or a `rustc` compiler substitution. TOML can spell these keys as table headers, dotted keys,
 /// inline tables or quoted keys, so the rule is lexical and fails closed: the
 /// text is flagged if any of these names appears as a whole key token
 /// anywhere, or if it contains a backslash (an escape in a quoted key can
@@ -39,14 +39,21 @@ fn collect(root: &Path, dir: &Path, files: &mut Vec<String>) {
 fn config_override(text: &str) -> bool {
     let key_char = |c: char| c.is_ascii_alphanumeric() || c == '_' || c == '-';
     text.contains('\\')
-        || ["paths", "include", "replace-with", "patch", "profile"]
-            .iter()
-            .any(|name| {
-                text.match_indices(name).any(|(at, _)| {
-                    !text[..at].chars().next_back().is_some_and(key_char)
-                        && !text[at + name.len()..].chars().next().is_some_and(key_char)
-                })
+        || [
+            "paths",
+            "include",
+            "replace-with",
+            "patch",
+            "profile",
+            "rustc",
+        ]
+        .iter()
+        .any(|name| {
+            text.match_indices(name).any(|(at, _)| {
+                !text[..at].chars().next_back().is_some_and(key_char)
+                    && !text[at + name.len()..].chars().next().is_some_and(key_char)
             })
+        })
 }
 
 fn relative(root: &Path, path: &Path) -> String {
@@ -111,7 +118,7 @@ fn main() {
     println!("cargo:rustc-env=LUUNA_BUILD_IDENTITY=sha256:{identity}");
     // The compiler Cargo actually invokes for this build, not whatever is on PATH.
     let rustc = std::env::var("RUSTC").unwrap_or_else(|_| "rustc".to_owned());
-    let version = std::process::Command::new(rustc)
+    let version = std::process::Command::new(&rustc)
         .arg("-vV")
         .output()
         .ok()
@@ -130,6 +137,19 @@ fn main() {
         field("release:"),
         field("commit-hash:")
     );
+    // The compiler's self-reported version cannot identify it: a shim selected
+    // through `build.rustc` or `CARGO_BUILD_RUSTC` can print the pinned release.
+    // The bytes of the executable Cargo invoked are hashed so they can be
+    // compared with the pinned toolchain's own `rustc`.
+    let rustc_sha256 = fs::read(&rustc)
+        .map(|bytes| {
+            Sha256::digest(&bytes)
+                .iter()
+                .map(|byte| format!("{byte:02x}"))
+                .collect::<String>()
+        })
+        .unwrap_or_else(|_| "unknown".to_owned());
+    println!("cargo:rustc-env=LUUNA_BUILD_RUSTC_SHA256={rustc_sha256}");
     // Cargo runs any configured wrapper around RUSTC (environment or config);
     // it can change how the binary is compiled, so it is reported, not hidden.
     let wrappers: Vec<String> = ["RUSTC_WRAPPER", "RUSTC_WORKSPACE_WRAPPER"]

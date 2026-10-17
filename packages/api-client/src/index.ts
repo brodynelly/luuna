@@ -21,6 +21,7 @@ export interface Health {
   /** Release and commit of the compiler that built the runtime binary. */
   build_rustc?: string;
   /** Any rustc wrapper Cargo ran the compiler through, or "none". */
+  build_rustc_sha256?: string;
   build_rustc_wrapper?: string;
   /** Profile, optimization and RUSTFLAGS the runtime binary was compiled with. */
   build_flags?: string;

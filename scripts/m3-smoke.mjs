@@ -260,18 +260,23 @@ const piTreeChangedAfter = [];
 
 try {
   evidence.environment = environment();
+  const pi = evidence.environment.pi_provenance;
+  record("the Pi tree is byte-identical to a fresh install of tools/pi/package-lock.json (every tarball integrity-checked by npm)", mode === "fixture" ? true : pi?.verified === true, mode === "fixture" ? "synthetic fixture tracked in the clean checkout; not provider evidence" : pi?.verified ? `@earendil-works/pi-coding-agent ${pi.package.version}, ${pi.package.tree_entries} entries, tree ${pi.package.tree_digest.slice(0, 16)}…, launcher sha256 ${pi.launcher.sha256.slice(0, 16)}…` : `not verified: ${pi?.error ?? "no provenance recorded"}`);
+  // The runtime forwards the provider credential to every Pi it starts, so an unverified Pi
+  // (a modified tree, launcher or entrypoint) never receives it: the run stops before any start.
+  if (mode === "real" && pi?.verified !== true) throw new Error("Pi provenance not verified; the runtime and every provider session were not started");
   runtime = await startRuntime("initial");
   const identity = evidence.environment.runtime_build_identity;
   // The harness and every other tracked file that defines the evidence must equal the recorded
   // revision too, or a locally weakened probe could pass under that revision's name.
   record("the Luuna checkout (harness included) matched the recorded revision: no modified or untracked file", evidence.environment.git_dirty === false, `revision ${evidence.environment.git_revision}, ${evidence.environment.git_dirty === false ? "clean" : evidence.environment.git_dirty === null ? "status unknown" : `modified: ${evidence.environment.git_dirty_paths}`}`);
   record("the runtime binary was built from the recorded revision's build inputs (embedded content digest)", identity === evidence.environment.expected_build_identity && evidence.environment.runtime_sources_dirty === false, `revision ${evidence.environment.git_revision}, build inputs ${evidence.environment.runtime_sources_dirty === false ? "clean" : "modified or unknown"}, binary reports ${String(identity).slice(0, 23)}…, checkout ${String(evidence.environment.expected_build_identity).slice(0, 23)}…`);
-  const pi = evidence.environment.pi_provenance;
-  record("the Pi tree is byte-identical to a fresh install of tools/pi/package-lock.json (every tarball integrity-checked by npm)", mode === "fixture" ? true : pi?.verified === true, mode === "fixture" ? "synthetic fixture tracked in the clean checkout; not provider evidence" : pi?.verified ? `@earendil-works/pi-coding-agent ${pi.package.version}, ${pi.package.tree_entries} entries, tree ${pi.package.tree_digest.slice(0, 16)}…, launcher sha256 ${pi.launcher.sha256.slice(0, 16)}…` : `not verified: ${pi?.error ?? "no provenance recorded"}`);
   const pinned = pinnedToolchain();
   // A wrapper (RUSTC_WRAPPER / RUSTC_WORKSPACE_WRAPPER) can change compilation while the compiler
   // still reports the pinned release, so evidence builds must use none.
-  record("the runtime binary was compiled with the toolchain pinned in rust-toolchain.toml, no compiler wrapper, no RUSTFLAGS, no profile overrides and no Cargo config overrides", pinned !== null && String(evidence.environment.runtime_build_rustc).split(" ")[0] === pinned && evidence.environment.runtime_build_rustc_wrapper === "none" && / rustflags=none overrides=none config-overrides=none$/.test(String(evidence.environment.runtime_build_flags)) && evidence.environment.cargo_dependency_overrides.length === 0, `pinned ${pinned ?? "unreadable"}, binary built by rustc ${evidence.environment.runtime_build_rustc}, wrapper ${evidence.environment.runtime_build_rustc_wrapper}, ${evidence.environment.runtime_build_flags}, Cargo config overrides now: ${evidence.environment.cargo_dependency_overrides.join(", ") || "none"}`);
+  const toolchainRustc = pinnedRustcSha256(pinned);
+  evidence.environment.pinned_rustc_sha256 = toolchainRustc;
+  record("the runtime binary was compiled with the toolchain pinned in rust-toolchain.toml (the compiler executable's bytes, not its self-report), no compiler wrapper, no RUSTFLAGS, no profile overrides and no Cargo config overrides", pinned !== null && String(evidence.environment.runtime_build_rustc).split(" ")[0] === pinned && /^[0-9a-f]{64}$/.test(toolchainRustc) && evidence.environment.runtime_build_rustc_sha256 === toolchainRustc && evidence.environment.runtime_build_rustc_wrapper === "none" && / rustflags=none overrides=none config-overrides=none$/.test(String(evidence.environment.runtime_build_flags)) && evidence.environment.cargo_dependency_overrides.length === 0, `pinned ${pinned ?? "unreadable"}, binary built by rustc ${evidence.environment.runtime_build_rustc} (sha256 ${String(evidence.environment.runtime_build_rustc_sha256).slice(0, 16)}…, pinned toolchain rustc ${String(toolchainRustc).slice(0, 16)}…), wrapper ${evidence.environment.runtime_build_rustc_wrapper}, ${evidence.environment.runtime_build_flags}, Cargo config overrides now: ${evidence.environment.cargo_dependency_overrides.join(", ") || "none"}`);
   await registerProjectAndBaseline();
   await scenario("feature", approvedFeatureIsCheckedAndIndependentlyReviewed);
   await scenario("repair", failingCheckRequiresManualRepairAndFreshEvidence);
@@ -431,6 +436,7 @@ async function startRuntime(label) {
           evidence.environment.runtime_build_identity = health.build_identity ?? "not reported";
           evidence.environment.runtime_build_rustc = health.build_rustc ?? "not reported";
           evidence.environment.runtime_build_rustc_wrapper = health.build_rustc_wrapper ?? "not reported";
+          evidence.environment.runtime_build_rustc_sha256 = health.build_rustc_sha256 ?? "not reported";
           evidence.environment.runtime_build_flags = health.build_flags ?? "not reported";
         }
         record(`runtime ${label} start`, health.status === "ok", `health ${JSON.stringify(health)}`);
@@ -445,7 +451,7 @@ async function startRuntime(label) {
         if (label !== "initial") {
           const env0 = evidence.environment;
           const executed = runningSha ?? binarySha;
-          record(`runtime ${label} is the same revision-bound binary as the initial start`, executed === env0.runtime_binary_sha256 && (runningSha === null || runningSha === env0.runtime_running_sha256) && health.build_identity === env0.expected_build_identity && health.build_rustc === env0.runtime_build_rustc && health.build_rustc_wrapper === env0.runtime_build_rustc_wrapper && health.build_flags === env0.runtime_build_flags, `${runningSha === null ? "pre-spawn" : "running"} sha256 ${executed.slice(0, 16)}… (initial ${String(env0.runtime_binary_sha256).slice(0, 16)}…), identity ${health.build_identity === env0.expected_build_identity ? "matches" : "differs"}, rustc ${health.build_rustc}`);
+          record(`runtime ${label} is the same revision-bound binary as the initial start`, executed === env0.runtime_binary_sha256 && (runningSha === null || runningSha === env0.runtime_running_sha256) && health.build_identity === env0.expected_build_identity && health.build_rustc === env0.runtime_build_rustc && health.build_rustc_sha256 === env0.runtime_build_rustc_sha256 && health.build_rustc_wrapper === env0.runtime_build_rustc_wrapper && health.build_flags === env0.runtime_build_flags, `${runningSha === null ? "pre-spawn" : "running"} sha256 ${executed.slice(0, 16)}… (initial ${String(env0.runtime_binary_sha256).slice(0, 16)}…), identity ${health.build_identity === env0.expected_build_identity ? "matches" : "differs"}, rustc ${health.build_rustc}`);
         }
         if (typeof logFd !== "number") record(`runtime ${label} log was created inside the output root`, false, logFd);
         startingRuntime = null;
@@ -530,6 +536,12 @@ async function registerProjectAndBaseline() {
 
 async function scenario(name, body) {
   console.log(`\n== ${name}`);
+  // The provider credential is handed only to the verified Pi: once the tree or launcher has
+  // changed, no further scenario starts a provider session.
+  if (piTreeChangedAfter.length > 0) {
+    record(`${name}: not started`, false, `the verified Pi tree or launcher changed after ${piTreeChangedAfter.join(", ")}; no further provider session is started`);
+    return;
+  }
   try {
     await body(name);
   } catch (error) {
@@ -1000,7 +1012,7 @@ function environment() {
       // The same lexical, fail-closed rule as build.rs: any of these names as a whole key token
       // anywhere (table header, dotted, inline or quoted key, or a mere mention), or any
       // backslash, since an escape in a quoted key can spell any name.
-      return text.includes("\\") || /(?<![A-Za-z0-9_-])(paths|include|replace-with|patch|profile)(?![A-Za-z0-9_-])/.test(text);
+      return text.includes("\\") || /(?<![A-Za-z0-9_-])(paths|include|replace-with|patch|profile|rustc)(?![A-Za-z0-9_-])/.test(text);
     });
   })();
   // Bind the binary to the recorded revision by content: the runtime reports the digest its
@@ -1124,6 +1136,18 @@ function pinnedToolchain() {
     const channel = /^\s*channel\s*=\s*"([^"]+)"/m.exec(readFileSync(path.join(repository, "rust-toolchain.toml"), "utf8"))?.[1];
     return channel && /^\d+\.\d+\.\d+$/.test(channel) ? channel : null;
   } catch { return null; }
+}
+
+/**
+ * SHA-256 of the pinned toolchain's own `rustc` executable, located by rustup independently of any
+ * Cargo configuration, or a reason it is unavailable.
+ */
+function pinnedRustcSha256(pinned) {
+  if (pinned === null) return "unavailable: no pinned release";
+  try {
+    const located = execFileSync("rustup", ["which", "rustc", "--toolchain", pinned], { encoding: "utf8", stdio: ["ignore", "pipe", "ignore"], timeout: 30_000 }).trim();
+    return createHash("sha256").update(readFileSync(located)).digest("hex");
+  } catch (error) { return `unavailable: ${error.code ?? "rustup could not locate the pinned rustc"}`; }
 }
 
 /** The digest `crates/luuna-runtime/build.rs` embeds: SHA-256 over `path\0sha256(content)\n` for every build input, sorted by path. */
