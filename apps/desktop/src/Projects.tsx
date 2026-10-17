@@ -24,6 +24,7 @@ export function Projects({ client }: { client: LuunaClient | null }) {
   const [draft, setDraft] = useState("");
   const [discovery, setDiscovery] = useState<Discovery | null>(null);
   const [baselines, setBaselines] = useState<BaselineEvidence[]>([]);
+  const [pendingBaselineRun, setPendingBaselineRun] = useState<string | null>(null);
   const [error, setError] = useState("");
   const [busy, setBusy] = useState(false);
   const operation = useRef<AbortController | null>(null);
@@ -57,6 +58,7 @@ export function Projects({ client }: { client: LuunaClient | null }) {
     setDiscovery(null);
     setDraft("");
     setBaselines([]);
+    setPendingBaselineRun(null);
     if (!client || !selected) return;
     const controller = new AbortController();
     Promise.all([client.project(selected, controller.signal), client.projectEvents(selected, 0, controller.signal), client.listBaselines(selected, controller.signal)]).then(([next, replay, recorded]) => {
@@ -99,15 +101,21 @@ export function Projects({ client }: { client: LuunaClient | null }) {
     setSelected(id);
   }
 
-  // A running baseline advances on the runtime; poll its durable record until it settles.
+  // A baseline advances on the runtime: poll its durable record from the moment the
+  // run is accepted (its record appears after inspection and probing) until it settles.
+  const baselineInFlight = pendingBaselineRun !== null || baselines.some((baseline) => baseline.status === "running");
   useEffect(() => {
-    if (!client || !selected || !baselines.some((baseline) => baseline.status === "running")) return;
+    if (!client || !selected || !baselineInFlight) return;
     const controller = new AbortController();
     const timer = setTimeout(() => {
-      client.listBaselines(selected, controller.signal).then((recorded) => { if (!controller.signal.aborted) setBaselines(recorded); }).catch(() => undefined);
-    }, 2000);
+      client.listBaselines(selected, controller.signal).then((recorded) => {
+        if (controller.signal.aborted) return;
+        setBaselines(recorded);
+        if (pendingBaselineRun && recorded.some((baseline) => baseline.run_id === pendingBaselineRun && baseline.status !== "running")) setPendingBaselineRun(null);
+      }).catch(() => undefined);
+    }, 1500);
     return () => { controller.abort(); clearTimeout(timer); };
-  }, [client, selected, baselines]);
+  }, [client, selected, baselines, baselineInFlight, pendingBaselineRun]);
 
   function runBaseline() {
     if (!selected || !view) return;
@@ -115,8 +123,9 @@ export function Projects({ client }: { client: LuunaClient | null }) {
     if (!repository) return;
     void guarded(async (signal) => {
       if (!client) return;
-      await client.startBaseline(selected, { repository_id: repository.repository_id }, signal);
+      const run = await client.startBaseline(selected, { repository_id: repository.repository_id }, signal);
       if (signal.aborted) return;
+      setPendingBaselineRun(run.id);
       await refresh(selected, signal);
     });
   }
@@ -209,7 +218,7 @@ export function Projects({ client }: { client: LuunaClient | null }) {
           </dl>
           <div className="project-actions">
             <button type="button" disabled={busy} onClick={discover}>Discover proposed map</button>
-            <button type="button" disabled={busy || !view.manifest || baselines.some((baseline) => baseline.status === "running")} onClick={runBaseline}>Run baseline</button>
+            <button type="button" disabled={busy || !view.manifest || baselineInFlight} onClick={runBaseline}>Run baseline</button>
             <small>Discovery reads manifests and lockfiles; it never runs repository commands. A baseline runs the confirmed required recipes on a clean checkout and records exact evidence.</small>
           </div>
           {baselines.length > 0 && <ul className="baselines" aria-label="Recorded baselines">{baselines.map((baseline) => <li key={baseline.id}>
