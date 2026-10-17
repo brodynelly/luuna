@@ -248,6 +248,16 @@ pub async fn register_project(
             .inspect(&PathBuf::from(&repository.path))
             .await
             .map_err(|e| git_error(&repository.id, e))?;
+        if observations
+            .iter()
+            .any(|(_, existing): &(String, RepositoryObservation)| {
+                existing.local_path == observation.local_path
+            })
+        {
+            return Err(bad_request(
+                "each repository must be a distinct checkout; two IDs point at the same root",
+            ));
+        }
         observations.push((repository.id.clone(), observation));
     }
     state

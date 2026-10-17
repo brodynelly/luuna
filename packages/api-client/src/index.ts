@@ -43,7 +43,8 @@ export interface ManifestCheck {
   required: boolean;
   timeout_seconds: number;
   capabilities: string[];
-  cwd: string;
+  /** Defaults to `.` (the repository root) when omitted. */
+  cwd?: string;
 }
 
 export interface RepositoryManifest {
@@ -96,7 +97,7 @@ export interface DirtyState {
 
 export interface RepositoryObservation {
   local_path: string;
-  identity: { remote: string | null; root_commits: string[]; shallow: boolean };
+  identity: { remote: string | null; push_remote?: string | null; root_commits: string[]; shallow: boolean };
   head_commit: string;
   branch: string | null;
   remote_default_branch: string | null;
@@ -225,7 +226,7 @@ export class LuunaClient {
         403: "The runtime denied this action.",
         409: "The run state changed or another session is active. Refresh and try again.",
       };
-      const reason = [409, 422].includes(response.status) ? await runtimeReason(response) : undefined;
+      const reason = [400, 409, 422].includes(response.status) ? await runtimeReason(response) : undefined;
       throw new ApiError(response.status, reason ?? messages[response.status] ?? `Runtime request failed (HTTP ${response.status}).`);
     }
     return await response.json() as T;

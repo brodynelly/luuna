@@ -6,7 +6,8 @@
 //! operation is issued, and remote URLs are redacted before they leave this crate.
 use chrono::{SecondsFormat, Utc};
 use luuna_domain::{
-    DirtyState, RepositoryIdentity, RepositoryObservation, MAX_RECORDED_DIRTY_PATHS,
+    is_filesystem_remote, DirtyState, RepositoryIdentity, RepositoryObservation,
+    MAX_RECORDED_DIRTY_PATHS,
 };
 use std::{
     path::{Path, PathBuf},
@@ -70,7 +71,14 @@ struct Output {
 }
 
 impl GitInspector {
-    async fn git(&self, cwd: Option<&Path>, args: &[&str]) -> Result<Output, GitError> {
+    /// `overrides` are additional `-c key=value` settings, used to neutralise
+    /// repository-selected content filters once their drivers are known.
+    async fn git(
+        &self,
+        cwd: Option<&Path>,
+        args: &[&str],
+        overrides: &[String],
+    ) -> Result<Output, GitError> {
         let mut command = Command::new(&self.program);
         command.arg("--no-pager");
         if let Some(cwd) = cwd {
@@ -83,6 +91,9 @@ impl GitInspector {
             "-c",
             "core.hooksPath=/dev/null",
         ]);
+        for setting in overrides {
+            command.arg("-c").arg(setting);
+        }
         command.args(args);
         // Every inherited GIT_* variable (GIT_DIR, GIT_COMMON_DIR, GIT_OBJECT_DIRECTORY,
         // GIT_CONFIG_*, ...) could redirect inspection away from the path given to -C.
@@ -143,8 +154,13 @@ impl GitInspector {
         })
     }
 
-    async fn expect(&self, cwd: &Path, args: &[&str]) -> Result<String, GitError> {
-        let output = self.git(Some(cwd), args).await?;
+    async fn expect(
+        &self,
+        cwd: &Path,
+        args: &[&str],
+        overrides: &[String],
+    ) -> Result<String, GitError> {
+        let output = self.git(Some(cwd), args, overrides).await?;
         if output.status != Some(0) {
             return Err(GitError::Command {
                 command: args.join(" "),
@@ -154,14 +170,51 @@ impl GitInspector {
         Ok(String::from_utf8_lossy(&output.stdout).into_owned())
     }
 
-    async fn optional(&self, cwd: &Path, args: &[&str]) -> Result<Option<String>, GitError> {
-        let output = self.git(Some(cwd), args).await?;
+    async fn optional(
+        &self,
+        cwd: &Path,
+        args: &[&str],
+        overrides: &[String],
+    ) -> Result<Option<String>, GitError> {
+        let output = self.git(Some(cwd), args, overrides).await?;
         Ok((output.status == Some(0))
             .then(|| String::from_utf8_lossy(&output.stdout).trim().to_owned()))
     }
 
+    /// Every configured `filter.<driver>.*` entry (system, global or repository) is
+    /// overridden to an empty command with `required=false`, so no clean, smudge or
+    /// process filter can execute during inspection. Enumerating config runs no filter.
+    async fn filter_overrides(&self, cwd: &Path) -> Result<Vec<String>, GitError> {
+        let listed = self
+            .optional(cwd, &["config", "--get-regexp", r"^filter\."], &[])
+            .await?
+            .unwrap_or_default();
+        let mut drivers: Vec<String> = listed
+            .lines()
+            .filter_map(|line| line.split_whitespace().next())
+            .filter_map(|key| {
+                let rest = key.strip_prefix("filter.")?;
+                let (driver, _attribute) = rest.rsplit_once('.')?;
+                (!driver.is_empty()).then(|| driver.to_owned())
+            })
+            .collect();
+        drivers.sort();
+        drivers.dedup();
+        Ok(drivers
+            .iter()
+            .flat_map(|driver| {
+                [
+                    format!("filter.{driver}.clean="),
+                    format!("filter.{driver}.smudge="),
+                    format!("filter.{driver}.process="),
+                    format!("filter.{driver}.required=false"),
+                ]
+            })
+            .collect())
+    }
+
     pub async fn version(&self) -> Result<String, GitError> {
-        let output = self.git(None, &["--version"]).await?;
+        let output = self.git(None, &["--version"], &[]).await?;
         if output.status != Some(0) {
             return Err(GitError::Command {
                 command: "--version".into(),
@@ -189,6 +242,7 @@ impl GitInspector {
                     "--is-bare-repository",
                     "--is-shallow-repository",
                 ],
+                &[],
             )
             .await?;
         if probe.status != Some(0) {
@@ -201,7 +255,7 @@ impl GitInspector {
         }
         let shallow = lines.next() == Some("true");
         let toplevel = self
-            .optional(&canonical, &["rev-parse", "--show-toplevel"])
+            .optional(&canonical, &["rev-parse", "--show-toplevel"], &[])
             .await?
             .filter(|t| !t.is_empty())
             .ok_or(GitError::NotRepository)?;
@@ -212,23 +266,47 @@ impl GitInspector {
         if toplevel_path != canonical {
             return Err(GitError::NotRoot(toplevel.to_owned()));
         }
+        // `.gitattributes` can select `filter.<driver>.clean`/`.process` commands that
+        // `git status` would run while re-hashing changed files; disable every
+        // configured driver before any worktree content is read.
+        let overrides = self.filter_overrides(&canonical).await?;
         let head_commit = self
             .optional(
                 &canonical,
                 &["rev-parse", "--verify", "--quiet", "HEAD^{commit}"],
+                &overrides,
             )
             .await?
             .filter(|c| c.len() == 40 || c.len() == 64)
             .ok_or(GitError::Unborn)?;
         let branch = self
-            .optional(&canonical, &["symbolic-ref", "--quiet", "--short", "HEAD"])
+            .optional(
+                &canonical,
+                &["symbolic-ref", "--quiet", "--short", "HEAD"],
+                &overrides,
+            )
             .await?
             .filter(|b| !b.is_empty());
-        let remote = self
-            .optional(&canonical, &["remote", "get-url", "origin"])
+        // Filesystem origins are not portable identities; they are observed as absent
+        // so discovery proposes an explicit local: identity instead.
+        let fetch_url = self
+            .optional(&canonical, &["remote", "get-url", "origin"], &overrides)
             .await?
             .filter(|r| !r.is_empty())
             .map(|r| redact_remote(&r));
+        let push_url = self
+            .optional(
+                &canonical,
+                &["remote", "get-url", "--push", "origin"],
+                &overrides,
+            )
+            .await?
+            .filter(|r| !r.is_empty())
+            .map(|r| redact_remote(&r));
+        let remote = fetch_url.clone().filter(|r| !is_filesystem_remote(r));
+        let push_remote = push_url
+            .filter(|p| Some(p) != fetch_url.as_ref())
+            .filter(|p| !is_filesystem_remote(p));
         let remote_default_branch = self
             .optional(
                 &canonical,
@@ -238,19 +316,24 @@ impl GitInspector {
                     "--short",
                     "refs/remotes/origin/HEAD",
                 ],
+                &overrides,
             )
             .await?
             .and_then(|r| r.strip_prefix("origin/").map(ToOwned::to_owned));
         let mut root_commits: Vec<String> = if shallow {
             Vec::new()
         } else {
-            self.expect(&canonical, &["rev-list", "--max-parents=0", "HEAD"])
-                .await?
-                .lines()
-                .map(str::trim)
-                .filter(|l| !l.is_empty())
-                .map(ToOwned::to_owned)
-                .collect()
+            self.expect(
+                &canonical,
+                &["rev-list", "--max-parents=0", "HEAD"],
+                &overrides,
+            )
+            .await?
+            .lines()
+            .map(str::trim)
+            .filter(|l| !l.is_empty())
+            .map(ToOwned::to_owned)
+            .collect()
         };
         root_commits.sort();
         root_commits.dedup();
@@ -262,6 +345,7 @@ impl GitInspector {
             .expect(
                 &canonical,
                 &["for-each-ref", "--format=%(refname:short)", "refs/heads/"],
+                &overrides,
             )
             .await?
             .lines()
@@ -279,6 +363,7 @@ impl GitInspector {
                     "--untracked-files=normal",
                     "--no-renames",
                 ],
+                &overrides,
             )
             .await?;
         if status.status != Some(0) {
@@ -291,6 +376,7 @@ impl GitInspector {
             local_path: canonical.to_string_lossy().into_owned(),
             identity: RepositoryIdentity {
                 remote,
+                push_remote,
                 root_commits,
                 shallow,
             },

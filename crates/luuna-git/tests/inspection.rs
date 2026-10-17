@@ -132,6 +132,64 @@ async fn rejects_invalid_and_non_root_paths() {
 }
 
 #[tokio::test]
+async fn repository_clean_filters_are_not_executed_and_push_urls_are_observed() {
+    let dir = tempfile::tempdir().unwrap();
+    synthetic_repository(dir.path());
+    let marker = dir.path().join("clean-filter-ran");
+    fs::write(dir.path().join(".gitattributes"), "* filter=marker\n").unwrap();
+    let clean = format!("sh -c 'touch {} && cat'", marker.display());
+    git(dir.path(), &["config", "filter.marker.clean", &clean]);
+    git(dir.path(), &["config", "filter.marker.process", &clean]);
+    git(dir.path(), &["config", "filter.marker.required", "true"]);
+    git(
+        dir.path(),
+        &[
+            "remote",
+            "set-url",
+            "--push",
+            "origin",
+            "https://push:tok@example.invalid/mirror.git",
+        ],
+    );
+    // README.md is modified in the working tree, so status must re-hash it.
+    let observation = GitInspector::default().inspect(dir.path()).await.unwrap();
+    assert!(
+        !marker.exists(),
+        "repository clean/process filters must not run during inspection"
+    );
+    assert_eq!(observation.dirty.unstaged, 1);
+    assert_eq!(
+        observation.identity.push_remote.as_deref(),
+        Some("https://example.invalid/mirror.git")
+    );
+    assert_eq!(
+        observation.identity.remote.as_deref(),
+        Some("https://example.invalid/fixture.git")
+    );
+}
+
+#[tokio::test]
+async fn filesystem_origins_are_not_portable_identities() {
+    let upstream = tempfile::tempdir().unwrap();
+    synthetic_repository(upstream.path());
+    let dir = tempfile::tempdir().unwrap();
+    synthetic_repository(dir.path());
+    git(
+        dir.path(),
+        &[
+            "remote",
+            "set-url",
+            "origin",
+            &upstream.path().to_string_lossy(),
+        ],
+    );
+    let observation = GitInspector::default().inspect(dir.path()).await.unwrap();
+    assert_eq!(observation.identity.remote, None);
+    assert_eq!(observation.identity.push_remote, None);
+    assert_eq!(observation.identity.root_commits.len(), 1);
+}
+
+#[tokio::test]
 async fn output_limit_is_enforced_while_reading() {
     let dir = tempfile::tempdir().unwrap();
     synthetic_repository(dir.path());

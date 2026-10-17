@@ -126,7 +126,7 @@ pub fn discover(request: DiscoveryRequest) -> Result<Discovery, DiscoveryError> 
                 facts.question(
                     &id,
                     "remote",
-                    "no origin remote is configured; confirm an explicit local: identity or add a remote before publication work",
+                    "no portable origin remote is configured (none, or a filesystem path); confirm an explicit local: identity or add a URL remote before publication work",
                 );
                 format!("local:{id}")
             }
@@ -347,21 +347,26 @@ fn node(root: &Path, id: &str, facts: &mut Facts) {
             return;
         }
     };
-    let from_lockfile = if exists(root, "bun.lock") || exists(root, "bun.lockb") {
-        facts.evidence.push(format!("{id}:bun.lock"));
-        Some("bun")
-    } else if exists(root, "pnpm-lock.yaml") {
-        facts.evidence.push(format!("{id}:pnpm-lock.yaml"));
-        Some("pnpm")
-    } else if exists(root, "yarn.lock") {
-        facts.evidence.push(format!("{id}:yarn.lock"));
-        Some("yarn")
-    } else if exists(root, "package-lock.json") {
-        facts.evidence.push(format!("{id}:package-lock.json"));
-        Some("npm")
-    } else {
-        None
-    };
+    let lockfiles: Vec<(&str, &str)> = [
+        ("bun.lock", "bun"),
+        ("bun.lockb", "bun"),
+        ("pnpm-lock.yaml", "pnpm"),
+        ("yarn.lock", "yarn"),
+        ("package-lock.json", "npm"),
+    ]
+    .into_iter()
+    .filter(|(file, _)| exists(root, file))
+    .collect();
+    for (file, _) in &lockfiles {
+        facts.evidence.push(format!("{id}:{file}"));
+    }
+    let from_lockfile = lockfiles.first().map(|(_, manager)| *manager);
+    let ambiguous_lockfiles = lockfiles
+        .iter()
+        .map(|(_, manager)| *manager)
+        .collect::<std::collections::BTreeSet<_>>()
+        .len()
+        > 1;
     // An explicit packageManager declaration wins over lockfile inference.
     let declared = package["packageManager"].as_str().and_then(|value| {
         let name = value.split('@').next().unwrap_or("");
@@ -396,6 +401,18 @@ fn node(root: &Path, id: &str, facts: &mut Facts) {
             declared
         }
         (Some(declared), _) => declared,
+        (None, Some(lockfile)) if ambiguous_lockfiles => {
+            let names: Vec<&str> = lockfiles.iter().map(|(file, _)| *file).collect();
+            facts.question(
+                id,
+                "node-package-manager",
+                format!(
+                    "lockfiles for different managers coexist ({}) and package.json declares none; {lockfile} was proposed",
+                    names.join(", ")
+                ),
+            );
+            lockfile
+        }
         (None, Some(lockfile)) => lockfile,
         (None, None) => {
             facts.question(
@@ -695,6 +712,7 @@ mod tests {
             local_path: path.display().to_string(),
             identity: RepositoryIdentity {
                 remote: remote.map(Into::into),
+                push_remote: None,
                 root_commits: vec!["c".repeat(40)],
                 shallow: false,
             },
@@ -840,6 +858,23 @@ mod tests {
             .questions
             .iter()
             .any(|q| q.topic == "node-package-manager" && q.detail.contains("npm lockfile")));
+        let both = tempfile::tempdir().unwrap();
+        fs::write(
+            both.path().join("package.json"),
+            r#"{"scripts":{"test":"vitest run"}}"#,
+        )
+        .unwrap();
+        fs::write(both.path().join("pnpm-lock.yaml"), "").unwrap();
+        fs::write(both.path().join("package-lock.json"), "{}").unwrap();
+        let discovery = discover(request(
+            both.path(),
+            observation(both.path(), Some("main"), None),
+        ))
+        .unwrap();
+        assert!(discovery
+            .questions
+            .iter()
+            .any(|q| q.topic == "node-package-manager" && q.detail.contains("coexist")));
     }
 
     #[test]

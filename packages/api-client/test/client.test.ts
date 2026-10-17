@@ -109,6 +109,8 @@ describe("project import and discovery", () => {
     await expect(conflict.discover("fixture")).rejects.toThrow("revision conflict: expected 1, current 0");
     const invalid = new LuunaClient("http://localhost:4242", "t", respond(422, '{"error":"default branch release is not a local or origin branch of repository app"}'));
     await expect(invalid.discover("fixture")).rejects.toThrow("default branch release");
+    const invalidPath = new LuunaClient("http://localhost:4242", "t", respond(400, '{"error":"repository path must be an absolute path to the repository root"}'));
+    await expect(invalidPath.registerProject({ name: "x", repositories: [{ id: "app", path: "relative" }] })).rejects.toThrow("absolute path");
     const long = new LuunaClient("http://localhost:4242", "t", respond(422, JSON.stringify({ error: "x".repeat(301) })));
     await expect(long.discover("fixture")).rejects.toThrow("Runtime request failed (HTTP 422)");
     const server = new LuunaClient("http://localhost:4242", "t", respond(500, '{"error":"secret prompt text"}'));

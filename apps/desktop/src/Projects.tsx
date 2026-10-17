@@ -138,6 +138,9 @@ export function Projects({ client }: { client: LuunaClient | null }) {
       await client.confirmManifest(selected, view.project.revision, manifest as Parameters<LuunaClient["confirmManifest"]>[2], signal);
       if (signal.aborted) return;
       await refresh(selected, signal);
+      // The confirmed proposal is spent; a new discovery produces the next revision's draft.
+      setDiscovery(null);
+      setDraft("");
     });
   }
 
@@ -172,7 +175,7 @@ export function Projects({ client }: { client: LuunaClient | null }) {
         {view && registration && observation ? <>
           <dl className="facts">
             <div><dt>Repository</dt><dd><code>{registration.repository_id}</code> · {registration.local_path}</dd></div>
-            <div><dt>Remote identity</dt><dd>{observation.identity.remote ?? "none configured"}{observation.identity.shallow && " · shallow clone"}</dd></div>
+            <div><dt>Remote identity</dt><dd>{observation.identity.remote ?? "no portable origin"}{observation.identity.push_remote && ` · push ${observation.identity.push_remote}`}{observation.identity.shallow && " · shallow clone"}</dd></div>
             <div><dt>HEAD at registration</dt><dd><code>{observation.head_commit.slice(0, 12)}</code> on {observation.branch ?? "detached HEAD"}</dd></div>
             <div><dt>Dirty state</dt><dd>{observation.dirty.staged} staged · {observation.dirty.unstaged} unstaged · {observation.dirty.untracked} untracked · {observation.dirty.conflicted} conflicted</dd></div>
             <div><dt>Confirmed manifest</dt><dd>{view.manifest ? <>revision {view.manifest.revision} · <code>{view.manifest.hash.slice(0, 23)}…</code> · base <code>{Object.values(view.manifest.base_commits)[0]?.slice(0, 12)}</code></> : "not yet confirmed"}</dd></div>

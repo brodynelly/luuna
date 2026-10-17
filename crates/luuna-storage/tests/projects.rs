@@ -11,6 +11,7 @@ fn observation(remote: Option<&str>) -> RepositoryObservation {
         local_path: "/srv/checkouts/app".into(),
         identity: RepositoryIdentity {
             remote: remote.map(Into::into),
+            push_remote: None,
             root_commits: vec!["1".repeat(40)],
             shallow: false,
         },

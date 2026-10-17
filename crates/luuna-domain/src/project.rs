@@ -271,6 +271,24 @@ pub fn valid_remote_identity(value: &str) -> bool {
         && !value.contains('?')
         && !value.contains('#')
         && !remote_has_userinfo(value)
+        && !is_filesystem_remote(value)
+}
+
+/// Filesystem origins are machine-specific and never belong in a portable manifest.
+pub fn is_filesystem_remote(value: &str) -> bool {
+    let bytes = value.as_bytes();
+    value.starts_with('/')
+        || value.starts_with('\\')
+        || value.starts_with("./")
+        || value.starts_with("../")
+        || value.starts_with(".\\")
+        || value.starts_with("..\\")
+        || value.to_ascii_lowercase().starts_with("file:")
+        || (bytes.len() >= 3
+            && bytes[0].is_ascii_alphabetic()
+            && bytes[1] == b':'
+            && (bytes[2] == b'/' || bytes[2] == b'\\'))
+        || !value.contains(':')
 }
 
 /// `scheme://user:secret@host` must never be recorded; redact before use.
@@ -302,8 +320,11 @@ pub fn valid_branch_name(value: &str) -> bool {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct RepositoryIdentity {
-    /// Redacted `origin` URL, if one is configured.
+    /// Redacted `origin` fetch URL, if a portable one is configured.
     pub remote: Option<String>,
+    /// Redacted `origin` push URL when it differs from the fetch URL.
+    #[serde(default)]
+    pub push_remote: Option<String>,
     /// Sorted parentless commits reachable from HEAD; empty for shallow clones.
     pub root_commits: Vec<String>,
     pub shallow: bool,
@@ -315,8 +336,14 @@ impl RepositoryIdentity {
             .remote
             .as_deref()
             .is_some_and(|r| !valid_remote_identity(r))
+            || self
+                .push_remote
+                .as_deref()
+                .is_some_and(|r| !valid_remote_identity(r))
         {
-            return invalid("remote identity contains credentials or invalid characters");
+            return invalid(
+                "remote identity contains credentials, a filesystem path or invalid characters",
+            );
         }
         if self.root_commits.iter().any(|c| !is_commit(c)) || !unique(&self.root_commits) {
             return invalid("root commits must be unique full commit identities");
@@ -357,6 +384,11 @@ impl RepositoryIdentity {
         if self.remote.is_some() != observed.remote.is_some() {
             return Err(DomainError::IdentityMismatch(
                 "remote configuration was added or removed; re-register".into(),
+            ));
+        }
+        if self.push_remote != observed.push_remote {
+            return Err(DomainError::IdentityMismatch(
+                "origin push URL changed; re-register before publication".into(),
             ));
         }
         Ok(())
@@ -485,6 +517,7 @@ mod tests {
     fn identity(remote: Option<&str>) -> RepositoryIdentity {
         RepositoryIdentity {
             remote: remote.map(Into::into),
+            push_remote: None,
             root_commits: vec!["a".repeat(40)],
             shallow: false,
         }
@@ -564,12 +597,14 @@ mod tests {
         assert!(registered.matches(&moved).is_err());
         let shallow = RepositoryIdentity {
             remote: Some("https://example.invalid/app.git".into()),
+            push_remote: None,
             root_commits: vec![],
             shallow: true,
         };
         registered.matches(&shallow).unwrap();
         let unstable = RepositoryIdentity {
             remote: None,
+            push_remote: None,
             root_commits: vec![],
             shallow: true,
         };
@@ -579,5 +614,26 @@ mod tests {
         assert!(local.matches(&registered).is_err());
         let leaked = identity(Some("ssh://git:pass@host/repo"));
         assert!(leaked.validate().is_err());
+        for path_like in [
+            "/srv/git/app.git",
+            "../app.git",
+            "file:///srv/app",
+            "C:\\git\\app",
+            "app.git",
+        ] {
+            assert!(is_filesystem_remote(path_like), "{path_like}");
+            assert!(identity(Some(path_like)).validate().is_err(), "{path_like}");
+        }
+        for portable in [
+            "https://github.com/x/y.git",
+            "git@github.com:x/y.git",
+            "local:app",
+        ] {
+            assert!(!is_filesystem_remote(portable), "{portable}");
+        }
+        let mut pushed = registered.clone();
+        pushed.push_remote = Some("https://example.invalid/fork.git".into());
+        assert!(registered.matches(&pushed).is_err());
+        pushed.matches(&pushed).unwrap();
     }
 }

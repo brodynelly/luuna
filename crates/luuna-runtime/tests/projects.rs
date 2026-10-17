@@ -378,6 +378,17 @@ async fn invalid_mismatched_and_unauthenticated_imports_are_rejected() {
         .request(
             "POST",
             "/api/v1/projects",
+            Some(json!({"id":"twice","name":"Twice","repositories":[
+                {"id":"app","path":repo.path().to_string_lossy()},
+                {"id":"api","path":repo.path().join(".").to_string_lossy()}]})),
+            true,
+        )
+        .await;
+    assert_eq!(status, StatusCode::BAD_REQUEST, "{body}");
+    let (status, _) = harness
+        .request(
+            "POST",
+            "/api/v1/projects",
             Some(register_body("fixture", repo.path())),
             true,
         )
