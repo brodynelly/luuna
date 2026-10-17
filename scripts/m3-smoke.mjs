@@ -89,6 +89,9 @@ const SCAN_FILE_LIMIT = 512 * 1024 * 1024;
 // left unscanned when a budget is spent is a scan failure and is quarantined.
 const SCAN_TOTAL_LIMIT = 2 * 1024 * 1024 * 1024;
 const SCAN_FILE_COUNT_LIMIT = 20_000;
+// Runtime stderr kept in memory (a diagnostic tail) and written to each runtime log at most.
+const RUNTIME_STDERR_TAIL = 64 * 1024;
+const RUNTIME_LOG_LIMIT = 16 * 1024 * 1024;
 // Deepest directory nesting the scan descends into (one call frame and one descriptor per level).
 const SCAN_DEPTH_LIMIT = 128;
 const CREDENTIAL_NAMES = ["ANTHROPIC_API_KEY", "OPENAI_API_KEY", "GEMINI_API_KEY", "GOOGLE_API_KEY", "MISTRAL_API_KEY", "GROQ_API_KEY", "XAI_API_KEY", "OPENROUTER_API_KEY"];
@@ -203,6 +206,8 @@ try {
   // revision too, or a locally weakened probe could pass under that revision's name.
   record("the Luuna checkout (harness included) matched the recorded revision: no modified or untracked file", evidence.environment.git_dirty === false, `revision ${evidence.environment.git_revision}, ${evidence.environment.git_dirty === false ? "clean" : evidence.environment.git_dirty === null ? "status unknown" : `modified: ${evidence.environment.git_dirty_paths}`}`);
   record("the runtime binary was built from the recorded revision's build inputs (embedded content digest)", identity === evidence.environment.expected_build_identity && evidence.environment.runtime_sources_dirty === false, `revision ${evidence.environment.git_revision}, build inputs ${evidence.environment.runtime_sources_dirty === false ? "clean" : "modified or unknown"}, binary reports ${String(identity).slice(0, 23)}…, checkout ${String(evidence.environment.expected_build_identity).slice(0, 23)}…`);
+  const pi = evidence.environment.pi_provenance;
+  record("the Pi executable is the published package pinned in tools/pi/package-lock.json (tarball integrity and every installed file verified)", mode === "fixture" ? true : pi?.verified === true, mode === "fixture" ? "synthetic fixture tracked in the clean checkout; not provider evidence" : pi?.verified ? `@earendil-works/pi-coding-agent ${pi.package.version}, ${pi.package.files_compared} files match the published tarball (${pi.package.tarball_integrity.slice(0, 20)}…), ${pi.package.dependencies_checked} locked packages checked, launcher sha256 ${pi.launcher.sha256.slice(0, 16)}…` : `not verified: ${pi?.error ?? "no provenance recorded"}`);
   const pinned = pinnedToolchain();
   // A wrapper (RUSTC_WRAPPER / RUSTC_WORKSPACE_WRAPPER) can change compilation while the compiler
   // still reports the pinned release, so evidence builds must use none.
@@ -324,10 +329,23 @@ async function startRuntime(label) {
   try { binarySha = createHash("sha256").update(readFileSync(runtimeBinary)).digest("hex"); } catch { binarySha = "unreadable"; }
   const child = spawn(runtimeBinary, [], { env, stdio: ["ignore", "ignore", "pipe"] });
   startingRuntime = child;
+  // stderr is drained for the child's whole life but retained only as a fixed-size tail in memory
+  // and up to RUNTIME_LOG_LIMIT bytes on disk, so a noisy runtime cannot exhaust the heap or fill
+  // the output volume before the leak scan and report.
   let stderr = "";
+  let logged = 0;
   let spawnError = null;
   child.on("error", (error) => { spawnError = error; });
-  child.stderr.on("data", (chunk) => { stderr += chunk; if (typeof logFd === "number") { try { writeSync(logFd, chunk); } catch { /* logged in memory only */ } } });
+  child.stderr.on("data", (chunk) => {
+    stderr = (stderr + chunk.toString("utf8")).slice(-RUNTIME_STDERR_TAIL);
+    if (typeof logFd !== "number" || logged >= RUNTIME_LOG_LIMIT) return;
+    const part = chunk.subarray(0, RUNTIME_LOG_LIMIT - logged);
+    try {
+      writeSync(logFd, part);
+      logged += part.length;
+      if (logged >= RUNTIME_LOG_LIMIT) writeSync(logFd, `\n[log truncated at ${RUNTIME_LOG_LIMIT} bytes; later output was drained, not kept]\n`);
+    } catch { /* kept as the in-memory tail only */ }
+  });
   child.on("close", () => { if (typeof logFd === "number") { try { closeSync(logFd); } catch { /* already closed */ } } });
   const deadline = Date.now() + 30_000;
   while (Date.now() < deadline) {
@@ -344,9 +362,18 @@ async function startRuntime(label) {
           evidence.environment.runtime_build_rustc_wrapper = health.build_rustc_wrapper ?? "not reported";
         }
         record(`runtime ${label} start`, health.status === "ok", `health ${JSON.stringify(health)}`);
+        // Hash the image the running process actually executes (Linux: /proc/<pid>/exe, which a
+        // replacement of the path cannot redirect and which cannot be written while it runs).
+        let runningSha = null;
+        try { runningSha = createHash("sha256").update(readFileSync(`/proc/${child.pid}/exe`)).digest("hex"); } catch { /* not available on this platform */ }
+        if (label === "initial") {
+          evidence.environment.runtime_running_sha256 = runningSha ?? "unavailable on this platform";
+          record("runtime initial process executes the hashed binary (running process image)", runningSha === null ? process.platform !== "linux" : runningSha === binarySha && binarySha === evidence.environment.runtime_binary_sha256, runningSha === null ? `process image not readable on ${process.platform}; pre-spawn hash ${binarySha.slice(0, 16)}…` : `running ${runningSha.slice(0, 16)}…, hashed ${binarySha.slice(0, 16)}…`);
+        }
         if (label !== "initial") {
           const env0 = evidence.environment;
-          record(`runtime ${label} is the same revision-bound binary as the initial start`, binarySha === env0.runtime_binary_sha256 && health.build_identity === env0.expected_build_identity && health.build_rustc === env0.runtime_build_rustc && health.build_rustc_wrapper === env0.runtime_build_rustc_wrapper, `sha256 ${binarySha.slice(0, 16)}… (initial ${String(env0.runtime_binary_sha256).slice(0, 16)}…), identity ${health.build_identity === env0.expected_build_identity ? "matches" : "differs"}, rustc ${health.build_rustc}`);
+          const executed = runningSha ?? binarySha;
+          record(`runtime ${label} is the same revision-bound binary as the initial start`, executed === env0.runtime_binary_sha256 && (runningSha === null || runningSha === env0.runtime_running_sha256) && health.build_identity === env0.expected_build_identity && health.build_rustc === env0.runtime_build_rustc && health.build_rustc_wrapper === env0.runtime_build_rustc_wrapper, `${runningSha === null ? "pre-spawn" : "running"} sha256 ${executed.slice(0, 16)}… (initial ${String(env0.runtime_binary_sha256).slice(0, 16)}…), identity ${health.build_identity === env0.expected_build_identity ? "matches" : "differs"}, rustc ${health.build_rustc}`);
         }
         if (typeof logFd !== "number") record(`runtime ${label} log was created inside the output root`, false, logFd);
         startingRuntime = null;
@@ -831,6 +858,7 @@ function environment() {
   try { info.python_version = execFileSync(python, ["--version"], { encoding: "utf8" }).trim(); } catch (error) { info.python_version = `unavailable: ${error.message}`; }
   if (mode === "real") {
     try { info.pi_version = execFileSync(profile.pi, [...profile.piArgs, "--version"], { encoding: "utf8" }).trim(); } catch (error) { info.pi_version = `unavailable: ${error.message}`; }
+    info.pi_provenance = piProvenance();
   } else {
     info.pi_version = "synthetic fixture reporting 1.3.0";
   }
@@ -843,6 +871,73 @@ function environment() {
   try { info.expected_build_identity = buildIdentity(); } catch (error) { info.expected_build_identity = `unavailable: ${error.message}`; }
   try { info.runtime_sources_dirty = git(repository, "status", "--porcelain", "--", "crates/*/src/*", "crates/*/assets/*", "crates/*/Cargo.toml", "crates/*/build.rs", "Cargo.toml", "Cargo.lock").length > 0; } catch { info.runtime_sources_dirty = null; }
   return info;
+}
+
+/**
+ * Binds the real Pi to published bytes instead of its self-reported version: the launcher and the
+ * entrypoint are hashed; the entrypoint's package must be the name and version pinned in the
+ * tracked tools/pi/package-lock.json; the published tarball is fetched, checked against the
+ * lockfile's integrity, and every file of the installed package is compared with it; and every
+ * other installed package's version and integrity must match the tracked lockfile.
+ */
+function piProvenance() {
+  const result = { verified: false };
+  const sha = (file) => createHash("sha256").update(readFileSync(file)).digest("hex");
+  try {
+    const launcher = existsSync(profile.pi) ? profile.pi : execFileSync("sh", ["-c", 'command -v "$1"', "sh", profile.pi], { encoding: "utf8" }).trim();
+    result.launcher = { path: realpathSync(launcher), sha256: sha(realpathSync(launcher)) };
+    const entry = profile.piArgs.find((arg) => existsSync(arg) && statSync(arg).isFile()) ?? launcher;
+    result.entrypoint = { path: realpathSync(entry), sha256: sha(realpathSync(entry)) };
+    const lock = JSON.parse(readFileSync(path.join(repository, "tools", "pi", "package-lock.json"), "utf8"));
+    const pinned = lock.packages?.["node_modules/@earendil-works/pi-coding-agent"];
+    let root = path.dirname(result.entrypoint.path);
+    while (!(existsSync(path.join(root, "package.json")) && JSON.parse(readFileSync(path.join(root, "package.json"), "utf8")).name === "@earendil-works/pi-coding-agent")) {
+      if (path.dirname(root) === root) throw new Error("the entrypoint is not inside the @earendil-works/pi-coding-agent package");
+      root = path.dirname(root);
+    }
+    const installed = JSON.parse(readFileSync(path.join(root, "package.json"), "utf8"));
+    result.package = { root, version: installed.version, pinned_version: pinned?.version, pinned_integrity: pinned?.integrity };
+    if (!pinned || installed.version !== pinned.version) throw new Error(`installed ${installed.version} is not the pinned ${pinned?.version}`);
+    // Fetch the published tarball outside the output tree and check it against the lockfile.
+    const work = realpathSync(execFileSync("mktemp", ["-d", path.join(tmpdir(), "luuna-pi-provenance-XXXXXX")], { encoding: "utf8" }).trim());
+    try {
+      const env = Object.fromEntries(Object.entries(process.env).filter(([name]) => !CREDENTIAL_NAMES.includes(name) && !name.startsWith("LUUNA_PI_")));
+      const packed = JSON.parse(execFileSync("npm", ["pack", `@earendil-works/pi-coding-agent@${pinned.version}`, "--json", "--pack-destination", work, "--ignore-scripts"], { cwd: work, encoding: "utf8", env }));
+      const tarball = path.join(work, packed[0].filename);
+      const integrity = `sha512-${createHash("sha512").update(readFileSync(tarball)).digest("base64")}`;
+      result.package.tarball_integrity = integrity;
+      if (integrity !== pinned.integrity) throw new Error("the published tarball does not match the lockfile integrity");
+      execFileSync("tar", ["-xzf", tarball, "-C", work]);
+      const files = (base) => {
+        const out = [];
+        const walkFiles = (rel) => {
+          for (const entry of readdirSync(path.join(base, rel), { withFileTypes: true })) {
+            const child = rel ? `${rel}/${entry.name}` : entry.name;
+            if (entry.isDirectory()) { if (!(rel === "" && entry.name === "node_modules")) walkFiles(child); } else out.push(child);
+          }
+        };
+        walkFiles("");
+        return out.sort();
+      };
+      const published = files(path.join(work, "package"));
+      const present = files(root);
+      const differing = [...new Set([...published, ...present])].filter((file) => !published.includes(file) || !present.includes(file) || sha(path.join(work, "package", file)) !== sha(path.join(root, file)));
+      result.package.files_compared = published.length;
+      if (differing.length > 0) throw new Error(`installed package differs from the published tarball: ${differing.slice(0, 5).join(", ")}`);
+      // Every other installed package must carry the version and integrity the tracked lockfile pins.
+      const installRoot = root.slice(0, root.lastIndexOf(`${path.sep}node_modules${path.sep}`));
+      const installedLock = JSON.parse(readFileSync(path.join(installRoot, "node_modules", ".package-lock.json"), "utf8")).packages ?? {};
+      const mismatched = Object.entries(lock.packages ?? {}).filter(([key, value]) => key.startsWith("node_modules/") && !value.optional && !value.dev && (installedLock[key]?.version !== value.version || installedLock[key]?.integrity !== value.integrity)).map(([key]) => key);
+      result.package.dependencies_checked = Object.keys(lock.packages ?? {}).filter((key) => key.startsWith("node_modules/")).length;
+      if (mismatched.length > 0) throw new Error(`installed dependencies differ from the tracked lockfile: ${mismatched.slice(0, 5).join(", ")}`);
+      result.verified = true;
+    } finally {
+      execFileSync("rm", ["-rf", "--", work]);
+    }
+  } catch (error) {
+    result.error = String(error?.message ?? error).split("\n")[0];
+  }
+  return result;
 }
 
 /** The exact release `rust-toolchain.toml` pins, or null when it pins none (a channel name is not a release). */
