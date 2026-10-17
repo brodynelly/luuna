@@ -74,7 +74,9 @@ async fn passing_and_failing_commands_record_exit_codes_hashes_and_excerpts() {
     assert_eq!(passed.artifacts.len(), 2);
     let stdout = &passed.artifacts[0];
     assert_eq!(
-        std::fs::read_to_string(&stdout.path).unwrap(),
+        std::fs::read_to_string(&stdout.path)
+            .unwrap()
+            .replace("\r\n", "\n"),
         "fixture stdout\n"
     );
     assert!(stdout.sha256.starts_with("sha256:") && !stdout.truncated);
@@ -235,4 +237,39 @@ async fn secrets_and_luuna_variables_never_reach_the_command() {
     assert!(!stdout.contains("secret-value"));
     assert!(stdout.contains("true"));
     let _ = PathBuf::new();
+}
+
+#[cfg(unix)]
+#[tokio::test]
+async fn repository_relative_executables_resolve_inside_the_checkout_only() {
+    use std::os::unix::fs::PermissionsExt;
+    let dir = tempfile::tempdir().unwrap();
+    let tools = dir.path().join("tools");
+    std::fs::create_dir(&tools).unwrap();
+    let script = tools.join("check.sh");
+    std::fs::write(&script, "#!/bin/sh\necho repo-local\n").unwrap();
+    std::fs::set_permissions(&script, std::fs::Permissions::from_mode(0o755)).unwrap();
+    std::os::unix::fs::symlink("/bin/sh", tools.join("escape")).unwrap();
+    let (_tx, cancel) = watch::channel(false);
+    let mut inside = spec(dir.path(), &[], 30);
+    inside.executable = "./tools/check.sh".into();
+    inside.capabilities = vec![];
+    let execution = Executor::default()
+        .execute(&inside, cancel.clone(), None)
+        .await
+        .unwrap();
+    assert_eq!(execution.status, CheckStatus::Passed, "{execution:?}");
+    assert!(execution.stdout_excerpt.contains("repo-local"));
+    let mut outside = inside.clone();
+    outside.executable = "tools/escape".into();
+    let execution = Executor::default()
+        .execute(&outside, cancel, None)
+        .await
+        .unwrap();
+    assert_eq!(execution.status, CheckStatus::Blocked);
+    assert!(execution
+        .reason
+        .as_deref()
+        .unwrap_or("")
+        .contains("outside the repository"));
 }

@@ -231,7 +231,11 @@ impl Executor {
             let candidate = cwd.join(path);
             let canonical = std::fs::canonicalize(&candidate)
                 .map_err(|_| format!("repository executable {executable} does not exist"))?;
-            if !canonical.starts_with(&spec.repository_root) || !canonical.is_file() {
+            // Compare canonical forms: on Windows canonicalize yields a verbatim
+            // `\\?\` path that would never start with the plain repository root.
+            let root = std::fs::canonicalize(&spec.repository_root)
+                .unwrap_or_else(|_| spec.repository_root.clone());
+            if !canonical.starts_with(&root) || !canonical.is_file() {
                 return Err(format!(
                     "repository executable {executable} resolves outside the repository"
                 ));
@@ -591,6 +595,9 @@ async fn terminate(child: &mut Child, pid: Option<u32>) {
             libc::killpg(pid as libc::pid_t, libc::SIGKILL);
         }
     }
+    // Windows has no process groups here; the direct child is killed below.
+    #[cfg(not(unix))]
+    let _ = pid;
     let _ = child.start_kill();
     let _ = tokio::time::timeout(REAP_TIMEOUT, child.wait()).await;
 }
