@@ -744,7 +744,13 @@ function scanForCredentialValues() {
         let target;
         try { target = readlinkSync(full); } catch { unreadable.push(relative); continue; }
         if (values.some((value) => target.includes(value))) metadataHits.push(relative);
-      } else if (entry.isDirectory()) walk(full); else if (entry.isFile()) files.push(full);
+      } else if (entry.isDirectory()) {
+        // Revalidate without following immediately before descending: an entry swapped for
+        // a link after the listing is reported, never traversed.
+        let current;
+        try { current = lstatSync(full); } catch { unreadable.push(relative); continue; }
+        if (current.isDirectory()) walk(full); else unreadable.push(relative);
+      } else if (entry.isFile()) files.push(full);
     }
   };
   walk(out);
@@ -767,8 +773,9 @@ function quarantineLeaks(scan) {
   if (targets.length === 0) return { removed: [], failed: [] };
   const removed = [];
   const failed = [];
-  // Presence is judged without following links: a dangling symlink is still an entry to remove.
-  const present = (target) => { try { lstatSync(target); return true; } catch { return false; } };
+  // Presence is judged without following links: a dangling symlink is still an entry to
+  // remove, and only ENOENT means absent; any other lookup error means "possibly still there".
+  const present = (target) => { try { lstatSync(target); return true; } catch (error) { return error?.code !== "ENOENT"; } };
   for (const entry of new Set([...targets, "data"])) {
     const target = path.resolve(out, entry);
     if (!target.startsWith(out + path.sep)) { failed.push(`${entry} (outside the output directory)`); continue; }
@@ -789,10 +796,12 @@ function quarantineLeaks(scan) {
               const fd = openSync(target, fsConstants.O_RDONLY | fsConstants.O_DIRECTORY | fsConstants.O_NOFOLLOW);
               try { fchmodSync(fd, 0o700); } finally { closeSync(fd); }
             }
-          } else if (stat.isFile()) {
+          } else if (stat.isFile() && fsConstants.O_NOFOLLOW !== undefined) {
             // Open without truncation and without following, validate the opened handle
-            // (regular, singly linked), then chmod and truncate that same handle.
-            const fd = openSync(target, fsConstants.O_WRONLY | (fsConstants.O_NOFOLLOW ?? 0));
+            // (regular, singly linked), then chmod and truncate that same handle. Where the
+            // platform cannot open a non-following handle (Windows), nothing is blanked:
+            // removal is still attempted and a survivor is reported as not removed.
+            const fd = openSync(target, fsConstants.O_WRONLY | fsConstants.O_NOFOLLOW);
             try {
               const opened = fstatSync(fd);
               if (opened.isFile() && opened.nlink === 1) { fchmodSync(fd, 0o600); ftruncateSync(fd, 0); }
@@ -809,7 +818,10 @@ function quarantineLeaks(scan) {
   return { removed, failed };
 }
 
-/** Streams a file of any size through a sliding window so a value spanning two chunks is still found. */
+/** Largest file the leak scan will read; anything bigger is an unscannable target that fails the run. */
+const SCAN_FILE_LIMIT = 512 * 1024 * 1024;
+
+/** Streams a file through a sliding window so a value spanning two chunks is still found; bounded by size and growth. */
 function fileContainsAny(file, values) {
   if (values.length === 0) return false;
   const overlap = Math.max(...values.map((value) => Buffer.byteLength(value, "latin1"))) - 1;
@@ -817,12 +829,18 @@ function fileContainsAny(file, values) {
   // handle: a FIFO or device swapped into the path is a scan failure, not a hang.
   const fd = openSync(file, fsConstants.O_RDONLY | (fsConstants.O_NOFOLLOW ?? 0) | (fsConstants.O_NONBLOCK ?? 0));
   try {
-    if (!fstatSync(fd).isFile()) throw new Error("not a regular file");
+    const opened = fstatSync(fd);
+    if (!opened.isFile()) throw new Error("not a regular file");
+    if (opened.size > SCAN_FILE_LIMIT) throw new Error(`exceeds the ${SCAN_FILE_LIMIT} byte scan limit`);
     const chunk = Buffer.alloc(1024 * 1024);
     let carry = "";
+    let total = 0;
     for (;;) {
       const read = readSync(fd, chunk, 0, chunk.length, null);
       if (read === 0) return false;
+      total += read;
+      // A file that keeps growing past its opened size is unscannable, not a hang.
+      if (total > opened.size + chunk.length) throw new Error("grew while being scanned");
       const window = carry + chunk.toString("latin1", 0, read);
       if (values.some((value) => window.includes(value))) return true;
       carry = overlap > 0 ? window.slice(-overlap) : "";
