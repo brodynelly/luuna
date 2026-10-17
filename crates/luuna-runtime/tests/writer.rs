@@ -848,7 +848,7 @@ async fn failing_candidate_checks_require_a_new_repair_revision_and_fresh_eviden
     let repo = tempfile::tempdir().unwrap();
     clean_repository(repo.path());
     register(&harness, repo.path()).await;
-    harness.confirm(0, vec![check("unit", "from pathlib import Path; import sys; bad = 'seeded regression' in Path('src/main.py').read_text(); print('running 1 tests'); print('test result: FAILED. 0 passed; 1 failed' if bad else 'test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured'); sys.exit(1 if bad else 0)")]).await;
+    harness.confirm(0, vec![check("unit", "from pathlib import Path; import sys; bad = 'seeded regression' in Path('src/main.py').read_text(); print('running 1 tests'); print('test result: ' + ('FAILED. 0 passed; 1 failed' if bad else 'ok. 1 passed; 0 failed; 0 ignored; 0 measured')); sys.exit(1 if bad else 0)")]).await;
     harness.baseline().await;
     let before = snapshot(repo.path());
     let (id, _) = harness
@@ -1349,7 +1349,7 @@ async fn automatic_repair_runs_fresh_checks_and_review_on_the_repaired_candidate
     let repo = tempfile::tempdir().unwrap();
     clean_repository(repo.path());
     register(&harness, repo.path()).await;
-    harness.confirm(0, vec![check("unit", "from pathlib import Path; import sys; bad = 'seeded regression' in Path('src/main.py').read_text(); print('running 1 tests'); print('test result: FAILED. 0 passed; 1 failed' if bad else 'test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured'); sys.exit(1 if bad else 0)")]).await;
+    harness.confirm(0, vec![check("unit", "from pathlib import Path; import sys; bad = 'seeded regression' in Path('src/main.py').read_text(); print('running 1 tests'); print('test result: ' + ('FAILED. 0 passed; 1 failed' if bad else 'ok. 1 passed; 0 failed; 0 ignored; 0 measured')); sys.exit(1 if bad else 0)")]).await;
     harness.baseline().await;
     let before = snapshot(repo.path());
     let (id, _) = harness
@@ -1541,7 +1541,7 @@ async fn cancelling_an_automatic_repair_stops_its_writer_and_preserves_both_atte
     let repo = tempfile::tempdir().unwrap();
     clean_repository(repo.path());
     register(&harness, repo.path()).await;
-    harness.confirm(0, vec![check("unit", "from pathlib import Path; import sys; bad = 'seeded regression' in Path('src/main.py').read_text(); print('running 1 tests'); print('test result: FAILED. 0 passed; 1 failed' if bad else 'test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured'); sys.exit(1 if bad else 0)")]).await;
+    harness.confirm(0, vec![check("unit", "from pathlib import Path; import sys; bad = 'seeded regression' in Path('src/main.py').read_text(); print('running 1 tests'); print('test result: ' + ('FAILED. 0 passed; 1 failed' if bad else 'ok. 1 passed; 0 failed; 0 ignored; 0 measured')); sys.exit(1 if bad else 0)")]).await;
     harness.baseline().await;
     let before = snapshot(repo.path());
     let (id, _) = harness

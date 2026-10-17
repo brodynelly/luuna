@@ -1,0 +1,709 @@
+#!/usr/bin/env node
+// Luuna M3 smoke harness: drives a real `luuna-runtime` binary through the
+// approved writer → candidate checks → independent review → bounded repair
+// pipeline on a disposable fixture repository and records sanitized evidence.
+//
+//   node scripts/m3-smoke.mjs --mode fixture      # synthetic Pi fixture; never provider evidence
+//   node scripts/m3-smoke.mjs --mode real --provider openrouter --model openai/gpt-4o-mini
+//
+// Scenarios: approved feature → checks → fresh reviewer; seeded failing check →
+// manual repair r2 → fresh checks/review; blocking review findings under bounded
+// automatic repair; cancellation while the reviewer is in flight; hard-kill
+// restart during review with conservative spend reservation; orderly shutdown.
+//
+// Real mode needs the pinned Pi executable (LUUNA_PI_COMMAND or --pi) and the
+// provider credential in this process environment; the runtime forwards only the
+// supported names (or their LUUNA_PI_ aliases) to the isolated Pi children. The
+// report records credential names only and is scanned for leaked values.
+import { spawn, execFileSync } from "node:child_process";
+import { mkdirSync, writeFileSync, readFileSync, readdirSync, statSync, existsSync } from "node:fs";
+import { randomBytes } from "node:crypto";
+import { tmpdir, platform, release, arch } from "node:os";
+import path from "node:path";
+import { fileURLToPath } from "node:url";
+import process from "node:process";
+import { setTimeout as sleep } from "node:timers/promises";
+
+const options = parseArguments(process.argv.slice(2));
+const mode = options.mode ?? "real";
+if (!["fixture", "real"].includes(mode)) fail("--mode must be fixture or real");
+const repository = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
+const started = new Date();
+const out = path.resolve(options.out ?? path.join(tmpdir(), `luuna-m3-smoke-${started.toISOString().replace(/[:.]/g, "-")}`));
+mkdirSync(out, { recursive: true, mode: 0o700 });
+const dataDir = path.join(out, "data");
+const fixtureRepo = path.join(out, "fixture-repo");
+const port = Number(options.port ?? 4248);
+const runtimeBinary = path.resolve(options.runtime ?? path.join(repository, "target", "debug", process.platform === "win32" ? "luuna-runtime.exe" : "luuna-runtime"));
+const token = randomBytes(36).toString("base64url");
+const runTimeoutSeconds = Number(options["run-timeout"] ?? process.env.LUUNA_RUN_TIMEOUT_SECONDS ?? 600);
+const python = process.platform === "win32" ? "python" : "python3";
+const PROJECT = "m3-smoke";
+const CREDENTIAL_NAMES = ["ANTHROPIC_API_KEY", "OPENAI_API_KEY", "GEMINI_API_KEY", "GOOGLE_API_KEY", "MISTRAL_API_KEY", "GROQ_API_KEY", "XAI_API_KEY", "OPENROUTER_API_KEY"];
+
+// Fixture mode: the synthetic writer/reviewer read their scenario from
+// `fixture:<name>` markers in the acceptance criteria. The required check is a
+// real host command that fails on the seeded regression the synthetic repair
+// writer produces first. Real mode: a Python unittest suite is the required
+// check; the farewell ticket deliberately disagrees with the authoritative
+// test so the first candidate fails and repair must produce a fresh revision.
+const FIXTURE_CHECK = "import pathlib,sys; t=pathlib.Path('src/main.py').read_text(); f='seeded regression' in t; print('running 1 tests'); print('test result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured' if f else 'test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured'); sys.exit(1 if f else 0)";
+const REAL_TESTS = `import unittest
+from src.greeting import greeting
+from src.farewell import farewell
+
+
+class MessageTest(unittest.TestCase):
+    def test_greeting_format(self):
+        value = greeting("Ada")
+        self.assertIsInstance(value, str)
+        if value != "TODO":
+            self.assertEqual(value, "Hello, Ada!")
+
+    def test_farewell_format(self):
+        value = farewell("Ada")
+        self.assertIsInstance(value, str)
+        if value != "TODO":
+            self.assertEqual(value, "Goodbye, Ada!")
+
+
+if __name__ == "__main__":
+    unittest.main()
+`;
+// A second required check that the ticket never mentions: it passes while
+// farewell is unimplemented (so the baseline passes) and fails the first real
+// implementation until the writer adds the header line it demands. Only the
+// check output says so, which is exactly what repair feedback must carry.
+const REAL_POLICY = `import pathlib
+import sys
+
+source = pathlib.Path("src/farewell.py").read_text(encoding="utf-8")
+if 'return "TODO"' in source:
+    print("policy: src/farewell.py is not implemented yet; nothing to check")
+    sys.exit(0)
+if source.splitlines()[:1] != ["# format: goodbye-v2"]:
+    print("policy violation: src/farewell.py must start with the exact line '# format: goodbye-v2' once farewell is implemented")
+    sys.exit(1)
+print("policy: src/farewell.py declares format goodbye-v2")
+`;
+const profile = mode === "fixture"
+  ? {
+    pi: python,
+    piArgs: [path.join(repository, "fixtures", "pi-rpc", "mock_pi.py")],
+    provider: "test",
+    model: "synthetic",
+    files: { "README.md": "fixture\n", "pyproject.toml": "[project]\nname = \"fixture\"\n", "src/main.py": "print('fixture')\n" },
+    checks: [{ id: "unit", executable: python, args: ["-c", FIXTURE_CHECK], required: true, timeout_seconds: 60, capabilities: ["python"], cwd: "." }],
+    scenarios: {
+      feature: ticket("Implement the greeting", "Make src/main.py print the greeting.", ["fixture:write_in_scope", "main prints the greeting"], ["src/main.py"], 1),
+      repair: ticket("Repair the seeded regression", "Make src/main.py print the greeting.", ["fixture:repair_in_scope", "main prints the greeting"], ["src/main.py"], 2),
+      blocking: ticket("Blocking review probe", "Make src/main.py print the greeting.", ["fixture:write_in_scope", "fixture:review_blocking", "main prints the greeting"], ["src/main.py"], 2),
+      cancel: ticket("Cancellation probe", "Make src/main.py print the greeting.", ["fixture:review_hold", "main prints the greeting"], ["src/main.py"], 1),
+      restart: ticket("Restart probe", "Make src/main.py print the greeting.", ["fixture:review_hold", "main prints the greeting"], ["src/main.py"], 1),
+    },
+  }
+  : {
+    pi: options.pi ?? process.env.LUUNA_PI_COMMAND ?? "pi",
+    piArgs: JSON.parse(options["pi-args-json"] ?? process.env.LUUNA_PI_ARGS_JSON ?? "[]"),
+    provider: options.provider ?? process.env.LUUNA_PI_PROVIDER,
+    model: options.model ?? process.env.LUUNA_PI_MODEL,
+    files: {
+      "README.md": "# Messages fixture\n\nA tiny Python package used by the Luuna M3 smoke harness.\n",
+      "src/__init__.py": "",
+      "src/greeting.py": "def greeting(name):\n    return \"TODO\"\n",
+      "src/farewell.py": "def farewell(name):\n    return \"TODO\"\n",
+      "test_messages.py": REAL_TESTS,
+      "checks/policy.py": REAL_POLICY,
+    },
+    checks: [
+      { id: "unit", executable: python, args: ["-m", "unittest", "-v"], required: true, timeout_seconds: 120, capabilities: ["python"], cwd: "." },
+      { id: "policy", executable: python, args: ["checks/policy.py"], required: true, timeout_seconds: 60, capabilities: ["python"], cwd: "." },
+    ],
+    scenarios: {
+      feature: ticket("Implement greeting", "Change src/greeting.py so that greeting(name) returns the string 'Hello, <name>!' (for example greeting('Ada') == 'Hello, Ada!'). Do not change any other file.", [`${python} -m unittest -v passes`, "only src/greeting.py changes"], ["src/greeting.py"], 1),
+      repair: ticket("Implement farewell", "Change src/farewell.py so that farewell(name) returns the string 'Goodbye, <name>!' (for example farewell('Ada') == 'Goodbye, Ada!'). Do not change any other file; the project's required checks run after you stop and any repair feedback quotes their output.", ["every required project check passes", "only src/farewell.py changes"], ["src/farewell.py"], 2),
+      blocking: ticket("Document the greeting", "Change src/greeting.py so that greeting(name) returns the string 'Hello, <name>!' and add a '## Usage' section to README.md that shows how to call it. Both changes are required.", ["README.md gains a Usage section", "src/greeting.py returns 'Hello, <name>!'", `${python} -m unittest -v passes`], ["src/greeting.py"], 2),
+      cancel: ticket("Implement greeting (cancellation probe)", "Change src/greeting.py so that greeting(name) returns the string 'Hello, <name>!' (for example greeting('Ada') == 'Hello, Ada!'). Do not change any other file.", [`${python} -m unittest -v passes`, "only src/greeting.py changes"], ["src/greeting.py"], 1),
+      restart: ticket("Implement greeting (restart probe)", "Change src/greeting.py so that greeting(name) returns the string 'Hello, <name>!' (for example greeting('Ada') == 'Hello, Ada!'). Do not change any other file.", [`${python} -m unittest -v passes`, "only src/greeting.py changes"], ["src/greeting.py"], 1),
+    },
+  };
+if (!profile.provider || !profile.model) fail("real mode requires --provider and --model (or LUUNA_PI_PROVIDER / LUUNA_PI_MODEL)");
+
+const checks = [];
+const notes = [];
+const evidence = { mode, started_at: started.toISOString(), out, runtime_binary: runtimeBinary, port, project: PROJECT, scenarios: {} };
+const base = `http://127.0.0.1:${port}`;
+let runtime = null;
+let developerHead = null;
+
+try {
+  evidence.environment = environment();
+  runtime = await startRuntime("initial");
+  await registerProjectAndBaseline();
+  await scenario("feature", approvedFeatureIsCheckedAndIndependentlyReviewed);
+  await scenario("repair", failingCheckRequiresManualRepairAndFreshEvidence);
+  await scenario("blocking", blockingFindingsAreBoundedByAutomaticRepair);
+  await scenario("cancel", cancellationDuringReviewPreservesChecks);
+  await scenario("restart", hardKillDuringReviewReservesSpend);
+  await developerCheckoutUntouched();
+  await gracefulShutdown();
+} catch (error) {
+  record("harness", false, `unexpected harness failure: ${error instanceof Error ? error.stack ?? error.message : String(error)}`);
+} finally {
+  if (runtime && runtime.exitCode === null && runtime.signalCode === null) runtime.kill("SIGKILL");
+}
+
+evidence.finished_at = new Date().toISOString();
+evidence.checks = checks;
+evidence.notes = notes;
+evidence.leak_scan = scanForCredentialValues();
+record("no credential value appears in the report, runtime logs or durable state", evidence.leak_scan.leaks === 0, `${evidence.leak_scan.files_scanned} files scanned against ${evidence.leak_scan.values_checked} configured values`);
+const passed = checks.every((check) => check.ok);
+evidence.verdict = mode === "fixture"
+  ? `SYNTHETIC fixture run ${passed ? "passed" : "FAILED"}: harness/protocol evidence only, never provider or M3 success`
+  : `Real provider run ${passed ? "passed every M3 smoke check" : "did NOT pass every M3 smoke check"} (see notes for best-effort observations)`;
+writeFileSync(path.join(out, "report.json"), JSON.stringify(evidence, null, 2) + "\n", { mode: 0o600 });
+writeFileSync(path.join(out, "report.md"), markdown(evidence), { mode: 0o600 });
+console.log(markdown(evidence));
+console.log(`Report written to ${path.join(out, "report.md")} and report.json`);
+process.exit(passed ? 0 : 1);
+
+// ---------------------------------------------------------------------------
+
+function ticket(title, intent, acceptance_criteria, paths, maxAttempts) {
+  return { title, intent, acceptance_criteria, paths, budgets: { max_attempts: maxAttempts, timeout_seconds: runTimeoutSeconds, cost_usd_micros: 300_000 } };
+}
+
+async function startRuntime(label) {
+  const env = { ...process.env };
+  delete env.LUUNA_PI_PROVIDER;
+  delete env.LUUNA_PI_MODEL;
+  Object.assign(env, {
+    LUUNA_API_TOKEN: token,
+    LUUNA_DATA_DIR: dataDir,
+    LUUNA_PORT: String(port),
+    LUUNA_PI_COMMAND: profile.pi,
+    LUUNA_PI_ARGS_JSON: JSON.stringify(profile.piArgs),
+    LUUNA_RUN_TIMEOUT_SECONDS: String(runTimeoutSeconds),
+  });
+  const log = path.join(out, `runtime-${label}.log`);
+  const child = spawn(runtimeBinary, [], { env, stdio: ["ignore", "ignore", "pipe"] });
+  let stderr = "";
+  child.stderr.on("data", (chunk) => { stderr += chunk; writeFileSync(log, stderr, { mode: 0o600 }); });
+  const deadline = Date.now() + 30_000;
+  while (Date.now() < deadline) {
+    if (child.exitCode !== null) throw new Error(`runtime exited early (${child.exitCode}): ${stderr.trim()}`);
+    try {
+      const response = await fetch(`${base}/api/v1/health`);
+      if (response.ok) {
+        const health = await response.json();
+        record(`runtime ${label} start`, health.status === "ok", `health ${JSON.stringify(health)}`);
+        return child;
+      }
+    } catch { /* not yet listening */ }
+    await sleep(100);
+  }
+  throw new Error(`runtime did not become healthy: ${stderr.trim()}`);
+}
+
+function createFixtureRepository() {
+  mkdirSync(fixtureRepo, { recursive: true });
+  const git = (...args) => execFileSync("git", ["-C", fixtureRepo, ...args], {
+    encoding: "utf8",
+    env: { ...process.env, GIT_AUTHOR_NAME: "Fixture", GIT_AUTHOR_EMAIL: "fixture@example.invalid", GIT_COMMITTER_NAME: "Fixture", GIT_COMMITTER_EMAIL: "fixture@example.invalid" },
+  }).trim();
+  git("init", "-q", "-b", "main");
+  git("config", "commit.gpgsign", "false");
+  for (const [relative, content] of Object.entries(profile.files)) {
+    const target = path.join(fixtureRepo, relative);
+    mkdirSync(path.dirname(target), { recursive: true });
+    writeFileSync(target, content);
+  }
+  git("add", ".");
+  git("commit", "-q", "-m", "fixture");
+  git("remote", "add", "origin", "https://example.invalid/m3-smoke.git");
+  return git("rev-parse", "HEAD");
+}
+
+async function registerProjectAndBaseline() {
+  developerHead = createFixtureRepository();
+  const registered = await api("POST", "/projects", { id: PROJECT, name: "M3 smoke", repositories: [{ id: "app", path: fixtureRepo }] });
+  record("fixture repository registers as a project", registered.status === 201 || registered.status === 200, `status ${registered.status}`);
+  const manifest = {
+    schema_version: "0.1", id: PROJECT, name: "M3 smoke", revision: 1,
+    repositories: [{ id: "app", remote: "https://example.invalid/m3-smoke.git", default_branch: "main", profiles: ["python"], execution: "native", checks: profile.checks }],
+    relationships: [],
+    policy: { approval: "plan", testing_prerequisite: true, publish: "automatic_pr", merge: "human", max_explorers: 1, max_implementers: 1, max_task_repairs: 2 },
+  };
+  const confirmed = await api("PUT", `/projects/${PROJECT}/manifest`, { expected_revision: 0, manifest });
+  record("manifest with one required host check is confirmed", confirmed.status === 200, `status ${confirmed.status} ${confirmed.status === 200 ? "" : JSON.stringify(confirmed.body)}`);
+  const baseline = await api("POST", `/projects/${PROJECT}/baselines`, { repository_id: "app" });
+  if (baseline.status !== 202) throw new Error(`baseline not accepted (${baseline.status}): ${JSON.stringify(baseline.body)}`);
+  await waitForRunState(baseline.body.id, ["completed", "failed", "cancelled", "interrupted"], 300_000);
+  const baselines = (await api("GET", `/projects/${PROJECT}/baselines`)).body;
+  const latest = Array.isArray(baselines) ? baselines[0] : null;
+  evidence.baseline = latest ? { id: latest.id, status: latest.status, reason: latest.reason ?? null, results: summarizeResults(latest.results) } : baselines;
+  record("baseline required check passed on the fixture repository (real host command)", latest?.status === "passed", `status=${latest?.status} results=${JSON.stringify(summarizeResults(latest?.results))}`);
+}
+
+async function scenario(name, body) {
+  console.log(`\n== ${name}`);
+  try {
+    await body(name);
+  } catch (error) {
+    record(`${name}: scenario completed without harness error`, false, error instanceof Error ? error.stack ?? error.message : String(error));
+  }
+}
+
+/** Ticket → plan → exact-hash approval → implement; returns the settled workflow and its first candidate. */
+async function approvedCandidate(name) {
+  const spec = profile.scenarios[name];
+  const summary = { ticket: null, plan: null, run_id: null };
+  evidence.scenarios[name] = summary;
+  const created = await api("POST", `/projects/${PROJECT}/tickets`, { idempotency_key: `${name}-${randomBytes(6).toString("hex")}`, title: spec.title, intent: spec.intent, acceptance_criteria: spec.acceptance_criteria, repository_ids: ["app"] });
+  if (created.status !== 201) throw new Error(`ticket not created (${created.status}): ${JSON.stringify(created.body)}`);
+  summary.ticket = { id: created.body.id, title: spec.title, intent: spec.intent, acceptance_criteria: spec.acceptance_criteria, paths: spec.paths };
+  const opened = await api("POST", `/tickets/${created.body.id}/plans`, { task: { repository_id: "app", paths: spec.paths, operations: ["read", "write"] }, budgets: spec.budgets });
+  if (opened.status !== 201) throw new Error(`plan not created (${opened.status}): ${JSON.stringify(opened.body)}`);
+  const plan = opened.body.plan;
+  summary.plan = { id: plan.id, revision: plan.revision, hash: plan.hash, base_commit: plan.base_commits?.app, budgets: plan.budgets };
+  summary.run_id = opened.body.run.id;
+  const approved = await api("POST", `/plans/${plan.id}/approvals`, { plan_revision: plan.revision, plan_hash: plan.hash, approved_by: "m3-smoke" });
+  if (approved.status !== 201 && approved.status !== 200) throw new Error(`approval refused (${approved.status}): ${JSON.stringify(approved.body)}`);
+  const implement = await api("POST", `/runs/${summary.run_id}/implement`, { provider: profile.provider, model: profile.model });
+  record(`${name}: exact-hash approval admits one scoped writer`, implement.status === 202 && implement.body.state === "implementing", `approve=${approved.status} implement=${implement.status} state=${implement.body?.state ?? JSON.stringify(implement.body)}`);
+  if (implement.status !== 202) throw new Error(`implementation refused (${implement.status}): ${JSON.stringify(implement.body)}`);
+  const settled = await waitForRunState(summary.run_id, ["validating", "failed", "cancelled", "interrupted", "completed", "paused", "testing_blocked"], (runTimeoutSeconds + 60) * 1000);
+  const events = await eventsOf(summary.run_id);
+  const spawned = events.find((event) => event.type === "pi.spawned")?.payload;
+  summary.writer = {
+    settled_state: settled.state,
+    pi_version: spawned?.pi_version ?? null,
+    tools: spawned?.tools ?? null,
+    scope: spawned?.scope ?? null,
+    provider_credentials: spawned?.provider_credentials ?? null,
+    tool_calls: events.filter((event) => event.type === "pi.tool_execution_start").map((event) => `${event.payload?.toolName}:${event.payload?.args?.path ?? ""}`),
+    blocked_tool_calls: events.filter((event) => event.type === "pi.tool_execution_end" && event.payload?.isError).map((event) => truncate(JSON.stringify(event.payload?.result?.content ?? event.payload?.result), 160)),
+    summary_text: truncate(assistantText(events), 300),
+    failure_reason: settled.state === "validating" ? undefined : events.findLast((event) => event.type.startsWith("run."))?.payload?.reason,
+  };
+  const view = await api("GET", `/runs/${summary.run_id}/candidate`);
+  const candidate = view.body?.evidence?.candidate ?? null;
+  summary.candidate_r1 = candidate ? { revision: candidate.revision, hash: candidate.hash, commits: candidate.commits ?? candidate.commit ?? null, plan_hash: candidate.plan_hash } : null;
+  record(`${name}: writer settled in validating with a frozen candidate bound to the approved plan`, settled.state === "validating" && candidate?.revision === 1 && (candidate?.plan_hash === undefined || candidate.plan_hash === plan.hash) && view.body?.evidence?.status === "pending", `state=${settled.state} revision=${candidate?.revision} status=${view.body?.evidence?.status}${summary.writer.failure_reason ? ` reason=${truncate(summary.writer.failure_reason, 160)}` : ""}`);
+  if (settled.state !== "validating" || !candidate) throw new Error(`no candidate to validate: state ${settled.state}`);
+  return { summary, plan, view: view.body };
+}
+
+async function validate(runId, hash, extra = {}) {
+  return api("POST", `/runs/${runId}/validate`, { candidate_hash: hash, provider: profile.provider, model: profile.model, ...extra });
+}
+
+async function approvedFeatureIsCheckedAndIndependentlyReviewed(name) {
+  const { summary, view } = await approvedCandidate(name);
+  const runId = summary.run_id;
+  const hash = view.evidence.candidate.hash;
+  const diff = await api("GET", `/runs/${runId}/diff`);
+  summary.diff = { status: diff.status, candidate_hash: diff.body?.candidate_hash, base_commit: diff.body?.base_commit, commit: diff.body?.commit, bytes: diff.body?.diff?.length ?? 0, touches: profile.scenarios[name].paths.map((p) => [p, String(diff.body?.diff ?? "").includes(p)]) };
+  record(`${name}: candidate diff is bound to the exact candidate hash and stays inside the approved paths`, diff.status === 200 && diff.body.candidate_hash === hash && summary.diff.touches.every(([, hit]) => hit) && !/^\+\+\+ b\/(?!src\/)/m.test(diff.body.diff ?? "+++ b/src/"), `status=${diff.status} bytes=${summary.diff.bytes}`);
+  const stale = await validate(runId, "sha256:" + "0".repeat(64));
+  record(`${name}: validation names the exact candidate; a stale hash is refused`, stale.status === 409 || stale.status === 422, `status ${stale.status} ${truncate(JSON.stringify(stale.body), 120)}`);
+  const accepted = await validate(runId, hash);
+  record(`${name}: validation of the exact candidate is accepted`, accepted.status === 202, `status ${accepted.status} ${accepted.status === 202 ? "" : JSON.stringify(accepted.body)}`);
+  const reviewStarted = await waitForEvent(runId, (event) => event.type === "review.started", (runTimeoutSeconds + 60) * 1000);
+  const settled = await candidateSettled(runId);
+  const events = await eventsOf(runId);
+  const ev = settled.evidence;
+  summary.validation = describeEvidence(settled, events, reviewStarted);
+  record(`${name}: required check ran in the owned worktree and passed before any review`, ev.results?.length >= 1 && ev.results.every((result) => result.status === "passed") && Boolean(reviewStarted) && events.findIndex((e) => e.type === "candidate.check_finished") < events.findIndex((e) => e.type === "review.started"), JSON.stringify(summarizeResults(ev.results)));
+  record(`${name}: a fresh independent reviewer session reviewed the exact candidate`, Boolean(ev.review) && ev.review.candidate_hash === hash && typeof ev.review.reviewer_session === "string" && ev.review.reviewer_session.startsWith("review-") && reviewStarted?.payload?.reviewer_session === ev.review.reviewer_session && ev.review.reviewer_session !== ev.implementer_session, `reviewer=${ev.review?.reviewer_session} implementer=${ev.implementer_session} verdict=${ev.review?.verdict}`);
+  record(`${name}: candidate reached reviewed with evidence generation 1 and durable usage`, ev.status === "reviewed" && (await api("GET", `/runs/${runId}`)).body.state === "reviewed" && ev.validation_generation === 1 && ev.cost_usd_micros >= 0 && settled.active === false, `status=${ev.status} generation=${ev.validation_generation} cost_usd_micros=${ev.cost_usd_micros} elapsed_seconds=${ev.elapsed_seconds} reason=${truncate(ev.reason ?? "", 160)}`);
+  const again = await validate(runId, hash);
+  record(`${name}: a reviewed candidate is not re-validated in place`, again.status !== 202, `status ${again.status}`);
+  if (mode === "real") note(name, `real reviewer verdict=${ev.review?.verdict} findings=${JSON.stringify(summarizeFindings(ev.review?.findings))}`);
+}
+
+async function failingCheckRequiresManualRepairAndFreshEvidence(name) {
+  const { summary, view } = await approvedCandidate(name);
+  const runId = summary.run_id;
+  const hash1 = view.evidence.candidate.hash;
+  const accepted = await validate(runId, hash1);
+  record(`${name}: validation of the first candidate is accepted`, accepted.status === 202, `status ${accepted.status}`);
+  const first = await candidateSettled(runId);
+  const firstEvents = await eventsOf(runId);
+  summary.validation_r1 = describeEvidence(first, firstEvents, null);
+  const failedCheck = first.evidence.results?.some((result) => result.status === "failed" && typeof result.exit_code === "number" && result.exit_code !== 0);
+  if (first.evidence.status === "reviewed") {
+    if (mode === "real") {
+      note(name, "the real writer satisfied the authoritative test on its first attempt, so the seeded check failure and manual repair path were not exercised with the real provider");
+      record(`${name}: first candidate settled with check evidence`, true, `status=${first.evidence.status} (seeded failure not reproduced with the real writer; see notes)`);
+      return;
+    }
+  }
+  record(`${name}: a failing required check fails the candidate before any review and keeps the run repairable`, first.evidence.status === "failed" && failedCheck && first.evidence.review == null && !firstEvents.some((event) => event.type === "review.started") && first.repair_allowed === true, `status=${first.evidence.status} results=${JSON.stringify(summarizeResults(first.evidence.results))} repair_allowed=${first.repair_allowed}`);
+  const refused = await validate(runId, hash1);
+  record(`${name}: a failed candidate cannot be re-validated; a new revision is required`, refused.status !== 202, `status ${refused.status}`);
+  const repair = await api("POST", `/runs/${runId}/repair`, { candidate_hash: hash1, provider: profile.provider, model: profile.model });
+  record(`${name}: manual repair of the exact failed candidate is admitted through the approval gate`, repair.status === 202, `status ${repair.status} ${repair.status === 202 ? "" : JSON.stringify(repair.body)}`);
+  if (repair.status !== 202) return;
+  const settledRun = await waitForRunState(runId, ["validating", "failed", "cancelled", "interrupted", "paused", "testing_blocked"], (runTimeoutSeconds + 60) * 1000);
+  const second = await api("GET", `/runs/${runId}/candidate`);
+  const hash2 = second.body?.evidence?.candidate?.hash;
+  const repairEvents = await eventsOf(runId);
+  summary.repair = {
+    run_state: settledRun.state,
+    revision: second.body?.evidence?.candidate?.revision,
+    hash: hash2,
+    repair_started: repairEvents.find((event) => event.type === "candidate.repair_started")?.payload ?? null,
+    writer_tool_calls: repairEvents.filter((event) => event.type === "pi.tool_execution_start").slice(summary.writer.tool_calls.length).map((event) => `${event.payload?.toolName}:${event.payload?.args?.path ?? ""}`),
+  };
+  record(`${name}: repair produced candidate revision 2 with a new hash and pending evidence`, settledRun.state === "validating" && second.body?.evidence?.candidate?.revision === 2 && typeof hash2 === "string" && hash2 !== hash1 && second.body.evidence.status === "pending" && second.body.evidence.validation_generation === 0, `state=${settledRun.state} revision=${second.body?.evidence?.candidate?.revision} status=${second.body?.evidence?.status}`);
+  const oldHash = await validate(runId, hash1);
+  record(`${name}: the superseded revision's hash no longer validates`, oldHash.status === 409 || oldHash.status === 422, `status ${oldHash.status}`);
+  const accepted2 = await validate(runId, hash2);
+  record(`${name}: validation of revision 2 is accepted`, accepted2.status === 202, `status ${accepted2.status}`);
+  const reviewStarted = await waitForEvent(runId, (event) => event.type === "review.started", (runTimeoutSeconds + 60) * 1000);
+  const final = await candidateSettled(runId);
+  const finalEvents = await eventsOf(runId);
+  summary.validation_r2 = describeEvidence(final, finalEvents, reviewStarted);
+  const ev = final.evidence;
+  record(`${name}: revision 2 earned fresh check and review evidence and reached reviewed`, ev.candidate.hash === hash2 && ev.results?.every((result) => result.status === "passed") && ev.validation_generation === 1 && Boolean(ev.review) && ev.review.candidate_hash === hash2 && ev.status === "reviewed" && ev.results.every((result) => !first.evidence.results.some((old) => old.id === result.id)), `status=${ev.status} verdict=${ev.review?.verdict} results=${JSON.stringify(summarizeResults(ev.results))} reason=${truncate(ev.reason ?? "", 120)}`);
+  const attempts = (await api("GET", `/runs/${runId}/attempts`)).body;
+  summary.attempts = Array.isArray(attempts) ? attempts.map((attempt) => ({ number: attempt.number, state: attempt.state })) : attempts;
+  record(`${name}: two writer attempts are durably recorded against the shared budget`, Array.isArray(attempts) && attempts.length === 2, `attempts=${JSON.stringify(summary.attempts)}`);
+  if (mode === "real") note(name, `real repair reviewer verdict=${ev.review?.verdict} findings=${JSON.stringify(summarizeFindings(ev.review?.findings))}`);
+}
+
+async function blockingFindingsAreBoundedByAutomaticRepair(name) {
+  const { summary, view } = await approvedCandidate(name);
+  const runId = summary.run_id;
+  const hash1 = view.evidence.candidate.hash;
+  const accepted = await validate(runId, hash1, { auto_repair: true });
+  record(`${name}: validation with bounded automatic repair is accepted`, accepted.status === 202, `status ${accepted.status}`);
+  const final = await candidateSettled(runId, (runTimeoutSeconds * 4 + 120) * 1000);
+  const events = await eventsOf(runId);
+  const ev = final.evidence;
+  const reviews = events.filter((event) => event.type === "candidate.review_finished");
+  const repairs = events.filter((event) => event.type === "candidate.repair_started");
+  summary.outcome = describeEvidence(final, events, events.find((event) => event.type === "review.started"));
+  summary.outcome.reviews_finished = reviews.length;
+  summary.outcome.automatic_repairs = repairs.length;
+  summary.outcome.run_state = (await api("GET", `/runs/${runId}`)).body.state;
+  const blocking = ev.review?.findings?.some((finding) => finding.severity === "blocking");
+  if (mode === "fixture") {
+    record(`${name}: blocking findings never pass; automatic repair stops at the attempt budget and pauses with evidence`, ev.status === "paused" && summary.outcome.run_state === "paused" && ev.candidate.revision === 2 && ev.review?.verdict === "changes_required" && blocking && final.repair_allowed === false && /attempt/.test(ev.reason ?? "") && repairs.length === 1 && reviews.length === 2, `status=${ev.status} revision=${ev.candidate.revision} verdict=${ev.review?.verdict} repairs=${repairs.length} reviews=${reviews.length} reason=${truncate(ev.reason ?? "", 160)}`);
+    return;
+  }
+  // Automatic repair only follows `changes_required` and stops when the repair
+  // writer produces no fresh candidate; a `blocked` verdict pauses at once.
+  const consistent = ev.results?.every((result) => result.status === "passed") && (
+    (ev.status === "reviewed" && ev.review?.verdict === "passed" && !blocking)
+    || (ev.status === "paused" && ev.review?.verdict === "changes_required" && ev.candidate.revision <= 2 && repairs.length === 1)
+    || (ev.status === "paused" && blocking && ev.review?.verdict === "blocked" && ev.candidate.revision === 1 && repairs.length === 0)
+    || (ev.status === "failed")
+  );
+  record(`${name}: the runtime honours the real reviewer's verdict (blocking findings cannot pass; repairs stay within max_attempts=2)`, consistent, `status=${ev.status} revision=${ev.candidate.revision} verdict=${ev.review?.verdict} blocking=${blocking} repair_allowed=${final.repair_allowed} repairs=${repairs.length} reviews=${reviews.length} reason=${truncate(ev.reason ?? "", 160)}`);
+  note(name, ev.review?.verdict && ev.review.verdict !== "passed"
+    ? `the real reviewer did not pass the out-of-scope README requirement (verdict=${ev.review.verdict}, blocking finding=${blocking}): ${JSON.stringify(summarizeFindings(ev.review?.findings))}`
+    : `the real reviewer passed the candidate despite the unmet README requirement (verdict=${ev.review?.verdict}); real non-passing behaviour was not observed in this run, fixture mode proves the runtime path`);
+}
+
+async function cancellationDuringReviewPreservesChecks(name) {
+  const { summary, view } = await approvedCandidate(name);
+  const runId = summary.run_id;
+  const hash = view.evidence.candidate.hash;
+  const accepted = await validate(runId, hash);
+  record(`${name}: validation is accepted`, accepted.status === 202, `status ${accepted.status}`);
+  const reviewStarted = await waitForEvent(runId, (event) => event.type === "review.started", (runTimeoutSeconds + 60) * 1000);
+  const pid = reviewStarted?.payload?.pid;
+  const aliveBefore = typeof pid === "number" && processAlive(pid);
+  const before = await api("GET", `/runs/${runId}/candidate`);
+  const cancel = await api("POST", `/runs/${runId}/cancel`);
+  const settled = await candidateSettled(runId);
+  const events = await eventsOf(runId);
+  const aliveAfter = typeof pid === "number" && processAlive(pid);
+  const ev = settled.evidence;
+  summary.cancellation = { ...describeEvidence(settled, events, reviewStarted), reviewer_pid: pid, status_when_cancelled: before.body?.evidence?.status, active_when_cancelled: before.body?.active, cancel_status: cancel.status, reviewer_alive_before: aliveBefore, reviewer_alive_after: aliveAfter };
+  record(`${name}: cancel reached an in-flight independent review`, Boolean(reviewStarted) && before.body?.active === true && cancel.status === 202, `status_when_cancelled=${before.body?.evidence?.status} active=${before.body?.active} cancel=${cancel.status}`);
+  record(`${name}: cancelled candidate keeps its identity and passed checks, has no review and is not repairable`, ev.status === "cancelled" && ev.candidate.hash === hash && ev.results?.every((result) => result.status === "passed") && ev.review == null && /cancelled/.test(ev.reason ?? "") && settled.repair_allowed === false && (await api("GET", `/runs/${runId}`)).body.state === "cancelled", `status=${ev.status} reason=${truncate(ev.reason ?? "", 120)} repair_allowed=${settled.repair_allowed}`);
+  record(`${name}: owned reviewer child was alive before cancel and reaped before the candidate settled`, aliveBefore && !aliveAfter, `pid=${pid} alive_before=${aliveBefore} alive_after=${aliveAfter}`);
+  const again = await validate(runId, hash);
+  record(`${name}: a cancelled candidate is not re-validated`, again.status !== 202, `status ${again.status}`);
+}
+
+async function hardKillDuringReviewReservesSpend(name) {
+  const earlier = {};
+  for (const [label, item] of Object.entries(evidence.scenarios)) if (item.run_id && label !== name) earlier[item.run_id] = JSON.stringify((await api("GET", `/runs/${item.run_id}/candidate`)).body);
+  const { summary, view, plan } = await approvedCandidate(name);
+  const runId = summary.run_id;
+  const hash = view.evidence.candidate.hash;
+  const accepted = await validate(runId, hash);
+  record(`${name}: validation is accepted`, accepted.status === 202, `status ${accepted.status}`);
+  const reviewStarted = await waitForEvent(runId, (event) => event.type === "review.started", (runTimeoutSeconds + 60) * 1000);
+  const pid = reviewStarted?.payload?.pid;
+  const before = await api("GET", `/runs/${runId}/candidate`);
+  const costBefore = before.body?.evidence?.cost_usd_micros ?? 0;
+  runtime.kill("SIGKILL");
+  await waitForExit(runtime, 10_000);
+  // The synthetic reviewer holds for 60s without reading stdin, so only a real Pi child can notice the closed pipe promptly.
+  const childExit = await waitUntil(() => typeof pid !== "number" || !processAlive(pid), mode === "fixture" ? 75_000 : 20_000);
+  const orphaned = typeof pid === "number" && processAlive(pid);
+  if (orphaned) { try { process.kill(pid, "SIGKILL"); } catch { /* already gone */ } }
+  runtime = await startRuntime("restarted");
+  const after = await candidateSettled(runId);
+  const events = await eventsOf(runId);
+  const ev = after.evidence;
+  let preserved = true;
+  for (const [id, snapshot] of Object.entries(earlier)) preserved &&= JSON.stringify((await api("GET", `/runs/${id}/candidate`)).body) === snapshot;
+  summary.restart = { ...describeEvidence(after, events, reviewStarted), reviewer_pid: pid, status_before_kill: before.body?.evidence?.status, cost_usd_micros_before_kill: costBefore, reviewer_exited_after_ms: childExit.elapsed, reviewer_orphaned: orphaned, earlier_candidates_compared: Object.keys(earlier).length, approved_cost_budget: plan.budgets?.cost_usd_micros };
+  record(`${name}: restart marks the in-flight review interrupted and preserves the frozen candidate and its passed checks`, before.body?.evidence?.status === "reviewing" && ev.status === "interrupted" && (await api("GET", `/runs/${runId}`)).body.state === "interrupted" && ev.candidate.hash === hash && ev.results?.every((result) => result.status === "passed") && ev.review == null && ev.validation_generation === 1, `before=${before.body?.evidence?.status} after=${ev.status} generation=${ev.validation_generation}`);
+  record(`${name}: unknown provider spend is reserved against the approved cost budget and re-validation is refused`, /unreported provider spend/.test(ev.reason ?? "") && ev.cost_usd_micros > costBefore && (await validate(runId, hash)).status !== 202 && /budget/.test((await validate(runId, hash)).body?.error ?? ""), `cost_before=${costBefore} cost_after=${ev.cost_usd_micros} budget=${plan.budgets?.cost_usd_micros} reason=${truncate(ev.reason ?? "", 160)}`);
+  record(`${name}: reviewer child exits after the runtime is hard-killed (stdin closed)`, !orphaned, `pid=${pid} exited_after_ms=${childExit.elapsed} orphaned=${orphaned}`);
+  record(`${name}: earlier candidate evidence survives the restart byte-for-byte`, preserved && Object.keys(earlier).length >= 3, `earlier_candidates_compared=${Object.keys(earlier).length}`);
+}
+
+async function developerCheckoutUntouched() {
+  const git = (...args) => execFileSync("git", ["-C", fixtureRepo, ...args], { encoding: "utf8" }).trim();
+  const head = git("rev-parse", "HEAD");
+  const tracked = git("status", "--porcelain", "--untracked-files=no");
+  const untracked = git("status", "--porcelain").split("\n").filter((line) => line.startsWith("??"));
+  const worktrees = Object.values(evidence.scenarios).map((item) => item.run_id).filter(Boolean);
+  evidence.developer_checkout = { head_before: developerHead, head_after: head, tracked_changes: tracked, untracked: untracked, runs: worktrees.length };
+  record("developer checkout HEAD and tracked content are untouched by every writer, check, repair and review", head === developerHead && tracked === "", `head=${head.slice(0, 12)} tracked_changes=${JSON.stringify(tracked)} untracked=${JSON.stringify(untracked)}`);
+}
+
+async function gracefulShutdown() {
+  const signal = process.platform === "win32" ? "SIGINT" : "SIGTERM";
+  runtime.kill(signal);
+  const exit = await waitForExit(runtime, 15_000);
+  record(`${signal} performs an orderly shutdown`, exit.exited && runtime.exitCode === 0, `exited=${exit.exited} code=${runtime.exitCode} after ${exit.elapsed}ms`);
+  if (!exit.exited) runtime.kill("SIGKILL");
+}
+
+// ---------------------------------------------------------------------------
+
+async function api(method, route, body) {
+  const response = await fetch(`${base}/api/v1${route}`, {
+    method,
+    headers: { Authorization: `Bearer ${token}`, ...(body ? { "Content-Type": "application/json" } : {}) },
+    body: body ? JSON.stringify(body) : undefined,
+  });
+  const text = await response.text();
+  let parsed = null;
+  try { parsed = JSON.parse(text); } catch { parsed = text; }
+  return { status: response.status, body: parsed };
+}
+
+async function eventsOf(id) {
+  const { body } = await api("GET", `/runs/${id}/events?after=0`);
+  return Array.isArray(body) ? body : [];
+}
+
+async function waitForRunState(id, states, timeoutMs) {
+  const deadline = Date.now() + timeoutMs;
+  while (Date.now() < deadline) {
+    const { body } = await api("GET", `/runs/${id}`);
+    if (states.includes(body.state)) return body;
+    await sleep(200);
+  }
+  throw new Error(`run ${id} did not reach ${states.join("/")} within ${timeoutMs}ms`);
+}
+
+async function candidateSettled(id, timeoutMs = (runTimeoutSeconds * 2 + 120) * 1000) {
+  const deadline = Date.now() + timeoutMs;
+  while (Date.now() < deadline) {
+    const { body } = await api("GET", `/runs/${id}/candidate`);
+    if (body?.active === false && body.evidence && !["pending", "validating", "reviewing"].includes(body.evidence.status)) return body;
+    await sleep(200);
+  }
+  throw new Error(`candidate of ${id} did not settle within ${timeoutMs}ms: ${JSON.stringify((await api("GET", `/runs/${id}/candidate`)).body)}`);
+}
+
+async function waitForEvent(id, predicate, timeoutMs) {
+  const deadline = Date.now() + timeoutMs;
+  while (Date.now() < deadline) {
+    const events = await eventsOf(id);
+    const found = events.find(predicate);
+    if (found) return found;
+    const { body } = await api("GET", `/runs/${id}/candidate`);
+    if (body?.active === false && body.evidence && !["pending", "validating", "reviewing"].includes(body.evidence.status)) return null;
+    await sleep(100);
+  }
+  return null;
+}
+
+function describeEvidence(view, events, reviewStarted) {
+  const ev = view.evidence ?? {};
+  return {
+    status: ev.status,
+    active: view.active,
+    repair_allowed: view.repair_allowed,
+    candidate: ev.candidate ? { revision: ev.candidate.revision, hash: ev.candidate.hash } : null,
+    implementer_session: ev.implementer_session,
+    validation_generation: ev.validation_generation,
+    elapsed_seconds: ev.elapsed_seconds,
+    cost_usd_micros: ev.cost_usd_micros,
+    reason: ev.reason ?? null,
+    results: summarizeResults(ev.results),
+    review: ev.review ? { id: ev.review.id, reviewer_session: ev.review.reviewer_session, candidate_hash: ev.review.candidate_hash, verdict: ev.review.verdict, findings: summarizeFindings(ev.review.findings), evidence: (ev.review.evidence ?? []).map((item) => truncate(item, 200)) } : null,
+    review_started: reviewStarted ? { reviewer_session: reviewStarted.payload?.reviewer_session, candidate_hash: reviewStarted.payload?.candidate_hash } : null,
+    // The reviewer's own transcript is not persisted in the run stream; only its verdict, findings and evidence are.
+    event_types: events.map((event) => event.type),
+  };
+}
+
+function summarizeResults(results) {
+  return (Array.isArray(results) ? results : []).map((result) => ({ id: result.id, recipe_id: result.recipe_id, status: result.status, exit_code: result.exit_code ?? null, tests_detected: result.tests_detected ?? null, reason: result.reason ?? null, artifacts: result.artifact_refs?.length ?? 0 }));
+}
+
+function summarizeFindings(findings) {
+  return (Array.isArray(findings) ? findings : []).map((finding) => ({ severity: finding.severity, path: finding.path, line: finding.line, explanation: truncate(finding.explanation, 240) }));
+}
+
+function assistantText(events) {
+  let finalText = "";
+  for (const event of events) {
+    const message = event.payload?.message;
+    if (event.type === "pi.message_end" && message?.role === "assistant" && Array.isArray(message.content)) {
+      finalText = message.content.filter((part) => part?.type === "text" && typeof part.text === "string").map((part) => part.text).join("\n");
+    }
+  }
+  return finalText;
+}
+
+function processAlive(pid) {
+  try { process.kill(pid, 0); return true; } catch (error) { return error.code === "EPERM"; }
+}
+
+async function waitForExit(child, timeoutMs) {
+  const startedAt = Date.now();
+  while (Date.now() - startedAt < timeoutMs) {
+    if (child.exitCode !== null || child.signalCode !== null) return { exited: true, elapsed: Date.now() - startedAt };
+    await sleep(50);
+  }
+  return { exited: false, elapsed: Date.now() - startedAt };
+}
+
+async function waitUntil(predicate, timeoutMs) {
+  const startedAt = Date.now();
+  while (Date.now() - startedAt < timeoutMs) {
+    if (predicate()) return { satisfied: true, elapsed: Date.now() - startedAt };
+    await sleep(50);
+  }
+  return { satisfied: false, elapsed: Date.now() - startedAt };
+}
+
+
+function environment() {
+  const info = { platform: `${platform()} ${release()} ${arch()}`, node: process.version, pi_launcher: profile.pi, pi_launcher_args: profile.piArgs, provider: profile.provider, model: profile.model, required_check: profile.checks.map((check) => [check.executable, ...check.args.map((arg) => truncate(arg, 40))].join(" ")) };
+  try { info.git_revision = execFileSync("git", ["rev-parse", "HEAD"], { cwd: repository, encoding: "utf8" }).trim(); } catch { info.git_revision = "unknown"; }
+  try { info.git_dirty = execFileSync("git", ["status", "--porcelain"], { cwd: repository, encoding: "utf8" }).trim().length > 0; } catch { info.git_dirty = null; }
+  try { info.python_version = execFileSync(python, ["--version"], { encoding: "utf8" }).trim(); } catch (error) { info.python_version = `unavailable: ${error.message}`; }
+  if (mode === "real") {
+    try { info.pi_version = execFileSync(profile.pi, [...profile.piArgs, "--version"], { encoding: "utf8" }).trim(); } catch (error) { info.pi_version = `unavailable: ${error.message}`; }
+  } else {
+    info.pi_version = "synthetic fixture reporting 1.3.0";
+  }
+  info.provider_credentials_present = CREDENTIAL_NAMES.filter((name) => process.env[name] !== undefined || process.env[`LUUNA_PI_${name}`] !== undefined).map((name) => process.env[`LUUNA_PI_${name}`] !== undefined ? `LUUNA_PI_${name} (alias)` : name);
+  try { info.runtime_binary_mtime = statSync(runtimeBinary).mtime.toISOString(); } catch { info.runtime_binary_mtime = "unknown"; }
+  return info;
+}
+
+/** Scan everything the harness wrote (report, runtime logs, durable state) for configured credential values; the values themselves are never recorded. */
+function scanForCredentialValues() {
+  const values = [token, ...CREDENTIAL_NAMES.flatMap((name) => [process.env[name], process.env[`LUUNA_PI_${name}`]])].filter((value) => typeof value === "string" && value.length >= 8);
+  const files = [];
+  const walk = (dir) => {
+    for (const entry of readdirSafe(dir)) {
+      const full = path.join(dir, entry.name);
+      if (entry.isDirectory()) { if (entry.name !== "worktrees") walk(full); } else if (entry.isFile() && !full.startsWith(fixtureRepo)) files.push(full);
+    }
+  };
+  walk(out);
+  let leaks = 0;
+  const leaking = [];
+  const reportText = JSON.stringify(evidence) + markdown({ ...evidence, verdict: "" });
+  for (const value of values) if (reportText.includes(value)) { leaks += 1; leaking.push("report"); }
+  for (const file of files) {
+    let content;
+    try { content = readFileSync(file, "latin1"); } catch { continue; }
+    for (const value of values) if (content.includes(value)) { leaks += 1; leaking.push(path.relative(out, file)); }
+  }
+  return { values_checked: values.length, files_scanned: files.length, leaks, leaking_files: [...new Set(leaking)] };
+}
+
+function readdirSafe(dir) {
+  try { return existsSync(dir) ? readdirSync(dir, { withFileTypes: true }) : []; } catch { return []; }
+}
+
+function record(name, ok, detail) {
+  checks.push({ name, ok, detail });
+  console.log(`${ok ? "PASS" : "FAIL"}  ${name}${detail ? ` — ${detail}` : ""}`);
+}
+
+function note(scenarioName, text) {
+  notes.push({ scenario: scenarioName, note: text });
+  console.log(`NOTE  ${scenarioName}: ${text}`);
+}
+
+function truncate(value, length = 200) {
+  const text = String(value ?? "");
+  return text.length > length ? `${text.slice(0, length)}…` : text;
+}
+
+function markdown(report) {
+  const lines = [
+    `# Luuna M3 smoke report (${report.mode} mode)`,
+    "",
+    `Verdict: **${report.verdict}**`,
+    "",
+    `Started ${report.started_at}, finished ${report.finished_at}. Runtime binary \`${report.runtime_binary}\`, port ${report.port}.`,
+    "",
+    "## Environment",
+    "",
+    ...Object.entries(report.environment ?? {}).map(([key, value]) => `- ${key}: ${JSON.stringify(value)}`),
+    "",
+    "## Checks",
+    "",
+    "| Result | Check | Detail |",
+    "| --- | --- | --- |",
+    ...report.checks.map((check) => `| ${check.ok ? "pass" : "FAIL"} | ${escape(check.name)} | ${escape(check.detail ?? "")} |`),
+    "",
+    "## Notes (best-effort observations that do not decide the verdict)",
+    "",
+    ...(report.notes?.length ? report.notes.map((item) => `- ${item.scenario}: ${escape(item.note)}`) : ["- none"]),
+    "",
+    "## Baseline",
+    "",
+    "```json", JSON.stringify(report.baseline ?? null, null, 2), "```",
+    "",
+    "## Scenarios",
+    "",
+  ];
+  for (const [label, item] of Object.entries(report.scenarios ?? {})) {
+    lines.push(`### ${label}`, "", "```json", JSON.stringify(item, null, 2), "```", "");
+  }
+  lines.push("## Developer checkout", "", "```json", JSON.stringify(report.developer_checkout ?? null, null, 2), "```", "");
+  return lines.join("\n");
+}
+
+function escape(text) {
+  return String(text).replace(/\|/g, "\\|").replace(/\n/g, " ");
+}
+
+function parseArguments(argv) {
+  const parsed = {};
+  for (let index = 0; index < argv.length; index += 1) {
+    const argument = argv[index];
+    if (!argument.startsWith("--")) fail(`unexpected argument ${argument}`);
+    const key = argument.slice(2);
+    const next = argv[index + 1];
+    if (next === undefined || next.startsWith("--")) { parsed[key] = true; } else { parsed[key] = next; index += 1; }
+  }
+  return parsed;
+}
+
+function fail(message) {
+  console.error(`m3-smoke: ${message}`);
+  process.exit(2);
+}

@@ -10,7 +10,12 @@ response only acknowledges acceptance.
 framing, Unicode separators, acceptance versus completion, unknown events,
 rejected commands, provider errors, recovery, crashes, malformed records,
 response correlation, and cancellation without network or credentials. It is
-never a genuine model run or evidence of provider compatibility.
+never a genuine model run or evidence of provider compatibility. Writer
+scenarios are named by `fixture:<name>` markers that tests place in the
+acceptance criteria; the reviewer branch answers `fixture:review_*` markers
+with a structured verdict. The `repair_in_scope` writer only repairs when its
+prompt quotes the failing check output, so the runtime's repair feedback
+contract is exercised rather than assumed.
 
 The real compatibility probe is `cargo run -p luuna-engine-pi --example probe`.
 Set `LUUNA_PI_COMMAND` to the installed `pi` executable, or to Node and provide

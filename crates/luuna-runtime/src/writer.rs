@@ -19,8 +19,8 @@ use axum::{
 use chrono::{SecondsFormat, Utc};
 use luuna_domain::{
     check_scope, valid_project_id, Approval, AttemptState, BudgetUsage, Budgets, CandidateSet,
-    CheckRecipe, ExecutionProfile, LeaseState, Operation, Permissions, PlanRevision, PlanTask,
-    RunState, Ticket, TicketSource, WorktreeLease, CANONICALIZATION, SCHEMA_VERSION,
+    CheckRecipe, CheckStatus, ExecutionProfile, LeaseState, Operation, Permissions, PlanRevision,
+    PlanTask, RunState, Ticket, TicketSource, WorktreeLease, CANONICALIZATION, SCHEMA_VERSION,
 };
 use luuna_engine_pi::{
     install_scope_guard, PiConfig, PiProcess, SessionProfile, WriterProfile, PI_VERSION,
@@ -522,7 +522,16 @@ async fn schedule_writer(
             .current_candidate(&id)
             .map_err(internal)?
             .ok_or_else(|| conflict("candidate missing"))?;
-        (Some(evidence.candidate.clone()),Some(format!("Repair feedback: {}",serde_json::to_string(&json!({"reason":evidence.reason,"checks":evidence.results,"review":evidence.review})).map_err(internal)?)))
+        drop(store);
+        let check_output = repair_check_output(&state, &id, &evidence);
+        (
+            Some(evidence.candidate.clone()),
+            Some(format!(
+                "Repair feedback: {}",
+                serde_json::to_string(&json!({"reason":evidence.reason,"checks":evidence.results,"check_output":check_output,"review":evidence.review}))
+                    .map_err(internal)?
+            )),
+        )
     } else {
         (None, None)
     };
@@ -775,6 +784,70 @@ fn bounded(value: Value) -> Value {
         }
         other => other,
     }
+}
+
+/// Bytes of each failed check log quoted back to a repair writer. The writer
+/// has no shell and cannot read private artifacts, so the feedback must carry
+/// the failure itself, not only an exit code and artifact identities.
+const REPAIR_OUTPUT_TAIL_BYTES: usize = 2048;
+
+/// The tail of every failed required check's recorded stdout/stderr, keyed by
+/// artifact identity. Missing or empty logs are omitted; nothing outside the
+/// run's private artifact directory is ever read.
+fn repair_check_output(
+    state: &AppState,
+    run_id: &str,
+    evidence: &luuna_domain::CandidateEvidence,
+) -> serde_json::Map<String, Value> {
+    let artifact_dir = crate::baselines::artifact_dir(state, run_id);
+    let mut output = serde_json::Map::new();
+    for result in evidence
+        .results
+        .iter()
+        .filter(|result| result.status != CheckStatus::Passed)
+    {
+        for reference in &result.artifact_refs {
+            let safe = !reference.is_empty()
+                && reference.len() <= 128
+                && !reference.contains("..")
+                && reference
+                    .bytes()
+                    .all(|b| b.is_ascii_alphanumeric() || b == b'-' || b == b'_' || b == b'.');
+            if !safe {
+                continue;
+            }
+            let Some((bytes, truncated)) =
+                read_tail(&artifact_dir.join(format!("{reference}.log")))
+            else {
+                continue;
+            };
+            let tail = String::from_utf8_lossy(&bytes).trim().to_owned();
+            if !tail.is_empty() {
+                let text = if truncated {
+                    format!("…{tail}")
+                } else {
+                    tail
+                };
+                output.insert(reference.clone(), Value::String(text));
+            }
+        }
+    }
+    output
+}
+
+/// Reads at most the last `REPAIR_OUTPUT_TAIL_BYTES` of a log without loading
+/// the whole file; the flag says whether earlier content was skipped.
+fn read_tail(path: &FsPath) -> Option<(Vec<u8>, bool)> {
+    use std::io::{Read, Seek, SeekFrom};
+    let mut file = std::fs::File::open(path).ok()?;
+    let len = file.metadata().ok()?.len();
+    let skip = len.saturating_sub(REPAIR_OUTPUT_TAIL_BYTES as u64);
+    file.seek(SeekFrom::Start(skip)).ok()?;
+    let mut bytes = Vec::with_capacity(REPAIR_OUTPUT_TAIL_BYTES);
+    file.take(REPAIR_OUTPUT_TAIL_BYTES as u64)
+        .read_to_end(&mut bytes)
+        .ok()?;
+    Some((bytes, skip > 0))
 }
 
 fn writer_system_prompt(job: &WriterJob, worktree: &FsPath) -> String {

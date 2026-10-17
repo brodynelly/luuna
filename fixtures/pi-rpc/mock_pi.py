@@ -116,9 +116,12 @@ def run_writer(request_id, kind, scenario, prompt):
         repairing = "Repair feedback:" in prompt or "Repair feedback:" in (flag("--system-prompt") or "")
         write_file("src/main.py", "print('revised by the synthetic repair writer')\n" if repairing else "print('implemented by the synthetic writer')\n")
     elif scenario in ("repair_in_scope", "repair_hold"):
-        repaired = "Repair feedback:" in prompt or "Repair feedback:" in (flag("--system-prompt") or "")
-        if scenario == "repair_hold" and repaired:
+        repairing = "Repair feedback:" in prompt or "Repair feedback:" in (flag("--system-prompt") or "")
+        if scenario == "repair_hold" and repairing:
             time.sleep(60)
+        # The synthetic repair writer only fixes what it can see: the runtime
+        # must quote the failing check output, not just an exit code.
+        repaired = repairing and "test result: FAILED" in prompt
         write_file("src/main.py", "print('repaired by the synthetic writer')\n" if repaired else "print('seeded regression')\n")
     elif scenario == "extension_error":
         send({"type": "extension_error", "extensionPath": "luuna-scope-guard.js",

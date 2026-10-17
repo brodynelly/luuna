@@ -68,7 +68,7 @@ In another terminal, run `npm run dev` and open `http://127.0.0.1:1420`, or use 
 
 Without a provider key, fixture/protocol checks and the UI connection remain useful, but no successful genuine model run can be claimed. A no-credential error is evidence for the failure path only.
 
-With a built runtime and the private settings exported, `node scripts/m1-smoke.mjs --mode real --provider <provider> --model <model>` runs the M1 checklist end to end and writes a sanitized report (no token or credential values). `--mode fixture` exercises the harness itself against the synthetic fixture and is labeled as such.
+With a built runtime and the private settings exported, `node scripts/m1-smoke.mjs --mode real --provider <provider> --model <model>` runs the M1 checklist end to end and writes a sanitized report (no token or credential values). `--mode fixture` exercises the harness itself against the synthetic fixture and is labeled as such. `node scripts/m3-smoke.mjs` does the same for the M3 checklist (approved writer, required checks, fresh independent review, seeded failure and repair, blocking findings, cancellation, hard-kill recovery) on a disposable Python fixture repository; it needs Python 3 and Git on the host and `--pi`/`--pi-args-json` when Pi is launched through Node. Keep every report outside Git.
 
 ## Review and evidence
 
