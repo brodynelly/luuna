@@ -18,7 +18,7 @@
 import { spawn, execFileSync } from "node:child_process";
 import { mkdirSync, writeFileSync, readFileSync, readdirSync, statSync, existsSync } from "node:fs";
 import { randomBytes } from "node:crypto";
-import { tmpdir, platform, release, arch } from "node:os";
+import { tmpdir, platform, release, arch, devNull } from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import process from "node:process";
@@ -47,7 +47,9 @@ const CREDENTIAL_NAMES = ["ANTHROPIC_API_KEY", "OPENAI_API_KEY", "GEMINI_API_KEY
 // writer produces first. Real mode: a Python unittest suite is the required
 // check; the farewell ticket deliberately disagrees with the authoritative
 // test so the first candidate fails and repair must produce a fresh revision.
-const FIXTURE_CHECK = "import pathlib,sys; t=pathlib.Path('src/main.py').read_text(); f='seeded regression' in t; print('running 1 tests'); print('test result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured' if f else 'test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured'); sys.exit(1 if f else 0)";
+// The failure marker is assembled at run time so it appears only in the check
+// output, never in the recorded command the repair feedback already quotes.
+const FIXTURE_CHECK = "import pathlib,sys; t=pathlib.Path('src/main.py').read_text(); f='seeded regression' in t; print('running 1 tests'); print('test result: ' + ('FAILED. 0 passed; 1 failed; 0 ignored; 0 measured' if f else 'ok. 1 passed; 0 failed; 0 ignored; 0 measured')); sys.exit(1 if f else 0)";
 const REAL_TESTS = `import unittest
 from src.greeting import greeting
 from src.farewell import farewell
@@ -208,12 +210,16 @@ async function startRuntime(label) {
 
 function createFixtureRepository() {
   mkdirSync(fixtureRepo, { recursive: true });
-  const git = (...args) => execFileSync("git", ["-C", fixtureRepo, ...args], {
-    encoding: "utf8",
-    env: { ...process.env, GIT_AUTHOR_NAME: "Fixture", GIT_AUTHOR_EMAIL: "fixture@example.invalid", GIT_COMMITTER_NAME: "Fixture", GIT_COMMITTER_EMAIL: "fixture@example.invalid" },
-  }).trim();
+  // Isolated Git: no user/system configuration, no inherited hooks or
+  // templates, and no provider credentials in the environment of any hook.
+  const noHooks = path.join(out, "no-hooks");
+  mkdirSync(noHooks, { recursive: true });
+  const env = { ...process.env, GIT_CONFIG_NOSYSTEM: "1", GIT_CONFIG_GLOBAL: devNull, GIT_TEMPLATE_DIR: noHooks, GIT_AUTHOR_NAME: "Fixture", GIT_AUTHOR_EMAIL: "fixture@example.invalid", GIT_COMMITTER_NAME: "Fixture", GIT_COMMITTER_EMAIL: "fixture@example.invalid" };
+  for (const name of CREDENTIAL_NAMES) { delete env[name]; delete env[`LUUNA_PI_${name}`]; }
+  const git = (...args) => execFileSync("git", ["-C", fixtureRepo, "-c", `core.hooksPath=${noHooks}`, "-c", "commit.gpgsign=false", ...args], { encoding: "utf8", env }).trim();
   git("init", "-q", "-b", "main");
   git("config", "commit.gpgsign", "false");
+  git("config", "core.hooksPath", noHooks);
   for (const [relative, content] of Object.entries(profile.files)) {
     const target = path.join(fixtureRepo, relative);
     mkdirSync(path.dirname(target), { recursive: true });
@@ -334,11 +340,9 @@ async function failingCheckRequiresManualRepairAndFreshEvidence(name) {
   summary.validation_r1 = describeEvidence(first, firstEvents, null);
   const failedCheck = first.evidence.results?.some((result) => result.status === "failed" && typeof result.exit_code === "number" && result.exit_code !== 0);
   if (first.evidence.status === "reviewed") {
-    if (mode === "real") {
-      note(name, "the real writer satisfied the authoritative test on its first attempt, so the seeded check failure and manual repair path were not exercised with the real provider");
-      record(`${name}: first candidate settled with check evidence`, true, `status=${first.evidence.status} (seeded failure not reproduced with the real writer; see notes)`);
-      return;
-    }
+    // The seeded failure must happen: a run that skipped repair cannot claim the repair exit.
+    record(`${name}: the seeded required-check failure was reproduced`, false, `status=${first.evidence.status}: the writer pre-empted the seeded failure, so failed command, repair admission, revision 2 and fresh evidence were not exercised in this run`);
+    return;
   }
   record(`${name}: a failing required check fails the candidate before any review and keeps the run repairable`, first.evidence.status === "failed" && failedCheck && first.evidence.review == null && !firstEvents.some((event) => event.type === "review.started") && first.repair_allowed === true, `status=${first.evidence.status} results=${JSON.stringify(summarizeResults(first.evidence.results))} repair_allowed=${first.repair_allowed}`);
   const refused = await validate(runId, hash1);
@@ -400,7 +404,6 @@ async function blockingFindingsAreBoundedByAutomaticRepair(name) {
     (ev.status === "reviewed" && ev.review?.verdict === "passed" && !blocking)
     || (ev.status === "paused" && ev.review?.verdict === "changes_required" && ev.candidate.revision <= 2 && repairs.length === 1)
     || (ev.status === "paused" && blocking && ev.review?.verdict === "blocked" && ev.candidate.revision === 1 && repairs.length === 0)
-    || (ev.status === "failed")
   );
   record(`${name}: the runtime honours the real reviewer's verdict (blocking findings cannot pass; repairs stay within max_attempts=2)`, consistent, `status=${ev.status} revision=${ev.candidate.revision} verdict=${ev.review?.verdict} blocking=${blocking} repair_allowed=${final.repair_allowed} repairs=${repairs.length} reviews=${reviews.length} reason=${truncate(ev.reason ?? "", 160)}`);
   note(name, ev.review?.verdict && ev.review.verdict !== "passed"
@@ -473,7 +476,15 @@ async function developerCheckoutUntouched() {
 }
 
 async function gracefulShutdown() {
-  const signal = process.platform === "win32" ? "SIGINT" : "SIGTERM";
+  if (process.platform === "win32") {
+    // Node's kill() terminates unconditionally on Windows, so this harness cannot
+    // deliver a console control event and does not claim an orderly Windows shutdown.
+    note("shutdown", "orderly shutdown is not established on Windows by this harness; the runtime was terminated");
+    runtime.kill();
+    await waitForExit(runtime, 15_000);
+    return;
+  }
+  const signal = "SIGTERM";
   runtime.kill(signal);
   const exit = await waitForExit(runtime, 15_000);
   record(`${signal} performs an orderly shutdown`, exit.exited && runtime.exitCode === 0, `exited=${exit.exited} code=${runtime.exitCode} after ${exit.elapsed}ms`);
@@ -609,14 +620,14 @@ function environment() {
   return info;
 }
 
-/** Scan everything the harness wrote (report, runtime logs, durable state) for configured credential values; the values themselves are never recorded. */
+/** Scan everything the harness wrote (report, runtime logs, durable state including managed worktrees and artifacts) for configured credential values; the values themselves are never recorded. */
 function scanForCredentialValues() {
   const values = [token, ...CREDENTIAL_NAMES.flatMap((name) => [process.env[name], process.env[`LUUNA_PI_${name}`]])].filter((value) => typeof value === "string" && value.length >= 8);
   const files = [];
   const walk = (dir) => {
     for (const entry of readdirSafe(dir)) {
       const full = path.join(dir, entry.name);
-      if (entry.isDirectory()) { if (entry.name !== "worktrees") walk(full); } else if (entry.isFile() && !full.startsWith(fixtureRepo)) files.push(full);
+      if (entry.isDirectory()) { if (entry.name !== ".git") walk(full); } else if (entry.isFile() && !full.startsWith(fixtureRepo) && fileSize(full) <= 8 * 1024 * 1024) files.push(full);
     }
   };
   walk(out);
@@ -630,6 +641,10 @@ function scanForCredentialValues() {
     for (const value of values) if (content.includes(value)) { leaks += 1; leaking.push(path.relative(out, file)); }
   }
   return { values_checked: values.length, files_scanned: files.length, leaks, leaking_files: [...new Set(leaking)] };
+}
+
+function fileSize(file) {
+  try { return statSync(file).size; } catch { return Infinity; }
 }
 
 function readdirSafe(dir) {

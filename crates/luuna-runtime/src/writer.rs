@@ -821,7 +821,7 @@ fn repair_check_output(
             else {
                 continue;
             };
-            let tail = String::from_utf8_lossy(&bytes).trim().to_owned();
+            let tail = redact_known_secrets(String::from_utf8_lossy(&bytes).trim(), state);
             if !tail.is_empty() {
                 let text = if truncated {
                     format!("…{tail}")
@@ -830,6 +830,31 @@ fn repair_check_output(
                 };
                 output.insert(reference.clone(), Value::String(text));
             }
+        }
+    }
+    output
+}
+
+/// Replaces every configured provider credential value and the service token
+/// with a marker before check output leaves the private artifact store for a
+/// model prompt. The executor already strips these from the check environment;
+/// this covers a repository command that echoes them from a file.
+fn redact_known_secrets(text: &str, state: &AppState) -> String {
+    let mut secrets: Vec<String> = luuna_engine_pi::PROVIDER_KEY_VARIABLES
+        .iter()
+        .flat_map(|name| {
+            [
+                std::env::var(format!("LUUNA_PI_{name}")).ok(),
+                std::env::var(name).ok(),
+            ]
+        })
+        .flatten()
+        .collect();
+    secrets.push(state.config.token.clone());
+    let mut output = text.to_owned();
+    for secret in secrets.iter().filter(|secret| secret.len() >= 8) {
+        if output.contains(secret.as_str()) {
+            output = output.replace(secret.as_str(), "[redacted credential]");
         }
     }
     output
