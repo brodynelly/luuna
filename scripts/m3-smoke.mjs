@@ -47,6 +47,16 @@ def forward(signum, frame):
         pass
 for signum in (signal.SIGINT, signal.SIGTERM, signal.SIGHUP):
     signal.signal(signum, forward)
+def kill_strays(signum, frame):
+    # Runs while the reaping loop below is paused, so no listed child can be
+    # reaped (freeing its PID for reuse) between listing and signalling it.
+    for pid in children():
+        if pid != harness:
+            try:
+                os.kill(pid, signal.SIGKILL)
+            except ProcessLookupError:
+                pass
+signal.signal(signal.SIGUSR1, kill_strays)
 def children():
     found = []
     for task in os.listdir("/proc/self/task"):
@@ -383,6 +393,12 @@ evidence.stray_processes = strays;
 const checkoutAfter = checkoutState();
 try { checkoutAfter.build_identity = buildIdentity(); } catch (error) { checkoutAfter.build_identity = `unavailable: ${error.message}`; }
 evidence.checkout_after_run = checkoutAfter;
+// The developer (fixture) checkout is compared again too: a check's detached descendant could
+// have changed it after the in-run comparison and before it was killed.
+let fixtureAfter;
+try { fixtureAfter = fixtureCheckoutState(); } catch (error) { fixtureAfter = { error: error.message }; }
+evidence.developer_checkout_after_run = fixtureAfter;
+record("the developer checkout was still untouched once every process of the run had stopped", fixtureAfter.head !== undefined && fixtureAfter.head === developerHead && fixtureAfter.tracked === "" && JSON.stringify(fixtureAfter.untracked) === JSON.stringify(untrackedAfterBaseline ?? []), fixtureAfter.error ? `unreadable: ${fixtureAfter.error}` : `head=${String(fixtureAfter.head).slice(0, 12)} tracked_changes=${JSON.stringify(fixtureAfter.tracked)} untracked=${JSON.stringify(fixtureAfter.untracked)}`);
 const sameMetadata = checkoutAfter.git_metadata_digest.startsWith("sha256:") && checkoutAfter.git_metadata_digest === evidence.environment?.git_metadata_digest;
 const sameIgnored = checkoutAfter.ignored_digest.startsWith("sha256:") && checkoutAfter.ignored_digest === evidence.environment?.ignored_digest;
 record("the Luuna checkout was still the recorded revision, clean, with the same build inputs, Git metadata and ignored files once every process of the run had stopped", checkoutAfter.git_revision === evidence.environment?.git_revision && checkoutAfter.git_dirty === false && checkoutAfter.build_identity === evidence.environment?.expected_build_identity && sameMetadata && sameIgnored, `revision ${checkoutAfter.git_revision}, ${checkoutAfter.git_dirty === false ? "clean" : checkoutAfter.git_dirty === null ? "status unknown" : `modified: ${checkoutAfter.git_dirty_paths}`}, build inputs ${checkoutAfter.build_identity === evidence.environment?.expected_build_identity ? "unchanged" : "changed"}, Git metadata (config, HEAD, refs, hooks, info) ${sameMetadata ? "unchanged" : "changed or unreadable"}, ignored files outside target/node_modules/dist ${sameIgnored ? `unchanged (${checkoutAfter.ignored_files})` : "changed or unreadable"}`);
@@ -869,10 +885,17 @@ async function hardKillDuringReviewReservesSpend(name) {
   record(`${name}: earlier candidate evidence survives the restart byte-for-byte`, preserved && Object.keys(earlier).length >= 3, `earlier_candidates_compared=${Object.keys(earlier).length}`);
 }
 
+/** The fixture (developer) checkout's HEAD, tracked changes and untracked files. */
+function fixtureCheckoutState() {
+  return {
+    head: git(fixtureRepo, "rev-parse", "HEAD"),
+    tracked: git(fixtureRepo, "status", "--porcelain", "--untracked-files=no"),
+    untracked: git(fixtureRepo, "status", "--porcelain").split("\n").filter((line) => line.startsWith("??")).sort(),
+  };
+}
+
 async function developerCheckoutUntouched() {
-  const head = git(fixtureRepo, "rev-parse", "HEAD");
-  const tracked = git(fixtureRepo, "status", "--porcelain", "--untracked-files=no");
-  const untracked = git(fixtureRepo, "status", "--porcelain").split("\n").filter((line) => line.startsWith("??")).sort();
+  const { head, tracked, untracked } = fixtureCheckoutState();
   const worktrees = Object.values(evidence.scenarios).map((item) => item.run_id).filter(Boolean);
   const untrackedUnchanged = JSON.stringify(untracked) === JSON.stringify(untrackedAfterBaseline ?? []);
   evidence.developer_checkout = { head_before: developerHead, head_after: head, tracked_changes: tracked, untracked_after_baseline: untrackedAfterBaseline, untracked_after_runs: untracked, runs: worktrees.length };
@@ -1025,15 +1048,27 @@ async function reapStrays() {
   if (process.platform !== "linux") return { contained: false, killed: 0, reason: "no child subreaper on this platform" };
   const reaper = Number(process.env.LUUNA_M3_REAPER);
   if (!Number.isInteger(reaper) || reaper !== process.ppid) return { contained: false, killed: 0, reason: "the harness is not running under its child subreaper" };
+  // A PID is only freed for reuse once its parent reaps it, so each parent signals its own
+  // children: the harness lists and kills its children in one synchronous step (Node reaps them
+  // only from its event loop), and the reaper kills its children itself on SIGUSR1, from a handler
+  // that runs while its reaping loop is paused. No signalled PID can belong to an unrelated process.
   const killed = new Set();
   const deadline = Date.now() + 15_000;
   for (;;) {
-    let survivors;
-    try { survivors = [...childrenOf(reaper), ...childrenOf(process.pid)].filter((pid) => pid !== process.pid); } catch (error) { return { contained: false, killed: killed.size, reason: `cannot list processes: ${error.code ?? error.message}` }; }
-    if (survivors.length === 0) return { contained: true, killed: killed.size };
-    if (Date.now() > deadline) return { contained: false, killed: killed.size, reason: `${survivors.length} process(es) still present after 15s` };
-    for (const pid of survivors) {
-      try { process.kill(pid, "SIGKILL"); killed.add(pid); } catch { /* already gone */ }
+    let own;
+    let adopted;
+    try {
+      own = childrenOf(process.pid);
+      for (const pid of own) {
+        try { process.kill(pid, "SIGKILL"); killed.add(pid); } catch { /* already gone */ }
+      }
+      adopted = childrenOf(reaper).filter((pid) => pid !== process.pid);
+    } catch (error) { return { contained: false, killed: killed.size, reason: `cannot list processes: ${error.code ?? error.message}` }; }
+    if (own.length === 0 && adopted.length === 0) return { contained: true, killed: killed.size };
+    if (Date.now() > deadline) return { contained: false, killed: killed.size, reason: `${own.length + adopted.length} process(es) still present after 15s` };
+    if (adopted.length > 0) {
+      for (const pid of adopted) killed.add(pid);
+      try { process.kill(reaper, "SIGUSR1"); } catch (error) { return { contained: false, killed: killed.size, reason: `cannot signal the subreaper: ${error.code ?? error.message}` }; }
     }
     await sleep(50);
   }

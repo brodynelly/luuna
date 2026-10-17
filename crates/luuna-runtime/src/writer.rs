@@ -1214,6 +1214,29 @@ fn url_credentials(text: &str) -> Vec<String> {
     found
 }
 
+/// Installs the scope guard under `deadline`. The installation is synchronous
+/// file I/O that a deadline cannot interrupt, so it runs on its own detached
+/// thread (which, like an abandoned feedback read, cannot hold up runtime
+/// shutdown); when the deadline passes first, `Ok(None)` is returned and the
+/// write is left to finish or fail on its own.
+pub(crate) async fn install_guard_by(
+    directory: PathBuf,
+    deadline: tokio::time::Instant,
+) -> Result<Option<PathBuf>, String> {
+    let (sender, receiver) = tokio::sync::oneshot::channel();
+    std::thread::Builder::new()
+        .name("luuna-scope-guard".into())
+        .spawn(move || {
+            let _ = sender.send(install_scope_guard(&directory));
+        })
+        .map_err(|e| format!("cannot start the scope guard writer: {e}"))?;
+    match tokio::time::timeout_at(deadline, receiver).await {
+        Err(_) => Ok(None),
+        Ok(Err(_)) => Err("the scope guard writer stopped without a result".into()),
+        Ok(Ok(result)) => result.map(Some).map_err(|e| e.to_string()),
+    }
+}
+
 /// What a model may see of recorded check results: which recipe ran and how
 /// it ended. The command line is left out, since a confirmed recipe may carry
 /// a credential in its arguments that no redaction rule recognises, as are
@@ -1811,8 +1834,20 @@ async fn writer_worker(state: AppState, job: WriterJob, mut cancel: watch::Recei
         "worktree.created",
         json!({"lease_id": lease_id, "repository_id": repository_id, "path": lease.path, "base_commit": base}),
     );
-    let guard = match install_scope_guard(&attempt_dir.join("pi")) {
-        Ok(path) => path,
+    let guard = match install_guard_by(attempt_dir.join("pi"), deadline).await {
+        Ok(Some(path)) => path,
+        Ok(None) => {
+            let (reason, usage) = startup_exceeded(started);
+            settle(
+                &state,
+                AttemptState::Failed,
+                RunState::Failed,
+                Some((&lease_id, LeaseState::Released, None)),
+                &format!("{reason}; worktree preserved"),
+                usage,
+            );
+            return;
+        }
         Err(error) => {
             settle(
                 &state,
@@ -2487,6 +2522,31 @@ mod redaction_tests {
             OsString::from("http://alice:s3cr3t-pw@proxy"),
         )];
         assert!(inherited_url_credentials(vars.into_iter()).contains(&"s3cr3t-pw".to_owned()));
+    }
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn a_blocked_scope_guard_write_is_bounded_by_the_deadline() {
+        let dir = tempfile::tempdir().unwrap();
+        // A FIFO at the guard's path: opening it for writing blocks until a
+        // reader appears, which never happens.
+        let status = std::process::Command::new("mkfifo")
+            .arg(dir.path().join("luuna-scope-guard.js"))
+            .status()
+            .unwrap();
+        assert!(status.success());
+        let started = std::time::Instant::now();
+        let deadline = tokio::time::Instant::now() + Duration::from_millis(300);
+        let result = install_guard_by(dir.path().to_path_buf(), deadline).await;
+        assert!(matches!(result, Ok(None)), "{result:?}");
+        assert!(started.elapsed() < Duration::from_secs(3));
+        let healthy = tempfile::tempdir().unwrap();
+        let far = tokio::time::Instant::now() + Duration::from_secs(10);
+        let installed = install_guard_by(healthy.path().to_path_buf(), far).await;
+        assert!(
+            matches!(&installed, Ok(Some(path)) if path.exists()),
+            "{installed:?}"
+        );
     }
 
     #[test]
