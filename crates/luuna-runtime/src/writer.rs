@@ -1291,44 +1291,62 @@ fn scrub_remaining(mut output: String, known: &[String]) -> String {
 /// `-----END … PRIVATE KEY-----` line, or to the end of the text when the
 /// block is cut off by the quoted tail.
 fn redact_pem_blocks(text: &str) -> String {
-    const MARKER: &str = "PRIVATE KEY-----";
-    let mut output = text.to_owned();
-    // A block whose BEGIN line was cut off (the text starts inside it) is
-    // removed from the start of the text through its END line.
-    let first_end = private_key_end_lines(output.as_bytes()).next();
-    if let Some(end) = first_end {
-        let begins_before = output[..end].match_indices("-----BEGIN ").any(|(i, _)| {
-            output[i..]
-                .lines()
-                .next()
-                .is_some_and(|line| line.contains(MARKER))
-        });
-        if !begins_before {
-            let footer = end + output[end..].find(MARKER).map_or(0, |m| m + MARKER.len());
-            output.replace_range(..footer, "[redacted private key]");
+    const REPLACEMENT: &str = "[redacted private key]";
+    // Line by line, tracking the open block's label: a block closes only at an
+    // END line with the same label (`-----BEGIN RSA PRIVATE KEY-----` is not
+    // closed by `-----END EC PRIVATE KEY-----` or a certificate's END), and a
+    // block still open at the end of the text is removed to the end.
+    let mut output = String::with_capacity(text.len());
+    let mut open: Option<String> = None;
+    let mut seen_begin = false;
+    for line in text.split_inclusive('\n') {
+        if let Some(label) = &open {
+            if let Some((_, end, found)) = pem_marker(line, "END") {
+                if &found == label {
+                    output.push_str(REPLACEMENT);
+                    output.push_str(&line[end..]);
+                    open = None;
+                }
+            }
+            continue;
         }
+        if let Some((start, _, label)) = pem_marker(line, "BEGIN") {
+            output.push_str(&line[..start]);
+            open = Some(label);
+            seen_begin = true;
+            continue;
+        }
+        // The text starts inside a block whose BEGIN line was cut off: remove
+        // everything up to its END line.
+        if let Some((_, end, _)) = pem_marker(line, "END") {
+            if !seen_begin {
+                output.clear();
+                output.push_str(REPLACEMENT);
+                output.push_str(&line[end..]);
+                seen_begin = true;
+                continue;
+            }
+        }
+        output.push_str(line);
     }
-    let mut cursor = 0;
-    while let Some(begin) = output[cursor..].find("-----BEGIN ") {
-        let start = cursor + begin;
-        let Some(header) = output[start..].find(MARKER) else {
-            break;
-        };
-        let header_end = start + header + MARKER.len();
-        let end = output[header_end..]
-            .find("-----END ")
-            .and_then(|e| {
-                let footer = header_end + e;
-                output[footer..]
-                    .find(MARKER)
-                    .map(|m| footer + m + MARKER.len())
-            })
-            .unwrap_or(output.len());
-        const REPLACEMENT: &str = "[redacted private key]";
-        output.replace_range(start..end, REPLACEMENT);
-        cursor = start + REPLACEMENT.len();
+    if open.is_some() {
+        output.push_str(REPLACEMENT);
     }
     output
+}
+
+/// A private-key PEM marker of `kind` (`BEGIN` or `END`) in `line`: its start
+/// offset, the offset just past its closing dashes, and its label
+/// (`RSA PRIVATE KEY`, `PRIVATE KEY`, ...).
+fn pem_marker(line: &str, kind: &str) -> Option<(usize, usize, String)> {
+    let tag = format!("-----{kind} ");
+    let start = line.find(&tag)?;
+    let rest = &line[start + tag.len()..];
+    let close = rest.find("-----")?;
+    let label = &rest[..close];
+    label
+        .ends_with("PRIVATE KEY")
+        .then(|| (start, start + tag.len() + close + 5, label.to_owned()))
 }
 
 /// Whether a line looks like it carries a credential: a bearer header, a
@@ -1413,15 +1431,22 @@ fn read_verified_tail(
     let longest = secrets.iter().map(String::len).max().unwrap_or(0);
     let window_len = REPAIR_REDACTION_WINDOW_BYTES.max(REPAIR_OUTPUT_TAIL_BYTES + 2 * longest);
     let windowed = bytes.len() > window_len;
-    let window_start = bytes.len().saturating_sub(window_len);
+    // The window starts at a line boundary, so it never begins inside a PEM
+    // header line.
+    let mut window_start = bytes.len().saturating_sub(window_len);
+    if window_start > 0 {
+        if let Some(newline) = bytes[window_start..].iter().position(|b| *b == b'\n') {
+            window_start += newline + 1;
+        }
+    }
     let mut text = String::from_utf8_lossy(&bytes[window_start..]).into_owned();
     // The private-key state at the window's start comes from the whole artifact
     // already read: a window that begins inside a key block (its BEGIN line
     // before the window, with or without an END line inside it) is treated as
     // starting with that BEGIN line, so the block is removed to its END or to
     // the end of the text.
-    if starts_inside_private_key(&bytes[..window_start]) {
-        text.insert_str(0, "-----BEGIN PRIVATE KEY-----\n");
+    if let Some(label) = open_private_key_label(&bytes[..window_start]) {
+        text.insert_str(0, &format!("-----BEGIN {label}-----\n"));
     }
     let redacted = redact_secrets(&text, secrets);
     let mut skip = if windowed {
@@ -1443,53 +1468,23 @@ fn read_verified_tail(
     })
 }
 
-/// Start offsets of the lines in `bytes` that are a private-key END line
-/// (`-----END … PRIVATE KEY-----`).
-fn private_key_end_lines(bytes: &[u8]) -> impl Iterator<Item = usize> + '_ {
-    bytes
-        .windows(9)
-        .enumerate()
-        .filter(|(_, w)| *w == b"-----END ")
-        .map(|(i, _)| i)
-        .filter(move |&i| {
-            let line_end = bytes[i..]
-                .iter()
-                .position(|b| *b == b'\n')
-                .map_or(bytes.len(), |n| i + n);
-            bytes[i..line_end]
-                .windows(16)
-                .any(|w| w == b"PRIVATE KEY-----")
-        })
-}
-
-/// Whether text continuing after `prefix` would be inside a private-key block:
-/// the last BEGIN line of a private key in `prefix` has no END line after it, or
-/// `prefix` ends inside a BEGIN line that may be one.
-fn starts_inside_private_key(prefix: &[u8]) -> bool {
-    let last_line = prefix.rsplit(|b| *b == b'\n').next().unwrap_or_default();
-    if last_line.windows(11).any(|w| w == b"-----BEGIN ") {
-        return true;
-    }
-    let mut cursor = prefix.len();
-    while let Some(begin) = prefix[..cursor]
-        .windows(11)
-        .rposition(|w| w == b"-----BEGIN ")
-    {
-        let line_end = prefix[begin..]
-            .iter()
-            .position(|b| *b == b'\n')
-            .map_or(prefix.len(), |n| begin + n);
-        if prefix[begin..line_end]
-            .windows(16)
-            .any(|w| w == b"PRIVATE KEY-----")
-        {
-            // Only a private-key END line closes the block; any other END line
-            // (a certificate's, say) inside it does not.
-            return !private_key_end_lines(prefix).any(|end| end > begin);
+/// The label of the private-key block still open at the end of `prefix`, if
+/// any: the same label-matched tracking as `redact_pem_blocks`, so only an END
+/// line with the open block's own label closes it.
+fn open_private_key_label(prefix: &[u8]) -> Option<String> {
+    let text = String::from_utf8_lossy(prefix);
+    let mut open: Option<String> = None;
+    for line in text.split_inclusive('\n') {
+        match &open {
+            Some(label) => {
+                if pem_marker(line, "END").is_some_and(|(_, _, found)| &found == label) {
+                    open = None;
+                }
+            }
+            None => open = pem_marker(line, "BEGIN").map(|(_, _, label)| label),
         }
-        cursor = begin;
     }
-    false
+    open
 }
 
 /// Opens a private artifact for reading without following a symbolic link or
@@ -2299,9 +2294,23 @@ mod redaction_tests {
     fn an_unrelated_end_line_does_not_close_an_open_key_block() {
         let mut prefix = b"-----BEGIN PRIVATE KEY-----\nMIIEvQIBADAN\n".to_vec();
         prefix.extend_from_slice(b"-----END CERTIFICATE-----\nMIIEmorekey\n");
-        assert!(starts_inside_private_key(&prefix));
+        assert_eq!(
+            open_private_key_label(&prefix).as_deref(),
+            Some("PRIVATE KEY")
+        );
         prefix.extend_from_slice(b"-----END PRIVATE KEY-----\nafter\n");
-        assert!(!starts_inside_private_key(&prefix));
+        assert_eq!(open_private_key_label(&prefix), None);
+        // Labels must match exactly: an EC footer does not close an RSA key.
+        let rsa =
+            b"-----BEGIN RSA PRIVATE KEY-----\nMIIE\n-----END EC PRIVATE KEY-----\nMIIEmore\n";
+        assert_eq!(
+            open_private_key_label(rsa).as_deref(),
+            Some("RSA PRIVATE KEY")
+        );
+        let out = redact_pem_blocks(
+            "a\n-----BEGIN RSA PRIVATE KEY-----\nMIIE\n-----END EC PRIVATE KEY-----\nMIIEmore\n-----END RSA PRIVATE KEY-----\nb",
+        );
+        assert_eq!(out, "a\n[redacted private key]\nb");
         // Text that opens inside a key whose first END line is a certificate's.
         let out = redact_pem_blocks(
             "keymaterial\n-----END CERTIFICATE-----\nmore\n-----END PRIVATE KEY-----\nafter",

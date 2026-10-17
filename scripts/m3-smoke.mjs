@@ -213,7 +213,7 @@ try {
   const pinned = pinnedToolchain();
   // A wrapper (RUSTC_WRAPPER / RUSTC_WORKSPACE_WRAPPER) can change compilation while the compiler
   // still reports the pinned release, so evidence builds must use none.
-  record("the runtime binary was compiled with the toolchain pinned in rust-toolchain.toml, no compiler wrapper, no RUSTFLAGS, no profile overrides and no dependency overrides", pinned !== null && String(evidence.environment.runtime_build_rustc).split(" ")[0] === pinned && evidence.environment.runtime_build_rustc_wrapper === "none" && / rustflags=none overrides=none dependency-overrides=none$/.test(String(evidence.environment.runtime_build_flags)) && evidence.environment.cargo_dependency_overrides.length === 0, `pinned ${pinned ?? "unreadable"}, binary built by rustc ${evidence.environment.runtime_build_rustc}, wrapper ${evidence.environment.runtime_build_rustc_wrapper}, ${evidence.environment.runtime_build_flags}, Cargo config overrides now: ${evidence.environment.cargo_dependency_overrides.join(", ") || "none"}`);
+  record("the runtime binary was compiled with the toolchain pinned in rust-toolchain.toml, no compiler wrapper, no RUSTFLAGS, no profile overrides and no Cargo config overrides", pinned !== null && String(evidence.environment.runtime_build_rustc).split(" ")[0] === pinned && evidence.environment.runtime_build_rustc_wrapper === "none" && / rustflags=none overrides=none config-overrides=none$/.test(String(evidence.environment.runtime_build_flags)) && evidence.environment.cargo_dependency_overrides.length === 0, `pinned ${pinned ?? "unreadable"}, binary built by rustc ${evidence.environment.runtime_build_rustc}, wrapper ${evidence.environment.runtime_build_rustc_wrapper}, ${evidence.environment.runtime_build_flags}, Cargo config overrides now: ${evidence.environment.cargo_dependency_overrides.join(", ") || "none"}`);
   await registerProjectAndBaseline();
   await scenario("feature", approvedFeatureIsCheckedAndIndependentlyReviewed);
   await scenario("repair", failingCheckRequiresManualRepairAndFreshEvidence);
@@ -875,7 +875,8 @@ function environment() {
   info.provider_credentials_present = CREDENTIAL_NAMES.filter((name) => process.env[name] !== undefined || process.env[`LUUNA_PI_${name}`] !== undefined).map((name) => process.env[`LUUNA_PI_${name}`] !== undefined ? `LUUNA_PI_${name} (alias)` : name);
   try { info.runtime_binary_sha256 = createHash("sha256").update(readFileSync(runtimeBinary)).digest("hex"); } catch { info.runtime_binary_sha256 = "unknown"; }
   // The Cargo config files Cargo reads for this workspace, checked now as well as by build.rs at
-  // build time: `paths` overrides, `[patch]` tables or source `replace-with` substitute dependencies.
+  // build time: `paths`, `[patch]` and source `replace-with` substitute dependencies, `[profile]`
+  // changes compiled behavior, and `include` pulls in config that is not read here.
   info.cargo_dependency_overrides = (() => {
     const candidates = [];
     for (let dir = repository; ; dir = path.dirname(dir)) {
@@ -887,7 +888,8 @@ function environment() {
     return candidates.filter((file) => {
       let text;
       try { text = readFileSync(file, "utf8"); } catch { return false; }
-      return text.split("\n").map((line) => line.trim()).some((line) => /^paths\s*=/.test(line) || line.startsWith("[patch") || line.startsWith("replace-with"));
+      // The same rule as build.rs: dependency substitution, profile changes or further includes.
+      return text.split("\n").map((line) => line.trim()).some((line) => /^(paths|include|replace-with)\s*=/.test(line) || /^\[(patch|profile)/.test(line) || /^(patch|profile)\./.test(line));
     });
   })();
   // Bind the binary to the recorded revision by content: the runtime reports the digest its
@@ -899,18 +901,43 @@ function environment() {
   return info;
 }
 
-/** SHA-256 over every entry of a tree (relative path with the file's SHA-256 or the link target), sorted; returns { digest, entries }. */
+/**
+ * SHA-256 over every entry of a tree (relative path with the file's SHA-256 or the link target),
+ * sorted; returns { digest, entries }. Bounded so a malformed tree fails closed: files are hashed
+ * in streamed chunks and the walk stops with an error past the entry, byte or depth limit.
+ */
 function treeDigest(root) {
+  const LIMITS = { entries: 100_000, bytes: 1024 * 1024 * 1024, depth: 64 };
   const entries = [];
-  const walkTree = (rel) => {
-    for (const entry of readdirSync(path.join(root, rel), { withFileTypes: true })) {
-      const child = rel ? `${rel}/${entry.name}` : entry.name;
-      if (entry.isDirectory()) walkTree(child);
-      else if (entry.isSymbolicLink()) entries.push(`${child}\0link\0${readlinkSync(path.join(root, child))}`);
-      else entries.push(`${child}\0${createHash("sha256").update(readFileSync(path.join(root, child))).digest("hex")}`);
-    }
+  let bytes = 0;
+  const chunk = Buffer.alloc(1024 * 1024);
+  const hashFile = (file) => {
+    const hash = createHash("sha256");
+    const fd = openSync(file, fsConstants.O_RDONLY | (fsConstants.O_NOFOLLOW ?? 0) | (fsConstants.O_NONBLOCK ?? 0));
+    try {
+      if (!fstatSync(fd).isFile()) throw new Error(`${file} is not a regular file`);
+      for (let read = readSync(fd, chunk, 0, chunk.length, null); read > 0; read = readSync(fd, chunk, 0, chunk.length, null)) {
+        bytes += read;
+        if (bytes > LIMITS.bytes) throw new Error(`tree exceeds ${LIMITS.bytes} bytes`);
+        hash.update(chunk.subarray(0, read));
+      }
+    } finally { closeSync(fd); }
+    return hash.digest("hex");
   };
-  walkTree("");
+  const walkTree = (rel, depth) => {
+    if (depth > LIMITS.depth) throw new Error(`tree nests deeper than ${LIMITS.depth} levels`);
+    const listing = opendirSync(path.join(root, rel));
+    try {
+      for (let entry = listing.readSync(); entry !== null; entry = listing.readSync()) {
+        const child = rel ? `${rel}/${entry.name}` : entry.name;
+        if (entries.length >= LIMITS.entries) throw new Error(`tree has more than ${LIMITS.entries} entries`);
+        if (entry.isDirectory()) walkTree(child, depth + 1);
+        else if (entry.isSymbolicLink()) entries.push(`${child}\0link\0${readlinkSync(path.join(root, child))}`);
+        else entries.push(`${child}\0${hashFile(path.join(root, child))}`);
+      }
+    } finally { listing.closeSync(); }
+  };
+  walkTree("", 0);
   entries.sort();
   return { digest: createHash("sha256").update(entries.join("\n")).digest("hex"), entries };
 }

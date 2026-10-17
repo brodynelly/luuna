@@ -27,13 +27,23 @@ fn collect(root: &Path, dir: &Path, files: &mut Vec<String>) {
     }
 }
 
-/// Whether Cargo config text declares a dependency override: `paths`, a
-/// `[patch…]` table or a source `replace-with`.
-fn dependency_override(text: &str) -> bool {
+/// Whether Cargo config text changes what or how the runtime is built beyond
+/// the repository's own manifests: a `paths` dependency override, a `[patch…]`
+/// table, a source `replace-with`, a `[profile…]` table (overflow checks, panic
+/// strategy, LTO, ...) or an `include` of further config that is not read here.
+fn config_override(text: &str) -> bool {
+    let key = |line: &str, name: &str| {
+        line.strip_prefix(name)
+            .is_some_and(|rest| rest.trim_start().starts_with('='))
+    };
     text.lines().map(str::trim).any(|line| {
-        line.starts_with("paths") && line[5..].trim_start().starts_with('=')
+        key(line, "paths")
+            || key(line, "include")
+            || key(line, "replace-with")
             || line.starts_with("[patch")
-            || line.starts_with("replace-with")
+            || line.starts_with("[profile")
+            || line.starts_with("profile.")
+            || line.starts_with("patch.")
     })
 }
 
@@ -188,11 +198,11 @@ fn main() {
         .filter_map(|path| {
             let text = fs::read_to_string(path).ok()?;
             println!("cargo:rerun-if-changed={}", path.display());
-            dependency_override(&text).then(|| path.display().to_string())
+            config_override(&text).then(|| path.display().to_string())
         })
         .collect();
     println!(
-        "cargo:rustc-env=LUUNA_BUILD_FLAGS=profile={} opt-level={} debug={} rustflags={} overrides={} dependency-overrides={}",
+        "cargo:rustc-env=LUUNA_BUILD_FLAGS=profile={} opt-level={} debug={} rustflags={} overrides={} config-overrides={}",
         value("PROFILE"),
         value("OPT_LEVEL"),
         value("DEBUG"),
