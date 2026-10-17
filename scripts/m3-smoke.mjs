@@ -1396,7 +1396,11 @@ function piProvenance() {
     // An allowlist, not a deny-list: npm is not verified before it runs, so it gets what a public
     // install needs (host basics, certificates, proxies) and no other inherited secret. The user's
     // npm configuration is not read, so a token in it cannot reach the registry or an altered CLI.
-    const env = { ...networkEnv(), npm_config_userconfig: devNull, npm_config_globalconfig: devNull };
+    // npm refuses one file as both user and global configuration, so each is its own empty file.
+    const npmConfig = realpathSync(mkdtempSync(path.join(tmpdir(), "luuna-npm-config-")));
+    for (const name of ["user", "global"]) writeFileSync(path.join(npmConfig, name), "");
+    process.once("exit", () => rmSync(npmConfig, { recursive: true, force: true }));
+    const env = { ...networkEnv(), npm_config_userconfig: path.join(npmConfig, "user"), npm_config_globalconfig: path.join(npmConfig, "global") };
     result.npm = { node: process.execPath, cli: realpathSync(npmCli), version: execFileSync(process.execPath, [npmCli, "--version"], { env, encoding: "utf8", stdio: ["ignore", "pipe", "ignore"], timeout: 30_000, killSignal: "SIGKILL" }).trim() };
     const work = realpathSync(mkdtempSync(path.join(tmpdir(), "luuna-pi-provenance-")));
     try {
