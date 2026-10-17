@@ -16,7 +16,7 @@
 // supported names (or their LUUNA_PI_ aliases) to the isolated Pi children. The
 // report records credential names only and is scanned for leaked values.
 import { spawn, spawnSync, execFileSync } from "node:child_process";
-import { mkdirSync, writeFileSync, writeSync, rmdirSync, readdirSync, readFileSync, opendirSync, statSync, lstatSync, readlinkSync, realpathSync, existsSync, openSync, readSync, closeSync, unlinkSync, fstatSync, fchmodSync, ftruncateSync, constants as fsConstants } from "node:fs";
+import { mkdirSync, mkdtempSync, rmSync, writeFileSync, writeSync, rmdirSync, readdirSync, readFileSync, opendirSync, statSync, lstatSync, readlinkSync, realpathSync, existsSync, openSync, readSync, closeSync, unlinkSync, fstatSync, fchmodSync, ftruncateSync, constants as fsConstants } from "node:fs";
 import { randomBytes, createHash } from "node:crypto";
 import { tmpdir, platform, release, arch, devNull } from "node:os";
 import path from "node:path";
@@ -1112,11 +1112,19 @@ function piProvenance() {
     if (!pinned || installed.version !== pinned.version) throw new Error(`installed ${installed.version} is not the pinned ${pinned?.version}`);
     // A fresh install of the tracked lockfile, outside the output tree; npm verifies every
     // tarball against the lockfile's integrity, and the installed tree must match it byte for byte.
-    const work = realpathSync(execFileSync("mktemp", ["-d", path.join(tmpdir(), "luuna-pi-provenance-XXXXXX")], { encoding: "utf8" }).trim());
+    // The fresh install is the trust root, so npm is not looked up on PATH (where a shim could
+    // install the same altered bytes): it is the npm bundled with the Node installation running
+    // this harness, run by that same Node executable. No other tool is resolved through PATH here.
+    const npmCli = process.platform === "win32"
+      ? path.join(path.dirname(process.execPath), "node_modules", "npm", "bin", "npm-cli.js")
+      : path.join(path.dirname(path.dirname(process.execPath)), "lib", "node_modules", "npm", "bin", "npm-cli.js");
+    if (!existsSync(npmCli)) throw new Error(`no npm bundled with ${process.execPath} (expected ${npmCli})`);
+    const env = Object.fromEntries(Object.entries(process.env).filter(([name]) => !CREDENTIAL_NAMES.includes(name) && !name.startsWith("LUUNA_PI_")));
+    result.npm = { node: process.execPath, cli: realpathSync(npmCli), version: execFileSync(process.execPath, [npmCli, "--version"], { env, encoding: "utf8", stdio: ["ignore", "pipe", "ignore"] }).trim() };
+    const work = realpathSync(mkdtempSync(path.join(tmpdir(), "luuna-pi-provenance-")));
     try {
       for (const file of ["package.json", "package-lock.json"]) writeFileSync(path.join(work, file), readFileSync(path.join(repository, "tools", "pi", file)));
-      const env = Object.fromEntries(Object.entries(process.env).filter(([name]) => !CREDENTIAL_NAMES.includes(name) && !name.startsWith("LUUNA_PI_")));
-      execFileSync("npm", ["ci", "--ignore-scripts", "--no-audit", "--no-fund", "--loglevel=error"], { cwd: work, env, stdio: ["ignore", "ignore", "pipe"] });
+      execFileSync(process.execPath, [npmCli, "ci", "--ignore-scripts", "--no-audit", "--no-fund", "--loglevel=error"], { cwd: work, env, stdio: ["ignore", "ignore", "pipe"] });
       const expected = treeDigest(path.join(work, "node_modules"));
       const actual = treeDigest(result.package.node_modules);
       result.package.tree_entries = actual.entries.length;
@@ -1129,7 +1137,7 @@ function piProvenance() {
       }
       result.verified = true;
     } finally {
-      execFileSync("rm", ["-rf", "--", work]);
+      rmSync(work, { recursive: true, force: true });
     }
   } catch (error) {
     result.error = String(error?.message ?? error).split("\n")[0];
