@@ -235,7 +235,7 @@ pub fn router(state: AppState) -> Router {
 
 async fn health() -> Json<Value> {
     Json(
-        json!({"status":"ok","pi_version":PI_VERSION,"pi_version_status":"required; checked on every run","demo_only":true}),
+        json!({"status":"ok","pi_version":PI_VERSION,"pi_version_status":"required; checked on every run","demo_only":true,"build_identity":env!("LUUNA_BUILD_IDENTITY")}),
     )
 }
 

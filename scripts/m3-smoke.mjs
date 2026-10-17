@@ -172,8 +172,9 @@ let finalStop = { exited: false };
 
 try {
   evidence.environment = environment();
-  record("the runtime binary was built from the recorded revision's runtime sources", evidence.environment.runtime_binary_current === true, `revision ${evidence.environment.git_revision}, runtime sources ${evidence.environment.runtime_sources_dirty ? "modified" : "clean"}, binary sha256 ${String(evidence.environment.runtime_binary_sha256).slice(0, 16)}…`);
   runtime = await startRuntime("initial");
+  const identity = evidence.environment.runtime_build_identity;
+  record("the runtime binary was built from the recorded revision's build inputs (embedded content digest)", identity === evidence.environment.expected_build_identity && evidence.environment.runtime_sources_dirty === false, `revision ${evidence.environment.git_revision}, build inputs ${evidence.environment.runtime_sources_dirty === false ? "clean" : "modified or unknown"}, binary reports ${String(identity).slice(0, 23)}…, checkout ${String(evidence.environment.expected_build_identity).slice(0, 23)}…`);
   await registerProjectAndBaseline();
   await scenario("feature", approvedFeatureIsCheckedAndIndependentlyReviewed);
   await scenario("repair", failingCheckRequiresManualRepairAndFreshEvidence);
@@ -266,6 +267,7 @@ async function startRuntime(label) {
       const response = await fetch(`${base}/api/v1/health`, { signal: AbortSignal.timeout(5_000) });
       if (response.ok) {
         const health = await response.json();
+        if (label === "initial") evidence.environment.runtime_build_identity = health.build_identity ?? "not reported";
         record(`runtime ${label} start`, health.status === "ok", `health ${JSON.stringify(health)}`);
         return child;
       }
@@ -742,31 +744,60 @@ function environment() {
     info.pi_version = "synthetic fixture reporting 1.3.0";
   }
   info.provider_credentials_present = CREDENTIAL_NAMES.filter((name) => process.env[name] !== undefined || process.env[`LUUNA_PI_${name}`] !== undefined).map((name) => process.env[`LUUNA_PI_${name}`] !== undefined ? `LUUNA_PI_${name} (alias)` : name);
-  try { info.runtime_binary_mtime = statSync(runtimeBinary).mtime.toISOString(); } catch { info.runtime_binary_mtime = "unknown"; }
   try { info.runtime_binary_sha256 = createHash("sha256").update(readFileSync(runtimeBinary)).digest("hex"); } catch { info.runtime_binary_sha256 = "unknown"; }
-  // Bind the binary to the recorded revision: it must be newer than every tracked file compiled
-  // into it (crate sources and assets, manifests, lockfile), and those must have no uncommitted
-  // change, or the run is not evidence for that revision.
-  const buildInputs = ["crates/*/src/*", "crates/*/assets/*", "crates/*/Cargo.toml", "Cargo.toml", "Cargo.lock"];
-  try {
-    const sources = git(repository, "ls-files", "-z", "--", ...buildInputs).split("\0").filter(Boolean);
-    const newest = Math.max(...sources.map((file) => { try { return statSync(path.join(repository, file)).mtimeMs; } catch { return 0; } }));
-    info.runtime_sources_dirty = git(repository, "status", "--porcelain", "--", ...buildInputs).length > 0;
-    info.runtime_binary_current = statSync(runtimeBinary).mtimeMs >= newest && !info.runtime_sources_dirty;
-  } catch { info.runtime_binary_current = false; }
+  // Bind the binary to the recorded revision by content: the runtime reports the digest its
+  // build script computed over every build input, which must equal the digest of the inputs in
+  // this checkout, and those inputs must equal the recorded revision (no modified or untracked
+  // build input). Timestamps play no part.
+  try { info.expected_build_identity = buildIdentity(); } catch (error) { info.expected_build_identity = `unavailable: ${error.message}`; }
+  try { info.runtime_sources_dirty = git(repository, "status", "--porcelain", "--", "crates/*/src/*", "crates/*/assets/*", "crates/*/Cargo.toml", "crates/*/build.rs", "Cargo.toml", "Cargo.lock").length > 0; } catch { info.runtime_sources_dirty = null; }
   return info;
+}
+
+/** The digest `crates/luuna-runtime/build.rs` embeds: SHA-256 over `path\0sha256(content)\n` for every build input, sorted by path. */
+function buildIdentity() {
+  const files = ["Cargo.toml", "Cargo.lock"];
+  const collect = (rel) => {
+    let entries;
+    try { entries = readdirSync(path.join(repository, rel), { withFileTypes: true }); } catch { return; }
+    for (const entry of entries) {
+      const child = `${rel}/${entry.name}`;
+      if (entry.isDirectory()) collect(child); else if (entry.isFile()) files.push(child);
+    }
+  };
+  for (const member of readdirSync(path.join(repository, "crates"), { withFileTypes: true })) {
+    if (!member.isDirectory()) continue;
+    for (const file of ["Cargo.toml", "build.rs"]) {
+      try { if (lstatSync(path.join(repository, "crates", member.name, file)).isFile()) files.push(`crates/${member.name}/${file}`); } catch { /* absent */ }
+    }
+    collect(`crates/${member.name}/src`);
+    collect(`crates/${member.name}/assets`);
+  }
+  files.sort((a, b) => Buffer.compare(Buffer.from(a), Buffer.from(b)));
+  const digest = createHash("sha256");
+  for (const file of files) digest.update(`${file}\0${createHash("sha256").update(readFileSync(path.join(repository, file))).digest("hex")}\n`);
+  return `sha256:${digest.digest("hex")}`;
 }
 
 /** Configured values, deduplicated and longest first: redacting a shorter value that is part of a
  *  longer one first would leave the longer one's remainder in the clear. */
 function configuredValues() {
-  const values = [token, ...CREDENTIAL_NAMES.flatMap((name) => [process.env[name], process.env[`LUUNA_PI_${name}`]])].filter((value) => typeof value === "string" && value.length > 0);
+  const raw = [token, ...CREDENTIAL_NAMES.flatMap((name) => [process.env[name], process.env[`LUUNA_PI_${name}`]])].filter((value) => typeof value === "string" && value.length > 0);
+  // A value with quotes, backslashes or control characters appears JSON-escaped in reports and
+  // logs, so the escaped form is scanned for and redacted as well.
+  const values = raw.flatMap((value) => [value, JSON.stringify(value).slice(1, -1)]).filter((value) => value.length > 0);
   return [...new Set(values)].sort((a, b) => b.length - a.length || (a < b ? -1 : a > b ? 1 : 0));
 }
 
 function redactConfiguredValues(text) {
+  const values = configuredValues();
   let output = String(text);
-  for (const value of configuredValues()) output = output.split(value).join("[redacted credential]");
+  for (const value of values) output = output.split(value).join("[redacted credential]");
+  // The marker itself, or a marker boundary, can reproduce a value (`redacted`, `]k`): delete any
+  // value still present until none is. Each deletion shortens the text, so this terminates.
+  for (let hit = values.find((value) => output.includes(value)); hit !== undefined; hit = values.find((value) => output.includes(value))) {
+    output = output.split(hit).join("");
+  }
   return output;
 }
 
@@ -861,9 +892,10 @@ function unpinnedReason(target) {
 
 /** Deletes every flagged or unscannable file plus the durable state and verifies each is gone; returns what was removed and what was not. */
 function quarantineLeaks(scan) {
+  // An incomplete walk leaves unvisited entries at every level up to the root, which cannot be
+  // listed without walking again: everything under the output root is removed instead.
+  if (scan.traversal_incomplete) return clearOutputRoot();
   const targets = [...scan.leaking_files, ...scan.unreadable_files];
-  // An incomplete walk leaves unvisited entries: the trees the runtime and checks write to go too.
-  if (scan.traversal_incomplete) targets.push("fixture-repo");
   if (targets.length === 0) return { removed: [], failed: [] };
   const removed = [];
   const failed = [];
@@ -926,6 +958,24 @@ function quarantineLeaks(scan) {
     }
   }
   return { removed, failed };
+}
+
+/** Removes every entry under the output root through the held root handle, listing in bounded batches. */
+function clearOutputRoot() {
+  if (outFd === null) return { removed: [], failed: ["output root (traversal incomplete; clearing it needs held directory handles on this platform)"] };
+  let removed = 0;
+  const failed = new Set();
+  for (let pass = 0; pass < 10_000; pass += 1) {
+    const batch = [];
+    const listing = opendirSync(heldPath(outFd));
+    try { for (let entry = listing.readSync(); entry !== null && batch.length < 1000; entry = listing.readSync()) if (!failed.has(entry.name)) batch.push(entry.name); } finally { listing.closeSync(); }
+    if (batch.length === 0) break;
+    for (const name of batch) {
+      try { removeHeld(outFd, name); removed += 1; } catch { failed.add(name); }
+    }
+  }
+  const remaining = readdirSync(heldPath(outFd)).length;
+  return { removed: [`${removed} entries under the output root (traversal incomplete)`], failed: remaining === 0 ? [] : [`${remaining} entries under the output root${failed.size ? ` (first: ${[...failed].slice(0, 5).join(", ")})` : ""}`] };
 }
 
 /** Streams a file through a sliding window so a value spanning two chunks is still found; bounded by size, growth and the remaining aggregate budget. Returns `{ hit, bytes }`. */

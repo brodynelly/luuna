@@ -16,6 +16,8 @@ export interface Health {
   status: string;
   pi_version: string;
   demo_only: boolean;
+  /** Content digest of the sources the runtime binary was built from. */
+  build_identity?: string;
 }
 
 export interface RunRequest {
