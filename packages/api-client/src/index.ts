@@ -20,6 +20,8 @@ export interface Health {
   build_identity?: string;
   /** Release and commit of the compiler that built the runtime binary. */
   build_rustc?: string;
+  /** Any rustc wrapper Cargo ran the compiler through, or "none". */
+  build_rustc_wrapper?: string;
 }
 
 export interface RunRequest {

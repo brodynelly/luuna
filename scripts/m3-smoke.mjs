@@ -89,6 +89,8 @@ const SCAN_FILE_LIMIT = 512 * 1024 * 1024;
 // left unscanned when a budget is spent is a scan failure and is quarantined.
 const SCAN_TOTAL_LIMIT = 2 * 1024 * 1024 * 1024;
 const SCAN_FILE_COUNT_LIMIT = 20_000;
+// Deepest directory nesting the scan descends into (one call frame and one descriptor per level).
+const SCAN_DEPTH_LIMIT = 128;
 const CREDENTIAL_NAMES = ["ANTHROPIC_API_KEY", "OPENAI_API_KEY", "GEMINI_API_KEY", "GOOGLE_API_KEY", "MISTRAL_API_KEY", "GROQ_API_KEY", "XAI_API_KEY", "OPENROUTER_API_KEY"];
 
 // Fixture mode: the synthetic writer/reviewer read their scenario from
@@ -202,7 +204,9 @@ try {
   record("the Luuna checkout (harness included) matched the recorded revision: no modified or untracked file", evidence.environment.git_dirty === false, `revision ${evidence.environment.git_revision}, ${evidence.environment.git_dirty === false ? "clean" : evidence.environment.git_dirty === null ? "status unknown" : `modified: ${evidence.environment.git_dirty_paths}`}`);
   record("the runtime binary was built from the recorded revision's build inputs (embedded content digest)", identity === evidence.environment.expected_build_identity && evidence.environment.runtime_sources_dirty === false, `revision ${evidence.environment.git_revision}, build inputs ${evidence.environment.runtime_sources_dirty === false ? "clean" : "modified or unknown"}, binary reports ${String(identity).slice(0, 23)}…, checkout ${String(evidence.environment.expected_build_identity).slice(0, 23)}…`);
   const pinned = pinnedToolchain();
-  record("the runtime binary was compiled with the toolchain pinned in rust-toolchain.toml", pinned !== null && String(evidence.environment.runtime_build_rustc).split(" ")[0] === pinned, `pinned ${pinned ?? "unreadable"}, binary built by rustc ${evidence.environment.runtime_build_rustc}`);
+  // A wrapper (RUSTC_WRAPPER / RUSTC_WORKSPACE_WRAPPER) can change compilation while the compiler
+  // still reports the pinned release, so evidence builds must use none.
+  record("the runtime binary was compiled with the toolchain pinned in rust-toolchain.toml and no compiler wrapper", pinned !== null && String(evidence.environment.runtime_build_rustc).split(" ")[0] === pinned && evidence.environment.runtime_build_rustc_wrapper === "none", `pinned ${pinned ?? "unreadable"}, binary built by rustc ${evidence.environment.runtime_build_rustc}, wrapper ${evidence.environment.runtime_build_rustc_wrapper}`);
   await registerProjectAndBaseline();
   await scenario("feature", approvedFeatureIsCheckedAndIndependentlyReviewed);
   await scenario("repair", failingCheckRequiresManualRepairAndFreshEvidence);
@@ -337,11 +341,12 @@ async function startRuntime(label) {
         if (label === "initial") {
           evidence.environment.runtime_build_identity = health.build_identity ?? "not reported";
           evidence.environment.runtime_build_rustc = health.build_rustc ?? "not reported";
+          evidence.environment.runtime_build_rustc_wrapper = health.build_rustc_wrapper ?? "not reported";
         }
         record(`runtime ${label} start`, health.status === "ok", `health ${JSON.stringify(health)}`);
         if (label !== "initial") {
           const env0 = evidence.environment;
-          record(`runtime ${label} is the same revision-bound binary as the initial start`, binarySha === env0.runtime_binary_sha256 && health.build_identity === env0.expected_build_identity && health.build_rustc === env0.runtime_build_rustc, `sha256 ${binarySha.slice(0, 16)}… (initial ${String(env0.runtime_binary_sha256).slice(0, 16)}…), identity ${health.build_identity === env0.expected_build_identity ? "matches" : "differs"}, rustc ${health.build_rustc}`);
+          record(`runtime ${label} is the same revision-bound binary as the initial start`, binarySha === env0.runtime_binary_sha256 && health.build_identity === env0.expected_build_identity && health.build_rustc === env0.runtime_build_rustc && health.build_rustc_wrapper === env0.runtime_build_rustc_wrapper, `sha256 ${binarySha.slice(0, 16)}… (initial ${String(env0.runtime_binary_sha256).slice(0, 16)}…), identity ${health.build_identity === env0.expected_build_identity ? "matches" : "differs"}, rustc ${health.build_rustc}`);
         }
         if (typeof logFd !== "number") record(`runtime ${label} log was created inside the output root`, false, logFd);
         startingRuntime = null;
@@ -908,7 +913,10 @@ function scanForCredentialValues() {
   const nameHit = (text) => values.some((value) => text.includes(value));
   // A directory is { fd } (held handle) or { path } (fallback); `rel` is relative to the output root.
   const childPath = (dir, name) => (dir.fd !== undefined ? heldPath(dir.fd, name) : path.join(dir.path, name));
-  const walk = (dir, rel) => {
+  // Recursion holds one call frame and one directory descriptor per level: nesting deeper than
+  // SCAN_DEPTH_LIMIT is not descended into and marks the walk incomplete, which fails the run
+  // and clears the output root, instead of overflowing the stack before quarantine can run.
+  const walk = (dir, rel, depth = 0) => {
     let listing;
     try { listing = opendirSync(dir.fd !== undefined ? heldPath(dir.fd) : dir.path); } catch { unreadable.push(rel || "."); return; }
     try {
@@ -930,13 +938,15 @@ function scanForCredentialValues() {
           if (dir.fd !== undefined) {
             // Descend through a handle opened without following: an entry swapped for a link is
             // refused by the open itself and reported, never traversed.
+            if (depth + 1 > SCAN_DEPTH_LIMIT) { incomplete = true; unreadable.push(relative); return; }
             let fd;
             try { fd = openHeldDir(target); } catch { unreadable.push(relative); continue; }
-            try { walk({ fd }, relative); } finally { closeSync(fd); }
+            try { walk({ fd }, relative, depth + 1); } finally { closeSync(fd); }
           } else {
             let current;
             try { current = lstatSync(target); } catch { unreadable.push(relative); continue; }
-            if (current.isDirectory()) walk({ path: target }, relative); else unreadable.push(relative);
+            if (depth + 1 > SCAN_DEPTH_LIMIT) { incomplete = true; unreadable.push(relative); return; }
+            if (current.isDirectory()) walk({ path: target }, relative, depth + 1); else unreadable.push(relative);
           }
           if (incomplete) return;
         } else if (entry.isFile()) {

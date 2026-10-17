@@ -32,6 +32,7 @@ use std::{
     collections::BTreeMap,
     io::Read as _,
     path::{Path as FsPath, PathBuf},
+    sync::atomic::{AtomicUsize, Ordering},
     time::Duration,
 };
 use tokio::sync::watch;
@@ -773,6 +774,7 @@ async fn repair_feedback(
         move || repair_check_output(&artifact_dir, &results, &blocking_secrets),
         limit,
         cancel.clone(),
+        &FEEDBACK_READERS,
     )
     .await;
     let raw = json!({"reason":evidence.reason,"checks":evidence.results,"check_output":check_output,"review":evidence.review});
@@ -788,6 +790,10 @@ async fn repair_feedback(
 /// Wall-clock bound on reading the quoted artifacts after the repair is claimed.
 const REPAIR_FEEDBACK_READ_SECONDS: u64 = 30;
 
+/// Feedback readers alive at once, abandoned ones included.
+const MAX_FEEDBACK_READERS: usize = 4;
+static FEEDBACK_READERS: AtomicUsize = AtomicUsize::new(0);
+
 /// Runs the blocking artifact read with a deadline and the repair's own
 /// cancellation: a read stalled on a hung filesystem (which the byte budget
 /// cannot bound) or a cancelled repair yields feedback without quoted output, so
@@ -795,21 +801,44 @@ const REPAIR_FEEDBACK_READ_SECONDS: u64 = 30;
 /// a detached OS thread rather than Tokio's blocking pool: a stalled read cannot
 /// be interrupted, and the runtime's teardown waits for pool tasks but not for
 /// detached threads, so shutdown never hangs on it. A late result is discarded.
+///
+/// Readers are counted in `readers` until their thread actually finishes, and at
+/// most `MAX_FEEDBACK_READERS` exist at once: readers abandoned on a permanently
+/// stalled mount cannot accumulate threads and descriptors without bound, and
+/// once the cap is reached repairs proceed without quoted output instead.
 async fn bounded_feedback_read<F>(
     read: F,
     limit: Duration,
     mut cancel: watch::Receiver<bool>,
+    readers: &'static AtomicUsize,
 ) -> serde_json::Map<String, Value>
 where
     F: FnOnce() -> serde_json::Map<String, Value> + Send + 'static,
 {
+    struct Slot(&'static AtomicUsize);
+    impl Drop for Slot {
+        fn drop(&mut self) {
+            self.0.fetch_sub(1, Ordering::AcqRel);
+        }
+    }
+    if readers
+        .fetch_update(Ordering::AcqRel, Ordering::Acquire, |n| {
+            (n < MAX_FEEDBACK_READERS).then_some(n + 1)
+        })
+        .is_err()
+    {
+        return serde_json::Map::new();
+    }
+    let slot = Slot(readers);
     let (sender, receiver) = tokio::sync::oneshot::channel();
     let spawned = std::thread::Builder::new()
         .name("luuna-repair-feedback".into())
         .spawn(move || {
+            let _slot = slot;
             let _ = sender.send(read());
         });
     if spawned.is_err() {
+        // The closure (and the slot it owns) was dropped with the failed spawn.
         return serde_json::Map::new();
     }
     let reading = tokio::time::timeout(limit, receiver);
@@ -2052,6 +2081,7 @@ mod redaction_tests {
     fn a_stalled_feedback_read_does_not_hold_runtime_shutdown() {
         let runtime = tokio::runtime::Runtime::new().unwrap();
         let (_tx, rx) = watch::channel(false);
+        static READERS: AtomicUsize = AtomicUsize::new(0);
         let out = runtime.block_on(bounded_feedback_read(
             || {
                 std::thread::sleep(Duration::from_secs(30));
@@ -2059,6 +2089,7 @@ mod redaction_tests {
             },
             Duration::from_millis(50),
             rx,
+            &READERS,
         ));
         assert!(out.is_empty());
         let started = std::time::Instant::now();
@@ -2074,15 +2105,21 @@ mod redaction_tests {
             map.insert("late".into(), json!(true));
             map
         };
+        static READERS: AtomicUsize = AtomicUsize::new(0);
         let (_tx, rx) = watch::channel(false);
         let started = std::time::Instant::now();
-        let out = bounded_feedback_read(slow, Duration::from_millis(100), rx).await;
+        let out = bounded_feedback_read(slow, Duration::from_millis(100), rx, &READERS).await;
         assert!(out.is_empty());
         assert!(started.elapsed() < Duration::from_millis(1000));
 
         let (tx, rx) = watch::channel(false);
         let started = std::time::Instant::now();
-        let reading = tokio::spawn(bounded_feedback_read(slow, Duration::from_secs(60), rx));
+        let reading = tokio::spawn(bounded_feedback_read(
+            slow,
+            Duration::from_secs(60),
+            rx,
+            &READERS,
+        ));
         tokio::time::sleep(Duration::from_millis(50)).await;
         tx.send(true).unwrap();
         assert!(reading.await.unwrap().is_empty());
@@ -2094,7 +2131,48 @@ mod redaction_tests {
             map.insert("ok".into(), json!(true));
             map
         };
-        let out = bounded_feedback_read(quick, Duration::from_secs(5), rx).await;
+        let out = bounded_feedback_read(quick, Duration::from_secs(5), rx, &READERS).await;
+        assert_eq!(out.get("ok"), Some(&json!(true)));
+    }
+
+    #[tokio::test]
+    async fn abandoned_feedback_readers_are_capped_until_they_finish() {
+        static READERS: AtomicUsize = AtomicUsize::new(0);
+        let stalled = || {
+            std::thread::sleep(Duration::from_millis(400));
+            serde_json::Map::new()
+        };
+        for _ in 0..MAX_FEEDBACK_READERS {
+            let (_tx, rx) = watch::channel(false);
+            bounded_feedback_read(stalled, Duration::from_millis(10), rx, &READERS).await;
+        }
+        assert_eq!(READERS.load(Ordering::Acquire), MAX_FEEDBACK_READERS);
+        // At the cap the read is not even started: no new thread, no quoted output.
+        let ran = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
+        let flag = ran.clone();
+        let (_tx, rx) = watch::channel(false);
+        let out = bounded_feedback_read(
+            move || {
+                flag.store(true, Ordering::Release);
+                serde_json::Map::new()
+            },
+            Duration::from_secs(5),
+            rx,
+            &READERS,
+        )
+        .await;
+        assert!(out.is_empty());
+        assert!(!ran.load(Ordering::Acquire));
+        // Slots return only when the abandoned threads actually finish.
+        tokio::time::sleep(Duration::from_millis(800)).await;
+        assert_eq!(READERS.load(Ordering::Acquire), 0);
+        let (_tx, rx) = watch::channel(false);
+        let quick = || {
+            let mut map = serde_json::Map::new();
+            map.insert("ok".into(), json!(true));
+            map
+        };
+        let out = bounded_feedback_read(quick, Duration::from_secs(5), rx, &READERS).await;
         assert_eq!(out.get("ok"), Some(&json!(true)));
     }
 

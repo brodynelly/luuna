@@ -108,4 +108,22 @@ fn main() {
         field("release:"),
         field("commit-hash:")
     );
+    // Cargo runs any configured wrapper around RUSTC (environment or config);
+    // it can change how the binary is compiled, so it is reported, not hidden.
+    let wrappers: Vec<String> = ["RUSTC_WRAPPER", "RUSTC_WORKSPACE_WRAPPER"]
+        .iter()
+        .filter_map(|name| {
+            println!("cargo:rerun-if-env-changed={name}");
+            std::env::var(name)
+                .ok()
+                .filter(|value| !value.is_empty())
+                .map(|value| format!("{name}={value}"))
+        })
+        .collect();
+    let wrappers = if wrappers.is_empty() {
+        "none".to_owned()
+    } else {
+        wrappers.join(" ")
+    };
+    println!("cargo:rustc-env=LUUNA_BUILD_RUSTC_WRAPPER={wrappers}");
 }
