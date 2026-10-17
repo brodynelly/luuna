@@ -599,6 +599,41 @@ async fn a_check_that_changes_the_checkout_cannot_produce_passed_evidence() {
 }
 
 #[tokio::test]
+async fn untracked_build_output_from_a_check_does_not_withhold_the_verdict() {
+    let harness = Harness::new();
+    let repo = tempfile::tempdir().unwrap();
+    clean_repository(repo.path());
+    register(&harness, repo.path()).await;
+    harness
+        .confirm(
+            "fixture",
+            0,
+            vec![check(
+                "cache",
+                "import os; os.makedirs('__pycache__', exist_ok=True); open('__pycache__/x.pyc', 'w').write('cache'); print('running 1 tests')",
+                true,
+                30,
+            )],
+        )
+        .await;
+    let run = harness.baseline("fixture", false).await;
+    let id = run["id"].as_str().unwrap().to_owned();
+    let terminal = harness.terminal(&id).await;
+    assert_eq!(terminal["state"], "completed", "{terminal}");
+    let (_, baselines) = harness
+        .request("GET", "/api/v1/projects/fixture/baselines", None)
+        .await;
+    assert_eq!(baselines[0]["status"], "passed", "{baselines}");
+    let events = harness.events(&id).await;
+    let noted = events
+        .iter()
+        .find(|e| e["type"] == "checkout.untracked")
+        .expect("untracked output is recorded");
+    assert_eq!(noted["payload"]["untracked"], 1);
+    assert_eq!(noted["payload"]["paths"][0], "__pycache__/");
+}
+
+#[tokio::test]
 async fn restart_interrupts_a_running_baseline() {
     let harness = Harness::new();
     let repo = tempfile::tempdir().unwrap();

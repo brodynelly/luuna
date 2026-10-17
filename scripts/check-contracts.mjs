@@ -22,7 +22,7 @@ for (const [schema, fixture] of starterPairs) {
 }
 const manifest = read('fixtures/domain/manifest.json');
 const entries = Array.isArray(manifest) ? manifest : manifest.fixtures;
-assert.ok(Array.isArray(entries) && entries.length >= 12, 'Expected valid and invalid fixtures for all six new contracts');
+assert.ok(Array.isArray(entries) && entries.length >= 14, 'Expected valid and invalid fixtures for all seven contracts');
 const compiled = new Map();
 const coverage = new Map();
 for (const item of entries) {
@@ -37,6 +37,6 @@ for (const item of entries) {
   coverage.get(item.schema).add(item.valid);
   checks += 1;
 }
-assert.equal(coverage.size, 6, 'All six new schemas must be exercised');
+assert.equal(coverage.size, 7, 'All seven schemas must be exercised');
 for (const [schema, outcomes] of coverage) assert.equal(outcomes.size, 2, `Missing positive or negative fixture for ${schema}`);
 console.log(`Contracts: ${checks} positive/negative checks passed across ${compiled.size + starterPairs.length} schemas.`);

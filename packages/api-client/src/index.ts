@@ -1,4 +1,6 @@
-export type RunState = "queued" | "running" | "completed" | "failed" | "cancelled" | "interrupted";
+export type RunState =
+  | "queued" | "running" | "completed" | "failed" | "cancelled" | "interrupted"
+  | "discovered" | "exploring" | "testing_blocked" | "plan_ready" | "approved" | "implementing" | "validating" | "reviewing" | "reviewed" | "paused";
 
 export interface RunRecord {
   id: string;
@@ -210,6 +212,151 @@ export interface StartBaselineRequest {
   include_optional?: boolean;
 }
 
+/** Temporary local ticket (ADR 0003); Missions becomes authoritative in M6. */
+export type TicketSource = "luuna_sqlite_temporary";
+
+export interface Ticket {
+  schema_version: string;
+  id: string;
+  project_id: string;
+  revision: number;
+  source: TicketSource;
+  title: string;
+  intent: string;
+  acceptance_criteria: string[];
+  repository_ids: string[];
+  created_at: string;
+  updated_at: string;
+}
+
+export interface CreateTicketRequest {
+  /** Repeating a delivery with the same key returns the same ticket. */
+  idempotency_key: string;
+  title: string;
+  intent: string;
+  acceptance_criteria: string[];
+  repository_ids: string[];
+}
+
+export type Operation = "read" | "write" | "shell" | "network" | "publish";
+
+export interface PlanTask {
+  id: string;
+  repository_id: string;
+  role: string;
+  depends_on: string[];
+  paths: string[];
+  operations: Operation[];
+  acceptance_criteria: string[];
+  execution_profile: string;
+}
+
+export interface CheckRecipe {
+  id: string;
+  repository_id: string;
+  executable: string;
+  args: string[];
+  cwd: string;
+  timeout_seconds: number;
+  required: boolean;
+  capabilities: string[];
+  execution_profile: string;
+}
+
+export interface Budgets {
+  max_workers: number;
+  max_attempts: number;
+  timeout_seconds: number;
+  cost_usd_micros: number;
+}
+
+export interface PlanRevision {
+  schema_version: string;
+  canonicalization: string;
+  id: string;
+  revision: number;
+  project_id: string;
+  ticket_id: string;
+  ticket_revision: number;
+  manifest_hash: string;
+  base_commits: Record<string, string>;
+  candidate_hash: string | null;
+  permissions: { repositories: Record<string, string[]>; operations: Operation[] };
+  tasks: PlanTask[];
+  required_checks: CheckRecipe[];
+  budgets: Budgets;
+  hash: string;
+}
+
+export interface CreatePlanRequest {
+  task: { id?: string; repository_id: string; paths: string[]; operations: Operation[]; acceptance_criteria?: string[] };
+  permissions?: Record<string, string[]>;
+  budgets?: { max_attempts?: number; timeout_seconds?: number; cost_usd_micros?: number };
+}
+
+export interface PlanOpened {
+  plan: PlanRevision;
+  run: RunRecord;
+}
+
+export interface Approval {
+  schema_version: string;
+  id: string;
+  plan_id: string;
+  plan_revision: number;
+  plan_hash: string;
+  approved_by: string;
+  approved_at: string;
+  permissions: { repositories: Record<string, string[]>; operations: Operation[] };
+}
+
+export interface ApprovePlanRequest {
+  plan_revision: number;
+  /** The exact hash the approver saw; anything else is a stale approval. */
+  plan_hash: string;
+  approved_by: string;
+}
+
+export interface PlanApproved {
+  approval: Approval;
+  run: RunRecord;
+}
+
+export interface ImplementRequest {
+  task_id?: string;
+  provider?: string;
+  model?: string;
+}
+
+export type LeaseState = "active" | "released" | "abandoned";
+
+export interface WorktreeLease {
+  id: string;
+  run_id: string;
+  project_id: string;
+  repository_id: string;
+  path: string;
+  base_commit: string;
+  state: LeaseState;
+  candidate_commit?: string;
+  created_at: string;
+  released_at?: string;
+  reason?: string;
+}
+
+export type AttemptState = "running" | "completed" | "failed" | "cancelled" | "interrupted";
+
+export interface AttemptRecord {
+  id: string;
+  run_id: string;
+  task_id: string;
+  number: number;
+  state: AttemptState;
+  payload: Record<string, unknown>;
+  started_at: string;
+  finished_at?: string;
+}
+
 export interface RegisterProjectRequest {
   id?: string;
   name: string;
@@ -236,7 +383,12 @@ export function loopbackUrl(value: string): string {
 }
 
 export function isTerminal(state: RunState): boolean {
-  return ["completed", "failed", "cancelled", "interrupted"].includes(state);
+  return ["completed", "failed", "cancelled", "interrupted", "reviewed"].includes(state);
+}
+
+/** A workflow whose writer has settled with a candidate and now waits for validation (M3). */
+export function awaitsValidation(state: RunState): boolean {
+  return state === "validating";
 }
 
 export class LuunaClient {
@@ -342,6 +494,52 @@ export class LuunaClient {
   /** Starts a baseline run; it is an ordinary run with events, cancellation and replay. */
   startBaseline(id: string, request: StartBaselineRequest, signal?: AbortSignal): Promise<RunRecord> {
     return this.request(`/projects/${encodeURIComponent(id)}/baselines`, { method: "POST", body: JSON.stringify(request), signal });
+  }
+
+  /** Creates the temporary local ticket through the canonical project-scoped route. */
+  createTicket(projectId: string, request: CreateTicketRequest, signal?: AbortSignal): Promise<Ticket> {
+    if (!request.idempotency_key.trim()) throw new Error("An idempotency key is required.");
+    return this.request(`/projects/${encodeURIComponent(projectId)}/tickets`, { method: "POST", body: JSON.stringify(request), signal });
+  }
+
+  listTickets(projectId: string, signal?: AbortSignal): Promise<Ticket[]> {
+    return this.request(`/projects/${encodeURIComponent(projectId)}/tickets`, { signal });
+  }
+
+  ticket(id: string, signal?: AbortSignal): Promise<Ticket> {
+    return this.request(`/tickets/${encodeURIComponent(id)}`, { signal });
+  }
+
+  listPlans(ticketId: string, signal?: AbortSignal): Promise<PlanRevision[]> {
+    return this.request(`/tickets/${encodeURIComponent(ticketId)}/plans`, { signal });
+  }
+
+  /** Records an immutable plan revision; the runtime binds ticket, manifest, base and recipes. */
+  createPlan(ticketId: string, request: CreatePlanRequest, signal?: AbortSignal): Promise<PlanOpened> {
+    return this.request(`/tickets/${encodeURIComponent(ticketId)}/plans`, { method: "POST", body: JSON.stringify(request), signal });
+  }
+
+  plan(id: string, signal?: AbortSignal): Promise<PlanRevision> {
+    return this.request(`/plans/${encodeURIComponent(id)}`, { signal });
+  }
+
+  /** Approves exactly one plan revision by hash; permissions come from the plan, never the client. */
+  approvePlan(id: string, request: ApprovePlanRequest, signal?: AbortSignal): Promise<PlanApproved> {
+    if (!request.plan_hash.startsWith("sha256:")) throw new Error("Approve the plan by its exact hash.");
+    return this.request(`/plans/${encodeURIComponent(id)}/approvals`, { method: "POST", body: JSON.stringify(request), signal });
+  }
+
+  /** Schedules the approved workflow's writer; the runtime revalidates everything before it starts. */
+  implement(runId: string, request: ImplementRequest = {}, signal?: AbortSignal): Promise<RunRecord> {
+    return this.request(`/runs/${encodeURIComponent(runId)}/implement`, { method: "POST", body: JSON.stringify(request), signal });
+  }
+
+  worktrees(runId: string, signal?: AbortSignal): Promise<WorktreeLease[]> {
+    return this.request(`/runs/${encodeURIComponent(runId)}/worktrees`, { signal });
+  }
+
+  attempts(runId: string, signal?: AbortSignal): Promise<AttemptRecord[]> {
+    return this.request(`/runs/${encodeURIComponent(runId)}/attempts`, { signal });
   }
 
   /** Reads a private check log by record identity (`<recipe>.stdout` or `<recipe>.stderr`). */

@@ -7,8 +7,10 @@ use thiserror::Error;
 
 mod baseline;
 mod project;
+mod writer;
 pub use baseline::*;
 pub use project::*;
+pub use writer::*;
 
 pub const SCHEMA_VERSION: &str = "0.1";
 pub const CANONICALIZATION: &str = "luuna-json-v1";
@@ -25,6 +27,10 @@ pub enum DomainError {
     IdentityMismatch(String),
     #[error("baseline evidence required: {0}")]
     BaselineRequired(String),
+    #[error("scope violation: {0}")]
+    ScopeViolation(String),
+    #[error("budget exceeded: {0}")]
+    BudgetExceeded(String),
     #[error("JSON: {0}")]
     Json(#[from] serde_json::Error),
 }
@@ -527,7 +533,7 @@ pub(crate) fn valid_relative_path(path: &str) -> bool {
         && !path.bytes().any(|byte| byte < 32 || byte == 127)
         && path.split('/').all(|part| !part.is_empty() && part != "..")
 }
-fn path_within(path: &str, prefix: &str) -> bool {
+pub(crate) fn path_within(path: &str, prefix: &str) -> bool {
     prefix == "."
         || path == prefix
         || path

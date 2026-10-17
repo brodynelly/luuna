@@ -54,8 +54,13 @@ pub struct AppState {
 
 mod baselines;
 mod projects;
+mod writer;
 pub use baselines::{ArtifactId, StartBaseline};
 pub use projects::{ConfirmManifest, ProjectView, RegisterProject, RegisterRepository};
+pub use writer::{
+    ApprovePlan, BudgetRequest, CreatePlan, CreateTicket, Implement, PlanApproved, PlanOpened,
+    PlanTaskRequest,
+};
 
 impl AppState {
     pub fn open(config: RuntimeConfig) -> Result<Self, Box<dyn std::error::Error>> {
@@ -159,6 +164,20 @@ pub fn router(state: AppState) -> Router {
         .route("/api/v1/runs/{id}/events", get(events))
         .route("/api/v1/runs/{id}/stream", get(stream))
         .route("/api/v1/runs/{id}/cancel", post(cancel))
+        .route("/api/v1/runs/{id}/implement", post(writer::implement))
+        .route("/api/v1/runs/{id}/worktrees", get(writer::list_worktrees))
+        .route("/api/v1/runs/{id}/attempts", get(writer::list_attempts))
+        .route(
+            "/api/v1/projects/{id}/tickets",
+            get(writer::list_tickets).post(writer::create_ticket),
+        )
+        .route("/api/v1/tickets/{id}", get(writer::get_ticket))
+        .route(
+            "/api/v1/tickets/{id}/plans",
+            get(writer::list_plans).post(writer::create_plan),
+        )
+        .route("/api/v1/plans/{id}", get(writer::get_plan))
+        .route("/api/v1/plans/{id}/approvals", post(writer::approve_plan))
         .route(
             "/api/v1/projects",
             get(projects::list_projects).post(projects::register_project),
@@ -490,6 +509,7 @@ async fn run_worker(
         config_dir: state.config.data_dir.join("attempts").join(&id).join("pi"),
         provider,
         model,
+        profile: luuna_engine_pi::SessionProfile::ToolFree,
     };
     let spawned = tokio::select! {
         biased;

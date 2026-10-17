@@ -24,6 +24,7 @@ fn config(stall: bool) -> PiConfig {
         config_dir: root.join("config"),
         provider: None,
         model: None,
+        profile: Default::default(),
     }
 }
 

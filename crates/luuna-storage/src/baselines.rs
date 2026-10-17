@@ -238,20 +238,10 @@ impl Store {
             .map(|payload| serde_json::from_str(&payload))
             .transpose()?
             .ok_or_else(|| StorageError::NotFound(plan_id.clone()))?;
-        let project_manifest: Option<String> = tx
-            .query_row(
-                "SELECT manifest_hash FROM projects WHERE id=?1",
-                [&plan.project_id],
-                |r| r.get(0),
-            )
-            .optional()?
-            .flatten();
-        if project_manifest.as_deref() != Some(plan.manifest_hash.as_str()) {
-            return Err(StorageError::Domain(DomainError::BaselineRequired(
-                "plan is bound to a manifest that is not the project's current confirmed manifest"
-                    .into(),
-            )));
-        }
+        // The ticket, manifest and recorded base commits must still be what the
+        // plan was made against; an external edit or re-confirmation blocks scheduling.
+        crate::writer::check_ticket_binding(&tx, &plan)?;
+        crate::writer::check_manifest_binding(&tx, &plan)?;
         let mut baselines = BTreeMap::new();
         for repository_id in plan.base_commits.keys() {
             let evidence =

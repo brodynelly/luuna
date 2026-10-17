@@ -6,7 +6,7 @@ Date: 2026-10-16. This is the implementation sequence from the audited foundatio
 
 Keep the application and all three maintained CLI components in **this monorepo**. Missions, Atlas, and Beacon retain independent package/API boundaries, compatible data formats, and upstream MIT notices. Repository separation is a later maintenance decision, not a prerequisite or the next assignment. Do not create repositories, remove component source, or replace these tools with Rust rewrites to advance a milestone.
 
-[FOUNDATION-STATUS.md](FOUNDATION-STATUS.md) records the observed evidence. Its current Linux baseline is 83 Rust tests, 15 API-client tests, 18 positive/negative schema checks, and 3,092 component tests passing, with Rust formatting/lint and frontend type/build checks passing, plus an 18-check synthetic smoke-harness run, the 19-check genuine OpenRouter run, the 15-check M2a browser smoke, a genuine passing baseline of this checkout and the 8-check M2b browser smoke. Counts describe that audit, not a permanent expected total; future changes must rerun appropriate checks.
+[FOUNDATION-STATUS.md](FOUNDATION-STATUS.md) records the observed evidence. Its current Linux baseline is 101 Rust tests, 18 API-client tests, 4 scope-guard tests, 20 positive/negative schema checks, and 3,092 component tests passing, with Rust formatting/lint and frontend type/build checks passing, plus an 18-check synthetic smoke-harness run, the 19-check genuine OpenRouter run, the 15-check M2a browser smoke, a genuine passing baseline of this checkout, the 8-check M2b browser smoke and the genuine M2c writer runs recorded in the status report. Counts describe that audit, not a permanent expected total; future changes must rerun appropriate checks.
 
 | Area | Implemented and checked | Partial or not yet demonstrated |
 | --- | --- | --- |
@@ -15,9 +15,9 @@ Keep the application and all three maintained CLI components in **this monorepo*
 | Pi/runtime | Actual Pi 1.3.0 version/RPC handshake, authenticated loopback run API, replay/SSE, timeout/cancel/reap, malformed/error fixtures, durable failed/cancelled attempts | Genuine provider-backed output observed on Linux on October 17, 2026 (OpenRouter `openai/gpt-4o-mini`, 19/19 real-mode smoke checks); Mac/Windows service lifecycle and native client remain unverified |
 | Frontend | Typed client, real service connection, run/history/cancel/reconnect, private in-memory token; browser smoke exercised | Tauri shell exists; native GUI launch, installer, and Mac/Windows results are unverified |
 | Maintained CLIs | Missions, Atlas, Beacon packages with passing standalone tests and compatible legacy aliases | Runtime ticket/knowledge/prompt adapters are not integrated; packages remain private/unpublished |
-| Product workflow | Foundational contracts and negative tests; M2a read-only import, discovery proposals and confirmed manifest revisions with replay; M2b supervised baseline execution with commit/tree/environment-bound evidence and the transactional implementation gate (October 17, 2026) | Approved writer worktrees, independent review, multi-repo scheduling, publication, TUI parity and release installation remain planned |
+| Product workflow | Foundational contracts and negative tests; M2a read-only import, discovery proposals and confirmed manifest revisions with replay; M2b supervised baseline execution with commit/tree/environment-bound evidence and the transactional implementation gate; M2c temporary tickets, immutable plans, exact-hash approvals, Luuna-owned worktree leases and one scoped writer (October 17, 2026) | Candidate validation and independent review (M3), multi-repo scheduling, Missions/Atlas/Beacon adapters, publication, TUI parity and release installation remain planned |
 
-M0 is substantially established, with remaining API/capability/threat-model details completed alongside their first executable consumers. It is not proof of the operational workflow. M1 is closed on Linux as of October 17, 2026; its native-host step is carried by the MVP native-lifecycle item. M2a and M2b closed later the same day (see the status report). Do not restart bootstrap or jump to broad orchestration; the next slice is M2c.
+M0 is substantially established, with remaining API/capability/threat-model details completed alongside their first executable consumers. It is not proof of the operational workflow. M1 is closed on Linux as of October 17, 2026; its native-host step is carried by the MVP native-lifecycle item. M2a, M2b and M2c closed later the same day (see the status report). Do not restart bootstrap or jump to broad orchestration; the next slice is M3.
 
 ## What counts as a usable product
 
@@ -70,6 +70,8 @@ Build a supervised command executor with executable/argument arrays, explicit cw
 Expose immutable plan revisions and exact-hash approvals through runtime/API/client. Revalidate ticket/manifest/base revision and baseline evidence when scheduling. Create only Luuna-owned branches/worktrees with durable ownership/leases. Execute one bounded writer assignment with declared resources, operation scope, budgets, and model profile. Separate native-host permissions from any advertised isolation mechanism.
 
 **Exit:** one approved fixture feature changes only its managed worktree; the developer checkout is preserved. Missing/stale approval, changed base, changed recipe, unrelated repository/path, stale baseline, second writer, and exceeded budget are rejected. Cancellation/restart preserves unfinished work and invalidates uncertain evidence. Map to R07/R08. A prompt that promises to obey paths is not an OS security boundary.
+
+**Status (October 17, 2026): closed on Linux.** Temporary local tickets (ADR 0003/0005), runtime-built immutable plan revisions, exact-hash approvals, `begin_implementation` revalidation of ticket, manifest, base, baseline and host fingerprint, worktree leases with one active lease per repository, attempts counted against the budget, the Pi writer profile with the Luuna scope guard, post-session scope judgement of the worktree diff and candidate commits exist; every exit rejection, cancellation and restart is tested, and a genuine pinned-Pi writer through a real provider is recorded in the status report; see [ADR 0008](decisions/0008-approval-worktrees-writer.md). The Missions adapter replaces the temporary ticket in M6; baselines still run on the developer checkout, so a dirty checkout still blocks a baseline.
 
 ### M3 — Candidate checks, independent review, repair and recovery
 
@@ -215,14 +217,14 @@ The earlier desktop proposal estimated **372–600 hours from scratch** for a me
 | Remaining work to a usable single-repo MVP | Focused hours before contingency |
 | --- | ---: |
 | Genuine M1 compatibility and evidence (Linux closed October 17, 2026; native-host step remains) | 0–8 |
-| M2c approval revalidation, worktree ownership and scoped writer (M2a and M2b closed October 17, 2026) | 40–72 |
+| M2c approval revalidation, worktree ownership and scoped writer (closed on Linux October 17, 2026; native-host proof remains) | 0–8 |
 | M3 independent review, repair and recovery | 64–104 |
 | MVP client completion, native smoke and end-to-end hardening | 64–104 |
-| Subtotal | 168–288 |
-| Technical uncertainty allowance, approximately 20% | 34–58 |
-| **Planning range** | **202–346** |
+| Subtotal | 128–224 |
+| Technical uncertainty allowance, approximately 20% | 26–45 |
+| **Planning range** | **154–269** |
 
-That is about **5–9 full 40-hour engineering weeks**, or **7–12 elapsed workweeks at 30 focused hours/week** under these assumptions. A connectivity preview can arrive sooner; it is not the usable MVP defined above.
+That is about **4–7 full 40-hour engineering weeks**, or **5–9 elapsed workweeks at 30 focused hours/week** under these assumptions. A connectivity preview can arrive sooner; it is not the usable MVP defined above.
 
 | Additional work after the MVP to full v1 | Focused hours before contingency |
 | --- | ---: |
@@ -235,6 +237,6 @@ That is about **5–9 full 40-hour engineering weeks**, or **7–12 elapsed work
 | Technical uncertainty allowance, approximately 20% | 106–184 |
 | **Additional planning range** | **640–1,110** |
 
-The combined remaining full-v1 range is roughly **920–1,580 focused hours**, about **23–40 full engineering weeks** or **31–53 elapsed workweeks at the assumed focused capacity**. Treat the upper range seriously: native/mobile profiles, TUI parity, independent service installation and publication recovery are substantial product work. Requirements changes or missing platforms can exceed this range.
+The combined remaining full-v1 range is roughly **790–1,380 focused hours**, about **20–35 full engineering weeks** or **26–46 elapsed workweeks at the assumed focused capacity**. Treat the upper range seriously: native/mobile profiles, TUI parity, independent service installation and publication recovery are substantial product work. Requirements changes or missing platforms can exceed this range.
 
 The execution critical path is **genuine M1 → import/baseline → exact approval/scoped writer → candidate checks/fresh review → reliable multi-repo integration**. Full-v1 release also depends on client parity, profile/platform proof and publication/installers. Stack/client contracts can be prepared alongside core work once stable, but one engineer's parallel tasks do not create extra capacity. Re-estimate from measured milestone throughput and preserve required gates; if time is short, narrow the MVP scope explicitly rather than declaring full v1 early.

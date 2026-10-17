@@ -1,6 +1,6 @@
 # Current Luuna architecture
 
-Date: 2026-10-16, updated 2026-10-17 for M2a and M2b. Status: authoritative foundation baseline; implementation evidence is required for each milestone.
+Date: 2026-10-16, updated 2026-10-17 for M2a, M2b and M2c. Status: authoritative foundation baseline; implementation evidence is required for each milestone.
 
 ## Purpose and precedence
 
@@ -61,13 +61,13 @@ The owner's explicit October 16, 2026 decision is to keep the application and al
 
 ## API and service lifetime
 
-All application routes use `/api/v1`. Implemented project routes are `POST /api/v1/projects` (register existing repositories by absolute root path), `GET /api/v1/projects[/{id}]`, `POST /api/v1/projects/{id}/discover` (read-only proposal), `PUT /api/v1/projects/{id}/manifest` (confirm with `expected_revision`) and `GET /api/v1/projects/{id}/events`. The canonical create-ticket route is **`POST /api/v1/projects/{id}/tickets`**. Do not add a parallel `POST /api/v1/tickets` alias. Other operations address ticket, plan, and run identities. Commands that can create work require idempotency; operations sensitive to stale state require expected revisions. SSE streams use durable event IDs/cursors for replay and deduplication. Artifacts use authorized IDs, never arbitrary request-supplied filesystem paths.
+All application routes use `/api/v1`. Implemented project routes are `POST /api/v1/projects` (register existing repositories by absolute root path), `GET /api/v1/projects[/{id}]`, `POST /api/v1/projects/{id}/discover` (read-only proposal), `PUT /api/v1/projects/{id}/manifest` (confirm with `expected_revision`) and `GET /api/v1/projects/{id}/events`. The canonical create-ticket route is **`POST /api/v1/projects/{id}/tickets`** (implemented in M2c with an idempotency key; the record is the temporary local source of ADR 0003). Do not add a parallel `POST /api/v1/tickets` alias. Other operations address ticket, plan, and run identities: `POST /api/v1/tickets/{id}/plans` records the next immutable plan revision and opens its workflow run, `POST /api/v1/plans/{id}/approvals` approves one exact hash, `POST /api/v1/runs/{id}/implement` schedules the writer after transactional revalidation, and `GET /api/v1/runs/{id}/worktrees` and `/attempts` expose the Luuna-owned worktree leases and attempts (ADR 0008). Commands that can create work require idempotency; operations sensitive to stale state require expected revisions. SSE streams use durable event IDs/cursors for replay and deduplication. Artifacts use authorized IDs, never arbitrary request-supplied filesystem paths.
 
 Bind the development service to loopback and authenticate protected API actions. A development launch may use an explicitly managed foreground process. The desktop reconnects to that service; closing a window or losing SSE does not decide run lifetime. Explicit shutdown stops or reconciles owned workers and persists interruption. A Tauri child/sidecar alone does not prove independent lifetime. Platform-specific startup, supervision, token storage, and shutdown must be tested before distribution. See [ADR 0004](decisions/0004-service-lifecycle.md).
 
 ## Milestone evidence
 
-The initial executable implementation is a tool-free connectivity slice, not the approved implementation workflow. It exposes authenticated run creation/history, cursor event replay and SSE, and cancellation; the UI currently reconnects through replay polling. M2a adds read-only repository import, discovery proposals and confirmed manifest revisions. Ticket creation, Seeds/Missions reconciliation, baseline execution, implementation scheduling, independent review, and publication remain subsequent capabilities. The canonical ticket route above is a specification until its implementation and tests exist.
+The initial executable implementation is a tool-free connectivity slice, not the approved implementation workflow. It exposes authenticated run creation/history, cursor event replay and SSE, and cancellation; the UI currently reconnects through replay polling. M2a adds read-only repository import, discovery proposals and confirmed manifest revisions; M2b adds supervised baselines with bound evidence; M2c adds temporary local tickets, immutable plan revisions, exact-hash approvals, Luuna-owned worktree leases and one scoped writer whose candidate waits in `validating`. Seeds/Missions reconciliation, candidate validation, independent review, and publication remain subsequent capabilities.
 
 | Milestone | Required proof | Does not establish completion |
 | --- | --- | --- |
@@ -75,6 +75,7 @@ The initial executable implementation is a tool-free connectivity slice, not the
 | M1 | Real pinned Pi/provider session, streamed API events, persistence, cancellation, error handling and restart evidence | Scripted worker or fixture-only protocol tests |
 | M2a | Real and synthetic imports with byte-identical checkouts, rejected invalid/mismatched repositories, proposed (not executed) recipes, confirmed manifest replay after restart | A proposed manifest, a stored recipe, or any claim that a baseline ran |
 | M2b | Genuine passing and failing baselines with commit/tree/environment-bound results and hashed artifacts; missing executable, empty suite, dirty checkout, deadline, cancellation and restart recorded as blocked/failed/cancelled/interrupted; stale baseline cannot enter implementation | A writer, a worktree, or any run that modifies a repository |
+| M2c | One approved fixture feature changed only its Luuna-owned worktree with the developer checkout byte-identical; missing or stale approval, changed base, changed recipe, unrelated repository or path, stale baseline, second writer and exceeded budget refused; cancellation and restart preserve the worktree and void the attempt; a genuine pinned-Pi writer run through a real provider | Validation of the candidate, independent review, repair or any publication (M3+); any claim that prompt or guard scoping is an OS boundary |
 | Desktop integration | Real service connection, run actions, streamed state and reconnection | Frontend build or decorative simulation alone |
 | Full v1 | Original requirements/acceptance matrix including browser/TUI parity and supported platform evidence | Single-repository Linux demo |
 

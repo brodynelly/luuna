@@ -387,6 +387,10 @@ impl Store {
     }
 }
 
+pub(crate) fn get_project_in(connection: &Connection, id: &str) -> Result<Option<ProjectRecord>> {
+    get_project(connection, id)
+}
+
 fn get_project(connection: &Connection, id: &str) -> Result<Option<ProjectRecord>> {
     connection
         .query_row(
@@ -405,6 +409,13 @@ fn get_project(connection: &Connection, id: &str) -> Result<Option<ProjectRecord
         )
         .optional()
         .map_err(Into::into)
+}
+
+pub(crate) fn repositories_in(
+    connection: &Connection,
+    project_id: &str,
+) -> Result<Vec<RepositoryRegistration>> {
+    repositories(connection, project_id)
 }
 
 fn repositories(connection: &Connection, project_id: &str) -> Result<Vec<RepositoryRegistration>> {

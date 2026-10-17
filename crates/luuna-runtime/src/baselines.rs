@@ -178,11 +178,19 @@ fn spec_for(
     recipe: &ManifestCheck,
     artifact_dir: &std::path::Path,
 ) -> CommandSpec {
+    recipe_spec(&job.registration.local_path, recipe, artifact_dir)
+}
+
+pub(crate) fn recipe_spec(
+    local_path: &str,
+    recipe: &ManifestCheck,
+    artifact_dir: &std::path::Path,
+) -> CommandSpec {
     CommandSpec {
         recipe_id: recipe.id.clone(),
         executable: recipe.executable.clone(),
         args: recipe.args.clone(),
-        repository_root: PathBuf::from(&job.registration.local_path),
+        repository_root: PathBuf::from(local_path),
         cwd: recipe.cwd.clone(),
         timeout: Duration::from_secs(recipe.timeout_seconds),
         capabilities: recipe.capabilities.clone(),
@@ -190,8 +198,33 @@ fn spec_for(
     }
 }
 
-fn artifact_dir(state: &AppState, run_id: &str) -> PathBuf {
+pub(crate) fn artifact_dir(state: &AppState, run_id: &str) -> PathBuf {
     state.config.data_dir.join("artifacts").join(run_id)
+}
+
+/// The host's environment fingerprint for a set of recipes: resolved
+/// executables and versions, probed without running any recipe. Baselines
+/// record it; scheduling recomputes it so evidence from another host or
+/// toolchain never authorizes a writer.
+pub(crate) async fn probe_fingerprint(
+    state: &AppState,
+    local_path: &str,
+    recipes: &[ManifestCheck],
+    artifact_dir: &std::path::Path,
+) -> String {
+    let mut parts = Vec::new();
+    for recipe in recipes {
+        let part = match state
+            .executor
+            .probe(&recipe_spec(local_path, recipe, artifact_dir))
+            .await
+        {
+            Probe::Resolved { fingerprint, .. } => fingerprint,
+            Probe::Unavailable(reason) => format!("unavailable:{}:{reason}", recipe.id),
+        };
+        parts.push(part);
+    }
+    Executor::combine_fingerprints(&parts)
 }
 
 async fn baseline_worker(state: AppState, job: BaselineJob, cancel: watch::Receiver<bool>) {
@@ -521,11 +554,11 @@ async fn baseline_worker(state: AppState, job: BaselineJob, cancel: watch::Recei
                         "HEAD moved from {} to {} while checks ran",
                         identity.commit, after.head_commit
                     ));
-                } else if !after.dirty.is_clean() {
+                } else if after.dirty.staged + after.dirty.unstaged + after.dirty.conflicted > 0 {
                     let dirty = &after.dirty;
                     drift = Some(format!(
-                        "working tree was modified while checks ran: {} staged, {} unstaged, {} untracked and {} conflicted paths",
-                        dirty.staged, dirty.unstaged, dirty.untracked, dirty.conflicted
+                        "tracked files were modified while checks ran: {} staged, {} unstaged and {} conflicted paths",
+                        dirty.staged, dirty.unstaged, dirty.conflicted
                     ));
                 } else if let Err(error) = job
                     .registration
@@ -536,6 +569,14 @@ async fn baseline_worker(state: AppState, job: BaselineJob, cancel: watch::Recei
                     drift = Some(format!(
                         "repository identity changed while checks ran: {error}"
                     ));
+                } else if after.dirty.untracked > 0 {
+                    // Build caches and reports are untracked by definition and do not
+                    // change the recorded commit or tree; they are recorded, not judged.
+                    let _ = state.event(
+                        &job.run_id,
+                        "checkout.untracked",
+                        json!({"untracked": after.dirty.untracked, "paths": after.dirty.paths, "truncated": after.dirty.truncated}),
+                    );
                 }
             }
             Err(error) => {

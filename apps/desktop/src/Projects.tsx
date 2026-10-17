@@ -2,6 +2,7 @@ import { useEffect, useRef, useState } from "react";
 import type { FormEvent } from "react";
 import type { BaselineEvidence, Discovery, EventEnvelope, LuunaClient, ProjectRecord, ProjectView } from "@luuna/api-client";
 import { isTerminal, mergeEvents } from "@luuna/api-client";
+import { Workflows } from "./Workflows";
 
 function message(error: unknown): string {
   return error instanceof Error ? error.message : "The runtime could not be reached.";
@@ -199,7 +200,7 @@ export function Projects({ client }: { client: LuunaClient | null }) {
   const observation = registration?.observation;
 
   return <section className="panel projects-panel" aria-labelledby="projects-heading">
-    <div className="panel-heading"><h2 id="projects-heading">Projects</h2><span className="tag">M2a import · M2b baseline</span></div>
+    <div className="panel-heading"><h2 id="projects-heading">Projects</h2><span className="tag">M2a import · M2b baseline · M2c writer</span></div>
     <p className="scope">Register an existing repository root. The runtime observes identity, base commit and dirty state without touching the checkout, proposes check recipes from its manifests, and records an immutable manifest revision only when you confirm it.</p>
     {error && <div className="error" role="alert">{error}<button className="text-button" type="button" onClick={() => setError("")}>Dismiss</button></div>}
 
@@ -257,6 +258,7 @@ export function Projects({ client }: { client: LuunaClient | null }) {
               </fieldset>
             </form>
           </>}
+          <Workflows client={client} projectId={view.project.id} repositoryId={registration.repository_id} manifestConfirmed={view.manifest !== null && view.manifest !== undefined} onChanged={() => { if (selected) void guarded((signal) => refresh(selected, signal)); }} />
           <details className="project-events"><summary>Project event record ({events.length})</summary>
             <ol className="events" aria-label="Durable project events">{events.map((event) => <li key={event.event_id}><details><summary><span className="event-number">{event.sequence}</span><span>{event.type}</span></summary><pre>{JSON.stringify(event.payload, null, 2)}</pre></details></li>)}</ol>
           </details>

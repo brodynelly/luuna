@@ -9,7 +9,9 @@ use thiserror::Error;
 
 mod baselines;
 mod projects;
+mod writer;
 pub use projects::*;
+pub use writer::AttemptRecord;
 
 #[derive(Debug, Error)]
 pub enum StorageError {
@@ -85,6 +87,7 @@ impl Store {
         connection.execute_batch(MIGRATION_1)?;
         connection.execute_batch(MIGRATION_2)?;
         connection.execute_batch(MIGRATION_3)?;
+        connection.execute_batch(MIGRATION_4)?;
         Ok(Self { connection })
     }
 
@@ -229,6 +232,7 @@ impl Store {
             )?;
         }
         baselines::interrupt_running_baselines(&tx)?;
+        writer::abandon_orphaned_work(&tx)?;
         tx.commit()?;
         Ok(active.len())
     }
@@ -413,7 +417,7 @@ pub(crate) fn transition(
     Ok(())
 }
 
-fn append(
+pub(crate) fn append(
     tx: &Transaction<'_>,
     run_id: &str,
     event_type: &str,
@@ -545,5 +549,19 @@ CREATE TABLE IF NOT EXISTS check_results(id TEXT PRIMARY KEY, baseline_id TEXT N
 CREATE TRIGGER IF NOT EXISTS immutable_check_results_update BEFORE UPDATE ON check_results BEGIN SELECT RAISE(ABORT,'immutable check result'); END;
 CREATE TRIGGER IF NOT EXISTS immutable_check_results_delete BEFORE DELETE ON check_results BEGIN SELECT RAISE(ABORT,'immutable check result'); END;
 INSERT OR IGNORE INTO schema_migrations(version) VALUES (3);
+COMMIT;
+";
+
+const MIGRATION_4: &str = "
+BEGIN IMMEDIATE;
+CREATE TABLE IF NOT EXISTS tickets(id TEXT PRIMARY KEY, project_id TEXT NOT NULL REFERENCES projects(id), revision INTEGER NOT NULL CHECK(revision>0),
+ idempotency_key TEXT NOT NULL, payload TEXT NOT NULL, created_at TEXT NOT NULL, updated_at TEXT NOT NULL);
+CREATE UNIQUE INDEX IF NOT EXISTS tickets_idempotency ON tickets(project_id, idempotency_key);
+CREATE TABLE IF NOT EXISTS worktree_leases(id TEXT PRIMARY KEY, run_id TEXT NOT NULL REFERENCES runs(id), project_id TEXT NOT NULL REFERENCES projects(id),
+ repository_id TEXT NOT NULL, path TEXT NOT NULL UNIQUE, base_commit TEXT NOT NULL, state TEXT NOT NULL, payload TEXT NOT NULL, created_at TEXT NOT NULL, released_at TEXT);
+CREATE UNIQUE INDEX IF NOT EXISTS one_active_lease_per_repository ON worktree_leases(project_id, repository_id) WHERE state='active';
+CREATE TABLE IF NOT EXISTS attempts(id TEXT PRIMARY KEY, run_id TEXT NOT NULL REFERENCES runs(id), task_id TEXT NOT NULL, number INTEGER NOT NULL CHECK(number>0),
+ state TEXT NOT NULL, payload TEXT NOT NULL, started_at TEXT NOT NULL, finished_at TEXT, UNIQUE(run_id, number));
+INSERT OR IGNORE INTO schema_migrations(version) VALUES (4);
 COMMIT;
 ";

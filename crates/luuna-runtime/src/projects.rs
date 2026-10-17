@@ -64,7 +64,7 @@ fn bad_request(message: impl Into<String>) -> ApiError {
     ApiError(StatusCode::BAD_REQUEST, message.into())
 }
 
-fn storage_error(error: StorageError) -> ApiError {
+pub(crate) fn storage_error(error: StorageError) -> ApiError {
     match error {
         StorageError::NotFound(_) => ApiError(StatusCode::NOT_FOUND, "project not found".into()),
         StorageError::AlreadyExists(id) => ApiError(

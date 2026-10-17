@@ -58,5 +58,15 @@
     "schema": "schemas/publication.schema.json",
     "fixture": "fixtures/domain/publication.invalid.json",
     "valid": false
+  },
+  {
+    "schema": "schemas/ticket.schema.json",
+    "fixture": "fixtures/domain/ticket.valid.json",
+    "valid": true
+  },
+  {
+    "schema": "schemas/ticket.schema.json",
+    "fixture": "fixtures/domain/ticket.invalid.json",
+    "valid": false
   }
 ]

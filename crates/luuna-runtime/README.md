@@ -65,6 +65,27 @@ require `Authorization: Bearer <token>`:
 - `GET /api/v1/runs/{id}/artifacts/{recipe}.{stdout|stderr}`: the private check log by
   record identity (text, capped at 16 MiB).
 
+- `POST /api/v1/projects/{id}/tickets`: `{ "idempotency_key", "title", "intent", "acceptance_criteria": [...], "repository_ids": [...] }`
+  creates the temporary local ticket (201; 200 when the key repeats with the same content,
+  409 when it repeats with different content). `GET` lists them; `GET /api/v1/tickets/{id}`
+  reads one. This is the only ticket creation route (ADR 0005).
+- `POST /api/v1/tickets/{id}/plans`: `{ "task": { "repository_id", "paths": [...], "operations": [...] }, "permissions"?, "budgets"? }`
+  records the next immutable plan revision bound by the runtime to the ticket revision, the
+  current manifest hash, its recorded base commit and its recipes, and opens the workflow run
+  (`plan_ready`). Returns `{ plan, run }`. `GET` lists a ticket's plans; `GET /api/v1/plans/{id}`
+  reads the latest revision.
+- `POST /api/v1/plans/{id}/approvals`: `{ "plan_revision", "plan_hash", "approved_by" }` approves
+  exactly that hash; permissions are copied from the plan. Returns `{ approval, run }` with the
+  run `approved`; a stale hash or revision returns 409.
+- `POST /api/v1/runs/{id}/implement`: `{ "task_id"?, "provider"?, "model"? }` schedules the
+  writer (202) after revalidating the approval, ticket revision, manifest, base commit, passed
+  baseline, host fingerprint, repository HEAD, lease exclusivity and attempt budget; any refusal
+  is 409/422 with the reason and leaves the run `approved`. The writer runs the pinned Pi inside a
+  Luuna-owned detached worktree under the data directory with file tools only and the scope
+  guard loaded; in-scope changes become a candidate commit and the run enters `validating`.
+- `GET /api/v1/runs/{id}/worktrees`, `GET /api/v1/runs/{id}/attempts`: the run's worktree
+  leases (path, base, state, candidate commit) and its attempts.
+
 Repository inspection runs `git` with optional locks disabled and repository-controlled
 `core.fsmonitor`/hooks neutralised, so the developer's index and working tree stay
 byte-identical. Remote URLs are redacted before storage. Registering or confirming a
