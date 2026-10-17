@@ -306,6 +306,12 @@ record("the runtime exited before the leak scan", finalStop.exited, finalStop.ex
 // check descendant, an orphaned Pi) is killed and its exit observed first.
 const strays = await reapStrays();
 evidence.stray_processes = strays;
+// Checks run writer-controlled code with host permissions, so the Luuna checkout that defines the
+// evidence is compared again once nothing of the run can still write to it.
+const checkoutAfter = checkoutState();
+try { checkoutAfter.build_identity = buildIdentity(); } catch (error) { checkoutAfter.build_identity = `unavailable: ${error.message}`; }
+evidence.checkout_after_run = checkoutAfter;
+record("the Luuna checkout was still the recorded revision, clean, with the same build inputs once every process of the run had stopped", checkoutAfter.git_revision === evidence.environment?.git_revision && checkoutAfter.git_dirty === false && checkoutAfter.build_identity === evidence.environment?.expected_build_identity, `revision ${checkoutAfter.git_revision}, ${checkoutAfter.git_dirty === false ? "clean" : checkoutAfter.git_dirty === null ? "status unknown" : `modified: ${checkoutAfter.git_dirty_paths}`}, build inputs ${checkoutAfter.build_identity === evidence.environment?.expected_build_identity ? "unchanged" : "changed"}`);
 record("no process of the run outlived it before the leak scan (Linux child subreaper; survivors killed)", strays.contained || process.platform !== "linux", strays.contained ? `${strays.killed} surviving process(es) killed and reaped` : process.platform === "linux" ? `not contained: ${strays.reason}` : `unavailable on ${process.platform}: descendants that detach from the runtime are not tracked`);
 evidence.leak_scan = scanForCredentialValues();
 // Held handles are required where they exist (Linux); elsewhere the weaker fallback is recorded, not hidden.
@@ -975,17 +981,27 @@ async function waitUntil(predicate, timeoutMs) {
 }
 
 
-function environment() {
-  const info = { platform: `${platform()} ${release()} ${arch()}`, node: process.version, pi_launcher: profile.pi, pi_launcher_args: profile.piArgs, provider: profile.provider, model: profile.model, required_check: profile.checks.map((check) => [check.executable, ...check.args.map((arg) => truncate(arg, 40))].join(" ")) };
-  try { info.git_revision = git(repository, "rev-parse", "HEAD"); } catch { info.git_revision = "unknown"; }
+/**
+ * The Luuna checkout's revision and whether any tracked, untracked or index-flagged path differs
+ * from it; taken before the run and again after every native process has stopped.
+ */
+function checkoutState() {
+  const state = {};
+  try { state.git_revision = git(repository, "rev-parse", "HEAD"); } catch { state.git_revision = "unknown"; }
   try {
     const status = git(repository, "status", "--porcelain", "--untracked-files=all");
     // `git status` hides changes to paths marked assume-unchanged (lower-case tag) or skip-worktree
     // (tag S), so any such flag counts as a possible modification.
     const hidden = git(repository, "ls-files", "-v").split("\n").filter((line) => /^[a-zS] /.test(line)).map((line) => `${line.slice(2)} (index flag ${line[0]})`);
-    info.git_dirty = status.length > 0 || hidden.length > 0;
-    if (info.git_dirty) info.git_dirty_paths = [...status.split("\n").filter(Boolean).map((line) => line.slice(3)), ...hidden].slice(0, 10).join(", ");
-  } catch { info.git_dirty = null; }
+    state.git_dirty = status.length > 0 || hidden.length > 0;
+    if (state.git_dirty) state.git_dirty_paths = [...status.split("\n").filter(Boolean).map((line) => line.replace(/^\s*\S{1,2}\s+/, "")), ...hidden].slice(0, 10).join(", ");
+  } catch { state.git_dirty = null; }
+  return state;
+}
+
+function environment() {
+  const info = { platform: `${platform()} ${release()} ${arch()}`, node: process.version, pi_launcher: profile.pi, pi_launcher_args: profile.piArgs, provider: profile.provider, model: profile.model, required_check: profile.checks.map((check) => [check.executable, ...check.args.map((arg) => truncate(arg, 40))].join(" ")) };
+  Object.assign(info, checkoutState());
   try { info.python_version = execFileSync(python, ["--version"], { encoding: "utf8" }).trim(); } catch (error) { info.python_version = `unavailable: ${error.message}`; }
   if (mode === "real") {
     try { info.pi_version = execFileSync(profile.pi, [...profile.piArgs, "--version"], { encoding: "utf8" }).trim(); } catch (error) { info.pi_version = `unavailable: ${error.message}`; }
@@ -1012,7 +1028,7 @@ function environment() {
       // The same lexical, fail-closed rule as build.rs: any of these names as a whole key token
       // anywhere (table header, dotted, inline or quoted key, or a mere mention), or any
       // backslash, since an escape in a quoted key can spell any name.
-      return text.includes("\\") || /(?<![A-Za-z0-9_-])(paths|include|replace-with|patch|profile|rustc)(?![A-Za-z0-9_-])/.test(text);
+      return text.includes("\\") || /(?<![A-Za-z0-9_-])(paths|include|replace-with|patch|profile|rustc|linker)(?![A-Za-z0-9_-])/.test(text);
     });
   })();
   // Bind the binary to the recorded revision by content: the runtime reports the digest its

@@ -31,8 +31,9 @@ fn collect(root: &Path, dir: &Path, files: &mut Vec<String>) {
 /// beyond the repository's own manifests: a `paths` dependency override, a
 /// `patch` table, a source `replace-with`, a `profile` setting (overflow
 /// checks, panic strategy, LTO, ...) or an `include` of further config that is
-/// not read here, or a `rustc` compiler substitution. TOML can spell these keys as table headers, dotted keys,
-/// inline tables or quoted keys, so the rule is lexical and fails closed: the
+/// not read here, or a `rustc` compiler or `linker` substitution. TOML can
+/// spell these keys as table headers, dotted keys, inline tables or quoted
+/// keys, so the rule is lexical and fails closed: the
 /// text is flagged if any of these names appears as a whole key token
 /// anywhere, or if it contains a backslash (an escape in a quoted key can
 /// spell any name). A comment or value that mentions a name is flagged too.
@@ -46,6 +47,7 @@ fn config_override(text: &str) -> bool {
             "patch",
             "profile",
             "rustc",
+            "linker",
         ]
         .iter()
         .any(|name| {
@@ -183,12 +185,19 @@ fn main() {
         .filter(|flag| !flag.is_empty())
         .collect::<Vec<_>>()
         .join(" ");
-    let mut overrides: Vec<String> = std::env::vars()
-        .map(|(name, _)| name)
+    // `vars_os`: an unrelated non-UTF-8 entry must not fail the build; the
+    // names that matter here are ASCII. Cargo sets `RUSTC_LINKER` for build
+    // scripts whenever a linker is configured (`target.<triple>.linker` or
+    // `CARGO_TARGET_<TRIPLE>_LINKER`); a substituted linker can change the
+    // binary, so it is reported as an override.
+    let mut overrides: Vec<String> = std::env::vars_os()
+        .map(|(name, _)| name.to_string_lossy().into_owned())
         .filter(|name| {
             name.starts_with("CARGO_PROFILE_")
-                || (name.starts_with("CARGO_TARGET_") && name.ends_with("_RUSTFLAGS"))
+                || (name.starts_with("CARGO_TARGET_")
+                    && (name.ends_with("_RUSTFLAGS") || name.ends_with("_LINKER")))
                 || name == "CARGO_BUILD_RUSTFLAGS"
+                || name == "RUSTC_LINKER"
         })
         .collect();
     overrides.sort();
