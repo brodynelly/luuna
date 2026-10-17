@@ -813,8 +813,11 @@ function quarantineLeaks(scan) {
 function fileContainsAny(file, values) {
   if (values.length === 0) return false;
   const overlap = Math.max(...values.map((value) => Buffer.byteLength(value, "latin1"))) - 1;
-  const fd = openSync(file, "r");
+  // Open without following a link and without blocking, then judge the opened
+  // handle: a FIFO or device swapped into the path is a scan failure, not a hang.
+  const fd = openSync(file, fsConstants.O_RDONLY | (fsConstants.O_NOFOLLOW ?? 0) | (fsConstants.O_NONBLOCK ?? 0));
   try {
+    if (!fstatSync(fd).isFile()) throw new Error("not a regular file");
     const chunk = Buffer.alloc(1024 * 1024);
     let carry = "";
     for (;;) {
