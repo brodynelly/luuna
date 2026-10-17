@@ -16,8 +16,8 @@
 // supported names (or their LUUNA_PI_ aliases) to the isolated Pi children. The
 // report records credential names only and is scanned for leaked values.
 import { spawn, execFileSync } from "node:child_process";
-import { mkdirSync, writeFileSync, readdirSync, statSync, lstatSync, readlinkSync, realpathSync, existsSync, openSync, readSync, closeSync, rmSync, unlinkSync, fstatSync, fchmodSync, ftruncateSync, constants as fsConstants } from "node:fs";
-import { randomBytes } from "node:crypto";
+import { mkdirSync, writeFileSync, rmdirSync, readdirSync, readFileSync, opendirSync, statSync, lstatSync, readlinkSync, realpathSync, existsSync, openSync, readSync, closeSync, unlinkSync, fstatSync, fchmodSync, ftruncateSync, constants as fsConstants } from "node:fs";
+import { randomBytes, createHash } from "node:crypto";
 import { tmpdir, platform, release, arch, devNull } from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
@@ -34,6 +34,22 @@ mkdirSync(out, { recursive: true, mode: 0o700 });
 // The output root's identity, pinned before anything runs: destructive cleanup is refused if
 // the directory is later replaced, renamed or reached through a different real path.
 const outIdentity = (() => { const stat = lstatSync(out); return { dev: stat.dev, ino: stat.ino, real: realpathSync(out) }; })();
+// Held directory handles (Linux): the scan and quarantine resolve every name relative to an open,
+// non-following directory descriptor through /proc/self/fd, so renaming the output root or
+// replacing any component with a link after it was opened cannot redirect a read or a removal.
+// Elsewhere the harness falls back to path checks, records that, and refuses recursive removal.
+const HELD_HANDLES = process.platform === "linux" && fsConstants.O_DIRECTORY !== undefined && fsConstants.O_NOFOLLOW !== undefined && existsSync("/proc/self/fd");
+const heldPath = (fd, name) => (name === undefined ? `/proc/self/fd/${fd}` : `/proc/self/fd/${fd}/${name}`);
+const openHeldDir = (target) => openSync(target, fsConstants.O_RDONLY | fsConstants.O_DIRECTORY | fsConstants.O_NOFOLLOW);
+// Removes an entry relative to a held parent, descending only through non-following handles.
+const removeHeld = (parentFd, name) => {
+  const target = heldPath(parentFd, name);
+  if (!lstatSync(target).isDirectory()) { unlinkSync(target); return; }
+  const fd = openHeldDir(target);
+  try { for (const child of readdirSync(heldPath(fd))) removeHeld(fd, child); } finally { closeSync(fd); }
+  rmdirSync(target);
+};
+const outFd = HELD_HANDLES ? openHeldDir(out) : null;
 const dataDir = path.join(out, "data");
 const fixtureRepo = path.join(out, "fixture-repo");
 // Refuse any non-empty output directory before anything is spawned: the run
@@ -156,6 +172,7 @@ let finalStop = { exited: false };
 
 try {
   evidence.environment = environment();
+  record("the runtime binary was built from the recorded revision's runtime sources", evidence.environment.runtime_binary_current === true, `revision ${evidence.environment.git_revision}, runtime sources ${evidence.environment.runtime_sources_dirty ? "modified" : "clean"}, binary sha256 ${String(evidence.environment.runtime_binary_sha256).slice(0, 16)}…`);
   runtime = await startRuntime("initial");
   await registerProjectAndBaseline();
   await scenario("feature", approvedFeatureIsCheckedAndIndependentlyReviewed);
@@ -178,6 +195,7 @@ evidence.notes = notes;
 // a runtime whose exit was not observed fails the run and the scan is not trusted.
 record("the runtime exited before the leak scan", finalStop.exited, finalStop.exited ? "exit observed" : "the runtime did not exit after SIGTERM and SIGKILL; the leak scan below cannot establish what remains on disk");
 evidence.leak_scan = scanForCredentialValues();
+record("the leak scan and quarantine resolved paths through held directory handles", evidence.leak_scan.held_handles, evidence.leak_scan.held_handles ? "/proc/self/fd handles" : "unavailable on this platform: path checks only, recursive cleanup refused");
 if (!finalStop.exited) { evidence.leak_scan.leaks += 1; evidence.leak_scan.untrusted = "runtime still running during the scan"; }
 record("no credential value appears in the report, runtime logs or durable state", evidence.leak_scan.leaks === 0, `${evidence.leak_scan.files_scanned} files scanned against ${evidence.leak_scan.values_checked} configured values`);
 // A file that carries a configured value, or that could not be scanned, must not
@@ -724,6 +742,16 @@ function environment() {
   }
   info.provider_credentials_present = CREDENTIAL_NAMES.filter((name) => process.env[name] !== undefined || process.env[`LUUNA_PI_${name}`] !== undefined).map((name) => process.env[`LUUNA_PI_${name}`] !== undefined ? `LUUNA_PI_${name} (alias)` : name);
   try { info.runtime_binary_mtime = statSync(runtimeBinary).mtime.toISOString(); } catch { info.runtime_binary_mtime = "unknown"; }
+  try { info.runtime_binary_sha256 = createHash("sha256").update(readFileSync(runtimeBinary)).digest("hex"); } catch { info.runtime_binary_sha256 = "unknown"; }
+  // Bind the binary to the recorded revision: it must be newer than every tracked runtime source
+  // file, and the runtime sources must have no uncommitted change, or the run is not evidence
+  // for that revision.
+  try {
+    const sources = git(repository, "ls-files", "-z", "--", "crates", "Cargo.toml", "Cargo.lock").split("\0").filter(Boolean);
+    const newest = Math.max(...sources.map((file) => { try { return statSync(path.join(repository, file)).mtimeMs; } catch { return 0; } }));
+    info.runtime_sources_dirty = git(repository, "status", "--porcelain", "--", "crates", "Cargo.toml", "Cargo.lock").length > 0;
+    info.runtime_binary_current = statSync(runtimeBinary).mtimeMs >= newest && !info.runtime_sources_dirty;
+  } catch { info.runtime_binary_current = false; }
   return info;
 }
 
@@ -743,59 +771,72 @@ function redactConfiguredValues(text) {
 /** Scan everything the harness wrote (report, runtime logs, durable state including managed worktrees and artifacts) for configured credential values; the values themselves are never recorded. */
 function scanForCredentialValues() {
   const values = configuredValues();
-  const files = [];
   const unreadable = [];
-  const metadataHits = [];
-  // A directory that cannot be listed hides files from the scan, so it counts as a scan failure.
-  const walk = (dir) => {
-    let entries;
-    try { entries = readdirSync(dir, { withFileTypes: true }); } catch { unreadable.push(path.relative(out, dir) || "."); return; }
-    for (const entry of entries) {
-      const full = path.join(dir, entry.name);
-      // Every file under the owned output tree is scanned, the fixture checkout and
-      // Git metadata included: a native check could echo a value anywhere in it.
-      // Entry names and symbolic-link targets are metadata that can carry a value too.
-      const relative = path.relative(out, full);
-      if (values.some((value) => relative.includes(value))) metadataHits.push(relative);
-      if (entry.isSymbolicLink()) {
-        let target;
-        try { target = readlinkSync(full); } catch { unreadable.push(relative); continue; }
-        if (values.some((value) => target.includes(value))) metadataHits.push(relative);
-      } else if (entry.isDirectory()) {
-        // Revalidate without following immediately before descending: an entry swapped for
-        // a link after the listing is reported, never traversed.
-        let current;
-        try { current = lstatSync(full); } catch { unreadable.push(relative); continue; }
-        if (current.isDirectory()) walk(full); else unreadable.push(relative);
-      } else if (entry.isFile()) files.push(full);
+  const leaking = [];
+  let leaks = 0;
+  let scannedBytes = 0;
+  let scannedFiles = 0;
+  let visited = 0;
+  let incomplete = false;
+  const nameHit = (text) => values.some((value) => text.includes(value));
+  // A directory is { fd } (held handle) or { path } (fallback); `rel` is relative to the output root.
+  const childPath = (dir, name) => (dir.fd !== undefined ? heldPath(dir.fd, name) : path.join(dir.path, name));
+  const walk = (dir, rel) => {
+    let listing;
+    try { listing = opendirSync(dir.fd !== undefined ? heldPath(dir.fd) : dir.path); } catch { unreadable.push(rel || "."); return; }
+    try {
+      for (let entry = listing.readSync(); entry !== null; entry = listing.readSync()) {
+        const relative = rel ? path.join(rel, entry.name) : entry.name;
+        // Every visited entry counts against the budget while walking, so a tree of millions of
+        // files stops the walk instead of exhausting memory; the unvisited remainder fails the scan.
+        visited += 1;
+        if (visited > SCAN_FILE_COUNT_LIMIT || scannedBytes >= SCAN_TOTAL_LIMIT) { incomplete = true; if (rel) unreadable.push(rel); return; }
+        // Every file under the owned output tree is scanned, the fixture checkout and Git metadata
+        // included; entry names and symbolic-link targets are metadata that can carry a value too.
+        if (nameHit(relative)) { leaks += 1; leaking.push(relative); }
+        const target = childPath(dir, entry.name);
+        if (entry.isSymbolicLink()) {
+          let link;
+          try { link = readlinkSync(target); } catch { unreadable.push(relative); continue; }
+          if (nameHit(link)) { leaks += 1; leaking.push(relative); }
+        } else if (entry.isDirectory()) {
+          if (dir.fd !== undefined) {
+            // Descend through a handle opened without following: an entry swapped for a link is
+            // refused by the open itself and reported, never traversed.
+            let fd;
+            try { fd = openHeldDir(target); } catch { unreadable.push(relative); continue; }
+            try { walk({ fd }, relative); } finally { closeSync(fd); }
+          } else {
+            let current;
+            try { current = lstatSync(target); } catch { unreadable.push(relative); continue; }
+            if (current.isDirectory()) walk({ path: target }, relative); else unreadable.push(relative);
+          }
+          if (incomplete) return;
+        } else if (entry.isFile()) {
+          try {
+            const result = fileContainsAny(target, values, SCAN_TOTAL_LIMIT - scannedBytes);
+            scannedBytes += result.bytes;
+            scannedFiles += 1;
+            if (result.hit) { leaks += 1; leaking.push(relative); }
+          } catch { unreadable.push(relative); }
+        } else {
+          unreadable.push(relative);
+        }
+      }
+    } finally {
+      listing.closeSync();
     }
   };
-  walk(out);
-  let leaks = metadataHits.length;
-  const leaking = [...metadataHits];
+  walk(outFd !== null ? { fd: outFd } : { path: out }, "");
   // The in-memory report is checked before it is written; its hit is recorded as a flag,
   // never as a path, so a filesystem entry that happens to be named "report" is still a
   // path to quarantine.
   const reportText = JSON.stringify(evidence) + markdown({ ...evidence, verdict: "" });
   const reportLeaks = values.some((value) => reportText.includes(value));
   if (reportLeaks) leaks += 1;
-  // Aggregate budgets bound the whole scan; every file left unscanned is a failure.
-  let scannedBytes = 0;
-  let scannedFiles = 0;
-  for (const file of files) {
-    const relative = path.relative(out, file);
-    if (scannedFiles >= SCAN_FILE_COUNT_LIMIT || scannedBytes >= SCAN_TOTAL_LIMIT) { unreadable.push(relative); continue; }
-    let hit;
-    try {
-      const result = fileContainsAny(file, values, SCAN_TOTAL_LIMIT - scannedBytes);
-      hit = result.hit;
-      scannedBytes += result.bytes;
-      scannedFiles += 1;
-    } catch { unreadable.push(relative); continue; }
-    if (hit) { leaks += 1; leaking.push(relative); }
-  }
+  if (incomplete) leaks += 1;
   // A file that could not be scanned is not evidence of anything; it fails the scan.
-  return { values_checked: values.length, files_scanned: scannedFiles, scanned_bytes: scannedBytes, unreadable_files: unreadable, leaks: leaks + unreadable.length, report_leaks: reportLeaks, leaking_files: [...new Set(leaking)] };
+  return { values_checked: values.length, held_handles: outFd !== null, entries_visited: visited, traversal_incomplete: incomplete, files_scanned: scannedFiles, scanned_bytes: scannedBytes, unreadable_files: unreadable, leaks: leaks + unreadable.length, report_leaks: reportLeaks, leaking_files: [...new Set(leaking)] };
 }
 
 /** Why a quarantine target cannot safely be touched, or null: the output root must still be the
@@ -819,6 +860,8 @@ function unpinnedReason(target) {
 /** Deletes every flagged or unscannable file plus the durable state and verifies each is gone; returns what was removed and what was not. */
 function quarantineLeaks(scan) {
   const targets = [...scan.leaking_files, ...scan.unreadable_files];
+  // An incomplete walk leaves unvisited entries: the trees the runtime and checks write to go too.
+  if (scan.traversal_incomplete) targets.push("fixture-repo");
   if (targets.length === 0) return { removed: [], failed: [] };
   const removed = [];
   const failed = [];
@@ -826,49 +869,59 @@ function quarantineLeaks(scan) {
   // remove, and only ENOENT means absent; any other lookup error means "possibly still there".
   const present = (target) => { try { lstatSync(target); return true; } catch (error) { return error?.code !== "ENOENT"; } };
   for (const entry of new Set([...targets, "data"])) {
-    const target = path.resolve(out, entry);
-    if (!target.startsWith(out + path.sep)) { failed.push(`${entry} (outside the output directory)`); continue; }
-    let error = null;
+    const parts = entry.split(path.sep).filter(Boolean);
+    if (parts.length === 0 || parts.some((part) => part === "." || part === "..")) { failed.push(`${entry} (not a path inside the output directory)`); continue; }
+    // With held handles every parent component is opened without following, relative to the held
+    // root, so neither a renamed root nor a component replaced by a link can redirect the removal.
+    const opened = [];
+    let parentFd = outFd;
     let refused = null;
-    for (let attempt = 0; attempt < 5 && present(target); attempt += 1) {
-      // Re-verify the pinned root and the path to the target before every destructive step.
-      refused = unpinnedReason(target);
-      if (refused) break;
-      try {
-        if (attempt > 0) {
-          // A file a lingering process still holds, or one with stripped permissions: make it
-          // writable and blank its contents so the value is gone even if unlinking fails, then
-          // retry. Nothing here follows a link: a path swapped for a symlink is unlinked as a
-          // link, a hard-linked file is never blanked, and blanking opens with O_NOFOLLOW.
-          const stat = lstatSync(target);
-          if (stat.isSymbolicLink()) {
-            unlinkSync(target);
-          } else if (stat.isDirectory()) {
-            // Open the directory itself (never a link) and change the mode on that handle.
-            if (fsConstants.O_DIRECTORY !== undefined && fsConstants.O_NOFOLLOW !== undefined) {
-              const fd = openSync(target, fsConstants.O_RDONLY | fsConstants.O_DIRECTORY | fsConstants.O_NOFOLLOW);
-              try { fchmodSync(fd, 0o700); } finally { closeSync(fd); }
-            }
-          } else if (stat.isFile() && fsConstants.O_NOFOLLOW !== undefined) {
-            // Open without truncation and without following, validate the opened handle
-            // (regular, singly linked), then chmod and truncate that same handle. Where the
-            // platform cannot open a non-following handle (Windows), nothing is blanked:
-            // removal is still attempted and a survivor is reported as not removed.
-            const fd = openSync(target, fsConstants.O_WRONLY | fsConstants.O_NOFOLLOW);
-            try {
-              const opened = fstatSync(fd);
-              if (opened.isFile() && opened.nlink === 1) { fchmodSync(fd, 0o600); ftruncateSync(fd, 0); }
-            } finally { closeSync(fd); }
-          }
-          Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 200 * attempt);
-        }
-        rmSync(target, { recursive: true, force: true, maxRetries: 3, retryDelay: 100 });
-        error = null;
-      } catch (caught) { error = caught; }
+    let gone = false;
+    if (outFd !== null) {
+      for (const part of parts.slice(0, -1)) {
+        try { parentFd = openHeldDir(heldPath(parentFd, part)); opened.push(parentFd); }
+        catch (error) { if (error?.code === "ENOENT") gone = true; else refused = `${part} is not a real directory`; break; }
+      }
     }
-    if (refused) failed.push(`${entry} (not touched: ${refused})`);
-    else if (present(target)) failed.push(`${entry}${error ? ` (${error.message})` : ""}`);
-    else removed.push(entry);
+    try {
+      if (gone) { removed.push(entry); continue; }
+      const target = outFd !== null ? heldPath(parentFd, parts.at(-1)) : path.resolve(out, entry);
+      let error = null;
+      for (let attempt = 0; !refused && attempt < 5 && present(target); attempt += 1) {
+        // Without held handles, re-verify the pinned root and the path before every step.
+        if (outFd === null) { refused = unpinnedReason(target); if (refused) break; }
+        try {
+          const stat = lstatSync(target);
+          if (stat.isDirectory() && outFd === null) { refused = "recursive cleanup needs held directory handles on this platform"; break; }
+          if (attempt > 0) {
+            // A file a lingering process still holds, or one with stripped permissions: make it
+            // writable and blank its contents so the value is gone even if unlinking fails, then
+            // retry. Nothing here follows a link: a symlink is unlinked as a link, a hard-linked
+            // file is never blanked, and every open is non-following and judged on its handle.
+            if (stat.isSymbolicLink()) {
+              unlinkSync(target);
+            } else if (stat.isDirectory()) {
+              const fd = openHeldDir(target);
+              try { fchmodSync(fd, 0o700); } finally { closeSync(fd); }
+            } else if (stat.isFile() && fsConstants.O_NOFOLLOW !== undefined) {
+              const fd = openSync(target, fsConstants.O_WRONLY | fsConstants.O_NOFOLLOW);
+              try {
+                const handle = fstatSync(fd);
+                if (handle.isFile() && handle.nlink === 1) { fchmodSync(fd, 0o600); ftruncateSync(fd, 0); }
+              } finally { closeSync(fd); }
+            }
+            Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 200 * attempt);
+          }
+          if (outFd !== null) removeHeld(parentFd, parts.at(-1)); else unlinkSync(target);
+          error = null;
+        } catch (caught) { error = caught; }
+      }
+      if (refused) failed.push(`${entry} (not touched: ${refused})`);
+      else if (present(target)) failed.push(`${entry}${error ? ` (${error.message})` : ""}`);
+      else removed.push(entry);
+    } finally {
+      for (const fd of opened) closeSync(fd);
+    }
   }
   return { removed, failed };
 }
