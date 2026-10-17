@@ -39,6 +39,8 @@ const token = randomBytes(36).toString("base64url");
 const runTimeoutSeconds = Number(options["run-timeout"] ?? process.env.LUUNA_RUN_TIMEOUT_SECONDS ?? 600);
 const python = process.platform === "win32" ? "python" : "python3";
 const PROJECT = "m3-smoke";
+/** Every request is bounded so a runtime that accepts a connection but never answers cannot hang the evidence run. */
+const REQUEST_TIMEOUT_MS = 30_000;
 const CREDENTIAL_NAMES = ["ANTHROPIC_API_KEY", "OPENAI_API_KEY", "GEMINI_API_KEY", "GOOGLE_API_KEY", "MISTRAL_API_KEY", "GROQ_API_KEY", "XAI_API_KEY", "OPENROUTER_API_KEY"];
 
 // Fixture mode: the synthetic writer/reviewer read their scenario from
@@ -164,9 +166,13 @@ const passed = checks.every((check) => check.ok);
 evidence.verdict = mode === "fixture"
   ? `SYNTHETIC fixture run ${passed ? "passed" : "FAILED"}: harness/protocol evidence only, never provider or M3 success`
   : `Real provider run ${passed ? "passed every M3 smoke check" : "did NOT pass every M3 smoke check"} (see notes for best-effort observations)`;
-writeFileSync(path.join(out, "report.json"), JSON.stringify(evidence, null, 2) + "\n", { mode: 0o600 });
-writeFileSync(path.join(out, "report.md"), markdown(evidence), { mode: 0o600 });
-console.log(markdown(evidence));
+// The report is redacted before it is written or printed: a leak the scan found
+// fails the run and is reported by file name, never by value.
+const reportJson = redactConfiguredValues(JSON.stringify(evidence, null, 2) + "\n");
+const reportMarkdown = redactConfiguredValues(markdown(evidence));
+writeFileSync(path.join(out, "report.json"), reportJson, { mode: 0o600 });
+writeFileSync(path.join(out, "report.md"), reportMarkdown, { mode: 0o600 });
+console.log(reportMarkdown);
 console.log(`Report written to ${path.join(out, "report.md")} and report.json`);
 process.exit(passed ? 0 : 1);
 
@@ -228,7 +234,10 @@ function git(cwd, ...args) {
 }
 
 function createFixtureRepository() {
-  mkdirSync(fixtureRepo, { recursive: true });
+  // Never adopt an existing directory: a rerun into the same --out, or any
+  // pre-existing path, would otherwise commit unrelated files into the fixture.
+  mkdirSync(path.dirname(fixtureRepo), { recursive: true });
+  try { mkdirSync(fixtureRepo); } catch (error) { fail(`fixture repository path already exists or cannot be created (${error.code ?? error.message}): ${fixtureRepo}; use a fresh --out`); }
   const noHooks = path.join(out, "no-hooks");
   const repo = (...args) => git(fixtureRepo, ...args);
   repo("init", "-q", "-b", "main");
@@ -244,6 +253,8 @@ function createFixtureRepository() {
   repo("remote", "add", "origin", "https://example.invalid/m3-smoke.git");
   return repo("rev-parse", "HEAD");
 }
+
+let untrackedAfterBaseline = null;
 
 async function registerProjectAndBaseline() {
   developerHead = createFixtureRepository();
@@ -264,6 +275,9 @@ async function registerProjectAndBaseline() {
   const latest = Array.isArray(baselines) ? baselines[0] : null;
   evidence.baseline = latest ? { id: latest.id, status: latest.status, reason: latest.reason ?? null, results: summarizeResults(latest.results) } : baselines;
   record("baseline required check passed on the fixture repository (real host command)", latest?.status === "passed", `status=${latest?.status} results=${JSON.stringify(summarizeResults(latest?.results))}`);
+  // Baselines run in the developer checkout by design (M2b) and may leave build
+  // output such as __pycache__; everything after this point must add nothing.
+  untrackedAfterBaseline = git(fixtureRepo, "status", "--porcelain").split("\n").filter((line) => line.startsWith("??")).sort();
 }
 
 async function scenario(name, body) {
@@ -446,7 +460,7 @@ async function cancellationDuringReviewPreservesChecks(name) {
   const ev = settled.evidence;
   summary.cancellation = { ...describeEvidence(settled, events, reviewStarted), reviewer_pid: pid, status_when_cancelled: before.body?.evidence?.status, active_when_cancelled: before.body?.active, cancel_status: cancel.status, reviewer_alive_before: aliveBefore, reviewer_alive_after: aliveAfter };
   record(`${name}: cancel reached an in-flight independent review`, Boolean(reviewStarted) && before.body?.active === true && cancel.status === 202, `status_when_cancelled=${before.body?.evidence?.status} active=${before.body?.active} cancel=${cancel.status}`);
-  record(`${name}: cancelled candidate keeps its identity and passed checks, has no review and is not repairable`, ev.status === "cancelled" && ev.candidate.hash === hash && ev.results?.every((result) => result.status === "passed") && ev.review == null && /cancelled/.test(ev.reason ?? "") && settled.repair_allowed === false && (await api("GET", `/runs/${runId}`)).body.state === "cancelled", `status=${ev.status} reason=${truncate(ev.reason ?? "", 120)} repair_allowed=${settled.repair_allowed}`);
+  record(`${name}: cancelled candidate keeps its identity and every passed required check, has no review and is not repairable`, ev.status === "cancelled" && ev.candidate.hash === hash && allRequiredPassed(ev.results) && ev.review == null && /cancelled/.test(ev.reason ?? "") && settled.repair_allowed === false && (await api("GET", `/runs/${runId}`)).body.state === "cancelled", `status=${ev.status} reason=${truncate(ev.reason ?? "", 120)} repair_allowed=${settled.repair_allowed}`);
   record(`${name}: owned reviewer child was alive before cancel and reaped before the candidate settled`, aliveBefore && !aliveAfter, `pid=${pid} alive_before=${aliveBefore} alive_after=${aliveAfter}`);
   const again = await validate(runId, hash);
   record(`${name}: a cancelled candidate is not re-validated`, again.status !== 202, `status ${again.status}`);
@@ -478,7 +492,7 @@ async function hardKillDuringReviewReservesSpend(name) {
   let preserved = true;
   for (const [id, snapshot] of Object.entries(earlier)) preserved &&= JSON.stringify((await api("GET", `/runs/${id}/candidate`)).body) === snapshot;
   summary.restart = { ...describeEvidence(after, events, reviewStarted), reviewer_pid: pid, status_before_kill: before.body?.evidence?.status, cost_usd_micros_before_kill: costBefore, reviewer_exited_after_ms: childExit.elapsed, reviewer_orphaned: orphaned, earlier_candidates_compared: Object.keys(earlier).length, approved_cost_budget: plan.budgets?.cost_usd_micros };
-  record(`${name}: restart marks the in-flight review interrupted and preserves the frozen candidate and its passed checks`, before.body?.evidence?.status === "reviewing" && ev.status === "interrupted" && (await api("GET", `/runs/${runId}`)).body.state === "interrupted" && ev.candidate.hash === hash && ev.results?.every((result) => result.status === "passed") && ev.review == null && ev.validation_generation === 1, `before=${before.body?.evidence?.status} after=${ev.status} generation=${ev.validation_generation}`);
+  record(`${name}: restart marks the in-flight review interrupted and preserves the frozen candidate and every passed required check`, before.body?.evidence?.status === "reviewing" && ev.status === "interrupted" && (await api("GET", `/runs/${runId}`)).body.state === "interrupted" && ev.candidate.hash === hash && allRequiredPassed(ev.results) && ev.review == null && ev.validation_generation === 1, `before=${before.body?.evidence?.status} after=${ev.status} generation=${ev.validation_generation}`);
   record(`${name}: unknown provider spend is reserved against the approved cost budget and re-validation is refused`, /unreported provider spend/.test(ev.reason ?? "") && ev.cost_usd_micros > costBefore && (await validate(runId, hash)).status !== 202 && /budget/.test((await validate(runId, hash)).body?.error ?? ""), `cost_before=${costBefore} cost_after=${ev.cost_usd_micros} budget=${plan.budgets?.cost_usd_micros} reason=${truncate(ev.reason ?? "", 160)}`);
   record(`${name}: reviewer child exits after the runtime is hard-killed (stdin closed)`, !orphaned, `pid=${pid} exited_after_ms=${childExit.elapsed} orphaned=${orphaned}`);
   record(`${name}: earlier candidate evidence survives the restart byte-for-byte`, preserved && Object.keys(earlier).length >= 3, `earlier_candidates_compared=${Object.keys(earlier).length}`);
@@ -487,10 +501,11 @@ async function hardKillDuringReviewReservesSpend(name) {
 async function developerCheckoutUntouched() {
   const head = git(fixtureRepo, "rev-parse", "HEAD");
   const tracked = git(fixtureRepo, "status", "--porcelain", "--untracked-files=no");
-  const untracked = git(fixtureRepo, "status", "--porcelain").split("\n").filter((line) => line.startsWith("??"));
+  const untracked = git(fixtureRepo, "status", "--porcelain").split("\n").filter((line) => line.startsWith("??")).sort();
   const worktrees = Object.values(evidence.scenarios).map((item) => item.run_id).filter(Boolean);
-  evidence.developer_checkout = { head_before: developerHead, head_after: head, tracked_changes: tracked, untracked: untracked, runs: worktrees.length };
-  record("developer checkout HEAD and tracked content are untouched by every writer, check, repair and review", head === developerHead && tracked === "", `head=${head.slice(0, 12)} tracked_changes=${JSON.stringify(tracked)} untracked=${JSON.stringify(untracked)}`);
+  const untrackedUnchanged = JSON.stringify(untracked) === JSON.stringify(untrackedAfterBaseline ?? []);
+  evidence.developer_checkout = { head_before: developerHead, head_after: head, tracked_changes: tracked, untracked_after_baseline: untrackedAfterBaseline, untracked_after_runs: untracked, runs: worktrees.length };
+  record("developer checkout HEAD, tracked content and untracked files are untouched by every writer, check, repair and review", head === developerHead && tracked === "" && untrackedUnchanged, `head=${head.slice(0, 12)} tracked_changes=${JSON.stringify(tracked)} untracked_after_baseline=${JSON.stringify(untrackedAfterBaseline)} untracked_after_runs=${JSON.stringify(untracked)}`);
 }
 
 async function gracefulShutdown() {
@@ -516,6 +531,7 @@ async function api(method, route, body) {
     method,
     headers: { Authorization: `Bearer ${token}`, ...(body ? { "Content-Type": "application/json" } : {}) },
     body: body ? JSON.stringify(body) : undefined,
+    signal: AbortSignal.timeout(REQUEST_TIMEOUT_MS),
   });
   const text = await response.text();
   let parsed = null;
@@ -579,6 +595,13 @@ function describeEvidence(view, events, reviewStarted) {
     // The reviewer's own transcript is not persisted in the run stream; only its verdict, findings and evidence are.
     event_types: events.map((event) => event.type),
   };
+}
+
+/** True only when one passed result exists for each configured required recipe and nothing else. */
+function allRequiredPassed(results) {
+  const required = profile.checks.filter((check) => check.required).map((check) => check.id).sort();
+  const observed = (Array.isArray(results) ? results : []).map((result) => result.recipe_id).sort();
+  return JSON.stringify(observed) === JSON.stringify(required) && results.every((result) => result.status === "passed");
 }
 
 /** Every path a unified diff touches, from its `diff --git` headers; /dev/null never counts. */
@@ -650,9 +673,19 @@ function environment() {
   return info;
 }
 
+function configuredValues() {
+  return [token, ...CREDENTIAL_NAMES.flatMap((name) => [process.env[name], process.env[`LUUNA_PI_${name}`]])].filter((value) => typeof value === "string" && value.length >= 8);
+}
+
+function redactConfiguredValues(text) {
+  let output = String(text);
+  for (const value of configuredValues()) output = output.split(value).join("[redacted credential]");
+  return output;
+}
+
 /** Scan everything the harness wrote (report, runtime logs, durable state including managed worktrees and artifacts) for configured credential values; the values themselves are never recorded. */
 function scanForCredentialValues() {
-  const values = [token, ...CREDENTIAL_NAMES.flatMap((name) => [process.env[name], process.env[`LUUNA_PI_${name}`]])].filter((value) => typeof value === "string" && value.length >= 8);
+  const values = configuredValues();
   const files = [];
   const unreadable = [];
   // A directory that cannot be listed hides files from the scan, so it counts as a scan failure.
