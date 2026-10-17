@@ -198,8 +198,15 @@ function buildRuntime() {
   // compiler-bytes check), not whatever `cargo` comes first on PATH. rustup is the trust root here.
   const pinned = pinnedToolchain();
   if (pinned === null) throw new Error("rust-toolchain.toml pins no exact release; the runtime is not built");
-  let cargo;
-  try { cargo = realpathSync(execFileSync("rustup", ["which", "cargo", "--toolchain", pinned], { encoding: "utf8", stdio: ["ignore", "pipe", "ignore"], timeout: 30_000 }).trim()); } catch (error) { throw new Error(`rustup could not locate cargo for the pinned toolchain ${pinned}: ${error.code ?? error.message}`); }
+  const locate = (tool) => {
+    try { return realpathSync(execFileSync("rustup", ["which", tool, "--toolchain", pinned], { encoding: "utf8", stdio: ["ignore", "pipe", "ignore"], timeout: 30_000 }).trim()); } catch (error) { throw new Error(`rustup could not locate ${tool} for the pinned toolchain ${pinned}: ${error.code ?? error.message}`); }
+  };
+  const cargo = locate("cargo");
+  // Cargo run directly would compile with whatever `rustc` PATH resolves, and a rustup proxy picks
+  // its toolchain by directory, so dependencies could be compiled by another release: the pinned
+  // compiler is named explicitly, and any proxy invocation resolves to the pinned release too.
+  env.RUSTC = locate("rustc");
+  env.RUSTUP_TOOLCHAIN = pinned;
   const startedAt = Date.now();
   try {
     execFileSync(cargo, ["build", "--locked", "-p", "luuna-runtime"], { cwd: repository, env, stdio: ["ignore", "ignore", "pipe"], timeout: RUNTIME_BUILD_TIMEOUT_MS, killSignal: "SIGKILL", maxBuffer: 64 * 1024 * 1024 });
