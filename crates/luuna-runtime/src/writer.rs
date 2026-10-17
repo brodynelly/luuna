@@ -790,6 +790,10 @@ fn bounded(value: Value) -> Value {
 /// has no shell and cannot read private artifacts, so the feedback must carry
 /// the failure itself, not only an exit code and artifact identities.
 const REPAIR_OUTPUT_TAIL_BYTES: usize = 2048;
+/// Upper bound on all quoted check output in one repair prompt; manifests do
+/// not bound their recipe count, so per-artifact limits alone cannot keep the
+/// prompt within a provider's context window.
+const REPAIR_OUTPUT_TOTAL_BYTES: usize = 16 * 1024;
 
 /// The tail of every failed required check's recorded stdout/stderr, keyed by
 /// artifact identity. Missing or empty logs are omitted; nothing outside the
@@ -801,12 +805,23 @@ fn repair_check_output(
 ) -> serde_json::Map<String, Value> {
     let artifact_dir = crate::baselines::artifact_dir(state, run_id);
     let mut output = serde_json::Map::new();
-    for result in evidence
+    let mut quoted = 0usize;
+    'results: for result in evidence
         .results
         .iter()
         .filter(|result| result.status != CheckStatus::Passed)
     {
         for reference in &result.artifact_refs {
+            if quoted >= REPAIR_OUTPUT_TOTAL_BYTES {
+                output.insert(
+                    "truncated".into(),
+                    Value::String(
+                        "further failed check output omitted: the aggregate feedback budget is spent"
+                            .into(),
+                    ),
+                );
+                break 'results;
+            }
             let safe = !reference.is_empty()
                 && reference.len() <= 128
                 && !reference.contains("..")
@@ -836,6 +851,7 @@ fn repair_check_output(
                         " [artifact capped at the executor limit; output after the cap was not retained]",
                     );
                 }
+                quoted += text.len();
                 output.insert(reference.clone(), Value::String(text));
             }
         }

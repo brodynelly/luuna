@@ -16,7 +16,7 @@
 // supported names (or their LUUNA_PI_ aliases) to the isolated Pi children. The
 // report records credential names only and is scanned for leaked values.
 import { spawn, execFileSync } from "node:child_process";
-import { mkdirSync, writeFileSync, readdirSync, statSync, existsSync, openSync, readSync, closeSync } from "node:fs";
+import { mkdirSync, writeFileSync, readdirSync, statSync, openSync, readSync, closeSync } from "node:fs";
 import { randomBytes } from "node:crypto";
 import { tmpdir, platform, release, arch, devNull } from "node:os";
 import path from "node:path";
@@ -310,7 +310,7 @@ async function approvedCandidate(name) {
   const view = await api("GET", `/runs/${summary.run_id}/candidate`);
   const candidate = view.body?.evidence?.candidate ?? null;
   summary.candidate_r1 = candidate ? { revision: candidate.revision, hash: candidate.hash, commits: candidate.commits ?? candidate.commit ?? null, plan_hash: candidate.plan_hash } : null;
-  record(`${name}: writer settled in validating with a frozen candidate bound to the approved plan`, settled.state === "validating" && candidate?.revision === 1 && (candidate?.plan_hash === undefined || candidate.plan_hash === plan.hash) && view.body?.evidence?.status === "pending", `state=${settled.state} revision=${candidate?.revision} status=${view.body?.evidence?.status}${summary.writer.failure_reason ? ` reason=${truncate(summary.writer.failure_reason, 160)}` : ""}`);
+  record(`${name}: writer settled in validating with a frozen candidate bound to the approved plan`, settled.state === "validating" && candidate?.revision === 1 && candidate?.plan_hash === plan.hash && view.body?.evidence?.status === "pending", `state=${settled.state} revision=${candidate?.revision} status=${view.body?.evidence?.status}${summary.writer.failure_reason ? ` reason=${truncate(summary.writer.failure_reason, 160)}` : ""}`);
   if (settled.state !== "validating" || !candidate) throw new Error(`no candidate to validate: state ${settled.state}`);
   return { summary, plan, view: view.body };
 }
@@ -654,8 +654,12 @@ function environment() {
 function scanForCredentialValues() {
   const values = [token, ...CREDENTIAL_NAMES.flatMap((name) => [process.env[name], process.env[`LUUNA_PI_${name}`]])].filter((value) => typeof value === "string" && value.length >= 8);
   const files = [];
+  const unreadable = [];
+  // A directory that cannot be listed hides files from the scan, so it counts as a scan failure.
   const walk = (dir) => {
-    for (const entry of readdirSafe(dir)) {
+    let entries;
+    try { entries = readdirSync(dir, { withFileTypes: true }); } catch { unreadable.push(path.relative(out, dir) || "."); return; }
+    for (const entry of entries) {
       const full = path.join(dir, entry.name);
       if (entry.isDirectory()) { if (entry.name !== ".git") walk(full); } else if (entry.isFile() && !full.startsWith(fixtureRepo)) files.push(full);
     }
@@ -663,7 +667,6 @@ function scanForCredentialValues() {
   walk(out);
   let leaks = 0;
   const leaking = [];
-  const unreadable = [];
   const reportText = JSON.stringify(evidence) + markdown({ ...evidence, verdict: "" });
   for (const value of values) if (reportText.includes(value)) { leaks += 1; leaking.push("report"); }
   for (const file of files) {
@@ -693,10 +696,6 @@ function fileContainsAny(file, values) {
   } finally {
     closeSync(fd);
   }
-}
-
-function readdirSafe(dir) {
-  try { return existsSync(dir) ? readdirSync(dir, { withFileTypes: true }) : []; } catch { return []; }
 }
 
 function record(name, ok, detail) {
