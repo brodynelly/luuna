@@ -16,7 +16,7 @@
 // supported names (or their LUUNA_PI_ aliases) to the isolated Pi children. The
 // report records credential names only and is scanned for leaked values.
 import { spawn, execFileSync } from "node:child_process";
-import { mkdirSync, writeFileSync, readdirSync, statSync, lstatSync, readlinkSync, existsSync, openSync, readSync, closeSync, rmSync, chmodSync, unlinkSync, constants as fsConstants } from "node:fs";
+import { mkdirSync, writeFileSync, readdirSync, statSync, lstatSync, readlinkSync, existsSync, openSync, readSync, closeSync, rmSync, unlinkSync, fstatSync, fchmodSync, ftruncateSync, constants as fsConstants } from "node:fs";
 import { randomBytes } from "node:crypto";
 import { tmpdir, platform, release, arch, devNull } from "node:os";
 import path from "node:path";
@@ -784,11 +784,19 @@ function quarantineLeaks(scan) {
           if (stat.isSymbolicLink()) {
             unlinkSync(target);
           } else if (stat.isDirectory()) {
-            chmodSync(target, 0o700);
-          } else if (stat.isFile() && stat.nlink === 1) {
-            chmodSync(target, 0o600);
-            const flags = fsConstants.O_WRONLY | fsConstants.O_TRUNC | (fsConstants.O_NOFOLLOW ?? 0);
-            closeSync(openSync(target, flags));
+            // Open the directory itself (never a link) and change the mode on that handle.
+            if (fsConstants.O_DIRECTORY !== undefined && fsConstants.O_NOFOLLOW !== undefined) {
+              const fd = openSync(target, fsConstants.O_RDONLY | fsConstants.O_DIRECTORY | fsConstants.O_NOFOLLOW);
+              try { fchmodSync(fd, 0o700); } finally { closeSync(fd); }
+            }
+          } else if (stat.isFile()) {
+            // Open without truncation and without following, validate the opened handle
+            // (regular, singly linked), then chmod and truncate that same handle.
+            const fd = openSync(target, fsConstants.O_WRONLY | (fsConstants.O_NOFOLLOW ?? 0));
+            try {
+              const opened = fstatSync(fd);
+              if (opened.isFile() && opened.nlink === 1) { fchmodSync(fd, 0o600); ftruncateSync(fd, 0); }
+            } finally { closeSync(fd); }
           }
           Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 200 * attempt);
         }
