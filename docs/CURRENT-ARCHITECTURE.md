@@ -1,6 +1,6 @@
 # Current Luuna architecture
 
-Date: 2026-10-16, updated 2026-10-17 for M2a, M2b and M2c. Status: authoritative foundation baseline; implementation evidence is required for each milestone.
+Date: 2026-10-16, updated 2026-10-17 for M2a, M2b, M2c and the M3 implementation. Status: authoritative foundation baseline; implementation evidence is required for each milestone.
 
 ## Purpose and precedence
 
@@ -59,6 +59,12 @@ Luuna maintains three branded CLI distributions: **Missions** (`@luuna/missions-
 
 The owner's explicit October 16, 2026 decision is to keep the application and all three components in `brodynelly/luuna` and defer separate repositories. Continue implementation in this monorepo; extraction is not a milestone prerequisite. No independent hosted repositories or published packages are claimed. Later extraction requires renewed scope, verified destination repositories, source/history provenance, preserved notices, CI/release ownership, and tested dependency consumption before deleting copies. See [ADR 0002](decisions/0002-supporting-components.md). Imported development metadata is not Luuna runtime data or permission to load stale instructions into agents.
 
+## Candidate validation and review
+
+Migration 5 stores exact candidate commit/tree identities, append-only validation generations and structured independent reviews. `POST /api/v1/runs/{id}/validate` names the expected hash and optionally `auto_repair`; it executes the approved required recipes inside the owned candidate worktree and starts a fresh read-only Pi reviewer only after the checks pass. Checks and reviews cannot be reused across candidate revisions or interrupted generations. `GET …/candidate` and `GET …/diff` expose authoritative evidence and exact diffs; `POST …/repair` rechecks current approval, baseline/host and remaining aggregate budgets before creating the next scoped candidate. Model output never supplies command evidence. See [ADR 0009](decisions/0009-candidate-validation-review.md).
+
+Automatic repair is opt-in and bounded by both the immutable plan and project repair policy. Infrastructure errors stop without repeated edits. Interrupted check stages retain elapsed usage; interrupted model stages reserve unknown spend and require re-planning when headroom is exhausted. Review success is evidence for an exact candidate only; publication and human-controlled merge remain separate gates.
+
 ## API and service lifetime
 
 All application routes use `/api/v1`. Implemented project routes are `POST /api/v1/projects` (register existing repositories by absolute root path), `GET /api/v1/projects[/{id}]`, `POST /api/v1/projects/{id}/discover` (read-only proposal), `PUT /api/v1/projects/{id}/manifest` (confirm with `expected_revision`) and `GET /api/v1/projects/{id}/events`. The canonical create-ticket route is **`POST /api/v1/projects/{id}/tickets`** (implemented in M2c with an idempotency key; the record is the temporary local source of ADR 0003). Do not add a parallel `POST /api/v1/tickets` alias. Other operations address ticket, plan, and run identities: `POST /api/v1/tickets/{id}/plans` records the next immutable plan revision and opens its workflow run, `POST /api/v1/plans/{id}/approvals` approves one exact hash, `POST /api/v1/runs/{id}/implement` schedules the writer after transactional revalidation, and `GET /api/v1/runs/{id}/worktrees` and `/attempts` expose the Luuna-owned worktree leases and attempts (ADR 0008). Commands that can create work require idempotency; operations sensitive to stale state require expected revisions. SSE streams use durable event IDs/cursors for replay and deduplication. Artifacts use authorized IDs, never arbitrary request-supplied filesystem paths.
@@ -67,7 +73,7 @@ Bind the development service to loopback and authenticate protected API actions.
 
 ## Milestone evidence
 
-The initial executable implementation is a tool-free connectivity slice, not the approved implementation workflow. It exposes authenticated run creation/history, cursor event replay and SSE, and cancellation; the UI currently reconnects through replay polling. M2a adds read-only repository import, discovery proposals and confirmed manifest revisions; M2b adds supervised baselines with bound evidence; M2c adds temporary local tickets, immutable plan revisions, exact-hash approvals, Luuna-owned worktree leases and one scoped writer whose candidate waits in `validating`. Seeds/Missions reconciliation, candidate validation, independent review, and publication remain subsequent capabilities.
+The initial executable implementation is a tool-free connectivity slice, not the approved implementation workflow. It exposes authenticated run creation/history, cursor event replay and SSE, and cancellation; the UI currently reconnects through replay polling. M2a adds read-only repository import, discovery proposals and confirmed manifest revisions; M2b adds supervised baselines with bound evidence; M2c adds temporary local tickets, immutable plan revisions, exact-hash approvals, Luuna-owned worktree leases and one scoped writer whose candidate waits in `validating`. The M3 implementation adds candidate-bound required checks, a fresh read-only reviewer, structured findings, optional bounded automatic repairs and conservative restart recovery; genuine-provider M3 acceptance remains pending. Seeds/Missions reconciliation and publication remain subsequent capabilities.
 
 | Milestone | Required proof | Does not establish completion |
 | --- | --- | --- |

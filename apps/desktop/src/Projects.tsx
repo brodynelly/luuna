@@ -200,7 +200,7 @@ export function Projects({ client }: { client: LuunaClient | null }) {
   const observation = registration?.observation;
 
   return <section className="panel projects-panel" aria-labelledby="projects-heading">
-    <div className="panel-heading"><h2 id="projects-heading">Projects</h2><span className="tag">M2a import · M2b baseline · M2c writer</span></div>
+    <div className="panel-heading"><h2 id="projects-heading">Projects</h2><span className="tag">Import · baseline · candidate workflow</span></div>
     <p className="scope">Register an existing repository root. The runtime observes identity, base commit and dirty state without touching the checkout, proposes check recipes from its manifests, and records an immutable manifest revision only when you confirm it.</p>
     {error && <div className="error" role="alert">{error}<button className="text-button" type="button" onClick={() => setError("")}>Dismiss</button></div>}
 

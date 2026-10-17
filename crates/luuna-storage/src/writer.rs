@@ -646,7 +646,23 @@ pub(crate) fn abandon_orphaned_work(tx: &Transaction<'_>) -> Result<usize> {
     for id in &attempt_ids {
         let mut record = load_attempt(tx, id)?.ok_or_else(|| StorageError::NotFound(id.clone()))?;
         record.state = AttemptState::Interrupted;
-        record.payload = json!({"reason": "runtime restarted before the attempt settled"});
+        let usage = if let Ok(plan) = crate::validation::bound_plan(tx, &record.run_id) {
+            let used = crate::validation::workflow_usage(tx, &record.run_id)?;
+            let previous = record.payload.get("usage").unwrap_or(&record.payload);
+            let elapsed = previous
+                .get("elapsed_seconds")
+                .and_then(Value::as_u64)
+                .unwrap_or(0);
+            let cost = previous
+                .get("cost_usd_micros")
+                .and_then(Value::as_u64)
+                .unwrap_or(0);
+            json!({"elapsed_seconds": elapsed.saturating_add(plan.budgets.timeout_seconds.saturating_sub(used.elapsed_seconds)),
+                "cost_usd_micros": cost.saturating_add(plan.budgets.cost_usd_micros.saturating_sub(used.cost_usd_micros))})
+        } else {
+            json!({})
+        };
+        record.payload = json!({"reason": "runtime restarted before the writer settled; unreported time and provider spend reserve the remaining approved budgets; re-plan required", "usage": usage});
         record.finished_at = Some(released_at.clone());
         tx.execute(
             "UPDATE attempts SET state='interrupted',payload=?1,finished_at=?2 WHERE id=?3",

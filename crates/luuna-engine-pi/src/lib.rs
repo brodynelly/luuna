@@ -75,6 +75,9 @@ pub enum SessionProfile {
     /// An approved writer (M2c): named built-in tools inside a leased worktree,
     /// the Luuna scope guard loaded explicitly, and a task-specific prompt.
     Writer(WriterProfile),
+    /// A fresh independent reviewer (M3): file reads only, with no writer
+    /// session or conversation restored. The runtime supplies candidate evidence.
+    Reviewer(ReviewerProfile),
 }
 
 #[derive(Clone, Debug)]
@@ -85,6 +88,15 @@ pub struct WriterProfile {
     /// Extension files loaded with `-e`; the scope guard is always one of them.
     pub extensions: Vec<PathBuf>,
     /// Extra variables for the child, such as `LUUNA_SCOPE_JSON`.
+    pub environment: Vec<(String, String)>,
+}
+
+#[derive(Clone, Debug)]
+pub struct ReviewerProfile {
+    pub system_prompt: String,
+    pub extensions: Vec<PathBuf>,
+    /// Normally LUUNA_SCOPE_JSON with only the `read` operation. The reviewer
+    /// cannot widen its tool set: those tools are fixed below, not prompt input.
     pub environment: Vec<(String, String)>,
 }
 
@@ -126,6 +138,16 @@ pub fn session_arguments(config: &PiConfig) -> Vec<String> {
         SessionProfile::Writer(profile) => {
             args.push("--tools".into());
             args.push(profile.tools.join(","));
+            for extension in &profile.extensions {
+                args.push("--extension".into());
+                args.push(extension.to_string_lossy().into_owned());
+            }
+            args.push("--system-prompt".into());
+            args.push(profile.system_prompt.clone());
+        }
+        SessionProfile::Reviewer(profile) => {
+            args.push("--tools".into());
+            args.push("read,grep,find,ls".into());
             for extension in &profile.extensions {
                 args.push("--extension".into());
                 args.push(extension.to_string_lossy().into_owned());
@@ -226,6 +248,74 @@ impl Record {
             }
         })
     }
+
+    /// Completed assistant text only. Partial deltas, user/tool messages and
+    /// `agent_end` repeats are not a structured review result. Runtime code must
+    /// still validate the JSON and bind its verdict to the exact candidate.
+    pub fn assistant_text(&self) -> Option<String> {
+        if self.kind != "message_end" {
+            return None;
+        }
+        let message = self.raw.get("message")?;
+        if message.get("role")?.as_str()? != "assistant"
+            || message.get("stopReason").and_then(Value::as_str) != Some("stop")
+        {
+            return None;
+        }
+        let content = message.get("content")?.as_array()?;
+        let text: Vec<&str> = content
+            .iter()
+            .filter(|part| part.get("type").and_then(Value::as_str) == Some("text"))
+            .filter_map(|part| part.get("text").and_then(Value::as_str))
+            .collect();
+        (!text.is_empty()).then(|| text.join("\n"))
+    }
+}
+
+/// Monotonic session cost in micros across assistant/tool turns. Pi's message
+/// updates repeat the current message's cumulative usage, while each completed
+/// assistant message adds a new cost. `agent_end` repeats those same messages
+/// and must never charge them again. This counter is local measurement; the
+/// runtime persists its deltas so interruptions cannot reset consumed budgets.
+#[derive(Debug, Default)]
+pub struct SessionUsage {
+    completed_cost: u64,
+    current_cost: u64,
+    total_cost: u64,
+}
+
+impl SessionUsage {
+    pub fn observe(&mut self, record: &Record) -> u64 {
+        let message = &record.raw["message"];
+        let assistant = message["role"] == "assistant";
+        let cost = message["usage"]["cost"]["total"]
+            .as_f64()
+            .or_else(|| record.raw["usage"]["cost"]["total"].as_f64())
+            .filter(|cost| cost.is_finite() && *cost >= 0.0)
+            .map(|cost| (cost * 1_000_000.0).ceil() as u64);
+        match record.kind.as_str() {
+            "message_start" if assistant => {
+                // Retain provisional spend if a provider retry starts another
+                // message without a terminal event for the previous request.
+                self.completed_cost = self.completed_cost.saturating_add(self.current_cost);
+                self.current_cost = cost.unwrap_or(0);
+            }
+            "message_update" if assistant || message.is_null() => {
+                self.current_cost = self.current_cost.max(cost.unwrap_or(0));
+            }
+            "message_end" if assistant => {
+                self.completed_cost = self
+                    .completed_cost
+                    .saturating_add(self.current_cost.max(cost.unwrap_or(0)));
+                self.current_cost = 0;
+            }
+            _ => {}
+        }
+        self.total_cost = self
+            .total_cost
+            .max(self.completed_cost.saturating_add(self.current_cost));
+        self.total_cost
+    }
 }
 
 pub struct PiProcess {
@@ -237,8 +327,9 @@ pub struct PiProcess {
 }
 
 impl PiProcess {
-    /// Launch a fresh, tool-free session in an empty cwd/config directory. Only
-    /// named provider credentials are inherited; Git/publication auth is excluded.
+    /// Launch a fresh session with its explicit profile. Only named provider
+    /// credentials are inherited; Git/publication auth is excluded. The runtime
+    /// gives every assignment a separate private configuration directory.
     pub async fn spawn(config: &PiConfig) -> Result<Self, EngineError> {
         verify_version(config).await?;
         private_directory(&config.cwd)?;
@@ -282,10 +373,13 @@ impl PiProcess {
                 command.env(name, value);
             }
         }
-        if let SessionProfile::Writer(profile) = &config.profile {
-            for (name, value) in &profile.environment {
-                command.env(name, value);
-            }
+        let environment = match &config.profile {
+            SessionProfile::Writer(profile) => &profile.environment[..],
+            SessionProfile::Reviewer(profile) => &profile.environment[..],
+            SessionProfile::ToolFree => &[],
+        };
+        for (name, value) in environment {
+            command.env(name, value);
         }
         command
             .env("HOME", &config.config_dir)
@@ -491,6 +585,147 @@ mod tests {
             Record::parse(br#"{"type":"response","id":"p1","command":"prompt","success":true}"#)
                 .unwrap();
         assert_ne!(ack.kind, "agent_end");
+    }
+
+    #[test]
+    fn reviewer_profile_has_only_read_tools_and_no_restored_resources() {
+        let config = PiConfig {
+            program: "pi".into(),
+            launcher_args: vec![],
+            cwd: "/tmp/candidate".into(),
+            config_dir: "/tmp/independent-reviewer".into(),
+            provider: None,
+            model: None,
+            profile: SessionProfile::Reviewer(ReviewerProfile {
+                system_prompt: "Luuna independent reviewer; exact candidate evidence".into(),
+                extensions: vec!["/tmp/independent-reviewer/luuna-scope-guard.js".into()],
+                environment: vec![("LUUNA_SCOPE_JSON".into(), "{}".into())],
+            }),
+        };
+        let args = session_arguments(&config);
+        assert_eq!(
+            args[args.iter().position(|arg| arg == "--tools").unwrap() + 1],
+            "read,grep,find,ls"
+        );
+        for flag in [
+            "--no-session",
+            "--no-context-files",
+            "--no-mcp",
+            "--no-skills",
+            "--no-extensions",
+        ] {
+            assert!(args.iter().any(|arg| arg == flag));
+        }
+        assert!(args.iter().any(|arg| arg == "--extension"));
+    }
+
+    #[test]
+    fn review_text_comes_only_from_successful_completed_assistant_messages() {
+        let text = r#"{"passed":true,"findings":[]}"#;
+        let record = Record::parse(
+            json!({"type":"message_end","message":{
+                "role":"assistant","stopReason":"stop","content":[{"type":"text","text":text}]
+            }})
+            .to_string()
+            .as_bytes(),
+        )
+        .unwrap();
+        assert_eq!(record.assistant_text().as_deref(), Some(text));
+        for raw in [
+            json!({"type":"message_end","message":{"role":"toolResult","stopReason":"stop","content":[{"type":"text","text":text}]}}),
+            json!({"type":"message_end","message":{"role":"assistant","stopReason":"error","content":[{"type":"text","text":text}]}}),
+            json!({"type":"message_end","message":{"role":"assistant","stopReason":"length","content":[{"type":"text","text":text}]}}),
+            json!({"type":"message_update","assistantMessageEvent":{"type":"text_delta","delta":text}}),
+            json!({"type":"agent_end","messages":[{"role":"assistant","stopReason":"stop","content":[{"type":"text","text":text}]}],"willRetry":false}),
+        ] {
+            assert_eq!(
+                Record::parse(raw.to_string().as_bytes())
+                    .unwrap()
+                    .assistant_text(),
+                None
+            );
+        }
+    }
+
+    #[test]
+    fn session_cost_sums_messages_without_counting_stream_updates_or_agent_end_twice() {
+        let mut usage = SessionUsage::default();
+        let mut observe =
+            |raw: Value| usage.observe(&Record::parse(raw.to_string().as_bytes()).unwrap());
+        let message = |cost, text| json!({"role":"assistant","usage":{"cost":{"total":cost}},"content":[{"type":"text","text":text}]});
+        assert_eq!(
+            observe(json!({"type":"message_start","message":message(0.0,"first")})),
+            0
+        );
+        assert_eq!(
+            observe(json!({"type":"message_update","message":message(0.002,"first")})),
+            2000
+        );
+        assert_eq!(
+            observe(json!({"type":"message_update","message":message(0.003,"first")})),
+            3000
+        );
+        assert_eq!(
+            observe(json!({"type":"message_update","message":message(0.003,"first")})),
+            3000
+        );
+        assert_eq!(
+            observe(json!({"type":"message_end","message":message(0.003,"first")})),
+            3000
+        );
+        assert_eq!(
+            observe(
+                json!({"type":"message_end","message":{"role":"toolResult","usage":{"cost":{"total":9}}}})
+            ),
+            3000
+        );
+        assert_eq!(
+            observe(json!({"type":"message_start","message":message(0.0,"second")})),
+            3000
+        );
+        assert_eq!(
+            observe(json!({"type":"message_update","usage":{"cost":{"total":0.001}}})),
+            4000
+        );
+        assert_eq!(
+            observe(json!({"type":"message_end","message":message(0.002,"second")})),
+            5000
+        );
+        assert_eq!(
+            observe(
+                json!({"type":"agent_end","messages":[message(0.003,"first"),message(0.002,"second")],"willRetry":false})
+            ),
+            5000
+        );
+    }
+
+    #[test]
+    fn session_cost_retains_partial_spend_across_provider_retry_and_ignores_invalid_usage() {
+        let mut usage = SessionUsage::default();
+        let mut observe =
+            |raw: Value| usage.observe(&Record::parse(raw.to_string().as_bytes()).unwrap());
+        assert_eq!(
+            observe(json!({"type":"message_update","usage":{"cost":{"total":0.003}}})),
+            3000
+        );
+        assert_eq!(
+            observe(json!({"type":"message_start","message":{"role":"assistant"}})),
+            3000
+        );
+        assert_eq!(
+            observe(
+                json!({"type":"message_end","message":{"role":"assistant","usage":{"cost":{"total":0.002}}}})
+            ),
+            5000
+        );
+        assert_eq!(
+            observe(json!({"type":"message_update","usage":{"cost":{"total":-1}}})),
+            5000
+        );
+        assert_eq!(
+            observe(json!({"type":"message_update","usage":{"cost":{"total":null}}})),
+            5000
+        );
     }
     #[test]
     fn rejects_malformed_records() {

@@ -1,0 +1,75 @@
+import { expect, test } from "vitest";
+import { renderToStaticMarkup } from "react-dom/server";
+import type { CandidateDiff, CandidateEvidence, CandidateView, RunRecord } from "@luuna/api-client";
+import { CandidateReview } from "./CandidateReview";
+import { canCancel, canValidate, workflowNeedsRefresh } from "./workflow-state";
+
+const hash = `sha256:${"a".repeat(64)}`;
+const commit = "b".repeat(40);
+const evidence: CandidateEvidence = {
+  candidate: { schema_version: "0.1", id: "candidate-1", revision: 2, plan_hash: `sha256:${"c".repeat(64)}`, repository_commits: { app: commit }, dependency_bindings: {}, hash },
+  run_id: "run-1", implementer_session: "writer-1", repository_trees: { app: "d".repeat(40) }, status: "pending", results: [], started_at: "2026-10-17T00:00:00Z", elapsed_seconds: 3, cost_usd_micros: 1000, validation_generation: 1,
+};
+const run: RunRecord = { id: "run-1", project_id: "project-1", revision: 3, state: "validating", metadata: { kind: "workflow" }, created_at: "2026-10-17T00:00:00Z", updated_at: "2026-10-17T00:00:00Z" };
+const view: CandidateView = { evidence, active: false, repair_allowed: false };
+const actions = { onValidate() {}, onRepair() {}, onCancel() {}, onDiff() {}, onArtifact() {} };
+const render = (next: CandidateView, nextRun = run, diff?: CandidateDiff) => renderToStaticMarkup(<CandidateReview run={nextRun} view={next} diff={diff} busy={false} {...actions} />);
+
+test("candidate actions follow authoritative worker state and repair permission", () => {
+  expect(render(view)).toContain("Validate and review");
+  expect(render(view)).not.toContain("Cancel workflow");
+  expect(render(view)).not.toContain("Repair candidate");
+  const active = { ...view, active: true, evidence: { ...evidence, status: "validating" as const } };
+  expect(render(active)).not.toContain("Validate and review");
+  expect(render(active)).toContain("Cancel workflow");
+  expect(canCancel("validating", true)).toBe(true);
+  expect(canCancel("reviewing", true)).toBe(true);
+  expect(canCancel("reviewing", false)).toBe(false);
+  expect(canCancel("failed", true)).toBe(true);
+  expect(canCancel("reviewed", false)).toBe(false);
+  expect(render({ ...view, repair_allowed: true })).toContain("Repair candidate");
+  expect(render({ ...active, repair_allowed: true })).not.toContain("Repair candidate");
+  expect(canValidate({ ...run, state: "reviewed" }, view)).toBe(false);
+  expect(canValidate(run, { ...view, evidence: { ...evidence, status: "failed" } })).toBe(false);
+  expect(canValidate({ ...run, state: "interrupted" }, { ...view, evidence: { ...evidence, status: "interrupted" } })).toBe(true);
+});
+
+test("complete candidate identity, executed check evidence and structured findings are inspectable", () => {
+  const result = { schema_version: "0.1", id: "check-1", run_id: run.id, repository_id: "app", recipe_id: "unit", candidate_hash: hash, commit, environment_fingerprint: `sha256:${"e".repeat(64)}`, command: ["npm", "test"], status: "passed" as const, exit_code: 0, artifact_refs: ["c2-g1-unit.stdout"], artifact_hashes: { "c2-g1-unit.stdout": "f".repeat(64) }, tests_detected: 3 };
+  const review = { schema_version: "0.1", id: "review-1", candidate_hash: hash, reviewer_session: "independent-1", verdict: "changes_required" as const, findings: [{ severity: "blocking" as const, path: "src/app.ts", line: 12, explanation: "Seeded regression loses data", evidence: ["A failing case is present at src/app.ts:12"] }], evidence: ["reviewed exact candidate"] };
+  const next = { ...view, evidence: { ...evidence, status: "paused" as const, reason: "Repair required: blocking review finding", results: [result], review } };
+  const diff = { candidate_hash: hash, repository_id: "app", base_commit: "0".repeat(40), commit, diff: "- old\n+ changed" };
+  const html = render(next, { ...run, state: "paused" }, diff);
+  for (const value of [hash, commit, evidence.candidate.plan_hash, result.environment_fingerprint, "View stdout", "tests_detected", "artifact_hashes", "f".repeat(64), "Seeded regression loses data", "src/app.ts", "independent-1", "changes required", "Repair required: blocking review finding", "+ changed"]) expect(html).toContain(value);
+  expect(html).not.toContain("Validate and review");
+});
+
+test("a replacement candidate never displays earlier diff, review or log as its evidence", () => {
+  const oldHash = `sha256:${"0".repeat(64)}`;
+  const next = { ...view, evidence: { ...evidence, review: { schema_version: "0.1", id: "old-review", candidate_hash: oldHash, reviewer_session: "old-reviewer", verdict: "passed" as const, findings: [], evidence: ["old result"] } } };
+  const diff = { candidate_hash: oldHash, repository_id: "app", base_commit: "0".repeat(40), commit, diff: "old diff must not appear" };
+  const html = renderToStaticMarkup(<CandidateReview run={run} view={next} diff={diff} log={{ candidateHash: oldHash, artifactId: "old.stdout", text: "old log must not appear" }} busy={false} {...actions} />);
+  expect(html).not.toContain("old-reviewer");
+  expect(html).not.toContain("old diff must not appear");
+  expect(html).not.toContain("old log must not appear");
+  expect(html).toContain("No independent review recorded for this candidate.");
+});
+
+test("an empty candidate record offers no validation or repair controls", () => {
+  expect(render({ evidence: null, active: false, repair_allowed: false })).toBe("");
+});
+
+test("restarting validation hides logs from the previous validation generation", () => {
+  const html = renderToStaticMarkup(<CandidateReview run={run} view={view} log={{ candidateHash: hash, artifactId: "c2-g0-unit.stdout", text: "old generation log" }} busy={false} {...actions} />);
+  expect(html).not.toContain("old generation log");
+});
+
+test("polling reconciles run and candidate reads that straddle settlement", () => {
+  expect(workflowNeedsRefresh(run, view)).toBe(false);
+  expect(workflowNeedsRefresh(run, { ...view, active: true })).toBe(true);
+  expect(workflowNeedsRefresh(run, { ...view, evidence: { ...evidence, status: "validating" } })).toBe(true);
+  expect(workflowNeedsRefresh(run, { ...view, evidence: { ...evidence, status: "reviewed" } })).toBe(true);
+  expect(workflowNeedsRefresh({ ...run, state: "reviewing" }, { ...view, evidence: { ...evidence, status: "failed" } })).toBe(true);
+  expect(workflowNeedsRefresh({ ...run, state: "reviewed" }, { ...view, evidence: { ...evidence, status: "reviewed" } })).toBe(false);
+  expect(workflowNeedsRefresh({ ...run, state: "implementing" }, view)).toBe(true);
+});

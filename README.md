@@ -4,7 +4,7 @@ Luuna is a local-first software engineering workbench for individual developers.
 
 This repository is being established as an executable foundation. The design documents describe the intended product; they are not evidence that the complete workflow, desktop distribution, provider integration, or full v1 has shipped. Deterministic fixture tests and real provider smoke tests have different purposes and must be reported separately.
 
-The initial executable slice is a tool-free Pi connectivity demo: authenticated run requests, durable history, event replay/streaming, and cancellation. It does not edit a repository, execute an approved implementation plan, or publish code. The desktop shell connects to a separately started service.
+The runtime provides repository import, supervised baselines, immutable plan approval and scoped writers in owned worktrees. The M3 implementation adds candidate-bound checks, fresh read-only reviewer sessions and bounded manual/optional automatic repair, with durable evidence and recovery. Deterministic integration and browser checks pass; genuine-provider M3 acceptance and native desktop/platform proof remain open. Publication is not implemented. The desktop shell connects to a separately started service.
 
 **Repository decision, October 16, 2026:** keep Missions, Atlas, and Beacon together in `brodynelly/luuna` while building the product. Separate repositories are deferred and are not a prerequisite for implementation. See [ADR 0002](docs/decisions/0002-supporting-components.md).
 
@@ -16,7 +16,7 @@ The initial executable slice is a tool-free Pi connectivity demo: authenticated 
 4. Consult the [decision records](docs/decisions/) when a historical proposal disagrees with the current architecture.
 5. Use the [implementation roadmap](docs/IMPLEMENTATION-ROADMAP.md) for the next bounded assignment, milestone exits, and planning estimates.
 
-The first implementation targets are M0, deterministic contracts and runtime policy, and M1, a real Pi RPC session with streaming, persistence, errors, and cancellation. A mocked session does not satisfy M1. Deeper orchestration, adapters, publication, and client parity follow evidence from those slices.
+M0–M2 have recorded Linux evidence. The next acceptance work is the genuine-provider M3 feature/check/review/repair flow and native-platform proof; see the handoff and status report. Fixture sessions establish deterministic failure behavior, not provider compatibility. Adapters, publication and client parity follow those gates.
 
 ## Repository map
 

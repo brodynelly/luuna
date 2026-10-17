@@ -53,6 +53,7 @@ pub struct AppState {
 }
 
 mod baselines;
+mod candidates;
 mod projects;
 mod writer;
 pub use baselines::{ArtifactId, StartBaseline};
@@ -165,6 +166,10 @@ pub fn router(state: AppState) -> Router {
         .route("/api/v1/runs/{id}/stream", get(stream))
         .route("/api/v1/runs/{id}/cancel", post(cancel))
         .route("/api/v1/runs/{id}/implement", post(writer::implement))
+        .route("/api/v1/runs/{id}/candidate", get(candidates::candidate))
+        .route("/api/v1/runs/{id}/diff", get(candidates::diff))
+        .route("/api/v1/runs/{id}/validate", post(candidates::validate))
+        .route("/api/v1/runs/{id}/repair", post(writer::repair))
         .route("/api/v1/runs/{id}/worktrees", get(writer::list_worktrees))
         .route("/api/v1/runs/{id}/attempts", get(writer::list_attempts))
         .route(
@@ -444,16 +449,18 @@ async fn cancel(
         .get_run(&id)
         .map_err(internal)?
         .ok_or_else(not_found)?;
+    let active = state.active.lock().map_err(internal)?;
+    if let Some(sender) = active.get(&id) {
+        sender.send(true).map_err(internal)?;
+        return Ok((StatusCode::ACCEPTED, Json(run)));
+    }
     if run.state.is_terminal() {
         return Ok((StatusCode::OK, Json(run)));
     }
-    let active = state.active.lock().map_err(internal)?;
-    let sender = active.get(&id).ok_or(ApiError(
+    Err(ApiError(
         StatusCode::CONFLICT,
         "run has no active local process".into(),
-    ))?;
-    sender.send(true).map_err(internal)?;
-    Ok((StatusCode::ACCEPTED, Json(run)))
+    ))
 }
 
 async fn run_worker(

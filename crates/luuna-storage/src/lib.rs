@@ -9,6 +9,7 @@ use thiserror::Error;
 
 mod baselines;
 mod projects;
+mod validation;
 mod writer;
 pub use projects::*;
 pub use writer::AttemptRecord;
@@ -88,6 +89,7 @@ impl Store {
         connection.execute_batch(MIGRATION_2)?;
         connection.execute_batch(MIGRATION_3)?;
         connection.execute_batch(MIGRATION_4)?;
+        connection.execute_batch(MIGRATION_5)?;
         Ok(Self { connection })
     }
 
@@ -169,6 +171,14 @@ impl Store {
             authorize_run(&tx, run_id)?;
             return Err(StorageError::Invalid("baseline evidence required: enter implementation through begin_implementation, which checks the approval, current manifest and passed baselines transactionally".into()));
         }
+        if matches!(
+            next,
+            RunState::Validating | RunState::Reviewing | RunState::Reviewed
+        ) {
+            return Err(StorageError::Invalid(
+                "candidate transitions require candidate-bound validation/review gates".into(),
+            ));
+        }
         transition(&tx, run_id, expected_revision, next, event_type, payload)?;
         tx.commit()?;
         self.get_run(run_id)?
@@ -232,6 +242,7 @@ impl Store {
             )?;
         }
         baselines::interrupt_running_baselines(&tx)?;
+        validation::interrupt_candidates(&tx)?;
         writer::abandon_orphaned_work(&tx)?;
         tx.commit()?;
         Ok(active.len())
@@ -563,5 +574,28 @@ CREATE UNIQUE INDEX IF NOT EXISTS one_active_lease_per_repository ON worktree_le
 CREATE TABLE IF NOT EXISTS attempts(id TEXT PRIMARY KEY, run_id TEXT NOT NULL REFERENCES runs(id), task_id TEXT NOT NULL, number INTEGER NOT NULL CHECK(number>0),
  state TEXT NOT NULL, payload TEXT NOT NULL, started_at TEXT NOT NULL, finished_at TEXT, UNIQUE(run_id, number));
 INSERT OR IGNORE INTO schema_migrations(version) VALUES (4);
+COMMIT;
+";
+
+const MIGRATION_5: &str = "
+BEGIN IMMEDIATE;
+CREATE TABLE IF NOT EXISTS candidates(hash TEXT PRIMARY KEY, run_id TEXT NOT NULL REFERENCES runs(id), id TEXT NOT NULL,
+ revision INTEGER NOT NULL CHECK(revision>0), status TEXT NOT NULL, payload TEXT NOT NULL, created_at TEXT NOT NULL,
+ UNIQUE(run_id, revision));
+CREATE TRIGGER IF NOT EXISTS immutable_candidate_identity BEFORE UPDATE ON candidates
+ WHEN NEW.hash != OLD.hash OR NEW.id != OLD.id OR NEW.run_id != OLD.run_id OR NEW.revision != OLD.revision
+ OR json_extract(NEW.payload,'$.candidate') != json_extract(OLD.payload,'$.candidate')
+ OR json_extract(NEW.payload,'$.repository_trees') != json_extract(OLD.payload,'$.repository_trees')
+ OR json_extract(NEW.payload,'$.implementer_session') != json_extract(OLD.payload,'$.implementer_session')
+ BEGIN SELECT RAISE(ABORT,'immutable candidate identity'); END;
+CREATE TABLE IF NOT EXISTS candidate_check_results(id TEXT PRIMARY KEY, candidate_hash TEXT NOT NULL REFERENCES candidates(hash),
+ generation INTEGER NOT NULL, recipe_id TEXT NOT NULL, payload TEXT NOT NULL, UNIQUE(candidate_hash,generation,recipe_id));
+CREATE TRIGGER IF NOT EXISTS immutable_candidate_checks_update BEFORE UPDATE ON candidate_check_results BEGIN SELECT RAISE(ABORT,'immutable candidate check'); END;
+CREATE TRIGGER IF NOT EXISTS immutable_candidate_checks_delete BEFORE DELETE ON candidate_check_results BEGIN SELECT RAISE(ABORT,'immutable candidate check'); END;
+CREATE TABLE IF NOT EXISTS candidate_reviews(id TEXT PRIMARY KEY, candidate_hash TEXT NOT NULL REFERENCES candidates(hash), generation INTEGER NOT NULL,
+ payload TEXT NOT NULL, UNIQUE(candidate_hash,generation));
+CREATE TRIGGER IF NOT EXISTS immutable_candidate_reviews_update BEFORE UPDATE ON candidate_reviews BEGIN SELECT RAISE(ABORT,'immutable candidate review'); END;
+CREATE TRIGGER IF NOT EXISTS immutable_candidate_reviews_delete BEFORE DELETE ON candidate_reviews BEGIN SELECT RAISE(ABORT,'immutable candidate review'); END;
+INSERT OR IGNORE INTO schema_migrations(version) VALUES (5);
 COMMIT;
 ";

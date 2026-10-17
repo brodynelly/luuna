@@ -1,9 +1,10 @@
 //! Tickets, plan workflows, leases and attempts: every stale or duplicate input fails closed.
 use luuna_domain::{
-    Approval, AttemptState, BaselineEvidence, BaselineIdentity, BaselineStatus, CheckResult,
-    CheckStatus, DirtyState, DomainError, ExecutionProfile, LeaseState, ManifestCheck,
-    PlanRevision, ProjectManifest, ProjectPolicy, RepositoryIdentity, RepositoryManifest,
-    RepositoryObservation, RunState, Ticket, TicketSource, WorktreeLease, SCHEMA_VERSION,
+    Approval, AttemptState, BaselineEvidence, BaselineIdentity, BaselineStatus, CandidateSet,
+    CandidateStatus, CheckResult, CheckStatus, DirtyState, DomainError, ExecutionProfile, Finding,
+    LeaseState, ManifestCheck, PlanRevision, ProjectManifest, ProjectPolicy, RepositoryIdentity,
+    RepositoryManifest, RepositoryObservation, ReviewResult, ReviewVerdict, RunState, Severity,
+    Ticket, TicketSource, WorktreeLease, SCHEMA_VERSION,
 };
 use luuna_storage::{StorageError, Store};
 use std::collections::BTreeMap;
@@ -71,7 +72,10 @@ fn ticket() -> Ticket {
     }
 }
 fn confirmed_store() -> (Store, String) {
-    let mut store = Store::open(":memory:").unwrap();
+    confirmed_store_at(":memory:")
+}
+fn confirmed_store_at(path: impl AsRef<std::path::Path>) -> (Store, String) {
+    let mut store = Store::open(path).unwrap();
     store
         .register_project("project", "Project", &[("app".into(), observation())])
         .unwrap();
@@ -440,6 +444,9 @@ fn leases_are_exclusive_attempts_are_budgeted_and_restart_abandons_both() {
     let attempts = store.attempts(&run.id).unwrap();
     assert_eq!(attempts.len(), 3);
     assert_eq!(attempts[2].state, AttemptState::Interrupted);
+    let recovered_usage = store.workflow_usage(&run.id).unwrap();
+    assert!(recovered_usage.elapsed_seconds >= plan.budgets.timeout_seconds);
+    assert!(recovered_usage.cost_usd_micros >= plan.budgets.cost_usd_micros);
     assert!(store.active_worktree_leases().unwrap().is_empty());
 }
 
@@ -470,4 +477,597 @@ fn ticket_retries_at_quota_replay_but_new_deliveries_are_refused() {
         store.create_ticket(&input, "key-999"),
         Err(StorageError::AlreadyExists(_))
     ));
+}
+
+fn candidate_fixture() -> (Store, PlanRevision, CandidateSet) {
+    candidate_fixture_at(":memory:", 2)
+}
+fn candidate_fixture_at(
+    path: impl AsRef<std::path::Path>,
+    max_attempts: u32,
+) -> (Store, PlanRevision, CandidateSet) {
+    let (mut store, hash) = confirmed_store_at(path);
+    store.create_ticket(&ticket(), "key").unwrap();
+    let mut plan = plan(&hash, 1, 1);
+    plan.budgets.max_attempts = max_attempts;
+    let plan = plan.seal().unwrap();
+    let run = store.open_plan_workflow("workflow-1", &plan).unwrap();
+    let run = store
+        .approve_plan(&run.id, run.revision, &approval(&plan))
+        .unwrap();
+    passed_baseline(&mut store, &plan);
+    let run = store
+        .begin_implementation(&run.id, run.revision, HOST)
+        .unwrap();
+    store
+        .start_attempt("writer-1", &run.id, "implement", 2, serde_json::json!({}))
+        .unwrap();
+    store
+        .finish_attempt(
+            "writer-1",
+            AttemptState::Completed,
+            serde_json::json!({"usage":{"elapsed_seconds":10,"cost_usd_micros":100}}),
+        )
+        .unwrap();
+    let mut candidate = CandidateSet {
+        schema_version: SCHEMA_VERSION.into(),
+        id: "candidate-1".into(),
+        revision: 1,
+        plan_hash: plan.hash.clone(),
+        repository_commits: BTreeMap::from([("app".into(), "c".repeat(40))]),
+        dependency_bindings: BTreeMap::new(),
+        hash: String::new(),
+    };
+    candidate.hash = candidate.computed_hash().unwrap();
+    store
+        .record_candidate(
+            &run.id,
+            run.revision,
+            &candidate,
+            &BTreeMap::from([("app".into(), "d".repeat(40))]),
+            "writer-1",
+        )
+        .unwrap();
+    (store, plan, candidate)
+}
+
+fn candidate_check(candidate: &CandidateSet, status: CheckStatus) -> CheckResult {
+    CheckResult {
+        schema_version: SCHEMA_VERSION.into(),
+        id: "candidate-unit".into(),
+        run_id: "workflow-1".into(),
+        repository_id: "app".into(),
+        recipe_id: "unit".into(),
+        candidate_hash: candidate.hash.clone(),
+        commit: candidate.repository_commits["app"].clone(),
+        environment_fingerprint: HOST.into(),
+        command: vec!["cargo".into(), "test".into(), "--locked".into()],
+        status,
+        exit_code: if status == CheckStatus::Passed {
+            Some(0)
+        } else {
+            Some(1)
+        },
+        artifact_refs: vec!["artifact:workflow-1:unit:stdout".into()],
+        cwd: ".".into(),
+        started_at: None,
+        finished_at: None,
+        reason: None,
+        artifact_hashes: BTreeMap::new(),
+        tests_detected: Some(5),
+    }
+}
+
+fn begin_validation(store: &mut Store, candidate: &CandidateSet) {
+    let run = store.get_run("workflow-1").unwrap().unwrap();
+    store
+        .begin_candidate_validation(&run.id, run.revision, &candidate.hash)
+        .unwrap();
+}
+
+fn finish_validation(store: &mut Store, candidate: &CandidateSet) {
+    let run = store.get_run("workflow-1").unwrap().unwrap();
+    store
+        .finish_candidate_validation(&run.id, run.revision, &candidate.hash)
+        .unwrap();
+}
+
+fn review(candidate: &CandidateSet) -> ReviewResult {
+    ReviewResult {
+        schema_version: SCHEMA_VERSION.into(),
+        id: "review-1".into(),
+        candidate_hash: candidate.hash.clone(),
+        reviewer_session: "independent-reviewer".into(),
+        findings: vec![],
+        verdict: ReviewVerdict::Passed,
+        evidence: vec!["artifact:workflow-1:review".into()],
+    }
+}
+
+#[test]
+fn candidate_gates_reject_stale_checks_forged_recipes_and_review_bypasses() {
+    let (mut store, _, candidate) = candidate_fixture();
+    let run = store.get_run("workflow-1").unwrap().unwrap();
+    for state in [RunState::Reviewing, RunState::Reviewed] {
+        assert!(store
+            .transition_run(
+                &run.id,
+                run.revision,
+                state,
+                "forged",
+                serde_json::json!({})
+            )
+            .is_err());
+    }
+    let result = candidate_check(&candidate, CheckStatus::Passed);
+    assert!(store
+        .record_candidate_check(&run.id, &candidate.hash, &result)
+        .is_err());
+    begin_validation(&mut store, &candidate);
+    let run = store.get_run(&run.id).unwrap().unwrap();
+    assert!(store
+        .begin_candidate_validation(&run.id, run.revision, &candidate.hash)
+        .is_err());
+    for mutation in ["hash", "commit", "command", "cwd", "run", "recipe"] {
+        let mut wrong = result.clone();
+        match mutation {
+            "hash" => wrong.candidate_hash = format!("sha256:{}", "f".repeat(64)),
+            "commit" => wrong.commit = "e".repeat(40),
+            "command" => wrong.command.push("--ignored".into()),
+            "cwd" => wrong.cwd = "elsewhere".into(),
+            "run" => wrong.run_id = "other".into(),
+            _ => wrong.recipe_id = "other".into(),
+        }
+        assert!(
+            store
+                .record_candidate_check(&run.id, &candidate.hash, &wrong)
+                .is_err(),
+            "{mutation}"
+        );
+    }
+    store
+        .record_candidate_check(&run.id, &candidate.hash, &result)
+        .unwrap();
+    assert!(store
+        .record_candidate_check(&run.id, &candidate.hash, &result)
+        .is_err());
+    finish_validation(&mut store, &candidate);
+    let run = store.get_run(&run.id).unwrap().unwrap();
+    assert_eq!(run.state, RunState::Reviewing);
+    let mut same = review(&candidate);
+    same.reviewer_session = "writer-1".into();
+    assert!(store
+        .finish_candidate_review(&run.id, run.revision, &candidate.hash, &same)
+        .is_err());
+    let mut blocking = review(&candidate);
+    blocking.findings.push(Finding {
+        severity: Severity::Blocking,
+        path: "src/main.rs".into(),
+        line: 1,
+        explanation: "seeded regression".into(),
+        evidence: vec!["failing case".into()],
+    });
+    assert!(store
+        .finish_candidate_review(&run.id, run.revision, &candidate.hash, &blocking)
+        .is_err());
+    let mut stale = review(&candidate);
+    stale.candidate_hash = format!("sha256:{}", "a".repeat(64));
+    assert!(store
+        .finish_candidate_review(&run.id, run.revision, &candidate.hash, &stale)
+        .is_err());
+    store
+        .finish_candidate_review(&run.id, run.revision, &candidate.hash, &review(&candidate))
+        .unwrap();
+    assert_eq!(
+        store.get_run(&run.id).unwrap().unwrap().state,
+        RunState::Reviewed
+    );
+    assert_eq!(
+        store.current_candidate(&run.id).unwrap().unwrap().review,
+        Some(review(&candidate))
+    );
+}
+
+#[test]
+fn failed_missing_or_blocked_candidate_checks_never_reach_review() {
+    for status in [Some(CheckStatus::Failed), Some(CheckStatus::Blocked), None] {
+        let (mut store, _, candidate) = candidate_fixture();
+        begin_validation(&mut store, &candidate);
+        if let Some(status) = status {
+            store
+                .record_candidate_check(
+                    "workflow-1",
+                    &candidate.hash,
+                    &candidate_check(&candidate, status),
+                )
+                .unwrap();
+        }
+        finish_validation(&mut store, &candidate);
+        let expected = if status == Some(CheckStatus::Blocked) {
+            RunState::TestingBlocked
+        } else {
+            RunState::Failed
+        };
+        assert_eq!(
+            store.get_run("workflow-1").unwrap().unwrap().state,
+            expected
+        );
+        assert!(store
+            .current_candidate("workflow-1")
+            .unwrap()
+            .unwrap()
+            .reason
+            .is_some());
+        assert!(store
+            .can_candidate_repair("workflow-1", &candidate.hash)
+            .is_ok());
+    }
+}
+
+#[test]
+fn repair_revisions_invalidate_checks_and_reviews_without_resetting_usage() {
+    let (mut store, plan, candidate) = candidate_fixture();
+    begin_validation(&mut store, &candidate);
+    store
+        .record_candidate_check(
+            "workflow-1",
+            &candidate.hash,
+            &candidate_check(&candidate, CheckStatus::Passed),
+        )
+        .unwrap();
+    finish_validation(&mut store, &candidate);
+    let run = store.get_run("workflow-1").unwrap().unwrap();
+    let mut rejected = review(&candidate);
+    rejected.verdict = ReviewVerdict::ChangesRequired;
+    store
+        .finish_candidate_review(&run.id, run.revision, &candidate.hash, &rejected)
+        .unwrap();
+    let usage = store
+        .charge_candidate_usage(&run.id, &candidate.hash, 20, 200)
+        .unwrap();
+    assert_eq!(usage.elapsed_seconds, 30);
+    assert_eq!(usage.cost_usd_micros, 300);
+    let run = store.get_run(&run.id).unwrap().unwrap();
+    let run = store
+        .begin_candidate_repair(&run.id, run.revision, &candidate.hash, HOST)
+        .unwrap();
+    store
+        .start_attempt(
+            "writer-2",
+            &run.id,
+            "implement",
+            plan.budgets.max_attempts,
+            serde_json::json!({}),
+        )
+        .unwrap();
+    store
+        .finish_attempt(
+            "writer-2",
+            AttemptState::Completed,
+            serde_json::json!({"usage":{"elapsed_seconds":4,"cost_usd_micros":40}}),
+        )
+        .unwrap();
+    let mut revised = candidate.clone();
+    revised.revision += 1;
+    revised
+        .repository_commits
+        .insert("app".into(), "e".repeat(40));
+    revised.hash = revised.computed_hash().unwrap();
+    store
+        .record_candidate(
+            &run.id,
+            run.revision,
+            &revised,
+            &BTreeMap::from([("app".into(), "f".repeat(40))]),
+            "writer-2",
+        )
+        .unwrap();
+    let current = store.current_candidate(&run.id).unwrap().unwrap();
+    assert!(current.results.is_empty());
+    assert!(current.review.is_none());
+    assert!(store
+        .record_candidate_check(
+            &run.id,
+            &candidate.hash,
+            &candidate_check(&candidate, CheckStatus::Passed)
+        )
+        .is_err());
+    let usage = store.workflow_usage(&run.id).unwrap();
+    assert_eq!(usage.attempts, 2);
+    assert_eq!(usage.elapsed_seconds, 34);
+    begin_validation(&mut store, &revised);
+    finish_validation(&mut store, &revised);
+    assert!(matches!(
+        store.can_candidate_repair(&run.id, &revised.hash),
+        Err(StorageError::Domain(DomainError::BudgetExceeded(_)))
+    ));
+    let failed = store.get_run(&run.id).unwrap().unwrap();
+    assert!(store
+        .begin_implementation(&run.id, failed.revision, HOST)
+        .is_err());
+    assert_eq!(store.candidates(&run.id).unwrap().len(), 2);
+}
+
+#[test]
+fn restart_keeps_consumed_budgets_and_retries_with_fresh_evidence_generation() {
+    let (mut store, _, candidate) = candidate_fixture();
+    begin_validation(&mut store, &candidate);
+    store
+        .record_candidate_check(
+            "workflow-1",
+            &candidate.hash,
+            &candidate_check(&candidate, CheckStatus::Passed),
+        )
+        .unwrap();
+    store
+        .charge_candidate_usage("workflow-1", &candidate.hash, 12, 130)
+        .unwrap();
+    store.interrupt_active_runs().unwrap();
+    let interrupted = store.current_candidate("workflow-1").unwrap().unwrap();
+    assert_eq!(interrupted.status, CandidateStatus::Interrupted);
+    begin_validation(&mut store, &candidate);
+    let resumed = store.current_candidate("workflow-1").unwrap().unwrap();
+    assert_eq!(resumed.validation_generation, 2);
+    assert!(resumed.results.is_empty());
+    let mut fresh = candidate_check(&candidate, CheckStatus::Passed);
+    fresh.id = "fresh-unit".into();
+    store
+        .record_candidate_check("workflow-1", &candidate.hash, &fresh)
+        .unwrap();
+    finish_validation(&mut store, &candidate);
+    assert_eq!(
+        store.workflow_usage("workflow-1").unwrap().elapsed_seconds,
+        22
+    );
+    store.interrupt_active_runs().unwrap();
+    assert_eq!(
+        store
+            .current_candidate("workflow-1")
+            .unwrap()
+            .unwrap()
+            .status,
+        CandidateStatus::Interrupted
+    );
+    let interrupted = store.get_run("workflow-1").unwrap().unwrap();
+    assert!(matches!(
+        store.begin_candidate_validation(&interrupted.id, interrupted.revision, &candidate.hash),
+        Err(StorageError::Domain(DomainError::BudgetExceeded(_)))
+    ));
+}
+
+#[test]
+fn changed_ticket_prevents_validation_and_review_and_exhaustion_is_durable() {
+    let (mut changed, _, pending) = candidate_fixture();
+    changed
+        .update_ticket(
+            "ticket-1",
+            1,
+            "changed",
+            "Different intent",
+            &["different".into()],
+        )
+        .unwrap();
+    let pending_run = changed.get_run("workflow-1").unwrap().unwrap();
+    assert!(changed
+        .begin_candidate_validation(&pending_run.id, pending_run.revision, &pending.hash)
+        .is_err());
+    let (mut store, _, candidate) = candidate_fixture();
+    begin_validation(&mut store, &candidate);
+    store
+        .record_candidate_check(
+            "workflow-1",
+            &candidate.hash,
+            &candidate_check(&candidate, CheckStatus::Passed),
+        )
+        .unwrap();
+    finish_validation(&mut store, &candidate);
+    store
+        .update_ticket(
+            "ticket-1",
+            1,
+            "revised",
+            "New intent",
+            &["new criterion".into()],
+        )
+        .unwrap();
+    let run = store.get_run("workflow-1").unwrap().unwrap();
+    assert!(store
+        .finish_candidate_review(&run.id, run.revision, &candidate.hash, &review(&candidate))
+        .is_err());
+    let usage = store
+        .charge_candidate_usage(&run.id, &candidate.hash, 500, 1_000_000)
+        .unwrap();
+    assert_eq!(usage.elapsed_seconds, 510);
+    assert_eq!(
+        store.get_run(&run.id).unwrap().unwrap().state,
+        RunState::Paused
+    );
+    assert!(store
+        .can_candidate_repair(&run.id, &candidate.hash)
+        .is_err());
+    assert!(store
+        .current_candidate(&run.id)
+        .unwrap()
+        .unwrap()
+        .reason
+        .unwrap()
+        .contains("budget exceeded"));
+}
+
+#[test]
+fn restart_conservatively_accounts_for_uncharged_stage_time_and_unknown_review_cost() {
+    let temp = tempfile::tempdir().unwrap();
+    let path = temp.path().join("state.sqlite");
+    let (mut store, plan, candidate) = candidate_fixture_at(&path, 2);
+    begin_validation(&mut store, &candidate);
+    let connection = rusqlite::Connection::open(&path).unwrap();
+    connection.execute("UPDATE candidates SET payload=json_set(payload,'$.stage_started_at','2000-01-01T00:00:00.000Z') WHERE hash=?1",[&candidate.hash]).unwrap();
+    drop(connection);
+    drop(store);
+    let mut store = Store::open(&path).unwrap();
+    store.interrupt_active_runs().unwrap();
+    let usage = store.workflow_usage("workflow-1").unwrap();
+    assert!(usage.elapsed_seconds >= plan.budgets.timeout_seconds);
+    let run = store.get_run("workflow-1").unwrap().unwrap();
+    assert!(store
+        .begin_candidate_validation(&run.id, run.revision, &candidate.hash)
+        .is_err());
+    store.interrupt_active_runs().unwrap();
+    assert_eq!(store.workflow_usage(&run.id).unwrap(), usage);
+
+    let (mut store, plan, candidate) = candidate_fixture();
+    begin_validation(&mut store, &candidate);
+    store
+        .record_candidate_check(
+            "workflow-1",
+            &candidate.hash,
+            &candidate_check(&candidate, CheckStatus::Passed),
+        )
+        .unwrap();
+    finish_validation(&mut store, &candidate);
+    store.interrupt_active_runs().unwrap();
+    let usage = store.workflow_usage("workflow-1").unwrap();
+    assert_eq!(usage.cost_usd_micros, plan.budgets.cost_usd_micros);
+    store.interrupt_active_runs().unwrap();
+    assert_eq!(store.workflow_usage("workflow-1").unwrap(), usage);
+}
+
+#[test]
+fn project_repair_limit_and_changed_host_block_repairs_independently_of_attempt_budget() {
+    let (mut store, _, candidate) = candidate_fixture_at(":memory:", 10);
+    begin_validation(&mut store, &candidate);
+    finish_validation(&mut store, &candidate);
+    let run = store.get_run("workflow-1").unwrap().unwrap();
+    assert!(store
+        .begin_candidate_repair(&run.id, run.revision, &candidate.hash, "different-host")
+        .is_err());
+    for index in 0..2 {
+        let run = store.get_run("workflow-1").unwrap().unwrap();
+        let run = store
+            .begin_candidate_repair(&run.id, run.revision, &candidate.hash, HOST)
+            .unwrap();
+        let id = format!("repair-{index}");
+        store
+            .start_attempt(&id, &run.id, "implement", 10, serde_json::json!({}))
+            .unwrap();
+        store
+            .finish_attempt(&id, AttemptState::Failed, serde_json::json!({}))
+            .unwrap();
+        store
+            .transition_run(
+                &run.id,
+                run.revision,
+                RunState::Failed,
+                "run.failed",
+                serde_json::json!({"reason":"synthetic writer failure"}),
+            )
+            .unwrap();
+    }
+    let error = store
+        .can_candidate_repair("workflow-1", &candidate.hash)
+        .unwrap_err();
+    assert!(error.to_string().contains("max_task_repairs"));
+    assert_eq!(store.workflow_usage("workflow-1").unwrap().attempts, 3);
+}
+
+#[test]
+fn checks_at_exact_budget_limit_pause_before_starting_independent_review() {
+    let (mut store, plan, candidate) = candidate_fixture();
+    begin_validation(&mut store, &candidate);
+    store
+        .record_candidate_check(
+            "workflow-1",
+            &candidate.hash,
+            &candidate_check(&candidate, CheckStatus::Passed),
+        )
+        .unwrap();
+    store
+        .charge_candidate_usage(
+            "workflow-1",
+            &candidate.hash,
+            plan.budgets.timeout_seconds - 10,
+            0,
+        )
+        .unwrap();
+    finish_validation(&mut store, &candidate);
+    assert_eq!(
+        store.get_run("workflow-1").unwrap().unwrap().state,
+        RunState::Paused
+    );
+    let evidence = store.current_candidate("workflow-1").unwrap().unwrap();
+    assert_eq!(evidence.status, CandidateStatus::Paused);
+    assert!(evidence.review.is_none());
+    assert!(store
+        .can_candidate_repair("workflow-1", &candidate.hash)
+        .is_err());
+}
+
+#[test]
+fn exhausted_repairs_pause_failed_candidates_and_refresh_an_existing_pause_reason() {
+    for status in [CheckStatus::Failed, CheckStatus::Blocked] {
+        let (mut store, plan, candidate) = candidate_fixture();
+        begin_validation(&mut store, &candidate);
+        store
+            .record_candidate_check(
+                "workflow-1",
+                &candidate.hash,
+                &candidate_check(&candidate, status),
+            )
+            .unwrap();
+        finish_validation(&mut store, &candidate);
+        store
+            .charge_candidate_usage(
+                "workflow-1",
+                &candidate.hash,
+                plan.budgets.timeout_seconds,
+                0,
+            )
+            .unwrap();
+        assert!(store
+            .can_candidate_repair("workflow-1", &candidate.hash)
+            .is_err());
+        let run = store.get_run("workflow-1").unwrap().unwrap();
+        store
+            .fail_candidate_stage(
+                &run.id,
+                run.revision,
+                &candidate.hash,
+                RunState::Paused,
+                "automatic repairs stopped: time budget exhausted; re-plan required",
+            )
+            .unwrap();
+        let paused = store.get_run(&run.id).unwrap().unwrap();
+        assert_eq!(paused.state, RunState::Paused);
+        assert_eq!(paused.revision, run.revision + 1);
+        store
+            .fail_candidate_stage(
+                &paused.id,
+                paused.revision,
+                &candidate.hash,
+                RunState::Paused,
+                "automatic repairs stopped: the approved repair limit was reached",
+            )
+            .unwrap();
+        let updated = store.get_run(&run.id).unwrap().unwrap();
+        assert_eq!(updated.revision, paused.revision + 1);
+        let evidence = store.current_candidate(&run.id).unwrap().unwrap();
+        assert_eq!(evidence.status, CandidateStatus::Paused);
+        assert!(evidence.reason.unwrap().contains("repair limit"));
+        let last = store.events_after(&run.id, 0).unwrap().pop().unwrap();
+        assert_eq!(last.event_type, "candidate.stage_failed");
+        assert_eq!(last.payload["state"], "paused");
+        assert!(last.payload["reason"]
+            .as_str()
+            .unwrap()
+            .contains("repair limit"));
+        assert!(store
+            .transition_run(
+                &run.id,
+                updated.revision,
+                RunState::Reviewed,
+                "forged",
+                serde_json::json!({})
+            )
+            .is_err());
+    }
 }
