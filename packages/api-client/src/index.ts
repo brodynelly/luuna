@@ -18,6 +18,8 @@ export interface Health {
   demo_only: boolean;
   /** Content digest of the sources the runtime binary was built from. */
   build_identity?: string;
+  /** Release and commit of the compiler that built the runtime binary. */
+  build_rustc?: string;
 }
 
 export interface RunRequest {

@@ -16,7 +16,7 @@
 // supported names (or their LUUNA_PI_ aliases) to the isolated Pi children. The
 // report records credential names only and is scanned for leaked values.
 import { spawn, execFileSync } from "node:child_process";
-import { mkdirSync, writeFileSync, rmdirSync, readdirSync, readFileSync, opendirSync, statSync, lstatSync, readlinkSync, realpathSync, existsSync, openSync, readSync, closeSync, unlinkSync, fstatSync, fchmodSync, ftruncateSync, constants as fsConstants } from "node:fs";
+import { mkdirSync, writeFileSync, writeSync, rmdirSync, readdirSync, readFileSync, opendirSync, statSync, lstatSync, readlinkSync, realpathSync, existsSync, openSync, readSync, closeSync, unlinkSync, fstatSync, fchmodSync, ftruncateSync, constants as fsConstants } from "node:fs";
 import { randomBytes, createHash } from "node:crypto";
 import { tmpdir, platform, release, arch, devNull } from "node:os";
 import path from "node:path";
@@ -189,6 +189,9 @@ let runtime = null;
 let developerHead = null;
 let untrackedAfterBaseline = null;
 let finalStop = { exited: false };
+// A runtime that is starting is tracked here until it is healthy, so a start that fails while the
+// child is still alive leaves the final cleanup a handle to stop and await.
+let startingRuntime = null;
 
 try {
   evidence.environment = environment();
@@ -198,6 +201,8 @@ try {
   // revision too, or a locally weakened probe could pass under that revision's name.
   record("the Luuna checkout (harness included) matched the recorded revision: no modified or untracked file", evidence.environment.git_dirty === false, `revision ${evidence.environment.git_revision}, ${evidence.environment.git_dirty === false ? "clean" : evidence.environment.git_dirty === null ? "status unknown" : `modified: ${evidence.environment.git_dirty_paths}`}`);
   record("the runtime binary was built from the recorded revision's build inputs (embedded content digest)", identity === evidence.environment.expected_build_identity && evidence.environment.runtime_sources_dirty === false, `revision ${evidence.environment.git_revision}, build inputs ${evidence.environment.runtime_sources_dirty === false ? "clean" : "modified or unknown"}, binary reports ${String(identity).slice(0, 23)}…, checkout ${String(evidence.environment.expected_build_identity).slice(0, 23)}…`);
+  const pinned = pinnedToolchain();
+  record("the runtime binary was compiled with the toolchain pinned in rust-toolchain.toml", pinned !== null && String(evidence.environment.runtime_build_rustc).split(" ")[0] === pinned, `pinned ${pinned ?? "unreadable"}, binary built by rustc ${evidence.environment.runtime_build_rustc}`);
   await registerProjectAndBaseline();
   await scenario("feature", approvedFeatureIsCheckedAndIndependentlyReviewed);
   await scenario("repair", failingCheckRequiresManualRepairAndFreshEvidence);
@@ -210,6 +215,10 @@ try {
   record("harness", false, `unexpected harness failure: ${error instanceof Error ? error.stack ?? error.message : String(error)}`);
 } finally {
   finalStop = await stopRuntime(runtime);
+  if (startingRuntime !== null && startingRuntime !== runtime) {
+    const starting = await stopRuntime(startingRuntime);
+    finalStop = { exited: finalStop.exited && starting.exited };
+  }
 }
 
 evidence.finished_at = new Date().toISOString();
@@ -256,14 +265,19 @@ process.exit(passed ? 0 : 1);
  * reasons it was refused, if any.
  */
 function writeReport(name, text) {
-  const flags = fsConstants.O_WRONLY | fsConstants.O_CREAT | fsConstants.O_EXCL | (fsConstants.O_NOFOLLOW ?? 0);
-  let target = path.join(out, name);
-  if (outFd !== null) target = heldPath(outFd, name);
-  else { const refused = unpinnedReason(target); if (refused) return [`${name}: ${refused}`]; }
-  let fd;
-  try { fd = openSync(target, flags, 0o600); } catch (error) { return [`${name}: ${error.code ?? error.message}`]; }
+  const fd = openOwnedFile(name);
+  if (typeof fd !== "number") return [`${name}: ${fd}`];
   try { writeFileSync(fd, text); } finally { closeSync(fd); }
   return [];
+}
+
+/** Creates a new file directly under the output root (exclusive, non-following, 0600); returns the descriptor or the reason it was refused. */
+function openOwnedFile(name, extraFlags = 0) {
+  const flags = fsConstants.O_WRONLY | fsConstants.O_CREAT | fsConstants.O_EXCL | (fsConstants.O_NOFOLLOW ?? 0) | extraFlags;
+  let target = path.join(out, name);
+  if (outFd !== null) target = heldPath(outFd, name);
+  else { const refused = unpinnedReason(target); if (refused) return refused; }
+  try { return openSync(target, flags, 0o600); } catch (error) { return String(error.code ?? error.message); }
 }
 
 function ticket(title, intent, acceptance_criteria, paths, maxAttempts) {
@@ -296,22 +310,33 @@ async function startRuntime(label) {
     LUUNA_PI_ARGS_JSON: JSON.stringify(profile.piArgs),
     LUUNA_RUN_TIMEOUT_SECONDS: String(runTimeoutSeconds),
   });
-  const log = path.join(out, `runtime-${label}.log`);
+  // The log is opened once, relative to the held output root, exclusively and without following a
+  // link; every chunk is written through that descriptor, so a later swap of the file or the root
+  // cannot redirect a write.
+  const logFd = openOwnedFile(`runtime-${label}.log`, fsConstants.O_APPEND);
   const child = spawn(runtimeBinary, [], { env, stdio: ["ignore", "ignore", "pipe"] });
+  startingRuntime = child;
   let stderr = "";
   let spawnError = null;
   child.on("error", (error) => { spawnError = error; });
-  child.stderr.on("data", (chunk) => { stderr += chunk; writeFileSync(log, stderr, { mode: 0o600 }); });
+  child.stderr.on("data", (chunk) => { stderr += chunk; if (typeof logFd === "number") { try { writeSync(logFd, chunk); } catch { /* logged in memory only */ } } });
+  child.on("close", () => { if (typeof logFd === "number") { try { closeSync(logFd); } catch { /* already closed */ } } });
   const deadline = Date.now() + 30_000;
   while (Date.now() < deadline) {
-    if (spawnError) throw new Error(`runtime could not be spawned (${spawnError.code ?? spawnError.message}): ${runtimeBinary}`);
-    if (child.exitCode !== null) throw new Error(`runtime exited early (${child.exitCode}): ${stderr.trim()}`);
+    // A child that never spawned or already exited leaves nothing to stop.
+    if (spawnError) { startingRuntime = null; throw new Error(`runtime could not be spawned (${spawnError.code ?? spawnError.message}): ${runtimeBinary}`); }
+    if (child.exitCode !== null || child.signalCode !== null) { startingRuntime = null; throw new Error(`runtime exited early (${child.exitCode ?? child.signalCode}): ${stderr.trim()}`); }
     try {
       const response = await fetch(`${base}/api/v1/health`, { signal: AbortSignal.timeout(5_000) });
       if (response.ok) {
         const health = await response.json();
-        if (label === "initial") evidence.environment.runtime_build_identity = health.build_identity ?? "not reported";
+        if (label === "initial") {
+          evidence.environment.runtime_build_identity = health.build_identity ?? "not reported";
+          evidence.environment.runtime_build_rustc = health.build_rustc ?? "not reported";
+        }
         record(`runtime ${label} start`, health.status === "ok", `health ${JSON.stringify(health)}`);
+        if (typeof logFd !== "number") record(`runtime ${label} log was created inside the output root`, false, logFd);
+        startingRuntime = null;
         return child;
       }
     } catch { /* not yet listening */ }
@@ -320,8 +345,10 @@ async function startRuntime(label) {
   // A child that never became healthy is still ours: reap it before failing so
   // no credential-bearing runtime outlives the harness holding the port and data directory.
   child.kill("SIGKILL");
-  await waitForExit(child, 10_000);
-  throw new Error(`runtime did not become healthy (child terminated): ${stderr.trim()}`);
+  // If its exit is not observed it stays in startingRuntime, and the final cleanup stops it again
+  // and records whether it exited before the leak scan.
+  const reaped = await waitForExit(child, 10_000);
+  throw new Error(`runtime did not become healthy (${reaped.exited ? "child terminated" : "child exit NOT observed"}): ${stderr.trim()}`);
 }
 
 /**
@@ -799,6 +826,14 @@ function environment() {
   try { info.expected_build_identity = buildIdentity(); } catch (error) { info.expected_build_identity = `unavailable: ${error.message}`; }
   try { info.runtime_sources_dirty = git(repository, "status", "--porcelain", "--", "crates/*/src/*", "crates/*/assets/*", "crates/*/Cargo.toml", "crates/*/build.rs", "Cargo.toml", "Cargo.lock").length > 0; } catch { info.runtime_sources_dirty = null; }
   return info;
+}
+
+/** The exact release `rust-toolchain.toml` pins, or null when it pins none (a channel name is not a release). */
+function pinnedToolchain() {
+  try {
+    const channel = /^\s*channel\s*=\s*"([^"]+)"/m.exec(readFileSync(path.join(repository, "rust-toolchain.toml"), "utf8"))?.[1];
+    return channel && /^\d+\.\d+\.\d+$/.test(channel) ? channel : null;
+  } catch { return null; }
 }
 
 /** The digest `crates/luuna-runtime/build.rs` embeds: SHA-256 over `path\0sha256(content)\n` for every build input, sorted by path. */

@@ -2,7 +2,9 @@
 //! into the runtime (each crate's manifest, `build.rs`, `src/` and `assets/`,
 //! plus the workspace manifest and lockfile). `/health` reports it so evidence
 //! can be bound to the exact sources a binary was built from, independent of
-//! timestamps. `scripts/m3-smoke.mjs` computes the same digest.
+//! timestamps. `scripts/m3-smoke.mjs` computes the same digest. The compiler
+//! that built the binary is embedded too (`build_rustc`), so evidence can be
+//! checked against the toolchain pinned in `rust-toolchain.toml`.
 
 use sha2::{Digest, Sha256};
 use std::fs;
@@ -85,4 +87,25 @@ fn main() {
         .map(|byte| format!("{byte:02x}"))
         .collect();
     println!("cargo:rustc-env=LUUNA_BUILD_IDENTITY=sha256:{identity}");
+    // The compiler Cargo actually invokes for this build, not whatever is on PATH.
+    let rustc = std::env::var("RUSTC").unwrap_or_else(|_| "rustc".to_owned());
+    let version = std::process::Command::new(rustc)
+        .arg("-vV")
+        .output()
+        .ok()
+        .and_then(|output| String::from_utf8(output.stdout).ok())
+        .unwrap_or_default();
+    let field = |key: &str| {
+        version
+            .lines()
+            .find_map(|line| line.strip_prefix(key))
+            .map(str::trim)
+            .unwrap_or("unknown")
+            .to_owned()
+    };
+    println!(
+        "cargo:rustc-env=LUUNA_BUILD_RUSTC={} ({})",
+        field("release:"),
+        field("commit-hash:")
+    );
 }
