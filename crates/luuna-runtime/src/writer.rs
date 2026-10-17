@@ -974,7 +974,7 @@ fn known_secrets(state: &AppState) -> Vec<String> {
             ]
         })
         .flatten()
-        .filter(|secret| secret.len() >= 8)
+        .filter(|secret| !secret.is_empty())
         .collect();
     secrets.push(state.config.token.clone());
     secrets
@@ -994,7 +994,7 @@ fn redact_secrets(text: &str, known: &[String]) -> String {
     let mut ordered: Vec<&str> = known
         .iter()
         .map(String::as_str)
-        .filter(|secret| secret.len() >= 8)
+        .filter(|secret| !secret.is_empty())
         .collect();
     ordered.sort_by(|a, b| b.len().cmp(&a.len()).then_with(|| a.cmp(b)));
     ordered.dedup();
@@ -1869,6 +1869,14 @@ mod redaction_tests {
         let out = redact_secrets("key=abcdefgh-private-suffix other=abcdefgh", &known);
         assert_eq!(out, "key=[redacted credential] other=[redacted credential]");
         assert!(!out.contains("suffix"));
+    }
+
+    #[test]
+    fn short_configured_values_are_redacted_too() {
+        // An explicitly configured credential is redacted whatever its length; length
+        // thresholds belong only to the heuristic token detection.
+        let out = redact_secrets("key=k3y! done", &["k3y!".to_owned()]);
+        assert_eq!(out, "key=[redacted credential] done");
     }
 
     #[test]

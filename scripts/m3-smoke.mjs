@@ -16,7 +16,7 @@
 // supported names (or their LUUNA_PI_ aliases) to the isolated Pi children. The
 // report records credential names only and is scanned for leaked values.
 import { spawn, execFileSync } from "node:child_process";
-import { mkdirSync, writeFileSync, readdirSync, statSync, lstatSync, readlinkSync, existsSync, openSync, readSync, closeSync, rmSync, unlinkSync, fstatSync, fchmodSync, ftruncateSync, constants as fsConstants } from "node:fs";
+import { mkdirSync, writeFileSync, readdirSync, statSync, lstatSync, readlinkSync, realpathSync, existsSync, openSync, readSync, closeSync, rmSync, unlinkSync, fstatSync, fchmodSync, ftruncateSync, constants as fsConstants } from "node:fs";
 import { randomBytes } from "node:crypto";
 import { tmpdir, platform, release, arch, devNull } from "node:os";
 import path from "node:path";
@@ -31,6 +31,9 @@ const repository = path.resolve(path.dirname(fileURLToPath(import.meta.url)), ".
 const started = new Date();
 const out = path.resolve(options.out ?? path.join(tmpdir(), `luuna-m3-smoke-${started.toISOString().replace(/[:.]/g, "-")}`));
 mkdirSync(out, { recursive: true, mode: 0o700 });
+// The output root's identity, pinned before anything runs: destructive cleanup is refused if
+// the directory is later replaced, renamed or reached through a different real path.
+const outIdentity = (() => { const stat = lstatSync(out); return { dev: stat.dev, ino: stat.ino, real: realpathSync(out) }; })();
 const dataDir = path.join(out, "data");
 const fixtureRepo = path.join(out, "fixture-repo");
 // Refuse any non-empty output directory before anything is spawned: the run
@@ -727,7 +730,7 @@ function environment() {
 /** Configured values, deduplicated and longest first: redacting a shorter value that is part of a
  *  longer one first would leave the longer one's remainder in the clear. */
 function configuredValues() {
-  const values = [token, ...CREDENTIAL_NAMES.flatMap((name) => [process.env[name], process.env[`LUUNA_PI_${name}`]])].filter((value) => typeof value === "string" && value.length >= 8);
+  const values = [token, ...CREDENTIAL_NAMES.flatMap((name) => [process.env[name], process.env[`LUUNA_PI_${name}`]])].filter((value) => typeof value === "string" && value.length > 0);
   return [...new Set(values)].sort((a, b) => b.length - a.length || (a < b ? -1 : a > b ? 1 : 0));
 }
 
@@ -795,6 +798,24 @@ function scanForCredentialValues() {
   return { values_checked: values.length, files_scanned: scannedFiles, scanned_bytes: scannedBytes, unreadable_files: unreadable, leaks: leaks + unreadable.length, report_leaks: reportLeaks, leaking_files: [...new Set(leaking)] };
 }
 
+/** Why a quarantine target cannot safely be touched, or null: the output root must still be the
+ *  pinned directory (same device, inode and real path, not a link) and every component between it
+ *  and the target must be a real directory, so no removal can be redirected outside the tree. */
+function unpinnedReason(target) {
+  let root;
+  try { root = lstatSync(out); } catch { return "the output directory is gone"; }
+  if (root.isSymbolicLink() || !root.isDirectory() || root.dev !== outIdentity.dev || root.ino !== outIdentity.ino) return "the output directory was replaced";
+  try { if (realpathSync(out) !== outIdentity.real) return "the output directory's real path changed"; } catch { return "the output directory's real path cannot be resolved"; }
+  let current = out;
+  for (const part of path.relative(out, path.dirname(target)).split(path.sep).filter(Boolean)) {
+    current = path.join(current, part);
+    let stat;
+    try { stat = lstatSync(current); } catch { return `${path.relative(out, current)} vanished`; }
+    if (stat.isSymbolicLink() || !stat.isDirectory()) return `${path.relative(out, current)} is no longer a real directory`;
+  }
+  return null;
+}
+
 /** Deletes every flagged or unscannable file plus the durable state and verifies each is gone; returns what was removed and what was not. */
 function quarantineLeaks(scan) {
   const targets = [...scan.leaking_files, ...scan.unreadable_files];
@@ -808,7 +829,11 @@ function quarantineLeaks(scan) {
     const target = path.resolve(out, entry);
     if (!target.startsWith(out + path.sep)) { failed.push(`${entry} (outside the output directory)`); continue; }
     let error = null;
+    let refused = null;
     for (let attempt = 0; attempt < 5 && present(target); attempt += 1) {
+      // Re-verify the pinned root and the path to the target before every destructive step.
+      refused = unpinnedReason(target);
+      if (refused) break;
       try {
         if (attempt > 0) {
           // A file a lingering process still holds, or one with stripped permissions: make it
@@ -841,7 +866,9 @@ function quarantineLeaks(scan) {
         error = null;
       } catch (caught) { error = caught; }
     }
-    if (present(target)) failed.push(`${entry}${error ? ` (${error.message})` : ""}`); else removed.push(entry);
+    if (refused) failed.push(`${entry} (not touched: ${refused})`);
+    else if (present(target)) failed.push(`${entry}${error ? ` (${error.message})` : ""}`);
+    else removed.push(entry);
   }
   return { removed, failed };
 }
