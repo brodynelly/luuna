@@ -411,21 +411,11 @@ async fn invalid_mismatched_and_unauthenticated_imports_are_rejected() {
         .await;
     let proposed = discovery["proposed_manifest"].clone();
 
-    // A different repository at the registered path is a mismatch, not a silent re-bind.
-    fs::remove_dir_all(repo.path().join(".git")).unwrap();
-    git(repo.path(), &["init", "-q", "-b", "main"]);
-    git(repo.path(), &["config", "commit.gpgsign", "false"]);
+    // A different history at the registered path (new root commit) is a mismatch,
+    // not a silent re-bind. An orphan branch avoids deleting read-only Git objects.
+    git(repo.path(), &["checkout", "-q", "--orphan", "replacement"]);
     git(repo.path(), &["add", "."]);
     git(repo.path(), &["commit", "-q", "-m", "replacement history"]);
-    git(
-        repo.path(),
-        &[
-            "remote",
-            "add",
-            "origin",
-            "https://example.invalid/fixture.git",
-        ],
-    );
     let (status, body) = harness
         .request(
             "PUT",
@@ -469,10 +459,9 @@ async fn invalid_mismatched_and_unauthenticated_imports_are_rejected() {
 /// detached CI checkouts and never requires a clean tree.
 #[tokio::test]
 async fn real_repository_import_leaves_index_and_status_untouched() {
-    let checkout = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
-        .join("../..")
-        .canonicalize()
-        .unwrap();
+    // Not canonicalized: Git for Windows rejects verbatim `\\?\` paths, and the
+    // runtime canonicalizes and normalizes the registered path itself.
+    let checkout = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../..");
     if !checkout.join(".git").exists() {
         eprintln!("skipping: {} is not a Git checkout", checkout.display());
         return;

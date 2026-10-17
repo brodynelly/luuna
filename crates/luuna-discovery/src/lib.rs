@@ -660,14 +660,16 @@ mod tests {
     fn node_scripts_are_proposed_as_recipes_with_evidence_not_executed() {
         let dir = tempfile::tempdir().unwrap();
         let marker = dir.path().join("executed");
-        fs::write(
-            dir.path().join("package.json"),
-            format!(
-                r#"{{"name":"x","scripts":{{"test":"touch {} && vitest run","typecheck":"tsc --noEmit"}},"devDependencies":{{"react":"19.0.0"}}}}"#,
-                marker.display()
-            ),
-        )
-        .unwrap();
+        // Serialize through serde_json so Windows path separators stay valid JSON.
+        let package = serde_json::json!({
+            "name": "x",
+            "scripts": {
+                "test": format!("touch {} && vitest run", marker.display()),
+                "typecheck": "tsc --noEmit",
+            },
+            "devDependencies": {"react": "19.0.0"},
+        });
+        fs::write(dir.path().join("package.json"), package.to_string()).unwrap();
         fs::write(dir.path().join("package-lock.json"), "{}").unwrap();
         fs::write(dir.path().join("tsconfig.json"), "{}").unwrap();
         let discovery = discover(request(

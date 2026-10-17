@@ -144,6 +144,8 @@ impl GitInspector {
         }
         let canonical = std::fs::canonicalize(path).map_err(|_| GitError::InvalidPath)?;
         let git_version = self.version().await?;
+        // Git for Windows does not accept `\\?\` verbatim paths; use the plain form for -C.
+        let canonical = strip_verbatim_prefix(&canonical);
         let probe = self
             .git(
                 Some(&canonical),
@@ -169,7 +171,9 @@ impl GitInspector {
             .filter(|t| !t.is_empty())
             .ok_or(GitError::NotRepository)?;
         let toplevel = toplevel.trim();
-        let toplevel_path = std::fs::canonicalize(toplevel).map_err(|_| GitError::NotRepository)?;
+        let toplevel_path = std::fs::canonicalize(toplevel)
+            .map(|p| strip_verbatim_prefix(&p))
+            .map_err(|_| GitError::NotRepository)?;
         if toplevel_path != canonical {
             return Err(GitError::NotRoot(toplevel.to_owned()));
         }
@@ -270,6 +274,18 @@ impl GitInspector {
     }
 }
 
+/// `std::fs::canonicalize` returns `\\?\C:\…` on Windows; Git and users expect `C:\…`.
+pub fn strip_verbatim_prefix(path: &Path) -> PathBuf {
+    let text = path.to_string_lossy();
+    if let Some(rest) = text.strip_prefix(r"\\?\UNC\") {
+        return PathBuf::from(format!(r"\\{rest}"));
+    }
+    if let Some(rest) = text.strip_prefix(r"\\?\") {
+        return PathBuf::from(rest);
+    }
+    path.to_path_buf()
+}
+
 /// Strip user information from URL-style remotes so tokens never persist.
 pub fn redact_remote(remote: &str) -> String {
     if let Some((scheme, rest)) = remote.split_once("://") {
@@ -325,6 +341,22 @@ pub fn parse_porcelain_v2(bytes: &[u8]) -> DirtyState {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn verbatim_prefixes_are_removed_for_git_and_display() {
+        assert_eq!(
+            strip_verbatim_prefix(Path::new(r"\\?\C:\work\repo")),
+            PathBuf::from(r"C:\work\repo")
+        );
+        assert_eq!(
+            strip_verbatim_prefix(Path::new(r"\\?\UNC\server\share\repo")),
+            PathBuf::from(r"\\server\share\repo")
+        );
+        assert_eq!(
+            strip_verbatim_prefix(Path::new("/srv/repo")),
+            PathBuf::from("/srv/repo")
+        );
+    }
 
     #[test]
     fn remote_redaction_removes_credentials_only() {
