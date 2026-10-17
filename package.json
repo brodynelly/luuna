@@ -11,8 +11,9 @@
     "desktop": "npm run tauri --workspace @luuna/desktop -- dev",
     "build": "npm run build --workspace @luuna/desktop",
     "typecheck": "npm run typecheck --workspaces --if-present",
-    "test": "npm run test:contracts && npm run test --workspaces --if-present",
-    "test:contracts": "node scripts/check-contracts.mjs"
+    "test": "npm run test:contracts && npm run test:guard && npm run test --workspaces --if-present",
+    "test:contracts": "node scripts/check-contracts.mjs",
+    "test:guard": "node --test \"tools/pi/test/**/*.test.mjs\""
   },
   "devDependencies": {
     "ajv": "8.20.0",

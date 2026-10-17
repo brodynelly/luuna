@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from "vitest";
-import { ApiError, LuunaClient, assistantText, checkResults, confirmedManifest, isTerminal, loopbackUrl, mergeEvents } from "../src/index";
+import { ApiError, LuunaClient, assistantText, awaitsValidation, checkResults, confirmedManifest, isTerminal, loopbackUrl, mergeEvents } from "../src/index";
 import type { EventEnvelope, ProjectManifest } from "../src/index";
 
 describe("local runtime connection", () => {
@@ -159,5 +159,40 @@ describe("project import and discovery", () => {
     expect(confirmedManifest(events.slice(0, 1))).toBeNull();
     expect(confirmedManifest(events)).toEqual({ revision: 2, hash: "sha256:b", manifest });
     expect(mergeEvents([], events).map((event) => event.sequence)).toEqual([1, 2, 3, 4]);
+  });
+});
+
+describe("tickets, plans, approvals and the writer (M2c)", () => {
+  it("creates tickets through the canonical project-scoped route with an idempotency key", async () => {
+    const fetcher = vi.fn<typeof fetch>().mockResolvedValue(new Response("{}", { status: 201 }));
+    const client = new LuunaClient("http://127.0.0.1:4242", "test-token", fetcher);
+    await client.createTicket("my project", { idempotency_key: "k1", title: "T", intent: "I", acceptance_criteria: ["c"], repository_ids: ["app"] });
+    const [url, init] = fetcher.mock.calls[0];
+    expect(url).toBe("http://127.0.0.1:4242/api/v1/projects/my%20project/tickets");
+    expect(init?.method).toBe("POST");
+    expect(JSON.parse(String(init?.body)).idempotency_key).toBe("k1");
+    expect(() => client.createTicket("p", { idempotency_key: " ", title: "T", intent: "I", acceptance_criteria: ["c"], repository_ids: ["app"] })).toThrow();
+  });
+
+  it("approves by exact hash and schedules the writer against the run", async () => {
+    const fetcher = vi.fn<typeof fetch>().mockImplementation(() => Promise.resolve(new Response("{}")));
+    const client = new LuunaClient("http://127.0.0.1:4242", "test-token", fetcher);
+    expect(() => client.approvePlan("plan-1", { plan_revision: 1, plan_hash: "not-a-hash", approved_by: "dev" })).toThrow();
+    await client.approvePlan("plan-1", { plan_revision: 2, plan_hash: "sha256:abc", approved_by: "dev" });
+    expect(fetcher.mock.calls[0][0]).toBe("http://127.0.0.1:4242/api/v1/plans/plan-1/approvals");
+    expect(JSON.parse(String(fetcher.mock.calls[0][1]?.body))).toEqual({ plan_revision: 2, plan_hash: "sha256:abc", approved_by: "dev" });
+    await client.implement("run/1", { provider: "openrouter", model: "m" });
+    expect(fetcher.mock.calls[1][0]).toBe("http://127.0.0.1:4242/api/v1/runs/run%2F1/implement");
+    await client.worktrees("run/1");
+    expect(fetcher.mock.calls[2][0]).toBe("http://127.0.0.1:4242/api/v1/runs/run%2F1/worktrees");
+  });
+
+  it("surfaces the runtime's refusal reason for a stale or refused implementation", async () => {
+    const fetcher = vi.fn<typeof fetch>().mockResolvedValue(new Response(JSON.stringify({ error: "implementation refused: baseline lacks a passed result for required check unit" }), { status: 422 }));
+    const client = new LuunaClient("http://127.0.0.1:4242", "test-token", fetcher);
+    await expect(client.implement("run-1")).rejects.toThrow("implementation refused");
+    expect(awaitsValidation("validating")).toBe(true);
+    expect(isTerminal("validating")).toBe(false);
+    expect(isTerminal("reviewed")).toBe(true);
   });
 });

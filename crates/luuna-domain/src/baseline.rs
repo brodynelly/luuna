@@ -217,7 +217,9 @@ impl BaselineEvidence {
             ));
         }
         // Every required recipe needs its own passed result bound to this exact
-        // identity and environment; optional results never count either way.
+        // identity; optional results never count either way. The host binding is
+        // the baseline's combined fingerprint, checked above; each result carries
+        // only its recipe's part.
         let candidate_hash = self.identity.hash()?;
         if self.required_checks.is_empty() {
             return Err(DomainError::BaselineRequired(
@@ -231,11 +233,10 @@ impl BaselineEvidence {
                     && r.exit_code == Some(0)
                     && r.candidate_hash == candidate_hash
                     && r.commit == self.identity.commit
-                    && r.environment_fingerprint == self.environment_fingerprint
             });
             if !satisfied {
                 return Err(DomainError::BaselineRequired(format!(
-                    "baseline lacks a passed result for required check {required} bound to its commit and environment"
+                    "baseline lacks a passed result for required check {required} bound to its commit"
                 )));
             }
         }
@@ -404,12 +405,14 @@ mod tests {
         optional_failed
             .authorizes(&plan, "app", &fingerprint)
             .unwrap();
-        // A required result recorded against another commit or host is not evidence.
+        // A required result recorded against another commit or identity is not evidence.
         let mut other_commit = good.clone();
         other_commit.results[0].commit = "c".repeat(40);
         assert!(other_commit.authorizes(&plan, "app", &fingerprint).is_err());
-        let mut other_host = good;
-        other_host.results[0].environment_fingerprint = format!("sha256:{}", "f".repeat(64));
-        assert!(other_host.authorizes(&plan, "app", &fingerprint).is_err());
+        let mut other_identity = good;
+        other_identity.results[0].candidate_hash = format!("sha256:{}", "f".repeat(64));
+        assert!(other_identity
+            .authorizes(&plan, "app", &fingerprint)
+            .is_err());
     }
 }

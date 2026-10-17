@@ -15,6 +15,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         config_dir: root.join("config"),
         provider: None,
         model: None,
+        profile: Default::default(),
     };
     let mut process = PiProcess::spawn(&config).await?;
     for (id, command) in [

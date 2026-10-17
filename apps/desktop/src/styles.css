@@ -128,3 +128,16 @@ footer { margin: 0 auto; max-width: 1280px; padding: 20px 42px 30px; border-top:
   footer { padding: 20px 18px; }
 }
 @media (prefers-reduced-motion: reduce) { *, *::before, *::after { scroll-behavior: auto !important; } }
+
+/* M2c workflow panel: tickets, plans, approvals and the writer. */
+.workflows { margin: 18px 0; padding-top: 12px; border-top: 1px solid #303640; }
+.workflows h3 { margin: 0; font-size: 15px; }
+.ticket-form fieldset, .plan-controls { display: grid; gap: 10px; }
+.plan-controls { grid-template-columns: 2fr auto 1fr; align-items: end; margin: 10px 0 14px; }
+.plan-controls .checkbox { display: flex; gap: 6px; align-items: center; font-size: 12px; }
+.tickets { list-style: none; padding: 0; margin: 0; display: grid; gap: 10px; }
+.tickets li { display: grid; gap: 6px; padding: 10px 12px; border: 1px solid #303640; border-radius: 7px; font-size: 12px; }
+.ticket-head { display: flex; justify-content: space-between; gap: 8px; align-items: baseline; }
+.ticket-actions { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; }
+.tickets code { font-size: 11px; }
+@media (max-width: 720px) { .plan-controls { grid-template-columns: 1fr; } }

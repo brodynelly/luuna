@@ -18,6 +18,9 @@ use thiserror::Error;
 use tokio::{io::AsyncReadExt, process::Command};
 
 pub const MAX_OUTPUT_BYTES: usize = 8 * 1024 * 1024;
+
+mod worktree;
+pub use worktree::*;
 const MAX_ROOT_COMMITS: usize = 64;
 
 #[derive(Debug, Error)]

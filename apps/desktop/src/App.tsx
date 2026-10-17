@@ -2,6 +2,7 @@ import { useEffect, useRef, useState } from "react";
 import type { FormEvent } from "react";
 import { LuunaClient, assistantText, isTerminal, mergeEvents } from "@luuna/api-client";
 import type { EventEnvelope, Health, RunRecord } from "@luuna/api-client";
+import { canCancel } from "./workflow-state";
 import { Projects } from "./Projects";
 
 function message(error: unknown): string {
@@ -203,7 +204,7 @@ export function App() {
         <aside className="panel history" aria-labelledby="history-heading">
           <div className="panel-heading"><h2 id="history-heading">Session history</h2><button className="text-button" disabled={!client} onClick={() => setRefresh((value) => value + 1)}>Refresh</button></div>
           {runs.length ? <ul>{runs.map((run) => <li key={run.id}><button className={`run-card ${selected === run.id ? "selected" : ""}`} onClick={() => setSelected(run.id)} aria-pressed={selected === run.id}>
-            <span className="run-prompt">{run.metadata.kind === "baseline" ? `Baseline · ${String(run.metadata.repository_id ?? "")} · manifest r${String(run.metadata.manifest_revision ?? "?")}` : typeof run.metadata.prompt === "string" ? run.metadata.prompt : run.id}</span>
+            <span className="run-prompt">{run.metadata.kind === "baseline" ? `Baseline · ${String(run.metadata.repository_id ?? "")} · manifest r${String(run.metadata.manifest_revision ?? "?")}` : run.metadata.kind === "workflow" ? `Workflow · ${String(run.metadata.plan_id ?? "")} r${String(run.metadata.plan_revision ?? "?")}` : typeof run.metadata.prompt === "string" ? run.metadata.prompt : run.id}</span>
             <span className="run-meta"><span className={`state ${run.state}`}>{run.state}</span><time dateTime={run.created_at}>{date(run.created_at)}</time></span>
           </button></li>)}</ul> : <p className="empty">{client ? "No sessions yet. Start one to create a durable run record." : "Connect to see sessions saved by your runtime."}</p>}
         </aside>
@@ -211,7 +212,7 @@ export function App() {
         <div className="main-column">
           <section className="panel" aria-labelledby="new-run-heading">
             <div className="panel-heading"><h2 id="new-run-heading">Start a Pi session</h2><span className="tag">Isolated demo</span></div>
-            <p className="scope">This foundation runs Pi without repository tools. Repository import, approved edits, checks and publishing are future milestones.</p>
+            <p className="scope">This session runs Pi without repository tools. Approved edits happen through a project ticket, plan and approval below; checks, review and publishing are later milestones.</p>
             <form onSubmit={(event) => void start(event)}>
               <fieldset disabled={!client || busy}>
                 <div className="model-fields"><label>Provider<input value={provider} onChange={(event) => setProvider(event.target.value)} placeholder="Runtime default" spellCheck={false} /></label><label>Model<input value={model} onChange={(event) => setModel(event.target.value)} placeholder="Runtime default" spellCheck={false} /></label></div>
@@ -224,7 +225,7 @@ export function App() {
           <section className="panel event-panel" aria-labelledby="events-heading">
             <div className="panel-heading"><h2 id="events-heading">{active ? "Session events" : "Live activity"}</h2>{active && <span className={`state ${active.state}`}>{active.state}</span>}</div>
             {active ? <>
-              <div className="run-detail"><code>{active.id}</code><span>{live}</span>{!isTerminal(active.state) && <button className="danger" disabled={busy} onClick={() => void cancel()}>Cancel session</button>}</div>
+              <div className="run-detail"><code>{active.id}</code><span>{live}</span>{canCancel(active.state) && <button className="danger" disabled={busy} onClick={() => void cancel()}>Cancel session</button>}</div>
               {active.state === "failed" && <p className="failure-note">This session failed. Open the final events below for the runtime’s recorded reason.</p>}
               {output && <div className="assistant-output"><h3>Pi response</h3><pre aria-live="polite">{output}</pre></div>}
               <ol className="events" aria-label="Durable session events">{events.map((event) => <li key={event.event_id}>
@@ -237,6 +238,6 @@ export function App() {
         </div>
       </div>
     </main>
-    <footer>Luuna · Local-first engineering workbench<span>M0 / M1 foundation · M2a import · M2b baseline</span></footer>
+    <footer>Luuna · Local-first engineering workbench<span>M0 / M1 foundation · M2a import · M2b baseline · M2c writer</span></footer>
   </div>;
 }

@@ -62,6 +62,87 @@ pub struct PiConfig {
     pub config_dir: PathBuf,
     pub provider: Option<String>,
     pub model: Option<String>,
+    pub profile: SessionProfile,
+}
+
+/// What a session may do. Every profile disables discovered resources,
+/// sessions, MCP, skills and context files; only the explicit items below load.
+#[derive(Clone, Debug, Default)]
+pub enum SessionProfile {
+    /// The M1 connectivity demo: no tools at all.
+    #[default]
+    ToolFree,
+    /// An approved writer (M2c): named built-in tools inside a leased worktree,
+    /// the Luuna scope guard loaded explicitly, and a task-specific prompt.
+    Writer(WriterProfile),
+}
+
+#[derive(Clone, Debug)]
+pub struct WriterProfile {
+    /// Built-in tool names declared to the model, e.g. `read`, `edit`, `write`.
+    pub tools: Vec<String>,
+    pub system_prompt: String,
+    /// Extension files loaded with `-e`; the scope guard is always one of them.
+    pub extensions: Vec<PathBuf>,
+    /// Extra variables for the child, such as `LUUNA_SCOPE_JSON`.
+    pub environment: Vec<(String, String)>,
+}
+
+/// The Luuna scope guard extension, written into a private directory per attempt.
+pub const SCOPE_GUARD_SOURCE: &str = include_str!("../assets/luuna-scope-guard.js");
+
+/// Write the scope guard beside the attempt's Pi configuration and return its path.
+pub fn install_scope_guard(dir: &std::path::Path) -> Result<PathBuf, std::io::Error> {
+    private_directory(dir)?;
+    let path = dir.join("luuna-scope-guard.js");
+    std::fs::write(&path, SCOPE_GUARD_SOURCE)?;
+    Ok(path)
+}
+
+/// Command-line arguments for a profile, after the launcher arguments.
+pub fn session_arguments(config: &PiConfig) -> Vec<String> {
+    let mut args: Vec<String> = [
+        "--mode",
+        "rpc",
+        "--no-session",
+        "--no-extensions",
+        "--no-skills",
+        "--no-prompt-templates",
+        "--no-themes",
+        "--no-context-files",
+        "--no-mcp",
+        "--no-approve",
+        "--offline",
+    ]
+    .into_iter()
+    .map(ToOwned::to_owned)
+    .collect();
+    match &config.profile {
+        SessionProfile::ToolFree => {
+            args.push("--no-tools".into());
+            args.push("--system-prompt".into());
+            args.push("You are the Luuna read-only connectivity demo. You have no tools. Answer the user's request as plain text.".into());
+        }
+        SessionProfile::Writer(profile) => {
+            args.push("--tools".into());
+            args.push(profile.tools.join(","));
+            for extension in &profile.extensions {
+                args.push("--extension".into());
+                args.push(extension.to_string_lossy().into_owned());
+            }
+            args.push("--system-prompt".into());
+            args.push(profile.system_prompt.clone());
+        }
+    }
+    if let Some(provider) = &config.provider {
+        args.push("--provider".into());
+        args.push(provider.clone());
+    }
+    if let Some(model) = &config.model {
+        args.push("--model".into());
+        args.push(model.clone());
+    }
+    args
 }
 
 #[derive(Debug, Clone)]
@@ -163,18 +244,9 @@ impl PiProcess {
         private_directory(&config.cwd)?;
         private_directory(&config.config_dir)?;
         let mut command = Command::new(&config.program);
-        command.args(&config.launcher_args).args([
-            "--mode", "rpc", "--no-session", "--no-tools", "--no-extensions",
-            "--no-skills", "--no-prompt-templates", "--no-themes", "--no-context-files",
-            "--no-mcp", "--no-approve", "--offline",
-            "--system-prompt", "You are the Luuna read-only connectivity demo. You have no tools. Answer the user's request as plain text.",
-        ]);
-        if let Some(provider) = &config.provider {
-            command.arg("--provider").arg(provider);
-        }
-        if let Some(model) = &config.model {
-            command.arg("--model").arg(model);
-        }
+        command
+            .args(&config.launcher_args)
+            .args(session_arguments(config));
         command.env_clear();
         for name in [
             "PATH",
@@ -207,6 +279,11 @@ impl PiProcess {
             if let Some(value) =
                 std::env::var_os(format!("LUUNA_PI_{name}")).or_else(|| std::env::var_os(name))
             {
+                command.env(name, value);
+            }
+        }
+        if let SessionProfile::Writer(profile) = &config.profile {
+            for (name, value) in &profile.environment {
                 command.env(name, value);
             }
         }
@@ -368,6 +445,46 @@ pub async fn verify_version(config: &PiConfig) -> Result<(), EngineError> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn writer_profile_declares_tools_guard_and_prompt_while_demo_stays_tool_free() {
+        let base = PiConfig {
+            program: "pi".into(),
+            launcher_args: vec![],
+            cwd: "/tmp/work".into(),
+            config_dir: "/tmp/config".into(),
+            provider: Some("openrouter".into()),
+            model: Some("m".into()),
+            profile: SessionProfile::ToolFree,
+        };
+        let demo = session_arguments(&base);
+        assert!(demo.contains(&"--no-tools".to_owned()));
+        assert!(demo.contains(&"--no-extensions".to_owned()));
+        assert!(!demo.contains(&"--tools".to_owned()));
+        let writer = PiConfig {
+            profile: SessionProfile::Writer(WriterProfile {
+                tools: vec!["read".into(), "edit".into(), "write".into()],
+                system_prompt: "task".into(),
+                extensions: vec!["/tmp/config/luuna-scope-guard.js".into()],
+                environment: vec![("LUUNA_SCOPE_JSON".into(), "{}".into())],
+            }),
+            ..base
+        };
+        let args = session_arguments(&writer);
+        let position = |flag: &str| args.iter().position(|a| a == flag).unwrap();
+        assert_eq!(args[position("--tools") + 1], "read,edit,write");
+        assert_eq!(
+            args[position("--extension") + 1],
+            "/tmp/config/luuna-scope-guard.js"
+        );
+        assert_eq!(args[position("--system-prompt") + 1], "task");
+        assert!(!args.contains(&"--no-tools".to_owned()));
+        // Discovery stays off even for writers; only the explicit extension loads.
+        assert!(args.contains(&"--no-extensions".to_owned()));
+        assert!(args.contains(&"--no-mcp".to_owned()));
+        assert!(SCOPE_GUARD_SOURCE.contains("tool_call"));
+    }
+
     #[test]
     fn prompt_acceptance_is_not_completion() {
         let ack =

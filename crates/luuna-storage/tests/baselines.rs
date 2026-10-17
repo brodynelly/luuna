@@ -71,6 +71,20 @@ fn approved_workflow() -> Fixture {
     let project = store
         .confirm_manifest("project", 0, &manifest(), &fresh)
         .unwrap();
+    let ticket = luuna_domain::Ticket {
+        schema_version: SCHEMA_VERSION.into(),
+        id: "ticket-1".into(),
+        project_id: "project".into(),
+        revision: 1,
+        source: luuna_domain::TicketSource::LuunaSqliteTemporary,
+        title: "Fixture feature".into(),
+        intent: "Implement the fixture feature.".into(),
+        acceptance_criteria: vec!["The fixture test passes.".into()],
+        repository_ids: vec!["app".into()],
+        created_at: "2026-10-17T00:00:00.000Z".into(),
+        updated_at: "2026-10-17T00:00:00.000Z".into(),
+    };
+    store.create_ticket(&ticket, "fixture-key").unwrap();
     let mut plan: PlanRevision =
         serde_json::from_str(include_str!("../../../fixtures/domain/plan.valid.json")).unwrap();
     plan.manifest_hash = project.manifest_hash.clone().unwrap();
