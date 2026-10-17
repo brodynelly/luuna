@@ -41,12 +41,32 @@ const outIdentity = (() => { const stat = lstatSync(out); return { dev: stat.dev
 const HELD_HANDLES = process.platform === "linux" && fsConstants.O_DIRECTORY !== undefined && fsConstants.O_NOFOLLOW !== undefined && existsSync("/proc/self/fd");
 const heldPath = (fd, name) => (name === undefined ? `/proc/self/fd/${fd}` : `/proc/self/fd/${fd}/${name}`);
 const openHeldDir = (target) => openSync(target, fsConstants.O_RDONLY | fsConstants.O_DIRECTORY | fsConstants.O_NOFOLLOW);
-// Removes an entry relative to a held parent, descending only through non-following handles.
-const removeHeld = (parentFd, name) => {
+// Removal is bounded like the scan: a shared entry budget and a nesting limit, so a huge or deeply
+// nested tree fails the cleanup (reported as not removed) instead of exhausting memory or the stack.
+const REMOVE_ENTRY_LIMIT = 200_000;
+const REMOVE_DEPTH_LIMIT = 128;
+const removalBudget = () => ({ left: REMOVE_ENTRY_LIMIT });
+/** Reads at most `limit` names from a held directory without materializing the whole listing. */
+const listHeld = (fd, limit, skip = null) => {
+  const names = [];
+  const listing = opendirSync(heldPath(fd));
+  try { for (let entry = listing.readSync(); entry !== null && names.length < limit; entry = listing.readSync()) if (!skip?.has(entry.name)) names.push(entry.name); } finally { listing.closeSync(); }
+  return names;
+};
+// Removes an entry relative to a held parent, descending only through non-following handles and
+// listing each directory in bounded batches.
+const removeHeld = (parentFd, name, budget, depth = 0) => {
+  budget.left -= 1;
+  if (budget.left < 0) throw new Error(`removal stopped after ${REMOVE_ENTRY_LIMIT} entries`);
   const target = heldPath(parentFd, name);
   if (!lstatSync(target).isDirectory()) { unlinkSync(target); return; }
+  if (depth >= REMOVE_DEPTH_LIMIT) throw new Error(`nesting deeper than ${REMOVE_DEPTH_LIMIT} directories`);
   const fd = openHeldDir(target);
-  try { for (const child of readdirSync(heldPath(fd))) removeHeld(fd, child); } finally { closeSync(fd); }
+  try {
+    for (let batch = listHeld(fd, 1000); batch.length > 0; batch = listHeld(fd, 1000)) {
+      for (const child of batch) removeHeld(fd, child, budget, depth + 1);
+    }
+  } finally { closeSync(fd); }
   rmdirSync(target);
 };
 const outFd = HELD_HANDLES ? openHeldDir(out) : null;
@@ -174,6 +194,9 @@ try {
   evidence.environment = environment();
   runtime = await startRuntime("initial");
   const identity = evidence.environment.runtime_build_identity;
+  // The harness and every other tracked file that defines the evidence must equal the recorded
+  // revision too, or a locally weakened probe could pass under that revision's name.
+  record("the Luuna checkout (harness included) matched the recorded revision: no modified or untracked file", evidence.environment.git_dirty === false, `revision ${evidence.environment.git_revision}, ${evidence.environment.git_dirty === false ? "clean" : evidence.environment.git_dirty === null ? "status unknown" : `modified: ${evidence.environment.git_dirty_paths}`}`);
   record("the runtime binary was built from the recorded revision's build inputs (embedded content digest)", identity === evidence.environment.expected_build_identity && evidence.environment.runtime_sources_dirty === false, `revision ${evidence.environment.git_revision}, build inputs ${evidence.environment.runtime_sources_dirty === false ? "clean" : "modified or unknown"}, binary reports ${String(identity).slice(0, 23)}…, checkout ${String(evidence.environment.expected_build_identity).slice(0, 23)}…`);
   await registerProjectAndBaseline();
   await scenario("feature", approvedFeatureIsCheckedAndIndependentlyReviewed);
@@ -215,13 +238,33 @@ evidence.verdict = mode === "fixture"
 // fails the run and is reported by file name, never by value.
 const reportJson = redactConfiguredValues(JSON.stringify(evidence, null, 2) + "\n");
 const reportMarkdown = redactConfiguredValues(markdown(evidence));
-writeFileSync(path.join(out, "report.json"), reportJson, { mode: 0o600 });
-writeFileSync(path.join(out, "report.md"), reportMarkdown, { mode: 0o600 });
 console.log(reportMarkdown);
+const unwritten = [["report.json", reportJson], ["report.md", reportMarkdown]].flatMap(([name, text]) => writeReport(name, text));
+if (unwritten.length > 0) {
+  console.error(`Report NOT written: ${unwritten.join("; ")}`);
+  process.exit(1);
+}
 console.log(`Report written to ${path.join(out, "report.md")} and report.json`);
 process.exit(passed ? 0 : 1);
 
 // ---------------------------------------------------------------------------
+
+/**
+ * Creates a report file relative to the held output root (or, without held handles, only while
+ * the pinned root is intact), never following a link and never replacing an existing entry, so a
+ * root renamed or swapped for a link after the scan cannot redirect the write. Returns the
+ * reasons it was refused, if any.
+ */
+function writeReport(name, text) {
+  const flags = fsConstants.O_WRONLY | fsConstants.O_CREAT | fsConstants.O_EXCL | (fsConstants.O_NOFOLLOW ?? 0);
+  let target = path.join(out, name);
+  if (outFd !== null) target = heldPath(outFd, name);
+  else { const refused = unpinnedReason(target); if (refused) return [`${name}: ${refused}`]; }
+  let fd;
+  try { fd = openSync(target, flags, 0o600); } catch (error) { return [`${name}: ${error.code ?? error.message}`]; }
+  try { writeFileSync(fd, text); } finally { closeSync(fd); }
+  return [];
+}
 
 function ticket(title, intent, acceptance_criteria, paths, maxAttempts) {
   return { title, intent, acceptance_criteria, paths, budgets: { max_attempts: maxAttempts, timeout_seconds: runTimeoutSeconds, cost_usd_micros: 300_000 } };
@@ -736,7 +779,11 @@ async function waitUntil(predicate, timeoutMs) {
 function environment() {
   const info = { platform: `${platform()} ${release()} ${arch()}`, node: process.version, pi_launcher: profile.pi, pi_launcher_args: profile.piArgs, provider: profile.provider, model: profile.model, required_check: profile.checks.map((check) => [check.executable, ...check.args.map((arg) => truncate(arg, 40))].join(" ")) };
   try { info.git_revision = git(repository, "rev-parse", "HEAD"); } catch { info.git_revision = "unknown"; }
-  try { info.git_dirty = git(repository, "status", "--porcelain").length > 0; } catch { info.git_dirty = null; }
+  try {
+    const status = git(repository, "status", "--porcelain", "--untracked-files=all");
+    info.git_dirty = status.length > 0;
+    if (info.git_dirty) info.git_dirty_paths = status.split("\n").slice(0, 10).map((line) => line.slice(3)).join(", ");
+  } catch { info.git_dirty = null; }
   try { info.python_version = execFileSync(python, ["--version"], { encoding: "utf8" }).trim(); } catch (error) { info.python_version = `unavailable: ${error.message}`; }
   if (mode === "real") {
     try { info.pi_version = execFileSync(profile.pi, [...profile.piArgs, "--version"], { encoding: "utf8" }).trim(); } catch (error) { info.pi_version = `unavailable: ${error.message}`; }
@@ -851,7 +898,11 @@ function scanForCredentialValues() {
             scannedBytes += result.bytes;
             scannedFiles += 1;
             if (result.hit) { leaks += 1; leaking.push(relative); }
-          } catch { unreadable.push(relative); }
+          } catch (error) {
+            // Bytes read before a failure (a file that grew, a read error) still count.
+            scannedBytes += error?.bytesRead ?? 0;
+            unreadable.push(relative);
+          }
         } else {
           unreadable.push(relative);
         }
@@ -902,6 +953,7 @@ function quarantineLeaks(scan) {
   // Presence is judged without following links: a dangling symlink is still an entry to
   // remove, and only ENOENT means absent; any other lookup error means "possibly still there".
   const present = (target) => { try { lstatSync(target); return true; } catch (error) { return error?.code !== "ENOENT"; } };
+  const budget = removalBudget();
   for (const entry of new Set([...targets, "data"])) {
     const parts = entry.split(path.sep).filter(Boolean);
     if (parts.length === 0 || parts.some((part) => part === "." || part === "..")) { failed.push(`${entry} (not a path inside the output directory)`); continue; }
@@ -946,7 +998,7 @@ function quarantineLeaks(scan) {
             }
             Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 200 * attempt);
           }
-          if (outFd !== null) removeHeld(parentFd, parts.at(-1)); else unlinkSync(target);
+          if (outFd !== null) removeHeld(parentFd, parts.at(-1), budget); else unlinkSync(target);
           error = null;
         } catch (caught) { error = caught; }
       }
@@ -965,17 +1017,15 @@ function clearOutputRoot() {
   if (outFd === null) return { removed: [], failed: ["output root (traversal incomplete; clearing it needs held directory handles on this platform)"] };
   let removed = 0;
   const failed = new Set();
-  for (let pass = 0; pass < 10_000; pass += 1) {
-    const batch = [];
-    const listing = opendirSync(heldPath(outFd));
-    try { for (let entry = listing.readSync(); entry !== null && batch.length < 1000; entry = listing.readSync()) if (!failed.has(entry.name)) batch.push(entry.name); } finally { listing.closeSync(); }
-    if (batch.length === 0) break;
+  const budget = removalBudget();
+  // Stop once the shared budget is spent; failed names are skipped, so each pass makes progress.
+  for (let batch = listHeld(outFd, 1000, failed); batch.length > 0 && budget.left > 0; batch = listHeld(outFd, 1000, failed)) {
     for (const name of batch) {
-      try { removeHeld(outFd, name); removed += 1; } catch { failed.add(name); }
+      try { removeHeld(outFd, name, budget); removed += 1; } catch { failed.add(name); }
     }
   }
-  const remaining = readdirSync(heldPath(outFd)).length;
-  return { removed: [`${removed} entries under the output root (traversal incomplete)`], failed: remaining === 0 ? [] : [`${remaining} entries under the output root${failed.size ? ` (first: ${[...failed].slice(0, 5).join(", ")})` : ""}`] };
+  const remaining = listHeld(outFd, 1001).length;
+  return { removed: [`${removed} entries under the output root (traversal incomplete)`], failed: remaining === 0 ? [] : [`${remaining > 1000 ? "more than 1000" : remaining} entries under the output root${failed.size ? ` (first: ${[...failed].slice(0, 5).join(", ")})` : ""}`] };
 }
 
 /** Streams a file through a sliding window so a value spanning two chunks is still found; bounded by size, growth and the remaining aggregate budget. Returns `{ hit, bytes }`. */
@@ -990,6 +1040,7 @@ function fileContainsAny(file, values, remainingBudget) {
   // Open without following a link and without blocking, then judge the opened
   // handle: a FIFO or device swapped into the path is a scan failure, not a hang.
   const fd = openSync(file, fsConstants.O_RDONLY | fsConstants.O_NOFOLLOW | (fsConstants.O_NONBLOCK ?? 0));
+  let total = 0;
   try {
     const opened = fstatSync(fd);
     if (!opened.isFile()) throw new Error("not a regular file");
@@ -997,7 +1048,6 @@ function fileContainsAny(file, values, remainingBudget) {
     if (opened.size > remainingBudget) throw new Error("exceeds the remaining aggregate scan budget");
     const chunk = Buffer.alloc(1024 * 1024);
     let carry = Buffer.alloc(0);
-    let total = 0;
     for (;;) {
       const read = readSync(fd, chunk, 0, chunk.length, null);
       if (read === 0) return { hit: false, bytes: total };
@@ -1009,6 +1059,9 @@ function fileContainsAny(file, values, remainingBudget) {
       if (needles.some((needle) => window.indexOf(needle) !== -1)) return { hit: true, bytes: total };
       carry = overlap > 0 ? Buffer.from(window.subarray(Math.max(0, window.length - overlap))) : Buffer.alloc(0);
     }
+  } catch (error) {
+    // The caller charges what was read against the aggregate budget even when the scan fails.
+    throw Object.assign(error instanceof Error ? error : new Error(String(error)), { bytesRead: total });
   } finally {
     closeSync(fd);
   }
