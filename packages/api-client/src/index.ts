@@ -22,6 +22,8 @@ export interface Health {
   build_rustc?: string;
   /** Any rustc wrapper Cargo ran the compiler through, or "none". */
   build_rustc_wrapper?: string;
+  /** Profile, optimization and RUSTFLAGS the runtime binary was compiled with. */
+  build_flags?: string;
 }
 
 export interface RunRequest {

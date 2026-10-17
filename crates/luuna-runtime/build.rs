@@ -126,4 +126,40 @@ fn main() {
         wrappers.join(" ")
     };
     println!("cargo:rustc-env=LUUNA_BUILD_RUSTC_WRAPPER={wrappers}");
+    // Flags and profile settings change the compiled behavior without changing
+    // the sources or the compiler, so they are reported too: the effective
+    // RUSTFLAGS (Cargo encodes the environment and config sources into
+    // CARGO_ENCODED_RUSTFLAGS), the profile's optimization and debug
+    // settings, and the names of any profile or build
+    // overrides set in the environment.
+    for name in ["CARGO_ENCODED_RUSTFLAGS", "RUSTFLAGS"] {
+        println!("cargo:rerun-if-env-changed={name}");
+    }
+    let rustflags = std::env::var("CARGO_ENCODED_RUSTFLAGS")
+        .unwrap_or_default()
+        .split('\u{1f}')
+        .filter(|flag| !flag.is_empty())
+        .collect::<Vec<_>>()
+        .join(" ");
+    let mut overrides: Vec<String> = std::env::vars()
+        .map(|(name, _)| name)
+        .filter(|name| {
+            name.starts_with("CARGO_PROFILE_")
+                || (name.starts_with("CARGO_TARGET_") && name.ends_with("_RUSTFLAGS"))
+                || name == "CARGO_BUILD_RUSTFLAGS"
+        })
+        .collect();
+    overrides.sort();
+    for name in &overrides {
+        println!("cargo:rerun-if-env-changed={name}");
+    }
+    let value = |name: &str| std::env::var(name).unwrap_or_else(|_| "unknown".to_owned());
+    println!(
+        "cargo:rustc-env=LUUNA_BUILD_FLAGS=profile={} opt-level={} debug={} rustflags={} overrides={}",
+        value("PROFILE"),
+        value("OPT_LEVEL"),
+        value("DEBUG"),
+        if rustflags.is_empty() { "none".to_owned() } else { rustflags.replace(' ', ",") },
+        if overrides.is_empty() { "none".to_owned() } else { overrides.join(",") },
+    );
 }

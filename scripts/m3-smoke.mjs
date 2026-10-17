@@ -197,6 +197,8 @@ let finalStop = { exited: false };
 // A runtime that is starting is tracked here until it is healthy, so a start that fails while the
 // child is still alive leaves the final cleanup a handle to stop and await.
 let startingRuntime = null;
+// Scenarios after which the verified Pi tree or launcher no longer matched (real mode).
+const piTreeChangedAfter = [];
 
 try {
   evidence.environment = environment();
@@ -207,17 +209,18 @@ try {
   record("the Luuna checkout (harness included) matched the recorded revision: no modified or untracked file", evidence.environment.git_dirty === false, `revision ${evidence.environment.git_revision}, ${evidence.environment.git_dirty === false ? "clean" : evidence.environment.git_dirty === null ? "status unknown" : `modified: ${evidence.environment.git_dirty_paths}`}`);
   record("the runtime binary was built from the recorded revision's build inputs (embedded content digest)", identity === evidence.environment.expected_build_identity && evidence.environment.runtime_sources_dirty === false, `revision ${evidence.environment.git_revision}, build inputs ${evidence.environment.runtime_sources_dirty === false ? "clean" : "modified or unknown"}, binary reports ${String(identity).slice(0, 23)}…, checkout ${String(evidence.environment.expected_build_identity).slice(0, 23)}…`);
   const pi = evidence.environment.pi_provenance;
-  record("the Pi executable is the published package pinned in tools/pi/package-lock.json (tarball integrity and every installed file verified)", mode === "fixture" ? true : pi?.verified === true, mode === "fixture" ? "synthetic fixture tracked in the clean checkout; not provider evidence" : pi?.verified ? `@earendil-works/pi-coding-agent ${pi.package.version}, ${pi.package.files_compared} files match the published tarball (${pi.package.tarball_integrity.slice(0, 20)}…), ${pi.package.dependencies_checked} locked packages checked, launcher sha256 ${pi.launcher.sha256.slice(0, 16)}…` : `not verified: ${pi?.error ?? "no provenance recorded"}`);
+  record("the Pi tree is byte-identical to a fresh install of tools/pi/package-lock.json (every tarball integrity-checked by npm)", mode === "fixture" ? true : pi?.verified === true, mode === "fixture" ? "synthetic fixture tracked in the clean checkout; not provider evidence" : pi?.verified ? `@earendil-works/pi-coding-agent ${pi.package.version}, ${pi.package.tree_entries} entries, tree ${pi.package.tree_digest.slice(0, 16)}…, launcher sha256 ${pi.launcher.sha256.slice(0, 16)}…` : `not verified: ${pi?.error ?? "no provenance recorded"}`);
   const pinned = pinnedToolchain();
   // A wrapper (RUSTC_WRAPPER / RUSTC_WORKSPACE_WRAPPER) can change compilation while the compiler
   // still reports the pinned release, so evidence builds must use none.
-  record("the runtime binary was compiled with the toolchain pinned in rust-toolchain.toml and no compiler wrapper", pinned !== null && String(evidence.environment.runtime_build_rustc).split(" ")[0] === pinned && evidence.environment.runtime_build_rustc_wrapper === "none", `pinned ${pinned ?? "unreadable"}, binary built by rustc ${evidence.environment.runtime_build_rustc}, wrapper ${evidence.environment.runtime_build_rustc_wrapper}`);
+  record("the runtime binary was compiled with the toolchain pinned in rust-toolchain.toml, no compiler wrapper, no RUSTFLAGS and no profile overrides", pinned !== null && String(evidence.environment.runtime_build_rustc).split(" ")[0] === pinned && evidence.environment.runtime_build_rustc_wrapper === "none" && / rustflags=none overrides=none$/.test(String(evidence.environment.runtime_build_flags)), `pinned ${pinned ?? "unreadable"}, binary built by rustc ${evidence.environment.runtime_build_rustc}, wrapper ${evidence.environment.runtime_build_rustc_wrapper}, ${evidence.environment.runtime_build_flags}`);
   await registerProjectAndBaseline();
   await scenario("feature", approvedFeatureIsCheckedAndIndependentlyReviewed);
   await scenario("repair", failingCheckRequiresManualRepairAndFreshEvidence);
   await scenario("blocking", blockingFindingsAreBoundedByAutomaticRepair);
   await scenario("cancel", cancellationDuringReviewPreservesChecks);
   await scenario("restart", hardKillDuringReviewReservesSpend);
+  record("the verified Pi tree and launcher were unchanged after every scenario", piTreeChangedAfter.length === 0, mode === "fixture" ? "synthetic fixture; not provider evidence" : piTreeChangedAfter.length === 0 ? "re-hashed after each of the five scenarios" : `changed after: ${piTreeChangedAfter.join(", ")}`);
   await developerCheckoutUntouched();
   await gracefulShutdown();
 } catch (error) {
@@ -360,6 +363,7 @@ async function startRuntime(label) {
           evidence.environment.runtime_build_identity = health.build_identity ?? "not reported";
           evidence.environment.runtime_build_rustc = health.build_rustc ?? "not reported";
           evidence.environment.runtime_build_rustc_wrapper = health.build_rustc_wrapper ?? "not reported";
+          evidence.environment.runtime_build_flags = health.build_flags ?? "not reported";
         }
         record(`runtime ${label} start`, health.status === "ok", `health ${JSON.stringify(health)}`);
         // Hash the image the running process actually executes (Linux: /proc/<pid>/exe, which a
@@ -373,7 +377,7 @@ async function startRuntime(label) {
         if (label !== "initial") {
           const env0 = evidence.environment;
           const executed = runningSha ?? binarySha;
-          record(`runtime ${label} is the same revision-bound binary as the initial start`, executed === env0.runtime_binary_sha256 && (runningSha === null || runningSha === env0.runtime_running_sha256) && health.build_identity === env0.expected_build_identity && health.build_rustc === env0.runtime_build_rustc && health.build_rustc_wrapper === env0.runtime_build_rustc_wrapper, `${runningSha === null ? "pre-spawn" : "running"} sha256 ${executed.slice(0, 16)}… (initial ${String(env0.runtime_binary_sha256).slice(0, 16)}…), identity ${health.build_identity === env0.expected_build_identity ? "matches" : "differs"}, rustc ${health.build_rustc}`);
+          record(`runtime ${label} is the same revision-bound binary as the initial start`, executed === env0.runtime_binary_sha256 && (runningSha === null || runningSha === env0.runtime_running_sha256) && health.build_identity === env0.expected_build_identity && health.build_rustc === env0.runtime_build_rustc && health.build_rustc_wrapper === env0.runtime_build_rustc_wrapper && health.build_flags === env0.runtime_build_flags, `${runningSha === null ? "pre-spawn" : "running"} sha256 ${executed.slice(0, 16)}… (initial ${String(env0.runtime_binary_sha256).slice(0, 16)}…), identity ${health.build_identity === env0.expected_build_identity ? "matches" : "differs"}, rustc ${health.build_rustc}`);
         }
         if (typeof logFd !== "number") record(`runtime ${label} log was created inside the output root`, false, logFd);
         startingRuntime = null;
@@ -463,6 +467,9 @@ async function scenario(name, body) {
   } catch (error) {
     record(`${name}: scenario completed without harness error`, false, error instanceof Error ? error.stack ?? error.message : String(error));
   }
+  // Every writer and reviewer the scenario launched ran from the verified Pi tree only if it is
+  // still byte-identical afterwards.
+  if (!piTreeUnchanged()) piTreeChangedAfter.push(name);
 }
 
 /** Ticket → plan → exact-hash approval → implement; returns the settled workflow and its first candidate. */
@@ -852,8 +859,11 @@ function environment() {
   try { info.git_revision = git(repository, "rev-parse", "HEAD"); } catch { info.git_revision = "unknown"; }
   try {
     const status = git(repository, "status", "--porcelain", "--untracked-files=all");
-    info.git_dirty = status.length > 0;
-    if (info.git_dirty) info.git_dirty_paths = status.split("\n").slice(0, 10).map((line) => line.slice(3)).join(", ");
+    // `git status` hides changes to paths marked assume-unchanged (lower-case tag) or skip-worktree
+    // (tag S), so any such flag counts as a possible modification.
+    const hidden = git(repository, "ls-files", "-v").split("\n").filter((line) => /^[a-zS] /.test(line)).map((line) => `${line.slice(2)} (index flag ${line[0]})`);
+    info.git_dirty = status.length > 0 || hidden.length > 0;
+    if (info.git_dirty) info.git_dirty_paths = [...status.split("\n").filter(Boolean).map((line) => line.slice(3)), ...hidden].slice(0, 10).join(", ");
   } catch { info.git_dirty = null; }
   try { info.python_version = execFileSync(python, ["--version"], { encoding: "utf8" }).trim(); } catch (error) { info.python_version = `unavailable: ${error.message}`; }
   if (mode === "real") {
@@ -873,12 +883,28 @@ function environment() {
   return info;
 }
 
+/** SHA-256 over every entry of a tree (relative path with the file's SHA-256 or the link target), sorted; returns { digest, entries }. */
+function treeDigest(root) {
+  const entries = [];
+  const walkTree = (rel) => {
+    for (const entry of readdirSync(path.join(root, rel), { withFileTypes: true })) {
+      const child = rel ? `${rel}/${entry.name}` : entry.name;
+      if (entry.isDirectory()) walkTree(child);
+      else if (entry.isSymbolicLink()) entries.push(`${child}\0link\0${readlinkSync(path.join(root, child))}`);
+      else entries.push(`${child}\0${createHash("sha256").update(readFileSync(path.join(root, child))).digest("hex")}`);
+    }
+  };
+  walkTree("");
+  entries.sort();
+  return { digest: createHash("sha256").update(entries.join("\n")).digest("hex"), entries };
+}
+
 /**
  * Binds the real Pi to published bytes instead of its self-reported version: the launcher and the
- * entrypoint are hashed; the entrypoint's package must be the name and version pinned in the
- * tracked tools/pi/package-lock.json; the published tarball is fetched, checked against the
- * lockfile's integrity, and every file of the installed package is compared with it; and every
- * other installed package's version and integrity must match the tracked lockfile.
+ * entrypoint are hashed, the entrypoint's package must be the version pinned in the tracked
+ * tools/pi/package-lock.json, and the whole installed node_modules tree (Pi and every dependency)
+ * must be byte-identical to a fresh `npm ci` of that lockfile, which verifies each tarball's
+ * integrity. The tree is re-hashed after every scenario (see `piTreeUnchanged`).
  */
 function piProvenance() {
   const result = { verified: false };
@@ -896,40 +922,26 @@ function piProvenance() {
       root = path.dirname(root);
     }
     const installed = JSON.parse(readFileSync(path.join(root, "package.json"), "utf8"));
-    result.package = { root, version: installed.version, pinned_version: pinned?.version, pinned_integrity: pinned?.integrity };
+    const marker = `${path.sep}node_modules${path.sep}`;
+    result.package = { root, version: installed.version, pinned_version: pinned?.version, pinned_integrity: pinned?.integrity, node_modules: path.join(root.slice(0, root.lastIndexOf(marker)), "node_modules") };
     if (!pinned || installed.version !== pinned.version) throw new Error(`installed ${installed.version} is not the pinned ${pinned?.version}`);
-    // Fetch the published tarball outside the output tree and check it against the lockfile.
+    // A fresh install of the tracked lockfile, outside the output tree; npm verifies every
+    // tarball against the lockfile's integrity, and the installed tree must match it byte for byte.
     const work = realpathSync(execFileSync("mktemp", ["-d", path.join(tmpdir(), "luuna-pi-provenance-XXXXXX")], { encoding: "utf8" }).trim());
     try {
+      for (const file of ["package.json", "package-lock.json"]) writeFileSync(path.join(work, file), readFileSync(path.join(repository, "tools", "pi", file)));
       const env = Object.fromEntries(Object.entries(process.env).filter(([name]) => !CREDENTIAL_NAMES.includes(name) && !name.startsWith("LUUNA_PI_")));
-      const packed = JSON.parse(execFileSync("npm", ["pack", `@earendil-works/pi-coding-agent@${pinned.version}`, "--json", "--pack-destination", work, "--ignore-scripts"], { cwd: work, encoding: "utf8", env }));
-      const tarball = path.join(work, packed[0].filename);
-      const integrity = `sha512-${createHash("sha512").update(readFileSync(tarball)).digest("base64")}`;
-      result.package.tarball_integrity = integrity;
-      if (integrity !== pinned.integrity) throw new Error("the published tarball does not match the lockfile integrity");
-      execFileSync("tar", ["-xzf", tarball, "-C", work]);
-      const files = (base) => {
-        const out = [];
-        const walkFiles = (rel) => {
-          for (const entry of readdirSync(path.join(base, rel), { withFileTypes: true })) {
-            const child = rel ? `${rel}/${entry.name}` : entry.name;
-            if (entry.isDirectory()) { if (!(rel === "" && entry.name === "node_modules")) walkFiles(child); } else out.push(child);
-          }
-        };
-        walkFiles("");
-        return out.sort();
-      };
-      const published = files(path.join(work, "package"));
-      const present = files(root);
-      const differing = [...new Set([...published, ...present])].filter((file) => !published.includes(file) || !present.includes(file) || sha(path.join(work, "package", file)) !== sha(path.join(root, file)));
-      result.package.files_compared = published.length;
-      if (differing.length > 0) throw new Error(`installed package differs from the published tarball: ${differing.slice(0, 5).join(", ")}`);
-      // Every other installed package must carry the version and integrity the tracked lockfile pins.
-      const installRoot = root.slice(0, root.lastIndexOf(`${path.sep}node_modules${path.sep}`));
-      const installedLock = JSON.parse(readFileSync(path.join(installRoot, "node_modules", ".package-lock.json"), "utf8")).packages ?? {};
-      const mismatched = Object.entries(lock.packages ?? {}).filter(([key, value]) => key.startsWith("node_modules/") && !value.optional && !value.dev && (installedLock[key]?.version !== value.version || installedLock[key]?.integrity !== value.integrity)).map(([key]) => key);
-      result.package.dependencies_checked = Object.keys(lock.packages ?? {}).filter((key) => key.startsWith("node_modules/")).length;
-      if (mismatched.length > 0) throw new Error(`installed dependencies differ from the tracked lockfile: ${mismatched.slice(0, 5).join(", ")}`);
+      execFileSync("npm", ["ci", "--ignore-scripts", "--no-audit", "--no-fund", "--loglevel=error"], { cwd: work, env, stdio: ["ignore", "ignore", "pipe"] });
+      const expected = treeDigest(path.join(work, "node_modules"));
+      const actual = treeDigest(result.package.node_modules);
+      result.package.tree_entries = actual.entries.length;
+      result.package.tree_digest = actual.digest;
+      if (actual.digest !== expected.digest) {
+        const want = new Set(expected.entries);
+        const have = new Set(actual.entries);
+        const differing = [...new Set([...expected.entries.filter((x) => !have.has(x)), ...actual.entries.filter((x) => !want.has(x))].map((x) => x.split("\0")[0]))];
+        throw new Error(`installed Pi tree differs from a fresh install of tools/pi/package-lock.json: ${differing.slice(0, 5).join(", ")}`);
+      }
       result.verified = true;
     } finally {
       execFileSync("rm", ["-rf", "--", work]);
@@ -938,6 +950,15 @@ function piProvenance() {
     result.error = String(error?.message ?? error).split("\n")[0];
   }
   return result;
+}
+
+/** Re-hashes the verified Pi tree and launcher; false when either changed since verification. */
+function piTreeUnchanged() {
+  const pi = evidence.environment?.pi_provenance;
+  if (mode !== "real" || !pi?.verified) return true;
+  try {
+    return treeDigest(pi.package.node_modules).digest === pi.package.tree_digest && createHash("sha256").update(readFileSync(pi.launcher.path)).digest("hex") === pi.launcher.sha256;
+  } catch { return false; }
 }
 
 /** The exact release `rust-toolchain.toml` pins, or null when it pins none (a channel name is not a release). */

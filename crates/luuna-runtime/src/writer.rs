@@ -1151,7 +1151,68 @@ fn known_secrets(state: &AppState) -> Vec<String> {
         .filter(|secret| !secret.is_empty())
         .collect();
     secrets.push(state.config.token.clone());
+    // Checks inherit every variable whose name is not secret-shaped, so a
+    // credential embedded in a URL value (`HTTP_PROXY=http://user:pass@host`)
+    // reaches them; its userinfo is redacted as an exact value too.
+    for (name, value) in std::env::vars() {
+        if luuna_executor::is_secret_or_reserved(&name) {
+            continue;
+        }
+        secrets.extend(url_credentials(&value));
+    }
     secrets
+}
+
+/// The `user:password` and `password` parts of every URL userinfo in `text`
+/// that carries a password.
+fn url_credentials(text: &str) -> Vec<String> {
+    let mut found = Vec::new();
+    let mut rest = text;
+    while let Some(at) = rest.find("://") {
+        let authority = &rest[at + 3..];
+        let end = authority
+            .find(|c: char| {
+                matches!(c, '/' | '?' | '#') || c.is_whitespace() || c == '"' || c == '\''
+            })
+            .unwrap_or(authority.len());
+        if let Some(userinfo) = authority[..end].rfind('@').map(|i| &authority[..i]) {
+            if let Some((_, password)) = userinfo.split_once(':') {
+                if !password.is_empty() {
+                    found.push(userinfo.to_owned());
+                    found.push(password.to_owned());
+                }
+            }
+        }
+        rest = &authority[end..];
+    }
+    found
+}
+
+/// Replaces the userinfo of every URL (`scheme://user:pass@host`) with a
+/// marker, whatever the credential, so a check that prints a credential-bearing
+/// URL does not forward it.
+fn redact_url_userinfo(text: &str) -> String {
+    let mut output = String::with_capacity(text.len());
+    let mut rest = text;
+    while let Some(at) = rest.find("://") {
+        let (head, tail) = rest.split_at(at + 3);
+        output.push_str(head);
+        let end = tail
+            .find(|c: char| {
+                matches!(c, '/' | '?' | '#') || c.is_whitespace() || c == '"' || c == '\''
+            })
+            .unwrap_or(tail.len());
+        match tail[..end].rfind('@') {
+            Some(i) => {
+                output.push_str("[redacted userinfo]");
+                output.push_str(&tail[i..end]);
+            }
+            None => output.push_str(&tail[..end]),
+        }
+        rest = &tail[end..];
+    }
+    output.push_str(rest);
+    output
 }
 
 /// Replaces the runtime's own credential values and common secret shapes a
@@ -1177,6 +1238,7 @@ fn redact_secrets(text: &str, known: &[String]) -> String {
             output = output.replace(secret, "[redacted credential]");
         }
     }
+    output = redact_url_userinfo(&output);
     output = redact_pem_blocks(&output);
     let output = output
         .split('\n')
@@ -1341,8 +1403,17 @@ fn read_verified_tail(
     let longest = secrets.iter().map(String::len).max().unwrap_or(0);
     let window_len = REPAIR_REDACTION_WINDOW_BYTES.max(REPAIR_OUTPUT_TAIL_BYTES + 2 * longest);
     let windowed = bytes.len() > window_len;
-    let window = &bytes[bytes.len().saturating_sub(window_len)..];
-    let redacted = redact_secrets(&String::from_utf8_lossy(window), secrets);
+    let window_start = bytes.len().saturating_sub(window_len);
+    let mut text = String::from_utf8_lossy(&bytes[window_start..]).into_owned();
+    // The private-key state at the window's start comes from the whole artifact
+    // already read: a window that begins inside a key block (its BEGIN line
+    // before the window, with or without an END line inside it) is treated as
+    // starting with that BEGIN line, so the block is removed to its END or to
+    // the end of the text.
+    if starts_inside_private_key(&bytes[..window_start]) {
+        text.insert_str(0, "-----BEGIN PRIVATE KEY-----\n");
+    }
+    let redacted = redact_secrets(&text, secrets);
     let mut skip = if windowed {
         longest.saturating_sub(1).min(redacted.len())
     } else {
@@ -1360,6 +1431,35 @@ fn read_verified_tail(
         tail: redacted[start..].to_owned(),
         truncated: windowed || skip > 0 || start > 0,
     })
+}
+
+/// Whether text continuing after `prefix` would be inside a private-key block:
+/// the last BEGIN line of a private key in `prefix` has no END line after it, or
+/// `prefix` ends inside a BEGIN line that may be one.
+fn starts_inside_private_key(prefix: &[u8]) -> bool {
+    let find_last = |needle: &[u8]| prefix.windows(needle.len()).rposition(|w| w == needle);
+    let last_line = prefix.rsplit(|b| *b == b'\n').next().unwrap_or_default();
+    if last_line.windows(11).any(|w| w == b"-----BEGIN ") {
+        return true;
+    }
+    let mut cursor = prefix.len();
+    while let Some(begin) = prefix[..cursor]
+        .windows(11)
+        .rposition(|w| w == b"-----BEGIN ")
+    {
+        let line_end = prefix[begin..]
+            .iter()
+            .position(|b| *b == b'\n')
+            .map_or(prefix.len(), |n| begin + n);
+        if prefix[begin..line_end]
+            .windows(16)
+            .any(|w| w == b"PRIVATE KEY-----")
+        {
+            return find_last(b"-----END ").is_none_or(|end| end < begin);
+        }
+        cursor = begin;
+    }
+    false
 }
 
 /// Opens a private artifact for reading without following a symbolic link or
@@ -2142,6 +2242,45 @@ mod redaction_tests {
             "MIIEvQIBADANBgkqhkiG9w0BAQEFAASC\nmorekeymaterial\n-----END PRIVATE KEY-----\nafter";
         let out = redact_pem_blocks(text);
         assert_eq!(out, "[redacted private key]\nafter");
+    }
+
+    #[test]
+    fn an_unterminated_key_block_before_the_window_hides_the_whole_tail() {
+        let dir = tempfile::tempdir().unwrap();
+        // A key block opens long before the window and the artifact ends inside
+        // it (the executor's cap cut it before the END line).
+        let mut body = b"log start\n-----BEGIN PRIVATE KEY-----\n".to_vec();
+        while body.len() < 300_000 {
+            body.extend_from_slice(b"MIIEvQIBADANBgkqhkiG9w0BAQEFAASCBKcwggSjAgEAAoIBAQC7\n");
+        }
+        let result = failed_result(dir.path(), 0, &body);
+        let path = dir.path().join("c1-g1-check0.log");
+        let expected = &result.artifact_hashes["c1-g1-check0"];
+        let mut budget = 64 * 1024 * 1024u64;
+        let tail = read_verified_tail(&path, expected, &mut budget, &[]).unwrap();
+        assert!(
+            !tail.tail.contains("MIIEvQ"),
+            "key material survived: {}",
+            &tail.tail[..80.min(tail.tail.len())]
+        );
+    }
+
+    #[test]
+    fn url_userinfo_is_redacted_and_inherited_url_passwords_are_known() {
+        let out = redact_secrets(
+            "proxy=http://alice:s3cr3t-pw@proxy.local:8080/path other https://example.com/x",
+            &[],
+        );
+        assert!(
+            !out.contains("s3cr3t-pw") && !out.contains("alice"),
+            "{out}"
+        );
+        assert!(out.contains("@proxy.local:8080/path") && out.contains("https://example.com/x"));
+        assert_eq!(
+            url_credentials("http://alice:s3cr3t-pw@proxy.local:8080"),
+            vec!["alice:s3cr3t-pw".to_owned(), "s3cr3t-pw".to_owned()]
+        );
+        assert!(url_credentials("https://example.com/a@b").is_empty());
     }
 
     #[test]
