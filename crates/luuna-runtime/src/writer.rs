@@ -1154,11 +1154,16 @@ fn known_secrets(state: &AppState) -> Vec<String> {
     // Checks inherit every variable whose name is not secret-shaped, so a
     // credential embedded in a URL value (`HTTP_PROXY=http://user:pass@host`)
     // reaches them; its userinfo is redacted as an exact value too.
-    for (name, value) in std::env::vars() {
-        if luuna_executor::is_secret_or_reserved(&name) {
+    // `vars_os`: a non-UTF-8 name or value must not panic here, after the
+    // repair is claimed; such entries are skipped.
+    for (name, value) in std::env::vars_os() {
+        let (Some(name), Some(value)) = (name.to_str(), value.to_str()) else {
+            continue;
+        };
+        if luuna_executor::is_secret_or_reserved(name) {
             continue;
         }
-        secrets.extend(url_credentials(&value));
+        secrets.extend(url_credentials(value));
     }
     secrets
 }
@@ -1290,12 +1295,17 @@ fn redact_pem_blocks(text: &str) -> String {
     let mut output = text.to_owned();
     // A block whose BEGIN line was cut off (the text starts inside it) is
     // removed from the start of the text through its END line.
-    if let Some(end) = output.find("-----END ") {
-        let begins_before = output[..end].contains("-----BEGIN ");
-        if let Some(footer) = output[end..].find(MARKER).map(|m| end + m + MARKER.len()) {
-            if !begins_before {
-                output.replace_range(..footer, "[redacted private key]");
-            }
+    let first_end = private_key_end_lines(output.as_bytes()).next();
+    if let Some(end) = first_end {
+        let begins_before = output[..end].match_indices("-----BEGIN ").any(|(i, _)| {
+            output[i..]
+                .lines()
+                .next()
+                .is_some_and(|line| line.contains(MARKER))
+        });
+        if !begins_before {
+            let footer = end + output[end..].find(MARKER).map_or(0, |m| m + MARKER.len());
+            output.replace_range(..footer, "[redacted private key]");
         }
     }
     let mut cursor = 0;
@@ -1433,11 +1443,29 @@ fn read_verified_tail(
     })
 }
 
+/// Start offsets of the lines in `bytes` that are a private-key END line
+/// (`-----END … PRIVATE KEY-----`).
+fn private_key_end_lines(bytes: &[u8]) -> impl Iterator<Item = usize> + '_ {
+    bytes
+        .windows(9)
+        .enumerate()
+        .filter(|(_, w)| *w == b"-----END ")
+        .map(|(i, _)| i)
+        .filter(move |&i| {
+            let line_end = bytes[i..]
+                .iter()
+                .position(|b| *b == b'\n')
+                .map_or(bytes.len(), |n| i + n);
+            bytes[i..line_end]
+                .windows(16)
+                .any(|w| w == b"PRIVATE KEY-----")
+        })
+}
+
 /// Whether text continuing after `prefix` would be inside a private-key block:
 /// the last BEGIN line of a private key in `prefix` has no END line after it, or
 /// `prefix` ends inside a BEGIN line that may be one.
 fn starts_inside_private_key(prefix: &[u8]) -> bool {
-    let find_last = |needle: &[u8]| prefix.windows(needle.len()).rposition(|w| w == needle);
     let last_line = prefix.rsplit(|b| *b == b'\n').next().unwrap_or_default();
     if last_line.windows(11).any(|w| w == b"-----BEGIN ") {
         return true;
@@ -1455,7 +1483,9 @@ fn starts_inside_private_key(prefix: &[u8]) -> bool {
             .windows(16)
             .any(|w| w == b"PRIVATE KEY-----")
         {
-            return find_last(b"-----END ").is_none_or(|end| end < begin);
+            // Only a private-key END line closes the block; any other END line
+            // (a certificate's, say) inside it does not.
+            return !private_key_end_lines(prefix).any(|end| end > begin);
         }
         cursor = begin;
     }
@@ -2263,6 +2293,20 @@ mod redaction_tests {
             "key material survived: {}",
             &tail.tail[..80.min(tail.tail.len())]
         );
+    }
+
+    #[test]
+    fn an_unrelated_end_line_does_not_close_an_open_key_block() {
+        let mut prefix = b"-----BEGIN PRIVATE KEY-----\nMIIEvQIBADAN\n".to_vec();
+        prefix.extend_from_slice(b"-----END CERTIFICATE-----\nMIIEmorekey\n");
+        assert!(starts_inside_private_key(&prefix));
+        prefix.extend_from_slice(b"-----END PRIVATE KEY-----\nafter\n");
+        assert!(!starts_inside_private_key(&prefix));
+        // Text that opens inside a key whose first END line is a certificate's.
+        let out = redact_pem_blocks(
+            "keymaterial\n-----END CERTIFICATE-----\nmore\n-----END PRIVATE KEY-----\nafter",
+        );
+        assert_eq!(out, "[redacted private key]\nafter");
     }
 
     #[test]

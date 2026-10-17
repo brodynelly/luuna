@@ -27,6 +27,16 @@ fn collect(root: &Path, dir: &Path, files: &mut Vec<String>) {
     }
 }
 
+/// Whether Cargo config text declares a dependency override: `paths`, a
+/// `[patch…]` table or a source `replace-with`.
+fn dependency_override(text: &str) -> bool {
+    text.lines().map(str::trim).any(|line| {
+        line.starts_with("paths") && line[5..].trim_start().starts_with('=')
+            || line.starts_with("[patch")
+            || line.starts_with("replace-with")
+    })
+}
+
 fn relative(root: &Path, path: &Path) -> String {
     let rel = path.strip_prefix(root).expect("input inside the workspace");
     rel.components()
@@ -154,12 +164,40 @@ fn main() {
         println!("cargo:rerun-if-env-changed={name}");
     }
     let value = |name: &str| std::env::var(name).unwrap_or_else(|_| "unknown".to_owned());
+    // Cargo config can substitute dependency sources without touching the
+    // lockfile (`paths` overrides) or redirect them (`[patch]`, source
+    // `replace-with`); the config files Cargo reads for this workspace are
+    // checked and any that declare such an override are named.
+    println!("cargo:rerun-if-env-changed=CARGO_HOME");
+    let mut candidates = Vec::new();
+    let mut dir = Some(root.as_path());
+    while let Some(current) = dir {
+        candidates.push(current.join(".cargo").join("config"));
+        candidates.push(current.join(".cargo").join("config.toml"));
+        dir = current.parent();
+    }
+    if let Some(home) = std::env::var_os("CARGO_HOME")
+        .map(PathBuf::from)
+        .or_else(|| std::env::var_os("HOME").map(|home| PathBuf::from(home).join(".cargo")))
+    {
+        candidates.push(home.join("config"));
+        candidates.push(home.join("config.toml"));
+    }
+    let dependency_overrides: Vec<String> = candidates
+        .iter()
+        .filter_map(|path| {
+            let text = fs::read_to_string(path).ok()?;
+            println!("cargo:rerun-if-changed={}", path.display());
+            dependency_override(&text).then(|| path.display().to_string())
+        })
+        .collect();
     println!(
-        "cargo:rustc-env=LUUNA_BUILD_FLAGS=profile={} opt-level={} debug={} rustflags={} overrides={}",
+        "cargo:rustc-env=LUUNA_BUILD_FLAGS=profile={} opt-level={} debug={} rustflags={} overrides={} dependency-overrides={}",
         value("PROFILE"),
         value("OPT_LEVEL"),
         value("DEBUG"),
         if rustflags.is_empty() { "none".to_owned() } else { rustflags.replace(' ', ",") },
         if overrides.is_empty() { "none".to_owned() } else { overrides.join(",") },
+        if dependency_overrides.is_empty() { "none".to_owned() } else { dependency_overrides.join(",") },
     );
 }

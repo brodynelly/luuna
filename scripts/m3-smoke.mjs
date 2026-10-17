@@ -213,7 +213,7 @@ try {
   const pinned = pinnedToolchain();
   // A wrapper (RUSTC_WRAPPER / RUSTC_WORKSPACE_WRAPPER) can change compilation while the compiler
   // still reports the pinned release, so evidence builds must use none.
-  record("the runtime binary was compiled with the toolchain pinned in rust-toolchain.toml, no compiler wrapper, no RUSTFLAGS and no profile overrides", pinned !== null && String(evidence.environment.runtime_build_rustc).split(" ")[0] === pinned && evidence.environment.runtime_build_rustc_wrapper === "none" && / rustflags=none overrides=none$/.test(String(evidence.environment.runtime_build_flags)), `pinned ${pinned ?? "unreadable"}, binary built by rustc ${evidence.environment.runtime_build_rustc}, wrapper ${evidence.environment.runtime_build_rustc_wrapper}, ${evidence.environment.runtime_build_flags}`);
+  record("the runtime binary was compiled with the toolchain pinned in rust-toolchain.toml, no compiler wrapper, no RUSTFLAGS, no profile overrides and no dependency overrides", pinned !== null && String(evidence.environment.runtime_build_rustc).split(" ")[0] === pinned && evidence.environment.runtime_build_rustc_wrapper === "none" && / rustflags=none overrides=none dependency-overrides=none$/.test(String(evidence.environment.runtime_build_flags)) && evidence.environment.cargo_dependency_overrides.length === 0, `pinned ${pinned ?? "unreadable"}, binary built by rustc ${evidence.environment.runtime_build_rustc}, wrapper ${evidence.environment.runtime_build_rustc_wrapper}, ${evidence.environment.runtime_build_flags}, Cargo config overrides now: ${evidence.environment.cargo_dependency_overrides.join(", ") || "none"}`);
   await registerProjectAndBaseline();
   await scenario("feature", approvedFeatureIsCheckedAndIndependentlyReviewed);
   await scenario("repair", failingCheckRequiresManualRepairAndFreshEvidence);
@@ -874,6 +874,22 @@ function environment() {
   }
   info.provider_credentials_present = CREDENTIAL_NAMES.filter((name) => process.env[name] !== undefined || process.env[`LUUNA_PI_${name}`] !== undefined).map((name) => process.env[`LUUNA_PI_${name}`] !== undefined ? `LUUNA_PI_${name} (alias)` : name);
   try { info.runtime_binary_sha256 = createHash("sha256").update(readFileSync(runtimeBinary)).digest("hex"); } catch { info.runtime_binary_sha256 = "unknown"; }
+  // The Cargo config files Cargo reads for this workspace, checked now as well as by build.rs at
+  // build time: `paths` overrides, `[patch]` tables or source `replace-with` substitute dependencies.
+  info.cargo_dependency_overrides = (() => {
+    const candidates = [];
+    for (let dir = repository; ; dir = path.dirname(dir)) {
+      candidates.push(path.join(dir, ".cargo", "config"), path.join(dir, ".cargo", "config.toml"));
+      if (path.dirname(dir) === dir) break;
+    }
+    const home = process.env.CARGO_HOME ?? (process.env.HOME ? path.join(process.env.HOME, ".cargo") : null);
+    if (home) candidates.push(path.join(home, "config"), path.join(home, "config.toml"));
+    return candidates.filter((file) => {
+      let text;
+      try { text = readFileSync(file, "utf8"); } catch { return false; }
+      return text.split("\n").map((line) => line.trim()).some((line) => /^paths\s*=/.test(line) || line.startsWith("[patch") || line.startsWith("replace-with"));
+    });
+  })();
   // Bind the binary to the recorded revision by content: the runtime reports the digest its
   // build script computed over every build input, which must equal the digest of the inputs in
   // this checkout, and those inputs must equal the recorded revision (no modified or untracked
