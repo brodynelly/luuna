@@ -16,7 +16,7 @@
 // supported names (or their LUUNA_PI_ aliases) to the isolated Pi children. The
 // report records credential names only and is scanned for leaked values.
 import { spawn, execFileSync } from "node:child_process";
-import { mkdirSync, writeFileSync, readdirSync, statSync, existsSync, openSync, readSync, closeSync } from "node:fs";
+import { mkdirSync, writeFileSync, readdirSync, statSync, existsSync, openSync, readSync, closeSync, rmSync } from "node:fs";
 import { randomBytes } from "node:crypto";
 import { tmpdir, platform, release, arch, devNull } from "node:os";
 import path from "node:path";
@@ -167,6 +167,10 @@ evidence.checks = checks;
 evidence.notes = notes;
 evidence.leak_scan = scanForCredentialValues();
 record("no credential value appears in the report, runtime logs or durable state", evidence.leak_scan.leaks === 0, `${evidence.leak_scan.files_scanned} files scanned against ${evidence.leak_scan.values_checked} configured values`);
+// A file that carries a configured value, or that could not be scanned, must not
+// outlive the run: remove it (and the durable state, whose contents it may have
+// come from) so a failed evidence run leaves no credential on disk.
+evidence.leak_scan.removed = quarantineLeaks(evidence.leak_scan);
 const passed = checks.every((check) => check.ok);
 evidence.verdict = mode === "fixture"
   ? `SYNTHETIC fixture run ${passed ? "passed" : "FAILED"}: harness/protocol evidence only, never provider or M3 success`
@@ -460,9 +464,16 @@ async function blockingFindingsAreBoundedByAutomaticRepair(name) {
   // Automatic repair only follows `changes_required` and stops when the repair
   // writer produces no fresh candidate; a `blocked` verdict pauses at once.
   // A reviewer that passes the unmet requirement observed nothing; only a non-passing verdict with bounded repair counts.
-  const consistent = allRequiredPassed(ev.results) && (
-    (ev.status === "paused" && ev.review?.verdict === "changes_required" && ev.candidate.revision <= 2 && repairs.length === 1)
-    || (ev.status === "paused" && blocking && ev.review?.verdict === "blocked" && ev.candidate.revision === 1 && repairs.length === 0)
+  // The gate must be closed, with the reason that matches the observed revision: a
+  // second revision means the attempt budget was spent, a first revision means the
+  // repair writer produced no fresh candidate.
+  const reason = ev.reason ?? "";
+  const gateClosed = final.repair_allowed === false && ev.status === "paused";
+  const consistent = allRequiredPassed(ev.results) && gateClosed && (
+    (ev.review?.verdict === "changes_required" && repairs.length === 1 && (
+      (ev.candidate.revision === 2 && /attempt 3 exceeds max_attempts 2/.test(reason))
+      || (ev.candidate.revision === 1 && /no fresh candidate/.test(reason))))
+    || (blocking && ev.review?.verdict === "blocked" && ev.candidate.revision === 1 && repairs.length === 0)
   );
   record(`${name}: the real reviewer did not pass the unmet requirement and bounded automatic repair stopped within max_attempts=2`, consistent, `status=${ev.status} revision=${ev.candidate.revision} verdict=${ev.review?.verdict} blocking=${blocking} repair_allowed=${final.repair_allowed} repairs=${repairs.length} reviews=${reviews.length} reason=${truncate(ev.reason ?? "", 160)}`);
   note(name, ev.review?.verdict && ev.review.verdict !== "passed"
@@ -736,6 +747,19 @@ function scanForCredentialValues() {
   }
   // A file that could not be scanned is not evidence of anything; it fails the scan.
   return { values_checked: values.length, files_scanned: files.length - unreadable.length, unreadable_files: unreadable, leaks: leaks + unreadable.length, leaking_files: [...new Set(leaking)] };
+}
+
+/** Deletes every flagged or unscannable file plus the durable state; returns what was removed. */
+function quarantineLeaks(scan) {
+  const targets = [...scan.leaking_files, ...scan.unreadable_files].filter((entry) => entry !== "report");
+  if (targets.length === 0) return [];
+  const removed = [];
+  for (const entry of new Set([...targets, "data"])) {
+    const target = path.resolve(out, entry);
+    if (!target.startsWith(out + path.sep)) continue;
+    try { rmSync(target, { recursive: true, force: true }); removed.push(entry); } catch (error) { removed.push(`${entry} (not removed: ${error.message})`); }
+  }
+  return removed;
 }
 
 /** Streams a file of any size through a sliding window so a value spanning two chunks is still found. */

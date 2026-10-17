@@ -514,16 +514,24 @@ async fn schedule_writer(
     inline_cancel: Option<watch::Receiver<bool>>,
 ) -> Result<(StatusCode, Json<RunRecord>), ApiError> {
     let (previous_candidate, repair_feedback) = if let Some(ref hash) = repair_hash {
-        let store = state.store.lock().map_err(internal)?;
-        store
-            .can_candidate_repair(&id, hash)
-            .map_err(storage_error)?;
-        let evidence = store
-            .current_candidate(&id)
-            .map_err(internal)?
-            .ok_or_else(|| conflict("candidate missing"))?;
-        drop(store);
-        let check_output = repair_check_output(&state, &id, &evidence);
+        let evidence = {
+            let store = state.store.lock().map_err(internal)?;
+            store
+                .can_candidate_repair(&id, hash)
+                .map_err(storage_error)?;
+            store
+                .current_candidate(&id)
+                .map_err(internal)?
+                .ok_or_else(|| conflict("candidate missing"))?
+        };
+        let artifact_dir = crate::baselines::artifact_dir(&state, &id);
+        let secrets = known_secrets(&state);
+        let results = evidence.results.clone();
+        let check_output = tokio::task::spawn_blocking(move || {
+            repair_check_output(&artifact_dir, &results, &secrets)
+        })
+        .await
+        .map_err(|e| internal(e.to_string()))?;
         (
             Some(evidence.candidate.clone()),
             Some(format!(
@@ -790,29 +798,38 @@ fn bounded(value: Value) -> Value {
 /// has no shell and cannot read private artifacts, so the feedback must carry
 /// the failure itself, not only an exit code and artifact identities.
 const REPAIR_OUTPUT_TAIL_BYTES: usize = 2048;
-/// Upper bound on all quoted check output in one repair prompt; manifests do
-/// not bound their recipe count, so per-artifact limits alone cannot keep the
+/// Upper bound on all quoted check output in one repair prompt, measured after
+/// JSON encoding so escaped binary output cannot exceed it; manifests do not
+/// bound their recipe count, so per-artifact limits alone cannot keep the
 /// prompt within a provider's context window.
 const REPAIR_OUTPUT_TOTAL_BYTES: usize = 16 * 1024;
+/// Bounds on the verification work itself: at most this many artifacts are
+/// opened and at most this many bytes are read and hashed per repair, whatever
+/// is ultimately quoted.
+const REPAIR_ARTIFACT_LIMIT: usize = 32;
+const REPAIR_READ_BUDGET_BYTES: u64 = 64 * 1024 * 1024;
 
 /// The tail of every failed required check's recorded stdout/stderr, keyed by
 /// artifact identity. Missing or empty logs are omitted; nothing outside the
-/// run's private artifact directory is ever read.
+/// run's private artifact directory is ever read. Runs on a blocking thread.
 fn repair_check_output(
-    state: &AppState,
-    run_id: &str,
-    evidence: &luuna_domain::CandidateEvidence,
+    artifact_dir: &FsPath,
+    results: &[luuna_domain::CheckResult],
+    secrets: &[String],
 ) -> serde_json::Map<String, Value> {
-    let artifact_dir = crate::baselines::artifact_dir(state, run_id);
     let mut output = serde_json::Map::new();
     let mut quoted = 0usize;
-    'results: for result in evidence
-        .results
+    let mut opened = 0usize;
+    let mut read_budget = REPAIR_READ_BUDGET_BYTES;
+    'results: for result in results
         .iter()
         .filter(|result| result.status != CheckStatus::Passed)
     {
         for reference in &result.artifact_refs {
-            if quoted >= REPAIR_OUTPUT_TOTAL_BYTES {
+            if quoted >= REPAIR_OUTPUT_TOTAL_BYTES
+                || opened >= REPAIR_ARTIFACT_LIMIT
+                || read_budget == 0
+            {
                 output.insert(
                     "truncated".into(),
                     Value::String(
@@ -834,12 +851,15 @@ fn repair_check_output(
             let Some(expected) = result.artifact_hashes.get(reference) else {
                 continue;
             };
-            let Some(verified) =
-                read_verified_tail(&artifact_dir.join(format!("{reference}.log")), expected)
-            else {
+            opened += 1;
+            let Some(verified) = read_verified_tail(
+                &artifact_dir.join(format!("{reference}.log")),
+                expected,
+                &mut read_budget,
+            ) else {
                 continue;
             };
-            let tail = redact_known_secrets(String::from_utf8_lossy(&verified.tail).trim(), state);
+            let tail = redact_secrets(String::from_utf8_lossy(&verified.tail).trim(), secrets);
             if !tail.is_empty() {
                 let mut text = if verified.truncated {
                     format!("…{tail}")
@@ -851,7 +871,10 @@ fn repair_check_output(
                         " [artifact capped at the executor limit; output after the cap was not retained]",
                     );
                 }
-                quoted += text.len();
+                // Budget the encoded form: escaped control bytes expand several-fold.
+                quoted += serde_json::to_string(&text)
+                    .map(|s| s.len())
+                    .unwrap_or(text.len());
                 output.insert(reference.clone(), Value::String(text));
             }
         }
@@ -859,11 +882,9 @@ fn repair_check_output(
     output
 }
 
-/// Replaces every configured provider credential value and the service token
-/// with a marker before check output leaves the private artifact store for a
-/// model prompt. The executor already strips these from the check environment;
-/// this covers a repository command that echoes them from a file.
-fn redact_known_secrets(text: &str, state: &AppState) -> String {
+/// Every configured provider credential value plus the service token: the
+/// values the runtime itself holds and must never forward.
+fn known_secrets(state: &AppState) -> Vec<String> {
     let mut secrets: Vec<String> = luuna_engine_pi::PROVIDER_KEY_VARIABLES
         .iter()
         .flat_map(|name| {
@@ -873,15 +894,100 @@ fn redact_known_secrets(text: &str, state: &AppState) -> String {
             ]
         })
         .flatten()
+        .filter(|secret| secret.len() >= 8)
         .collect();
     secrets.push(state.config.token.clone());
+    secrets
+}
+
+/// Replaces the runtime's own credential values and common secret shapes a
+/// host-permission check could echo (PEM private key blocks, bearer headers,
+/// well-known API token prefixes) before check output leaves the private
+/// artifact store for a model prompt. This is best effort: native checks run
+/// with host permissions and no isolation is claimed, so the manifest the
+/// developer confirmed remains the boundary on what a check may read.
+fn redact_secrets(text: &str, known: &[String]) -> String {
     let mut output = text.to_owned();
-    for secret in secrets.iter().filter(|secret| secret.len() >= 8) {
+    for secret in known.iter().filter(|secret| secret.len() >= 8) {
         if output.contains(secret.as_str()) {
             output = output.replace(secret.as_str(), "[redacted credential]");
         }
     }
+    output = redact_pem_blocks(&output);
     output
+        .split('\n')
+        .map(|line| {
+            if line_carries_token(line) {
+                "[redacted token-like line]"
+            } else {
+                line
+            }
+        })
+        .collect::<Vec<_>>()
+        .join("\n")
+}
+
+/// Removes every `-----BEGIN … PRIVATE KEY-----` block through its matching
+/// `-----END … PRIVATE KEY-----` line, or to the end of the text when the
+/// block is cut off by the quoted tail.
+fn redact_pem_blocks(text: &str) -> String {
+    const MARKER: &str = "PRIVATE KEY-----";
+    let mut output = text.to_owned();
+    let mut cursor = 0;
+    while let Some(begin) = output[cursor..].find("-----BEGIN ") {
+        let start = cursor + begin;
+        let Some(header) = output[start..].find(MARKER) else {
+            break;
+        };
+        let header_end = start + header + MARKER.len();
+        let end = output[header_end..]
+            .find("-----END ")
+            .and_then(|e| {
+                let footer = header_end + e;
+                output[footer..]
+                    .find(MARKER)
+                    .map(|m| footer + m + MARKER.len())
+            })
+            .unwrap_or(output.len());
+        const REPLACEMENT: &str = "[redacted private key]";
+        output.replace_range(start..end, REPLACEMENT);
+        cursor = start + REPLACEMENT.len();
+    }
+    output
+}
+
+/// Whether a line looks like it carries a credential: a bearer header, a
+/// private-key assignment, or a well-known token prefix at a word boundary
+/// followed by a long run of token characters.
+fn line_carries_token(line: &str) -> bool {
+    const PREFIXES: [&str; 9] = [
+        "sk-",
+        "AKIA",
+        "ghp_",
+        "gho_",
+        "github_pat_",
+        "glpat-",
+        "xoxb-",
+        "xoxp-",
+        "AIza",
+    ];
+    let lowered = line.to_ascii_lowercase();
+    if lowered.contains("authorization: bearer ") || lowered.contains("private_key") {
+        return true;
+    }
+    PREFIXES.iter().any(|prefix| {
+        line.match_indices(prefix).any(|(at, _)| {
+            let boundary = line[..at]
+                .chars()
+                .next_back()
+                .is_none_or(|c| !c.is_ascii_alphanumeric());
+            let run = line[at + prefix.len()..]
+                .chars()
+                .take_while(|c| c.is_ascii_alphanumeric() || matches!(c, '_' | '-'))
+                .count();
+            boundary && run >= 20
+        })
+    })
 }
 
 struct VerifiedTail {
@@ -898,14 +1004,20 @@ struct VerifiedTail {
 /// a non-file, an oversized file or a digest mismatch yields nothing: native
 /// checks run with host permissions, so bytes that no longer match the durable
 /// evidence must not reach a model prompt.
-fn read_verified_tail(path: &FsPath, expected_hash: &str) -> Option<VerifiedTail> {
+fn read_verified_tail(
+    path: &FsPath,
+    expected_hash: &str,
+    read_budget: &mut u64,
+) -> Option<VerifiedTail> {
     let metadata = std::fs::symlink_metadata(path).ok()?;
     if metadata.file_type().is_symlink()
         || !metadata.is_file()
         || metadata.len() > luuna_executor::MAX_ARTIFACT_BYTES
+        || metadata.len() > *read_budget
     {
         return None;
     }
+    *read_budget -= metadata.len();
     let bytes = std::fs::read(path).ok()?;
     if luuna_executor::sha256_hex(&bytes) != expected_hash {
         return None;
@@ -1481,5 +1593,90 @@ async fn writer_worker(state: AppState, job: WriterJob, mut cancel: watch::Recei
             RunState::Failed,
             json!({"reason":format!("cannot persist candidate: {error}")}),
         );
+    }
+}
+
+#[cfg(test)]
+mod redaction_tests {
+    use super::*;
+
+    #[test]
+    fn known_values_pem_blocks_and_token_lines_are_removed() {
+        let known = vec!["configured-provider-value".to_owned()];
+        let text = "ok line\nkey=configured-provider-value\n-----BEGIN RSA PRIVATE KEY-----\nMIIE\n-----END RSA PRIVATE KEY-----\nAuthorization: Bearer abc\ntoken sk-abcdefghijklmnopqrstuvwxyz0123\ndisk-usage report line";
+        let out = redact_secrets(text, &known);
+        assert_eq!(
+            out,
+            "ok line\nkey=[redacted credential]\n[redacted private key]\n[redacted token-like line]\n[redacted token-like line]\ndisk-usage report line"
+        );
+    }
+
+    #[test]
+    fn a_cut_off_pem_block_is_removed_to_the_end() {
+        let out = redact_secrets("x\n-----BEGIN PRIVATE KEY-----\nMIIE", &[]);
+        assert_eq!(out, "x\n[redacted private key]");
+    }
+
+    fn failed_result(
+        artifact_dir: &FsPath,
+        index: usize,
+        body: &[u8],
+    ) -> luuna_domain::CheckResult {
+        let reference = format!("c1-g1-check{index}");
+        std::fs::write(artifact_dir.join(format!("{reference}.log")), body).unwrap();
+        luuna_domain::CheckResult {
+            schema_version: "0.1".into(),
+            id: format!("result-{index}"),
+            run_id: "run".into(),
+            repository_id: "app".into(),
+            recipe_id: format!("check{index}"),
+            candidate_hash: "sha256:0".into(),
+            commit: "0".repeat(40),
+            environment_fingerprint: "env".into(),
+            command: vec!["true".into()],
+            status: CheckStatus::Failed,
+            exit_code: Some(1),
+            artifact_refs: vec![reference.clone()],
+            cwd: ".".into(),
+            started_at: None,
+            finished_at: None,
+            reason: Some("exit code 1".into()),
+            artifact_hashes: [(reference, luuna_executor::sha256_hex(body))].into(),
+            tests_detected: None,
+        }
+    }
+
+    #[test]
+    fn the_aggregate_feedback_budget_is_measured_after_json_encoding() {
+        let dir = tempfile::tempdir().unwrap();
+        // Each tail is 2 KiB of NUL bytes, which encode six-fold as `\u0000`.
+        let results: Vec<_> = (0..REPAIR_ARTIFACT_LIMIT)
+            .map(|i| failed_result(dir.path(), i, &[b'x', 0u8].repeat(REPAIR_OUTPUT_TAIL_BYTES)))
+            .collect();
+        let output = repair_check_output(dir.path(), &results, &[]);
+        let encoded = serde_json::to_string(&output).unwrap();
+        assert!(output.contains_key("truncated"), "{encoded:.200}");
+        // The budget plus at most one over-running entry and the marker.
+        let bound = REPAIR_OUTPUT_TOTAL_BYTES + 8 * REPAIR_OUTPUT_TAIL_BYTES + 512;
+        assert!(encoded.len() <= bound, "{} > {bound}", encoded.len());
+        assert!(output.len() < REPAIR_ARTIFACT_LIMIT);
+    }
+
+    #[test]
+    fn artifact_verification_stops_at_the_artifact_limit_even_for_empty_tails() {
+        let dir = tempfile::tempdir().unwrap();
+        let results: Vec<_> = (0..REPAIR_ARTIFACT_LIMIT + 5)
+            .map(|i| failed_result(dir.path(), i, b"   "))
+            .collect();
+        let output = repair_check_output(dir.path(), &results, &[]);
+        assert_eq!(output.len(), 1, "{output:?}");
+        assert!(output.contains_key("truncated"));
+    }
+
+    #[test]
+    fn short_prefix_matches_are_left_alone() {
+        assert!(!line_carries_token("sk-1 is a label"));
+        assert!(!line_carries_token("task-abcdefghijklmnopqrstuvwxyz"));
+        assert!(line_carries_token("AKIAABCDEFGHIJKLMNOPQRST"));
     }
 }
