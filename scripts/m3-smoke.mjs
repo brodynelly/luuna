@@ -195,7 +195,8 @@ evidence.notes = notes;
 // a runtime whose exit was not observed fails the run and the scan is not trusted.
 record("the runtime exited before the leak scan", finalStop.exited, finalStop.exited ? "exit observed" : "the runtime did not exit after SIGTERM and SIGKILL; the leak scan below cannot establish what remains on disk");
 evidence.leak_scan = scanForCredentialValues();
-record("the leak scan and quarantine resolved paths through held directory handles", evidence.leak_scan.held_handles, evidence.leak_scan.held_handles ? "/proc/self/fd handles" : "unavailable on this platform: path checks only, recursive cleanup refused");
+// Held handles are required where they exist (Linux); elsewhere the weaker fallback is recorded, not hidden.
+record("the leak scan and quarantine resolved paths through held directory handles where the platform provides them", evidence.leak_scan.held_handles || process.platform !== "linux", evidence.leak_scan.held_handles ? "/proc/self/fd handles" : `unavailable on ${process.platform}: pinned-root path checks only, recursive cleanup refused`);
 if (!finalStop.exited) { evidence.leak_scan.leaks += 1; evidence.leak_scan.untrusted = "runtime still running during the scan"; }
 record("no credential value appears in the report, runtime logs or durable state", evidence.leak_scan.leaks === 0, `${evidence.leak_scan.files_scanned} files scanned against ${evidence.leak_scan.values_checked} configured values`);
 // A file that carries a configured value, or that could not be scanned, must not
@@ -743,13 +744,14 @@ function environment() {
   info.provider_credentials_present = CREDENTIAL_NAMES.filter((name) => process.env[name] !== undefined || process.env[`LUUNA_PI_${name}`] !== undefined).map((name) => process.env[`LUUNA_PI_${name}`] !== undefined ? `LUUNA_PI_${name} (alias)` : name);
   try { info.runtime_binary_mtime = statSync(runtimeBinary).mtime.toISOString(); } catch { info.runtime_binary_mtime = "unknown"; }
   try { info.runtime_binary_sha256 = createHash("sha256").update(readFileSync(runtimeBinary)).digest("hex"); } catch { info.runtime_binary_sha256 = "unknown"; }
-  // Bind the binary to the recorded revision: it must be newer than every tracked runtime source
-  // file, and the runtime sources must have no uncommitted change, or the run is not evidence
-  // for that revision.
+  // Bind the binary to the recorded revision: it must be newer than every tracked file compiled
+  // into it (crate sources and assets, manifests, lockfile), and those must have no uncommitted
+  // change, or the run is not evidence for that revision.
+  const buildInputs = ["crates/*/src/*", "crates/*/assets/*", "crates/*/Cargo.toml", "Cargo.toml", "Cargo.lock"];
   try {
-    const sources = git(repository, "ls-files", "-z", "--", "crates", "Cargo.toml", "Cargo.lock").split("\0").filter(Boolean);
+    const sources = git(repository, "ls-files", "-z", "--", ...buildInputs).split("\0").filter(Boolean);
     const newest = Math.max(...sources.map((file) => { try { return statSync(path.join(repository, file)).mtimeMs; } catch { return 0; } }));
-    info.runtime_sources_dirty = git(repository, "status", "--porcelain", "--", "crates", "Cargo.toml", "Cargo.lock").length > 0;
+    info.runtime_sources_dirty = git(repository, "status", "--porcelain", "--", ...buildInputs).length > 0;
     info.runtime_binary_current = statSync(runtimeBinary).mtimeMs >= newest && !info.runtime_sources_dirty;
   } catch { info.runtime_binary_current = false; }
   return info;
