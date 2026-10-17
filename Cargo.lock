@@ -502,6 +502,21 @@ dependencies = [
 ]
 
 [[package]]
+name = "luuna-executor"
+version = "0.1.0"
+dependencies = [
+ "chrono",
+ "libc",
+ "luuna-domain",
+ "serde",
+ "serde_json",
+ "sha2",
+ "tempfile",
+ "thiserror",
+ "tokio",
+]
+
+[[package]]
 name = "luuna-git"
 version = "0.1.0"
 dependencies = [
@@ -525,6 +540,7 @@ dependencies = [
  "luuna-discovery",
  "luuna-domain",
  "luuna-engine-pi",
+ "luuna-executor",
  "luuna-git",
  "luuna-storage",
  "serde",

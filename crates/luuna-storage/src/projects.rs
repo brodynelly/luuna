@@ -432,7 +432,7 @@ fn repositories(connection: &Connection, project_id: &str) -> Result<Vec<Reposit
     .collect()
 }
 
-fn append_project_event(
+pub(crate) fn append_project_event(
     tx: &Transaction<'_>,
     project_id: &str,
     event_type: &str,

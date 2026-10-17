@@ -5,7 +5,9 @@ use sha2::{Digest, Sha256};
 use std::collections::{BTreeMap, BTreeSet};
 use thiserror::Error;
 
+mod baseline;
 mod project;
+pub use baseline::*;
 pub use project::*;
 
 pub const SCHEMA_VERSION: &str = "0.1";
@@ -21,6 +23,8 @@ pub enum DomainError {
     StaleApproval,
     #[error("repository identity mismatch: {0}")]
     IdentityMismatch(String),
+    #[error("baseline evidence required: {0}")]
+    BaselineRequired(String),
     #[error("JSON: {0}")]
     Json(#[from] serde_json::Error),
 }

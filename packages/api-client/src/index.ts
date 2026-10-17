@@ -164,6 +164,52 @@ export interface ProjectView {
   discovery: Discovery | null;
 }
 
+export type CheckStatus = "passed" | "failed" | "blocked" | "cancelled" | "interrupted";
+export type BaselineStatus = "running" | CheckStatus;
+
+/** Deterministic evidence for one recipe execution (schemas/result.schema.json). */
+export interface CheckResult {
+  schema_version: string;
+  id: string;
+  run_id: string;
+  repository_id: string;
+  recipe_id: string;
+  candidate_hash: string;
+  commit: string;
+  environment_fingerprint: string;
+  command: string[];
+  status: CheckStatus;
+  exit_code: number | null;
+  artifact_refs: string[];
+  cwd?: string;
+  started_at?: string;
+  finished_at?: string;
+  reason?: string;
+  artifact_hashes?: Record<string, string>;
+  tests_detected?: number;
+}
+
+/** A repository's required checks at an exact commit, tree, manifest and host. */
+export interface BaselineEvidence {
+  id: string;
+  run_id: string;
+  project_id: string;
+  manifest_revision: number;
+  identity: { manifest_hash: string; repository_id: string; commit: string; tree: string };
+  environment_fingerprint: string;
+  status: BaselineStatus;
+  required_checks: string[];
+  results: CheckResult[];
+  started_at: string;
+  finished_at?: string;
+  reason?: string;
+}
+
+export interface StartBaselineRequest {
+  repository_id: string;
+  include_optional?: boolean;
+}
+
 export interface RegisterProjectRequest {
   id?: string;
   name: string;
@@ -288,6 +334,39 @@ export class LuunaClient {
     if (!Number.isSafeInteger(after) || after < 0) throw new Error("Invalid event cursor.");
     return this.request(`/projects/${encodeURIComponent(id)}/events?after=${after}`, { signal });
   }
+
+  listBaselines(id: string, signal?: AbortSignal): Promise<BaselineEvidence[]> {
+    return this.request(`/projects/${encodeURIComponent(id)}/baselines`, { signal });
+  }
+
+  /** Starts a baseline run; it is an ordinary run with events, cancellation and replay. */
+  startBaseline(id: string, request: StartBaselineRequest, signal?: AbortSignal): Promise<RunRecord> {
+    return this.request(`/projects/${encodeURIComponent(id)}/baselines`, { method: "POST", body: JSON.stringify(request), signal });
+  }
+
+  /** Reads a private check log by record identity (`<recipe>.stdout` or `<recipe>.stderr`). */
+  async artifact(runId: string, artifactId: string, signal?: AbortSignal): Promise<string> {
+    if (!/^[A-Za-z0-9._-]+\.(stdout|stderr)$/.test(artifactId) || artifactId.includes("..")) throw new Error("Invalid artifact identifier.");
+    const headers = new Headers({ Authorization: `Bearer ${this.token}`, Accept: "text/plain" });
+    const response = await this.fetcher.call(globalThis, `${this.baseUrl}/api/v1/runs/${encodeURIComponent(runId)}/artifacts/${encodeURIComponent(artifactId)}`, {
+      headers,
+      cache: "no-store",
+      credentials: "omit",
+      redirect: "error",
+      signal,
+    });
+    if (!response.ok) throw new ApiError(response.status, response.status === 404 ? "The artifact is not available." : `Runtime request failed (HTTP ${response.status}).`);
+    return await response.text();
+  }
+}
+
+/** Extract check results from a baseline run's event stream, in execution order. */
+export function checkResults(events: EventEnvelope[]): CheckResult[] {
+  return events.flatMap((event) => {
+    if (event.type !== "check.finished") return [];
+    const result = event.payload.result;
+    return result && typeof result === "object" ? [result as CheckResult] : [];
+  });
 }
 
 async function runtimeReason(response: Response): Promise<string | undefined> {

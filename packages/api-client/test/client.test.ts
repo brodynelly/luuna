@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from "vitest";
-import { ApiError, LuunaClient, assistantText, confirmedManifest, isTerminal, loopbackUrl, mergeEvents } from "../src/index";
+import { ApiError, LuunaClient, assistantText, checkResults, confirmedManifest, isTerminal, loopbackUrl, mergeEvents } from "../src/index";
 import type { EventEnvelope, ProjectManifest } from "../src/index";
 
 describe("local runtime connection", () => {
@@ -117,6 +117,35 @@ describe("project import and discovery", () => {
     await expect(server.discover("fixture")).rejects.not.toThrow("secret");
     const text = new LuunaClient("http://localhost:4242", "t", respond(409, "not json"));
     await expect(text.discover("fixture")).rejects.toThrow("The run state changed");
+  });
+
+  it("starts baselines, lists them and reads artifacts by identity only", async () => {
+    const fetcher = vi.fn<typeof fetch>().mockImplementation((url) => Promise.resolve(new Response(String(url).includes("/artifacts/") ? "log text" : "[]")));
+    const client = new LuunaClient("http://127.0.0.1:4242", "test-token", fetcher);
+    await client.startBaseline("fixture", { repository_id: "app" });
+    await client.listBaselines("fixture");
+    expect(await client.artifact("run-1", "unit.stdout")).toBe("log text");
+    const calls = fetcher.mock.calls.map(([url, init]) => [String(url), init?.method ?? "GET", init?.body]);
+    expect(calls[0]).toEqual(["http://127.0.0.1:4242/api/v1/projects/fixture/baselines", "POST", JSON.stringify({ repository_id: "app" })]);
+    expect(calls[1]).toEqual(["http://127.0.0.1:4242/api/v1/projects/fixture/baselines", "GET", undefined]);
+    expect(calls[2]).toEqual(["http://127.0.0.1:4242/api/v1/runs/run-1/artifacts/unit.stdout", "GET", undefined]);
+    expect(new Headers(fetcher.mock.calls[2][1]?.headers).get("Authorization")).toBe("Bearer test-token");
+    for (const bad of ["../luuna.sqlite3", "unit.stdin", "a/b.stdout", "unit..stdout"]) {
+      await expect(client.artifact("run-1", bad)).rejects.toThrow("Invalid artifact identifier");
+    }
+    const missing = new LuunaClient("http://127.0.0.1:4242", "t", vi.fn<typeof fetch>().mockResolvedValue(new Response("secret path", { status: 404 })));
+    await expect(missing.artifact("run-1", "unit.stdout")).rejects.toThrow("not available");
+  });
+
+  it("extracts check results from a baseline event stream in order", () => {
+    const result = (recipe_id: string, status: "passed" | "failed") => ({ schema_version: "0.1", id: recipe_id, run_id: "r", repository_id: "app", recipe_id, candidate_hash: "sha256:a", commit: "b".repeat(40), environment_fingerprint: "sha256:e", command: ["cargo", "test"], status, exit_code: status === "passed" ? 0 : 1, artifact_refs: [] });
+    const events: EventEnvelope[] = [
+      { ...base, event_id: "1", sequence: 1, type: "check.started", payload: { recipe_id: "unit" } },
+      { ...base, event_id: "2", sequence: 2, type: "check.finished", payload: { result: result("unit", "passed") } },
+      { ...base, event_id: "3", sequence: 3, type: "check.finished", payload: { result: result("lint", "failed") } },
+      { ...base, event_id: "4", sequence: 4, type: "check.finished", payload: { result: "model text saying passed" } },
+    ];
+    expect(checkResults(events).map((r) => [r.recipe_id, r.status])).toEqual([["unit", "passed"], ["lint", "failed"]]);
   });
 
   it("reconstructs the confirmed map from the project event stream", () => {
