@@ -16,7 +16,7 @@
 // supported names (or their LUUNA_PI_ aliases) to the isolated Pi children. The
 // report records credential names only and is scanned for leaked values.
 import { spawn, execFileSync } from "node:child_process";
-import { mkdirSync, writeFileSync, readdirSync, statSync, openSync, readSync, closeSync } from "node:fs";
+import { mkdirSync, writeFileSync, readdirSync, statSync, existsSync, openSync, readSync, closeSync } from "node:fs";
 import { randomBytes } from "node:crypto";
 import { tmpdir, platform, release, arch, devNull } from "node:os";
 import path from "node:path";
@@ -33,6 +33,10 @@ const out = path.resolve(options.out ?? path.join(tmpdir(), `luuna-m3-smoke-${st
 mkdirSync(out, { recursive: true, mode: 0o700 });
 const dataDir = path.join(out, "data");
 const fixtureRepo = path.join(out, "fixture-repo");
+// Refuse a reused output directory before anything is spawned: adopting an
+// existing fixture repository could commit unrelated files, and failing later
+// would leave a credential-bearing runtime behind.
+if (existsSync(fixtureRepo) || existsSync(dataDir)) fail(`output directory already holds a fixture repository or data directory; use a fresh --out: ${out}`);
 const port = Number(options.port ?? 4248);
 const runtimeBinary = path.resolve(options.runtime ?? path.join(repository, "target", "debug", process.platform === "win32" ? "luuna-runtime.exe" : "luuna-runtime"));
 const token = randomBytes(36).toString("base64url");
@@ -242,7 +246,8 @@ function createFixtureRepository() {
   // Never adopt an existing directory: a rerun into the same --out, or any
   // pre-existing path, would otherwise commit unrelated files into the fixture.
   mkdirSync(path.dirname(fixtureRepo), { recursive: true });
-  try { mkdirSync(fixtureRepo); } catch (error) { fail(`fixture repository path already exists or cannot be created (${error.code ?? error.message}): ${fixtureRepo}; use a fresh --out`); }
+  // Throwing (not exiting) lets the top-level finally terminate the runtime.
+  mkdirSync(fixtureRepo);
   const noHooks = path.join(out, "no-hooks");
   const repo = (...args) => git(fixtureRepo, ...args);
   repo("init", "-q", "-b", "main");
@@ -438,7 +443,7 @@ async function blockingFindingsAreBoundedByAutomaticRepair(name) {
   // Automatic repair only follows `changes_required` and stops when the repair
   // writer produces no fresh candidate; a `blocked` verdict pauses at once.
   // A reviewer that passes the unmet requirement observed nothing; only a non-passing verdict with bounded repair counts.
-  const consistent = ev.results?.every((result) => result.status === "passed") && (
+  const consistent = allRequiredPassed(ev.results) && (
     (ev.status === "paused" && ev.review?.verdict === "changes_required" && ev.candidate.revision <= 2 && repairs.length === 1)
     || (ev.status === "paused" && blocking && ev.review?.verdict === "blocked" && ev.candidate.revision === 1 && repairs.length === 0)
   );
@@ -499,7 +504,7 @@ async function hardKillDuringReviewReservesSpend(name) {
   summary.restart = { ...describeEvidence(after, events, reviewStarted), reviewer_pid: pid, status_before_kill: before.body?.evidence?.status, cost_usd_micros_before_kill: costBefore, reviewer_exited_after_ms: childExit.elapsed, reviewer_orphaned: orphaned, earlier_candidates_compared: Object.keys(earlier).length, approved_cost_budget: plan.budgets?.cost_usd_micros };
   record(`${name}: restart marks the in-flight review interrupted and preserves the frozen candidate and every passed required check`, before.body?.evidence?.status === "reviewing" && ev.status === "interrupted" && (await api("GET", `/runs/${runId}`)).body.state === "interrupted" && ev.candidate.hash === hash && allRequiredPassed(ev.results) && ev.review == null && ev.validation_generation === 1, `before=${before.body?.evidence?.status} after=${ev.status} generation=${ev.validation_generation}`);
   record(`${name}: unknown provider spend is reserved against the approved cost budget and re-validation is refused`, /unreported provider spend/.test(ev.reason ?? "") && ev.cost_usd_micros > costBefore && (await validate(runId, hash)).status !== 202 && /budget/.test((await validate(runId, hash)).body?.error ?? ""), `cost_before=${costBefore} cost_after=${ev.cost_usd_micros} budget=${plan.budgets?.cost_usd_micros} reason=${truncate(ev.reason ?? "", 160)}`);
-  record(`${name}: reviewer child exits after the runtime is hard-killed (stdin closed)`, !orphaned, `pid=${pid} exited_after_ms=${childExit.elapsed} orphaned=${orphaned}`);
+  record(`${name}: reviewer child exits after the runtime is hard-killed (stdin closed)`, typeof pid === "number" && childExit.satisfied && !orphaned, `pid=${pid} exited_after_ms=${childExit.elapsed} observed_exit=${childExit.satisfied} orphaned=${orphaned}`);
   record(`${name}: earlier candidate evidence survives the restart byte-for-byte`, preserved && Object.keys(earlier).length >= 3, `earlier_candidates_compared=${Object.keys(earlier).length}`);
 }
 
@@ -736,14 +741,16 @@ function fileContainsAny(file, values) {
   }
 }
 
+// Live output passes through the same redactor as the report: a provider or
+// runtime message that echoes a configured value never reaches the terminal.
 function record(name, ok, detail) {
   checks.push({ name, ok, detail });
-  console.log(`${ok ? "PASS" : "FAIL"}  ${name}${detail ? ` — ${detail}` : ""}`);
+  console.log(redactConfiguredValues(`${ok ? "PASS" : "FAIL"}  ${name}${detail ? ` — ${detail}` : ""}`));
 }
 
 function note(scenarioName, text) {
   notes.push({ scenario: scenarioName, note: text });
-  console.log(`NOTE  ${scenarioName}: ${text}`);
+  console.log(redactConfiguredValues(`NOTE  ${scenarioName}: ${text}`));
 }
 
 function truncate(value, length = 200) {
