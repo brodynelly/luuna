@@ -14,6 +14,7 @@ variables locally; keep credentials out of repository files:
 | --- | --- |
 | `LUUNA_API_TOKEN` | Required random token, at least 32 bytes; frontend enters it locally |
 | `LUUNA_PI_COMMAND` | Pi executable, default `pi`; may be an absolute Node executable |
+| `LUUNA_GIT_COMMAND` | Host `git` used for read-only repository inspection, default `git` |
 | `LUUNA_PI_ARGS_JSON` | Optional JSON array of launcher arguments, e.g. absolute `dist/cli.js` path |
 | `LUUNA_PI_PROVIDER` / `LUUNA_PI_MODEL` | Optional explicit defaults; UI can supply them per run |
 | `LUUNA_PI_<PROVIDER>_API_KEY` | Optional alias for any supported provider key (for example `LUUNA_PI_ANTHROPIC_API_KEY`, `LUUNA_PI_OPENAI_API_KEY`) for hosts that reserve the plain name; it becomes the child's standard variable, takes precedence over a direct key, and is never passed through under the alias name |
@@ -39,6 +40,25 @@ require `Authorization: Bearer <token>`:
 - `GET /api/v1/runs/{id}/events?after=0`: durable event replay by sequence.
 - `GET /api/v1/runs/{id}/stream?after=0`: SSE replay then live delivery; accepts `Last-Event-ID`.
 - `POST /api/v1/runs/{id}/cancel`: request abort; terminal cancellation follows process reaping.
+- `GET /api/v1/projects`, `GET /api/v1/projects/{id}`: registered projects, machine-registry
+  repositories, the current confirmed manifest and the latest discovery.
+- `POST /api/v1/projects`: `{ "id"?: "slug", "name": "...", "repositories": [{ "id": "app", "path": "/abs/root" }] }`
+  inspects each repository root read-only (identity, HEAD, branch, dirty state) and registers it.
+  Non-repositories, nested paths, bare or unborn repositories are rejected with 422.
+- `POST /api/v1/projects/{id}/discover`: re-observes the registered repositories and records a
+  proposed manifest with per-recipe evidence, confidence and open questions. It reads manifest
+  files only; it never runs a repository script.
+- `PUT /api/v1/projects/{id}/manifest`: `{ "expected_revision": n, "manifest": {...} }` confirms
+  revision `n+1` after re-checking identity, remote and default branch, and records the exact
+  HEAD commit per repository as the base. Stale revisions and changed identities return 409.
+- `GET /api/v1/projects/{id}/events?after=0`: durable project stream (`run_id` is
+  `project:{id}`); `manifest.confirmed` carries the complete manifest for replay.
+
+Repository inspection runs `git` with optional locks disabled and repository-controlled
+`core.fsmonitor`/hooks neutralised, so the developer's index and working tree stay
+byte-identical. Remote URLs are redacted before storage. Registering or confirming a
+project enables no write, command execution or plan transition; the storage guard that
+blocks `Implementing` without baseline evidence is unchanged (M2b).
 
 Only one runtime can own a data directory. Startup recovery marks abandoned
 active attempts interrupted after obtaining that exclusive ownership. A

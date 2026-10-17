@@ -34,6 +34,142 @@ export interface EventEnvelope {
   payload: Record<string, unknown>;
 }
 
+export type ExecutionProfile = "native" | "container";
+
+export interface ManifestCheck {
+  id: string;
+  executable: string;
+  args: string[];
+  required: boolean;
+  timeout_seconds: number;
+  capabilities: string[];
+  /** Defaults to `.` (the repository root) when omitted. */
+  cwd?: string;
+}
+
+export interface RepositoryManifest {
+  id: string;
+  remote: string;
+  default_branch: string;
+  profiles: string[];
+  execution: ExecutionProfile;
+  checks: ManifestCheck[];
+}
+
+export interface Relationship {
+  producer: string;
+  consumer: string;
+  kind: "api" | "package" | "generated-contract" | "runtime" | "integration";
+  contract: string;
+  confirmed: boolean;
+  evidence: string[];
+}
+
+export interface ProjectPolicy {
+  approval: "plan";
+  testing_prerequisite: true;
+  publish: "automatic_pr";
+  merge: "human";
+  max_explorers: number;
+  max_implementers: number;
+  max_task_repairs: number;
+}
+
+/** The versioned, machine-independent project map (schemas/project.schema.json). */
+export interface ProjectManifest {
+  schema_version: string;
+  id: string;
+  name: string;
+  revision: number;
+  repositories: RepositoryManifest[];
+  relationships: Relationship[];
+  policy: ProjectPolicy;
+}
+
+export interface DirtyState {
+  staged: number;
+  unstaged: number;
+  untracked: number;
+  conflicted: number;
+  paths: string[];
+  truncated: boolean;
+}
+
+export interface RepositoryObservation {
+  local_path: string;
+  identity: { remote: string | null; push_remote?: string | null; root_commits: string[]; shallow: boolean };
+  head_commit: string;
+  branch: string | null;
+  remote_default_branch: string | null;
+  local_branches: string[];
+  dirty: DirtyState;
+  git_version: string;
+  observed_at: string;
+}
+
+export interface ProjectRecord {
+  id: string;
+  name: string;
+  revision: number;
+  manifest_hash: string | null;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface RepositoryRegistration {
+  project_id: string;
+  repository_id: string;
+  local_path: string;
+  observation: RepositoryObservation;
+  registered_at: string;
+}
+
+export interface ManifestRecord {
+  project_id: string;
+  revision: number;
+  hash: string;
+  manifest: ProjectManifest;
+  base_commits: Record<string, string>;
+  confirmed_at: string;
+}
+
+export interface ProposedCheck {
+  check: ManifestCheck;
+  evidence: string[];
+  confidence: "observed" | "inferred";
+}
+
+export interface DiscoveryQuestion {
+  repository_id: string | null;
+  topic: string;
+  detail: string;
+}
+
+/** A read-only proposal; it executed nothing and authorizes nothing. */
+export interface Discovery {
+  schema_version: string;
+  id: string;
+  project_id: string;
+  created_at: string;
+  repositories: { repository_id: string; observation: RepositoryObservation; profiles: string[]; evidence: string[]; proposed_checks: ProposedCheck[] }[];
+  proposed_manifest: ProjectManifest;
+  manifest_problems: string[];
+  questions: DiscoveryQuestion[];
+}
+
+export interface ProjectView {
+  project: ProjectRecord;
+  repositories: RepositoryRegistration[];
+  manifest: ManifestRecord | null;
+  discovery: Discovery | null;
+}
+
+export interface RegisterProjectRequest {
+  id?: string;
+  name: string;
+  repositories: { id: string; path: string }[];
+}
+
 export class ApiError extends Error {
   constructor(public readonly status: number, message: string) {
     super(message);
@@ -83,13 +219,15 @@ export class LuunaClient {
     });
     if (!response.ok) {
       // Do not surface arbitrary server error bodies: they can contain prompts or secrets.
+      // Validation and conflict responses carry short deterministic runtime reasons.
       const messages: Record<number, string> = {
         400: "The runtime rejected these settings. Check the prompt, provider and model configuration.",
         401: "The service rejected this token. Reconnect using its current token.",
         403: "The runtime denied this action.",
         409: "The run state changed or another session is active. Refresh and try again.",
       };
-      throw new ApiError(response.status, messages[response.status] ?? `Runtime request failed (HTTP ${response.status}).`);
+      const reason = [400, 409, 422].includes(response.status) ? await runtimeReason(response) : undefined;
+      throw new ApiError(response.status, reason ?? messages[response.status] ?? `Runtime request failed (HTTP ${response.status}).`);
     }
     return await response.json() as T;
   }
@@ -118,6 +256,64 @@ export class LuunaClient {
     if (!Number.isSafeInteger(after) || after < 0) throw new Error("Invalid event cursor.");
     return this.request(`/runs/${encodeURIComponent(id)}/events?after=${after}`, { signal });
   }
+
+  listProjects(signal?: AbortSignal): Promise<ProjectRecord[]> {
+    return this.request("/projects", { signal });
+  }
+
+  project(id: string, signal?: AbortSignal): Promise<ProjectView> {
+    return this.request(`/projects/${encodeURIComponent(id)}`, { signal });
+  }
+
+  /** Registers existing repositories by absolute path; the runtime inspects them read-only. */
+  registerProject(request: RegisterProjectRequest, signal?: AbortSignal): Promise<ProjectView> {
+    return this.request("/projects", { method: "POST", body: JSON.stringify(request), signal });
+  }
+
+  discover(id: string, signal?: AbortSignal): Promise<Discovery> {
+    return this.request(`/projects/${encodeURIComponent(id)}/discover`, { method: "POST", signal });
+  }
+
+  /** Saves the confirmed map; `expectedRevision` is the project's current manifest revision. */
+  confirmManifest(id: string, expectedRevision: number, manifest: ProjectManifest, signal?: AbortSignal): Promise<ProjectView> {
+    if (!Number.isSafeInteger(expectedRevision) || expectedRevision < 0) throw new Error("Invalid manifest revision.");
+    return this.request(`/projects/${encodeURIComponent(id)}/manifest`, {
+      method: "PUT",
+      body: JSON.stringify({ expected_revision: expectedRevision, manifest }),
+      signal,
+    });
+  }
+
+  projectEvents(id: string, after = 0, signal?: AbortSignal): Promise<EventEnvelope[]> {
+    if (!Number.isSafeInteger(after) || after < 0) throw new Error("Invalid event cursor.");
+    return this.request(`/projects/${encodeURIComponent(id)}/events?after=${after}`, { signal });
+  }
+}
+
+async function runtimeReason(response: Response): Promise<string | undefined> {
+  try {
+    const body: unknown = await response.clone().json();
+    if (body && typeof body === "object" && "error" in body && typeof body.error === "string") {
+      const reason = body.error.trim();
+      if (reason.length > 0 && reason.length <= 300 && !/[\u0000-\u001f]/.test(reason)) return reason;
+    }
+  } catch {
+    // Non-JSON bodies are never surfaced.
+  }
+  return undefined;
+}
+
+/** Fold the project event stream into the last confirmed map, or null before confirmation. */
+export function confirmedManifest(events: EventEnvelope[]): { revision: number; hash: string; manifest: ProjectManifest } | null {
+  let latest: { revision: number; hash: string; manifest: ProjectManifest } | null = null;
+  for (const event of events) {
+    if (event.type !== "manifest.confirmed") continue;
+    const { revision, manifest_hash, manifest } = event.payload;
+    if (typeof revision === "number" && typeof manifest_hash === "string" && manifest && typeof manifest === "object") {
+      latest = { revision, hash: manifest_hash, manifest: manifest as ProjectManifest };
+    }
+  }
+  return latest;
 }
 
 /** Merge replayed events without duplicates; a reconnect can repeat the last page. */

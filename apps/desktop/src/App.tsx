@@ -2,6 +2,7 @@ import { useEffect, useRef, useState } from "react";
 import type { FormEvent } from "react";
 import { LuunaClient, assistantText, isTerminal, mergeEvents } from "@luuna/api-client";
 import type { EventEnvelope, Health, RunRecord } from "@luuna/api-client";
+import { Projects } from "./Projects";
 
 function message(error: unknown): string {
   return error instanceof Error ? error.message : "The runtime could not be reached.";
@@ -196,6 +197,8 @@ export function App() {
         </form>}
       </section>
 
+      <Projects client={client} />
+
       <div className="workspace">
         <aside className="panel history" aria-labelledby="history-heading">
           <div className="panel-heading"><h2 id="history-heading">Session history</h2><button className="text-button" disabled={!client} onClick={() => setRefresh((value) => value + 1)}>Refresh</button></div>
@@ -234,6 +237,6 @@ export function App() {
         </div>
       </div>
     </main>
-    <footer>Luuna · Local-first engineering workbench<span>M0 / M1 foundation</span></footer>
+    <footer>Luuna · Local-first engineering workbench<span>M0 / M1 foundation · M2a import</span></footer>
   </div>;
 }

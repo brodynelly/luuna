@@ -1,0 +1,19 @@
+# ADR 0006: read-only repository import, machine registry and project event stream
+
+Date: 2026-10-17. Status: accepted.
+
+## Context
+
+M2a registers an existing repository, proposes its check recipes and persists a confirmed manifest without changing the developer's checkout. The current architecture separates the versioned manifest from machine-specific paths and requires that discovery propose commands rather than execute repository text. The event envelope and SQLite outbox were defined for runs, and project-level facts had no durable stream.
+
+## Decision
+
+1. **Inspection is read-only and executes nothing from the repository.** `luuna-git` shells out to the host `git` with `GIT_OPTIONAL_LOCKS=0`, `GIT_TERMINAL_PROMPT=0`, `--no-pager`, and `-c core.fsmonitor=false -c core.hooksPath=/dev/null`, every inherited `GIT_*` variable cleared, and every configured `filter.<driver>` clean/smudge/process command overridden to empty with `required=false`, so `status`, `rev-parse`, `rev-list`, `symbolic-ref`, `for-each-ref` and `remote get-url` leave the index and working tree byte-identical and cannot be redirected or made to execute repository-selected commands. Output is capped per stream while it is read. No fetch, push, checkout, hook or filter ever runs. Remote URLs are redacted (userinfo, query and fragment) before they are stored or returned.
+2. **Repository identity** is the redacted `origin` fetch URL, the redacted push URL when it differs, and the sorted parentless commits reachable from HEAD (empty for shallow clones, which must then have a remote; more than 64 roots is rejected). Filesystem origins (paths or `file:` URLs) are machine-specific and are observed as no remote. Registration stores that identity; discovery and confirmation re-observe the path and reject a different repository at the same path with a conflict instead of silently re-binding. A repository without a portable remote carries an explicit `local:` identity in the manifest, and confirmation enforces that.
+3. **The manifest is machine-independent and hashed with `luuna-json-v1`.** Local paths, observed commits, branches and dirty state live only in the private SQLite machine registry (`repositories` table) and in evidence records. `PlanRevision.manifest_hash` refers to this manifest hash.
+4. **Discovery proposes; the developer confirms.** `luuna-discovery` reads a bounded set of well-known manifest files and proposes recipes as executable plus argument arrays with file-level evidence, observed/inferred confidence and open questions. Shell interpreters require an explicit `shell` capability, absolute executables are rejected, and the proposal is stored as a `Discovery` record, never executed. Confirmation requires the project's current revision, revision `n+1`, an identity match, the observed remote and an observed default branch, and records the exact HEAD commit per repository as the base.
+5. **Project-scoped events reuse the run event envelope.** They are stored in `project_events` with their own monotonic sequence, `project_id` set to the project, and `run_id` set to the stream identifier `project:<project_id>`. Clients deduplicate and replay them with the same cursor rules as run events, and `manifest.confirmed` carries the complete manifest so replay reconstructs the confirmed map.
+
+## Consequences
+
+The routes `POST /api/v1/projects`, `GET /api/v1/projects[/{id}]`, `POST /api/v1/projects/{id}/discover`, `PUT /api/v1/projects/{id}/manifest` and `GET /api/v1/projects/{id}/events` implement the contract table in `docs/07-contracts.md`. `schemas/project.schema.json` gains an optional `cwd` per check (default `.`). Nothing in this slice enables repository writes, command execution or the storage guard's removal; M2b supplies the executor and baseline evidence, and M2c the approved writer. A multi-repository manifest is accepted by the contracts but relationships and integration remain M4 work.

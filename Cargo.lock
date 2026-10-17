@@ -473,6 +473,16 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "f9f8bd3e56ce4dfc153cf470fffbfa98c7620958b312ca5c3a4b8d5181fd13c6"
 
 [[package]]
+name = "luuna-discovery"
+version = "0.1.0"
+dependencies = [
+ "luuna-domain",
+ "serde_json",
+ "tempfile",
+ "thiserror",
+]
+
+[[package]]
 name = "luuna-domain"
 version = "0.1.0"
 dependencies = [
@@ -492,18 +502,34 @@ dependencies = [
 ]
 
 [[package]]
+name = "luuna-git"
+version = "0.1.0"
+dependencies = [
+ "chrono",
+ "luuna-domain",
+ "serde_json",
+ "tempfile",
+ "thiserror",
+ "tokio",
+]
+
+[[package]]
 name = "luuna-runtime"
 version = "0.1.0"
 dependencies = [
  "async-stream",
  "axum",
+ "chrono",
  "constant_time_eq",
  "fs2",
+ "luuna-discovery",
  "luuna-domain",
  "luuna-engine-pi",
+ "luuna-git",
  "luuna-storage",
  "serde",
  "serde_json",
+ "tempfile",
  "tokio",
  "tower",
  "tower-http",

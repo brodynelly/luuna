@@ -14,6 +14,7 @@ use axum::{
 use fs2::FileExt;
 use luuna_domain::RunState;
 use luuna_engine_pi::{PiConfig, PiProcess, PI_VERSION};
+use luuna_git::GitInspector;
 use luuna_storage::{RunRecord, Store};
 use serde::Deserialize;
 use serde_json::{json, Value};
@@ -31,6 +32,8 @@ use tower_http::cors::CorsLayer;
 pub struct RuntimeConfig {
     pub data_dir: PathBuf,
     pub pi_program: PathBuf,
+    /// Host `git` used for read-only repository inspection.
+    pub git_program: PathBuf,
     pub pi_launcher_args: Vec<String>,
     pub provider: Option<String>,
     pub model: Option<String>,
@@ -43,8 +46,12 @@ pub struct AppState {
     store: Arc<Mutex<Store>>,
     active: Arc<Mutex<HashMap<String, watch::Sender<bool>>>>,
     config: Arc<RuntimeConfig>,
+    git: Arc<GitInspector>,
     _owner_lock: Arc<std::fs::File>,
 }
+
+mod projects;
+pub use projects::{ConfirmManifest, ProjectView, RegisterProject, RegisterRepository};
 
 impl AppState {
     pub fn open(config: RuntimeConfig) -> Result<Self, Box<dyn std::error::Error>> {
@@ -75,10 +82,15 @@ impl AppState {
             .map_err(|_| "another Luuna runtime already owns this data directory")?;
         let mut store = Store::open(config.data_dir.join("luuna.sqlite3"))?;
         store.interrupt_active_runs()?;
+        let git = GitInspector {
+            program: config.git_program.clone(),
+            ..GitInspector::default()
+        };
         Ok(Self {
             store: Arc::new(Mutex::new(store)),
             active: Arc::new(Mutex::new(HashMap::new())),
             config: Arc::new(config),
+            git: Arc::new(git),
             _owner_lock: Arc::new(owner_lock),
         })
     }
@@ -142,6 +154,20 @@ pub fn router(state: AppState) -> Router {
         .route("/api/v1/runs/{id}/events", get(events))
         .route("/api/v1/runs/{id}/stream", get(stream))
         .route("/api/v1/runs/{id}/cancel", post(cancel))
+        .route(
+            "/api/v1/projects",
+            get(projects::list_projects).post(projects::register_project),
+        )
+        .route("/api/v1/projects/{id}", get(projects::get_project))
+        .route("/api/v1/projects/{id}/discover", post(projects::discover))
+        .route(
+            "/api/v1/projects/{id}/manifest",
+            axum::routing::put(projects::confirm_manifest),
+        )
+        .route(
+            "/api/v1/projects/{id}/events",
+            get(projects::project_events),
+        )
         .route_layer(middleware::from_fn_with_state(state.clone(), authenticate));
     let cors = CorsLayer::new()
         .allow_origin([
@@ -151,7 +177,11 @@ pub fn router(state: AppState) -> Router {
             "http://tauri.localhost".parse().unwrap(),
             "https://tauri.localhost".parse().unwrap(),
         ])
-        .allow_methods([axum::http::Method::GET, axum::http::Method::POST])
+        .allow_methods([
+            axum::http::Method::GET,
+            axum::http::Method::POST,
+            axum::http::Method::PUT,
+        ])
         .allow_headers([
             header::AUTHORIZATION,
             header::CONTENT_TYPE,
@@ -161,7 +191,7 @@ pub fn router(state: AppState) -> Router {
         .merge(protected)
         .route("/health", get(health))
         .route("/api/v1/health", get(health))
-        .layer(axum::extract::DefaultBodyLimit::max(32 * 1024))
+        .layer(axum::extract::DefaultBodyLimit::max(256 * 1024))
         .layer(cors)
         .with_state(state)
 }
@@ -195,7 +225,7 @@ async fn authenticate(
 }
 
 #[derive(Debug)]
-pub struct ApiError(StatusCode, &'static str);
+pub struct ApiError(pub StatusCode, pub String);
 impl IntoResponse for ApiError {
     fn into_response(self) -> Response {
         (self.0, Json(json!({"error":self.1}))).into_response()
@@ -204,11 +234,11 @@ impl IntoResponse for ApiError {
 fn internal<T>(_: T) -> ApiError {
     ApiError(
         StatusCode::INTERNAL_SERVER_ERROR,
-        "runtime storage or process operation failed; inspect local state",
+        "runtime storage or process operation failed; inspect local state".into(),
     )
 }
 fn not_found() -> ApiError {
-    ApiError(StatusCode::NOT_FOUND, "run not found")
+    ApiError(StatusCode::NOT_FOUND, "run not found".into())
 }
 
 async fn list_runs(State(state): State<AppState>) -> Result<Json<Vec<RunRecord>>, ApiError> {
@@ -254,7 +284,7 @@ async fn start_run(
     {
         return Err(ApiError(
             StatusCode::BAD_REQUEST,
-            "prompt must be 1..16000 bytes and cannot invoke a slash command",
+            "prompt must be 1..16000 bytes and cannot invoke a slash command".into(),
         ));
     }
     let provider = request
@@ -272,7 +302,7 @@ async fn start_run(
     {
         return Err(ApiError(
             StatusCode::BAD_REQUEST,
-            "an explicit provider and model are required",
+            "an explicit provider and model are required".into(),
         ));
     }
     let id = uuid::Uuid::new_v4().to_string();
@@ -281,7 +311,7 @@ async fn start_run(
     if active.len() >= 4 {
         return Err(ApiError(
             StatusCode::TOO_MANY_REQUESTS,
-            "four demo runs are already active",
+            "four demo runs are already active".into(),
         ));
     }
     let metadata = json!({"prompt":request.prompt,"provider":provider,"model":model,"demo_only":true,"tools":[]});
@@ -388,7 +418,7 @@ async fn cancel(
     let active = state.active.lock().map_err(internal)?;
     let sender = active.get(&id).ok_or(ApiError(
         StatusCode::CONFLICT,
-        "run has no active local process",
+        "run has no active local process".into(),
     ))?;
     sender.send(true).map_err(internal)?;
     Ok((StatusCode::ACCEPTED, Json(run)))

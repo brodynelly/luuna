@@ -10,7 +10,7 @@ Preserve user changes, historical design references, upstream license notices, a
 
 ## Set up and check
 
-Use Rust 1.90.0 from `rust-toolchain.toml` and committed lockfiles. Run from the repository root:
+Use Rust 1.90.0 from `rust-toolchain.toml` and committed lockfiles. Rust tests also need a host `git` (2.40 or newer) on `PATH` for the read-only repository inspection fixtures. Run from the repository root:
 
 ```sh
 cargo fmt --all -- --check

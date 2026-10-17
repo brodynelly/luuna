@@ -95,6 +95,7 @@ fn configuration(root: PathBuf) -> RuntimeConfig {
         data_dir: root,
         pi_program: if cfg!(windows) { "python" } else { "python3" }.into(),
         pi_launcher_args: vec![script.to_string_lossy().into_owned()],
+        git_program: "git".into(),
         provider: None,
         model: None,
         token: TOKEN.into(),
