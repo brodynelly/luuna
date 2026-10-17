@@ -74,7 +74,15 @@ while True:
 sys.exit(os.WEXITSTATUS(status) if os.WIFEXITED(status) else 128 + os.WTERMSIG(status))
 `;
 if (process.platform === "linux" && process.env.LUUNA_M3_REAPER !== String(process.ppid)) {
-  const reaped = spawnSync("python3", ["-I", "-c", REAPER_SCRIPT, process.execPath, ...process.execArgv, fileURLToPath(import.meta.url), ...process.argv.slice(2)], { stdio: "inherit" });
+  // The reaper is the harness's parent, so the harness's environment, provider credentials
+  // included, necessarily passes through it (as it does through the Node executable running this
+  // script): it is part of the host trust root. It is resolved once to an absolute file, run as
+  // exactly that file, and its path and SHA-256 are recorded in the evidence.
+  const python = (process.env.PATH ?? "").split(path.delimiter).filter(Boolean).map((dir) => path.join(dir, "python3")).find((candidate) => { try { return statSync(candidate).isFile(); } catch { return false; } });
+  if (!python) { console.error("m3-smoke: python3 not found on PATH for the child subreaper"); process.exit(2); }
+  const resolved = realpathSync(python);
+  const env = { ...process.env, LUUNA_M3_REAPER_PYTHON: `${resolved} sha256:${createHash("sha256").update(readFileSync(resolved)).digest("hex")}` };
+  const reaped = spawnSync(resolved, ["-I", "-c", REAPER_SCRIPT, process.execPath, ...process.execArgv, fileURLToPath(import.meta.url), ...process.argv.slice(2)], { stdio: "inherit", env });
   if (reaped.error) {
     console.error(`m3-smoke: cannot start the python3 child subreaper (${reaped.error.code ?? reaped.error.message})`);
     process.exit(2);
@@ -137,7 +145,11 @@ const port = Number(options.port ?? 4248);
 // The harness builds the runtime itself (see `buildRuntime`), so no externally supplied or stale
 // binary, command-line `--config` or inherited build environment can stand in for the revision.
 if (options.runtime !== undefined) fail("--runtime is not accepted: the harness builds the runtime from this checkout itself");
-const runtimeTarget = path.join(repository, "target", "m3-smoke");
+// A new, empty target directory for every run: a reused build cache trusts its own fingerprints
+// and output timestamps, so a binary replaced after an earlier build could be treated as fresh.
+// It lives outside the output root (which the leak scan walks) and is removed when the run ends.
+const runtimeTarget = realpathSync(mkdtempSync(path.join(tmpdir(), "luuna-m3-build-")));
+process.on("exit", () => { try { rmSync(runtimeTarget, { recursive: true, force: true }); } catch { /* best effort */ } });
 const runtimeBinary = path.join(runtimeTarget, "debug", process.platform === "win32" ? "luuna-runtime.exe" : "luuna-runtime");
 const token = randomBytes(36).toString("base64url");
 const runTimeoutSeconds = Number(options["run-timeout"] ?? process.env.LUUNA_RUN_TIMEOUT_SECONDS ?? 600);
@@ -297,6 +309,7 @@ const piTreeChangedAfter = [];
 
 try {
   evidence.runtime_build = buildRuntime();
+  evidence.subreaper = process.platform === "linux" ? { interpreter: process.env.LUUNA_M3_REAPER_PYTHON ?? "unknown", pid: process.ppid } : null;
   evidence.environment = environment();
   const pi = evidence.environment.pi_provenance;
   record("the Pi tree is byte-identical to a fresh install of tools/pi/package-lock.json (every tarball integrity-checked by npm)", mode === "fixture" ? true : pi?.verified === true, mode === "fixture" ? "synthetic fixture tracked in the clean checkout; not provider evidence" : pi?.verified ? `@earendil-works/pi-coding-agent ${pi.package.version}, ${pi.package.tree_entries} entries, tree ${pi.package.tree_digest.slice(0, 16)}…, launcher sha256 ${pi.launcher.sha256.slice(0, 16)}…` : `not verified: ${pi?.error ?? "no provenance recorded"}`);

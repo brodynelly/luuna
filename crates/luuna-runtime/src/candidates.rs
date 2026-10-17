@@ -599,6 +599,7 @@ async fn pipeline(
         .map_err(|e| e.to_string())?
         .ok_or("candidate missing")?
         .results;
+    let checks = crate::writer::model_check_view(&checks);
     let session = format!("review-{}", uuid::Uuid::new_v4());
     let directory = state.config.data_dir.join("reviews").join(&session);
     let guard = install_scope_guard(&directory).map_err(|e| e.to_string())?;
