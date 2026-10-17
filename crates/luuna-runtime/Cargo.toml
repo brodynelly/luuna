@@ -23,6 +23,9 @@ uuid = { version = "1", features = ["v4"] }
 constant_time_eq = "0.4"
 fs2 = "0.4"
 
+[target.'cfg(unix)'.dependencies]
+libc = "0.2"
+
 [dev-dependencies]
 tower = { version = "0.5", features = ["util"] }
 tempfile = "3.23.0"

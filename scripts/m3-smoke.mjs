@@ -16,7 +16,7 @@
 // supported names (or their LUUNA_PI_ aliases) to the isolated Pi children. The
 // report records credential names only and is scanned for leaked values.
 import { spawn, execFileSync } from "node:child_process";
-import { mkdirSync, writeFileSync, readdirSync, statSync, existsSync, openSync, readSync, closeSync, rmSync } from "node:fs";
+import { mkdirSync, writeFileSync, readdirSync, statSync, existsSync, openSync, readSync, closeSync, rmSync, chmodSync } from "node:fs";
 import { randomBytes } from "node:crypto";
 import { tmpdir, platform, release, arch, devNull } from "node:os";
 import path from "node:path";
@@ -33,10 +33,9 @@ const out = path.resolve(options.out ?? path.join(tmpdir(), `luuna-m3-smoke-${st
 mkdirSync(out, { recursive: true, mode: 0o700 });
 const dataDir = path.join(out, "data");
 const fixtureRepo = path.join(out, "fixture-repo");
-// Refuse a reused output directory before anything is spawned: adopting an
-// existing fixture repository could commit unrelated files, and failing later
-// would leave a credential-bearing runtime behind.
-if (existsSync(fixtureRepo) || existsSync(dataDir)) fail(`output directory already holds a fixture repository or data directory; use a fresh --out: ${out}`);
+// Refuse any non-empty output directory before anything is spawned: the run
+// scans, redacts and may delete files under it, so it must own every file there.
+if (readdirSync(out).length > 0) fail(`output directory is not empty; use a fresh or empty --out: ${out}`);
 const port = Number(options.port ?? 4248);
 const runtimeBinary = path.resolve(options.runtime ?? path.join(repository, "target", "debug", process.platform === "win32" ? "luuna-runtime.exe" : "luuna-runtime"));
 const token = randomBytes(36).toString("base64url");
@@ -170,7 +169,10 @@ record("no credential value appears in the report, runtime logs or durable state
 // A file that carries a configured value, or that could not be scanned, must not
 // outlive the run: remove it (and the durable state, whose contents it may have
 // come from) so a failed evidence run leaves no credential on disk.
-evidence.leak_scan.removed = quarantineLeaks(evidence.leak_scan);
+const quarantine = quarantineLeaks(evidence.leak_scan);
+evidence.leak_scan.removed = quarantine.removed;
+evidence.leak_scan.not_removed = quarantine.failed;
+if (quarantine.removed.length + quarantine.failed.length > 0) record("every file the leak scan flagged was removed before exit", quarantine.failed.length === 0, quarantine.failed.length === 0 ? `removed ${quarantine.removed.join(", ")}` : `still present: ${quarantine.failed.join(", ")}`);
 const passed = checks.every((check) => check.ok);
 evidence.verdict = mode === "fixture"
   ? `SYNTHETIC fixture run ${passed ? "passed" : "FAILED"}: harness/protocol evidence only, never provider or M3 success`
@@ -749,17 +751,33 @@ function scanForCredentialValues() {
   return { values_checked: values.length, files_scanned: files.length - unreadable.length, unreadable_files: unreadable, leaks: leaks + unreadable.length, leaking_files: [...new Set(leaking)] };
 }
 
-/** Deletes every flagged or unscannable file plus the durable state; returns what was removed. */
+/** Deletes every flagged or unscannable file plus the durable state and verifies each is gone; returns what was removed and what was not. */
 function quarantineLeaks(scan) {
   const targets = [...scan.leaking_files, ...scan.unreadable_files].filter((entry) => entry !== "report");
-  if (targets.length === 0) return [];
+  if (targets.length === 0) return { removed: [], failed: [] };
   const removed = [];
+  const failed = [];
   for (const entry of new Set([...targets, "data"])) {
     const target = path.resolve(out, entry);
-    if (!target.startsWith(out + path.sep)) continue;
-    try { rmSync(target, { recursive: true, force: true }); removed.push(entry); } catch (error) { removed.push(`${entry} (not removed: ${error.message})`); }
+    if (!target.startsWith(out + path.sep)) { failed.push(`${entry} (outside the output directory)`); continue; }
+    let error = null;
+    for (let attempt = 0; attempt < 5 && existsSync(target); attempt += 1) {
+      try {
+        if (attempt > 0) {
+          // A file a lingering process still holds, or one with stripped permissions: make it
+          // writable, blank its contents first so the value is gone even if unlinking fails, then retry.
+          const stat = statSync(target);
+          chmodSync(target, stat.isDirectory() ? 0o700 : 0o600);
+          if (stat.isFile()) writeFileSync(target, "");
+          Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 200 * attempt);
+        }
+        rmSync(target, { recursive: true, force: true, maxRetries: 3, retryDelay: 100 });
+        error = null;
+      } catch (caught) { error = caught; }
+    }
+    if (existsSync(target)) failed.push(`${entry}${error ? ` (${error.message})` : ""}`); else removed.push(entry);
   }
-  return removed;
+  return { removed, failed };
 }
 
 /** Streams a file of any size through a sliding window so a value spanning two chunks is still found. */

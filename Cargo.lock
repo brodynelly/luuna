@@ -537,6 +537,7 @@ dependencies = [
  "chrono",
  "constant_time_eq",
  "fs2",
+ "libc",
  "luuna-discovery",
  "luuna-domain",
  "luuna-engine-pi",

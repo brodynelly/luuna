@@ -30,6 +30,7 @@ use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 use std::{
     collections::BTreeMap,
+    io::Read as _,
     path::{Path as FsPath, PathBuf},
     time::Duration,
 };
@@ -856,30 +857,85 @@ fn repair_check_output(
                 &artifact_dir.join(format!("{reference}.log")),
                 expected,
                 &mut read_budget,
+                secrets,
             ) else {
                 continue;
             };
-            let tail = redact_secrets(String::from_utf8_lossy(&verified.tail).trim(), secrets);
-            if !tail.is_empty() {
-                let mut text = if verified.truncated {
-                    format!("…{tail}")
-                } else {
-                    tail
-                };
-                if verified.capped {
-                    text.push_str(
-                        " [artifact capped at the executor limit; output after the cap was not retained]",
-                    );
-                }
-                // Budget the encoded form: escaped control bytes expand several-fold.
-                quoted += serde_json::to_string(&text)
-                    .map(|s| s.len())
-                    .unwrap_or(text.len());
-                output.insert(reference.clone(), Value::String(text));
+            let tail = verified.tail.trim();
+            if tail.is_empty() {
+                continue;
             }
+            let suffix = if verified.capped {
+                " [artifact capped at the executor limit; output after the cap was not retained]"
+            } else {
+                ""
+            };
+            // Budget the encoded form, entry key included: escaped control bytes
+            // expand several-fold. The entry is cut from the front to fit what
+            // remains, or omitted when nothing useful fits.
+            let remaining = REPAIR_OUTPUT_TOTAL_BYTES
+                .saturating_sub(quoted)
+                .saturating_sub(reference.len() + 4);
+            let Some(text) = fit_encoded(tail, verified.truncated, suffix, remaining) else {
+                output.insert(
+                    "truncated".into(),
+                    Value::String(
+                        "further failed check output omitted: the aggregate feedback budget is spent"
+                            .into(),
+                    ),
+                );
+                break 'results;
+            };
+            quoted += reference.len() + 4 + encoded_len(&text);
+            output.insert(reference.clone(), Value::String(text));
         }
     }
     output
+}
+
+fn encoded_len(text: &str) -> usize {
+    serde_json::to_string(text)
+        .map(|s| s.len())
+        .unwrap_or(text.len())
+}
+
+/// The longest suffix of `tail` whose JSON-encoded form, with the ellipsis for
+/// an already-cut artifact and the cap note, fits in `budget` bytes; `None`
+/// when fewer than 64 bytes of output would survive.
+fn fit_encoded(tail: &str, truncated: bool, suffix: &str, budget: usize) -> Option<String> {
+    const MIN_USEFUL: usize = 64;
+    let compose = |body: &str, cut: bool| {
+        let mut text = if cut {
+            format!("…{body}")
+        } else {
+            body.to_owned()
+        };
+        text.push_str(suffix);
+        text
+    };
+    let whole = compose(tail, truncated);
+    if encoded_len(&whole) <= budget {
+        return Some(whole);
+    }
+    // Binary search over char boundaries for the longest fitting suffix.
+    let boundaries: Vec<usize> = tail
+        .char_indices()
+        .map(|(i, _)| i)
+        .chain(std::iter::once(tail.len()))
+        .collect();
+    let (mut low, mut high) = (0usize, boundaries.len() - 1);
+    while low < high {
+        let mid = low.div_ceil(2) + high / 2;
+        let candidate = compose(&tail[boundaries[mid]..], true);
+        if encoded_len(&candidate) <= budget {
+            high = mid;
+        } else {
+            low = mid + 1;
+        }
+    }
+    let body = &tail[boundaries[low]..];
+    let fitted = compose(body, true);
+    (encoded_len(&fitted) <= budget && body.len() >= MIN_USEFUL).then_some(fitted)
 }
 
 /// Every configured provider credential value plus the service token: the
@@ -991,7 +1047,9 @@ fn line_carries_token(line: &str) -> bool {
 }
 
 struct VerifiedTail {
-    tail: Vec<u8>,
+    /// Already redacted: secrets are removed from the whole artifact before
+    /// the tail is cut, so a value straddling the cut cannot survive in part.
+    tail: String,
     /// Earlier content exists beyond the quoted tail.
     truncated: bool,
     /// The artifact reached the executor's size cap, so the command's real end
@@ -1008,8 +1066,12 @@ fn read_verified_tail(
     path: &FsPath,
     expected_hash: &str,
     read_budget: &mut u64,
+    secrets: &[String],
 ) -> Option<VerifiedTail> {
-    let metadata = std::fs::symlink_metadata(path).ok()?;
+    // Open without following a symlink and judge, hash and read one handle, so
+    // a path swapped between check and use cannot redirect the read.
+    let file = open_without_following(path)?;
+    let metadata = file.metadata().ok()?;
     if metadata.file_type().is_symlink()
         || !metadata.is_file()
         || metadata.len() > luuna_executor::MAX_ARTIFACT_BYTES
@@ -1018,17 +1080,47 @@ fn read_verified_tail(
         return None;
     }
     *read_budget -= metadata.len();
-    let bytes = std::fs::read(path).ok()?;
-    if luuna_executor::sha256_hex(&bytes) != expected_hash {
+    let mut bytes = Vec::with_capacity(metadata.len() as usize);
+    std::io::Read::read_to_end(
+        &mut (&file).take(luuna_executor::MAX_ARTIFACT_BYTES + 1),
+        &mut bytes,
+    )
+    .ok()?;
+    if bytes.len() as u64 > luuna_executor::MAX_ARTIFACT_BYTES
+        || luuna_executor::sha256_hex(&bytes) != expected_hash
+    {
         return None;
     }
     let capped = bytes.len() as u64 == luuna_executor::MAX_ARTIFACT_BYTES;
-    let start = bytes.len().saturating_sub(REPAIR_OUTPUT_TAIL_BYTES);
+    let redacted = redact_secrets(&String::from_utf8_lossy(&bytes), secrets);
+    let mut start = redacted.len().saturating_sub(REPAIR_OUTPUT_TAIL_BYTES);
+    while !redacted.is_char_boundary(start) {
+        start += 1;
+    }
     Some(VerifiedTail {
-        tail: bytes[start..].to_vec(),
+        tail: redacted[start..].to_owned(),
         truncated: start > 0,
         capped,
     })
+}
+
+/// Opens a private artifact for reading without following a symbolic link or
+/// reparse point at the final path component.
+fn open_without_following(path: &FsPath) -> Option<std::fs::File> {
+    let mut options = std::fs::OpenOptions::new();
+    options.read(true);
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::OpenOptionsExt;
+        options.custom_flags(libc::O_NOFOLLOW);
+    }
+    #[cfg(windows)]
+    {
+        use std::os::windows::fs::OpenOptionsExt;
+        const FILE_FLAG_OPEN_REPARSE_POINT: u32 = 0x0020_0000;
+        options.custom_flags(FILE_FLAG_OPEN_REPARSE_POINT);
+    }
+    options.open(path).ok()
 }
 
 fn writer_system_prompt(job: &WriterJob, worktree: &FsPath) -> String {
@@ -1656,10 +1748,18 @@ mod redaction_tests {
         let output = repair_check_output(dir.path(), &results, &[]);
         let encoded = serde_json::to_string(&output).unwrap();
         assert!(output.contains_key("truncated"), "{encoded:.200}");
-        // The budget plus at most one over-running entry and the marker.
-        let bound = REPAIR_OUTPUT_TOTAL_BYTES + 8 * REPAIR_OUTPUT_TAIL_BYTES + 512;
+        // Only the marker entry and the map braces/commas lie outside the budget.
+        let bound = REPAIR_OUTPUT_TOTAL_BYTES + 128 + 2 * output.len();
         assert!(encoded.len() <= bound, "{} > {bound}", encoded.len());
         assert!(output.len() < REPAIR_ARTIFACT_LIMIT);
+        // The last quoted entry was cut from the front to fit, not dropped whole.
+        let last = output
+            .iter()
+            .filter(|(k, _)| k.as_str() != "truncated")
+            .map(|(_, v)| v.as_str().unwrap())
+            .next_back()
+            .unwrap();
+        assert!(last.starts_with('…') && last.len() < 2 * REPAIR_OUTPUT_TAIL_BYTES);
     }
 
     #[test]
@@ -1671,6 +1771,21 @@ mod redaction_tests {
         let output = repair_check_output(dir.path(), &results, &[]);
         assert_eq!(output.len(), 1, "{output:?}");
         assert!(output.contains_key("truncated"));
+    }
+
+    #[test]
+    fn a_secret_straddling_the_tail_cut_never_survives_in_part() {
+        let dir = tempfile::tempdir().unwrap();
+        let secret = "sk-straddlingsecretvalue0123456789";
+        // Place the secret so that the 2 KiB tail would start inside it.
+        let mut body = "a".repeat(5000).into_bytes();
+        let at = 5000 + 40 - REPAIR_OUTPUT_TAIL_BYTES - secret.len() / 2;
+        body.splice(at..at, secret.bytes());
+        let results = vec![failed_result(dir.path(), 0, &body)];
+        let output = repair_check_output(dir.path(), &results, &[secret.to_owned()]);
+        let text = output["c1-g1-check0"].as_str().unwrap();
+        assert!(!text.contains("secretvalue"), "{text:.120}");
+        assert!(text.starts_with('…'));
     }
 
     #[test]
