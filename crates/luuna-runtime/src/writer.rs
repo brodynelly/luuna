@@ -1214,19 +1214,49 @@ fn url_credentials(text: &str) -> Vec<String> {
     found
 }
 
+const MAX_GUARD_WRITERS: usize = 4;
+static GUARD_WRITERS: AtomicUsize = AtomicUsize::new(0);
+
 /// Installs the scope guard under `deadline`. The installation is synchronous
 /// file I/O that a deadline cannot interrupt, so it runs on its own detached
 /// thread (which, like an abandoned feedback read, cannot hold up runtime
 /// shutdown); when the deadline passes first, `Ok(None)` is returned and the
-/// write is left to finish or fail on its own.
+/// write is left to finish or fail on its own. At most `MAX_GUARD_WRITERS`
+/// such threads exist at once, so writes abandoned on a permanently stalled
+/// mount cannot accumulate threads without bound; once the cap is reached the
+/// session is refused, since Pi never starts without its guard.
 pub(crate) async fn install_guard_by(
     directory: PathBuf,
     deadline: tokio::time::Instant,
 ) -> Result<Option<PathBuf>, String> {
+    install_guard_with(directory, deadline, &GUARD_WRITERS).await
+}
+
+async fn install_guard_with(
+    directory: PathBuf,
+    deadline: tokio::time::Instant,
+    writers: &'static AtomicUsize,
+) -> Result<Option<PathBuf>, String> {
+    struct Slot(&'static AtomicUsize);
+    impl Drop for Slot {
+        fn drop(&mut self) {
+            self.0.fetch_sub(1, Ordering::AcqRel);
+        }
+    }
+    if writers
+        .fetch_update(Ordering::AcqRel, Ordering::Acquire, |n| {
+            (n < MAX_GUARD_WRITERS).then_some(n + 1)
+        })
+        .is_err()
+    {
+        return Err("too many stalled scope guard writers; session refused".into());
+    }
+    let slot = Slot(writers);
     let (sender, receiver) = tokio::sync::oneshot::channel();
     std::thread::Builder::new()
         .name("luuna-scope-guard".into())
         .spawn(move || {
+            let _slot = slot;
             let _ = sender.send(install_scope_guard(&directory));
         })
         .map_err(|e| format!("cannot start the scope guard writer: {e}"))?;
@@ -2040,7 +2070,8 @@ async fn writer_worker(state: AppState, job: WriterJob, mut cancel: watch::Recei
     };
     // The child is stopped and reaped before any verdict is persisted.
     let stopped = process.stop().await;
-    let usage_json = json!({"elapsed_seconds": started.elapsed().as_secs().saturating_add(preparation_seconds), "cost_usd_micros": writer_cost, "attempt": job.attempt.number});
+    let usage_now = |started: std::time::Instant| json!({"elapsed_seconds": started.elapsed().as_secs().saturating_add(preparation_seconds), "cost_usd_micros": writer_cost, "attempt": job.attempt.number});
+    let usage_json = usage_now(started);
     if let Err(error) = stopped {
         settle(
             &state,
@@ -2102,110 +2133,150 @@ async fn writer_worker(state: AppState, job: WriterJob, mut cancel: watch::Recei
         }
         Outcome::Settled => {}
     }
-    // Judge what actually changed, as the repository reports it.
-    let changes = match state.git.changed_paths(&worktree).await {
-        Ok(changes) => changes,
-        Err(error) => {
+    // Judging and committing the candidate is still part of the attempt: it
+    // runs under the same approved deadline and the attempt's cancellation (a
+    // git process stalled on a hung filesystem is killed when dropped), and the
+    // time it takes is charged in the usage recorded below.
+    struct Rejected {
+        reason: String,
+        commit: Option<String>,
+        extra: Option<Value>,
+    }
+    let reject = |reason: String, commit: Option<&String>| Rejected {
+        reason,
+        commit: commit.cloned(),
+        extra: None,
+    };
+    let judge = async {
+        // Judge what actually changed, as the repository reports it.
+        let changes = state.git.changed_paths(&worktree).await.map_err(|error| {
+            reject(
+                format!("cannot inspect worktree changes: {error}; worktree preserved"),
+                None,
+            )
+        })?;
+        let _ = state.event(
+            &job.run_id,
+            "worktree.changes",
+            json!({"lease_id": lease_id, "changes": changes}),
+        );
+        if let Err(violation) = check_scope(&changes, &job.task, &job.plan.permissions) {
+            return Err(Rejected {
+                extra: Some(json!(changes)),
+                ..reject(
+                    format!(
+                        "{violation}; no candidate recorded, worktree preserved for inspection"
+                    ),
+                    None,
+                )
+            });
+        }
+        if changes.is_empty() {
+            return Err(reject(
+                "writer settled without changing any file".to_owned(),
+                None,
+            ));
+        }
+        let message = format!(
+            "Luuna candidate for ticket {} task {} (plan {}@{})",
+            job.ticket.id, job.task.id, job.plan.id, job.plan.revision
+        );
+        let commit = state
+            .git
+            .commit_all(&worktree, &message)
+            .await
+            .map_err(|error| {
+                reject(
+                    format!("cannot record candidate commit: {error}; worktree preserved"),
+                    None,
+                )
+            })?;
+        let candidate = CandidateSet {
+            schema_version: SCHEMA_VERSION.into(),
+            id: job
+                .previous_candidate
+                .as_ref()
+                .map(|c| c.id.clone())
+                .unwrap_or_else(|| format!("candidate-{}", uuid::Uuid::new_v4())),
+            revision: job
+                .previous_candidate
+                .as_ref()
+                .map(|c| c.revision + 1)
+                .unwrap_or(1),
+            plan_hash: job.plan.hash.clone(),
+            repository_commits: BTreeMap::from([(repository_id.clone(), commit.clone())]),
+            dependency_bindings: BTreeMap::new(),
+            hash: String::new(),
+        };
+        let candidate = match candidate.computed_hash() {
+            Ok(hash) => CandidateSet { hash, ..candidate },
+            Err(error) => {
+                return Err(reject(
+                    format!("cannot hash candidate: {error}"),
+                    Some(&commit),
+                ))
+            }
+        };
+        let tree = state
+            .git
+            .commit_tree(&worktree, &commit)
+            .await
+            .map_err(|error| {
+                reject(
+                    format!("cannot identify candidate tree: {error}"),
+                    Some(&commit),
+                )
+            })?;
+        Ok((commit, candidate, tree))
+    };
+    let judged = tokio::select! {
+        biased;
+        _ = cancel.changed() => None,
+        result = tokio::time::timeout_at(deadline, judge) => Some(result),
+    };
+    let usage_json = usage_now(started);
+    let (commit, candidate, tree) = match judged {
+        None => {
+            settle(
+                &state,
+                AttemptState::Cancelled,
+                RunState::Cancelled,
+                Some((&lease_id, LeaseState::Released, None)),
+                "cancelled during candidate judgement; worktree preserved",
+                usage_json,
+            );
+            return;
+        }
+        Some(Err(_)) => {
             settle(
                 &state,
                 AttemptState::Failed,
                 RunState::Failed,
                 Some((&lease_id, LeaseState::Released, None)),
-                &format!("cannot inspect worktree changes: {error}; worktree preserved"),
+                &format!(
+                    "budget exceeded: timeout_seconds {} elapsed during candidate judgement; worktree preserved",
+                    budgets.timeout_seconds
+                ),
                 usage_json,
             );
             return;
         }
-    };
-    let _ = state.event(
-        &job.run_id,
-        "worktree.changes",
-        json!({"lease_id": lease_id, "changes": changes}),
-    );
-    if let Err(violation) = check_scope(&changes, &job.task, &job.plan.permissions) {
-        settle(
-            &state,
-            AttemptState::Failed,
-            RunState::Failed,
-            Some((&lease_id, LeaseState::Released, None)),
-            &format!("{violation}; no candidate recorded, worktree preserved for inspection"),
-            json!({"changes": changes, "usage": usage_json}),
-        );
-        return;
-    }
-    if changes.is_empty() {
-        settle(
-            &state,
-            AttemptState::Failed,
-            RunState::Failed,
-            Some((&lease_id, LeaseState::Released, None)),
-            "writer settled without changing any file",
-            usage_json,
-        );
-        return;
-    }
-    let message = format!(
-        "Luuna candidate for ticket {} task {} (plan {}@{})",
-        job.ticket.id, job.task.id, job.plan.id, job.plan.revision
-    );
-    let commit = match state.git.commit_all(&worktree, &message).await {
-        Ok(commit) => commit,
-        Err(error) => {
+        Some(Ok(Err(rejected))) => {
+            let extra = match rejected.extra {
+                Some(changes) => json!({"changes": changes, "usage": usage_json}),
+                None => usage_json,
+            };
             settle(
                 &state,
                 AttemptState::Failed,
                 RunState::Failed,
-                Some((&lease_id, LeaseState::Released, None)),
-                &format!("cannot record candidate commit: {error}; worktree preserved"),
-                usage_json,
+                Some((&lease_id, LeaseState::Released, rejected.commit.as_deref())),
+                &rejected.reason,
+                extra,
             );
             return;
         }
-    };
-    let candidate = CandidateSet {
-        schema_version: SCHEMA_VERSION.into(),
-        id: job
-            .previous_candidate
-            .as_ref()
-            .map(|c| c.id.clone())
-            .unwrap_or_else(|| format!("candidate-{}", uuid::Uuid::new_v4())),
-        revision: job
-            .previous_candidate
-            .as_ref()
-            .map(|c| c.revision + 1)
-            .unwrap_or(1),
-        plan_hash: job.plan.hash.clone(),
-        repository_commits: BTreeMap::from([(repository_id.clone(), commit.clone())]),
-        dependency_bindings: BTreeMap::new(),
-        hash: String::new(),
-    };
-    let candidate = match candidate.computed_hash() {
-        Ok(hash) => CandidateSet { hash, ..candidate },
-        Err(error) => {
-            settle(
-                &state,
-                AttemptState::Failed,
-                RunState::Failed,
-                Some((&lease_id, LeaseState::Released, Some(&commit))),
-                &format!("cannot hash candidate: {error}"),
-                usage_json,
-            );
-            return;
-        }
-    };
-    let tree = match state.git.commit_tree(&worktree, &commit).await {
-        Ok(tree) => tree,
-        Err(error) => {
-            settle(
-                &state,
-                AttemptState::Failed,
-                RunState::Failed,
-                Some((&lease_id, LeaseState::Released, Some(&commit))),
-                &format!("cannot identify candidate tree: {error}"),
-                usage_json,
-            );
-            return;
-        }
+        Some(Ok(Ok(judged))) => judged,
     };
     if *cancel.borrow() {
         settle(
@@ -2547,6 +2618,56 @@ mod redaction_tests {
             matches!(&installed, Ok(Some(path)) if path.exists()),
             "{installed:?}"
         );
+    }
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn stalled_scope_guard_writers_are_capped() {
+        static WRITERS: AtomicUsize = AtomicUsize::new(0);
+        let mut fifos = Vec::new();
+        for _ in 0..MAX_GUARD_WRITERS {
+            let dir = tempfile::tempdir().unwrap();
+            let fifo = dir.path().join("luuna-scope-guard.js");
+            assert!(std::process::Command::new("mkfifo")
+                .arg(&fifo)
+                .status()
+                .unwrap()
+                .success());
+            let deadline = tokio::time::Instant::now() + Duration::from_millis(50);
+            let result = install_guard_with(dir.path().to_path_buf(), deadline, &WRITERS).await;
+            assert!(matches!(result, Ok(None)), "{result:?}");
+            fifos.push((dir, fifo));
+        }
+        assert_eq!(WRITERS.load(Ordering::Acquire), MAX_GUARD_WRITERS);
+        // At the cap no thread is started and the session is refused.
+        let healthy = tempfile::tempdir().unwrap();
+        let far = tokio::time::Instant::now() + Duration::from_secs(10);
+        let refused = install_guard_with(healthy.path().to_path_buf(), far, &WRITERS).await;
+        assert!(
+            matches!(&refused, Err(reason) if reason.contains("too many stalled")),
+            "{refused:?}"
+        );
+        assert!(!healthy.path().join("luuna-scope-guard.js").exists());
+        // Unblocking the stalled writes frees their slots.
+        let readers: Vec<_> = fifos
+            .iter()
+            .map(|(_, fifo)| {
+                use std::os::unix::fs::OpenOptionsExt;
+                std::fs::OpenOptions::new()
+                    .read(true)
+                    .custom_flags(libc::O_NONBLOCK)
+                    .open(fifo)
+                    .unwrap()
+            })
+            .collect();
+        let freed = tokio::time::Instant::now() + Duration::from_secs(10);
+        while WRITERS.load(Ordering::Acquire) != 0 {
+            assert!(tokio::time::Instant::now() < freed, "slots not released");
+            tokio::time::sleep(Duration::from_millis(20)).await;
+        }
+        drop(readers);
+        let installed = install_guard_with(healthy.path().to_path_buf(), far, &WRITERS).await;
+        assert!(matches!(&installed, Ok(Some(_))), "{installed:?}");
     }
 
     #[test]

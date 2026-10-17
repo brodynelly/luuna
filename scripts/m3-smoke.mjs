@@ -180,6 +180,7 @@ const RUNTIME_LOG_LIMIT = 16 * 1024 * 1024;
 const SCAN_DEPTH_LIMIT = 128;
 const CREDENTIAL_NAMES = ["ANTHROPIC_API_KEY", "OPENAI_API_KEY", "GEMINI_API_KEY", "GOOGLE_API_KEY", "MISTRAL_API_KEY", "GROQ_API_KEY", "XAI_API_KEY", "OPENROUTER_API_KEY"];
 const NPM_INSTALL_TIMEOUT_MS = 10 * 60_000;
+const GIT_TIMEOUT_MS = 2 * 60_000;
 const RUNTIME_BUILD_TIMEOUT_MS = 30 * 60_000;
 
 /** This process's environment without any provider credential or LUUNA_PI_ alias. */
@@ -596,7 +597,14 @@ function git(cwd, ...args) {
   }
   Object.assign(env, { GIT_CONFIG_NOSYSTEM: "1", GIT_CONFIG_GLOBAL: devNull, GIT_TEMPLATE_DIR: noHooks, GIT_AUTHOR_NAME: "Fixture", GIT_AUTHOR_EMAIL: "fixture@example.invalid", GIT_COMMITTER_NAME: "Fixture", GIT_COMMITTER_EMAIL: "fixture@example.invalid" });
   const config = ["-c", `core.hooksPath=${noHooks}`, "-c", "core.fsmonitor=false", "-c", "commit.gpgsign=false"];
-  return execFileSync("git", ["-C", cwd, ...config, ...args], { encoding: "utf8", env }).trim();
+  try {
+    return execFileSync("git", ["-C", cwd, ...config, ...args], { encoding: "utf8", env, timeout: GIT_TIMEOUT_MS, killSignal: "SIGKILL", maxBuffer: 64 * 1024 * 1024 }).trim();
+  } catch (error) {
+    // A stalled Git (a hung file system or a held lock) is killed at the bound
+    // and surfaces as a failure the caller records, never as a hung harness.
+    if (error.code === "ETIMEDOUT" || error.signal === "SIGKILL") throw new Error(`git ${args[0]} did not finish within ${GIT_TIMEOUT_MS / 1000}s`);
+    throw error;
+  }
 }
 
 function createFixtureRepository() {
@@ -1624,18 +1632,40 @@ function clearOutputRoot() {
   return { removed: [`${removed} entries under the output root (traversal incomplete)`], failed: remaining === 0 ? [] : [`${remaining > 1000 ? "more than 1000" : remaining} entries under the output root${failed.size ? ` (first: ${[...failed].slice(0, 5).join(", ")})` : ""}`] };
 }
 
+/**
+ * Opens `file` for reading without following a final link. Where O_NOFOLLOW
+ * exists the open itself refuses a link. Without it (Windows) the path is
+ * judged first, as a regular file and not a symbolic link or junction, and the
+ * opened handle must then be that same file by volume and file index: a link
+ * swapped in between the check and the open opens a different file and is
+ * refused. A file system that reports no file index cannot be revalidated, so
+ * its files are unscannable rather than opened through a possible link.
+ */
+function openUnfollowed(file) {
+  if (fsConstants.O_NOFOLLOW !== undefined) return openSync(file, fsConstants.O_RDONLY | fsConstants.O_NOFOLLOW | (fsConstants.O_NONBLOCK ?? 0));
+  const before = lstatSync(file, { bigint: true });
+  if (before.isSymbolicLink() || !before.isFile()) throw new Error("not a regular file");
+  if (before.ino === 0n) throw new Error("no file identity to revalidate a non-following open on this file system");
+  const fd = openSync(file, fsConstants.O_RDONLY);
+  try {
+    const opened = fstatSync(fd, { bigint: true });
+    if (opened.dev !== before.dev || opened.ino !== before.ino) throw new Error("replaced while being opened");
+    return fd;
+  } catch (error) {
+    closeSync(fd);
+    throw error;
+  }
+}
+
 /** Streams a file through a sliding window so a value spanning two chunks is still found; bounded by size, growth and the remaining aggregate budget. Returns `{ hit, bytes }`. */
 function fileContainsAny(file, values, remainingBudget) {
-  // A non-following open cannot be guaranteed without O_NOFOLLOW (Windows): such a file is
-  // unscannable rather than opened through a possible replacement link.
-  if (fsConstants.O_NOFOLLOW === undefined) throw new Error("no non-following open on this platform");
   if (values.length === 0) return { hit: false, bytes: 0 };
   // Compare UTF-8 bytes, not decoded text, so a value with non-ASCII characters is found.
   const needles = values.map((value) => Buffer.from(value, "utf8"));
   const overlap = Math.max(...needles.map((needle) => needle.length)) - 1;
   // Open without following a link and without blocking, then judge the opened
   // handle: a FIFO or device swapped into the path is a scan failure, not a hang.
-  const fd = openSync(file, fsConstants.O_RDONLY | fsConstants.O_NOFOLLOW | (fsConstants.O_NONBLOCK ?? 0));
+  const fd = openUnfollowed(file);
   let total = 0;
   try {
     const opened = fstatSync(fd);

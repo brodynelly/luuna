@@ -238,7 +238,54 @@ fn main() {
         })
         .collect();
     overrides.sort();
-    for name in &overrides {
+    // Cargo reruns this script only for names it was told to watch, so every
+    // supported spelling is registered whether or not it is set now: an
+    // override that first appears on a later build (which would rebuild the
+    // bundled SQLite) must also refresh the reported `overrides=`. Prefix
+    // families with no fixed set of names (`CARGO_PROFILE_*`, the SQLite
+    // compile options) are registered as found.
+    let mut watched: Vec<String> = [
+        "CARGO_BUILD_RUSTFLAGS",
+        "RUSTC_LINKER",
+        "CRATE_CC_NO_DEFAULTS",
+        "LIBSQLITE3_FLAGS",
+        "LIBSQLITE3_SYS_BUNDLING",
+        "LIBSQLITE3_SYS_USE_PKG_CONFIG",
+        "SQLITE_MAX_COLUMN",
+        "SQLITE_MAX_EXPR_DEPTH",
+        "SQLITE_MAX_VARIABLE_NUMBER",
+        "SQLITE3_INCLUDE_DIR",
+        "SQLITE3_LIB_DIR",
+        "SQLITE3_STATIC",
+    ]
+    .iter()
+    .map(|name| (*name).to_owned())
+    .collect();
+    let triples: Vec<String> = ["TARGET", "HOST"]
+        .iter()
+        .filter_map(|name| std::env::var(name).ok())
+        .collect();
+    for triple in &triples {
+        let upper = triple.to_uppercase().replace(['-', '.'], "_");
+        watched.push(format!("CARGO_TARGET_{upper}_LINKER"));
+        watched.push(format!("CARGO_TARGET_{upper}_RUSTFLAGS"));
+    }
+    for tool in C_TOOLCHAIN {
+        watched.extend([
+            tool.to_owned(),
+            format!("TARGET_{tool}"),
+            format!("HOST_{tool}"),
+        ]);
+        for triple in &triples {
+            watched.push(format!("{tool}_{triple}"));
+            watched.push(format!("{tool}_{}", triple.replace('-', "_")));
+            watched.push(format!("{tool}-{triple}"));
+        }
+    }
+    watched.extend(overrides.iter().cloned());
+    watched.sort();
+    watched.dedup();
+    for name in &watched {
         println!("cargo:rerun-if-env-changed={name}");
     }
     let value = |name: &str| std::env::var(name).unwrap_or_else(|_| "unknown".to_owned());

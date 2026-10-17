@@ -739,6 +739,9 @@ async fn pipeline(
         .validate_for(&evidence.candidate, &evidence.implementer_session)
         .map_err(|e| e.to_string())?;
     verify(state, evidence, repo, worktree).await?;
+    // The final identity check is charged too: a review whose verification
+    // pushed it past the approved budget is not recorded as accepted work.
+    charge(0)?;
     if *cancel.borrow() {
         return Err("cancelled before durable review verdict".into());
     }
