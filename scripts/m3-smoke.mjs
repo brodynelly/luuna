@@ -734,7 +734,9 @@ function scanForCredentialValues() {
     try { entries = readdirSync(dir, { withFileTypes: true }); } catch { unreadable.push(path.relative(out, dir) || "."); return; }
     for (const entry of entries) {
       const full = path.join(dir, entry.name);
-      if (entry.isDirectory()) { if (entry.name !== ".git") walk(full); } else if (entry.isFile() && !full.startsWith(fixtureRepo)) files.push(full);
+      // Every file under the owned output tree is scanned, the fixture checkout and
+      // Git metadata included: a native check could echo a value anywhere in it.
+      if (entry.isDirectory()) walk(full); else if (entry.isFile()) files.push(full);
     }
   };
   walk(out);

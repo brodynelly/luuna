@@ -189,6 +189,8 @@ export interface CheckResult {
   reason?: string;
   artifact_hashes?: Record<string, string>;
   tests_detected?: number;
+  /** Artifact references whose stream reached the executor's size cap. */
+  truncated_artifacts?: string[];
 }
 
 /** A repository's required checks at an exact commit, tree, manifest and host. */

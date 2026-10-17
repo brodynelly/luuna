@@ -865,7 +865,7 @@ fn repair_check_output(
             if tail.is_empty() {
                 continue;
             }
-            let suffix = if verified.capped {
+            let suffix = if result.truncated_artifacts.contains(reference) {
                 " [artifact capped at the executor limit; output after the cap was not retained]"
             } else {
                 ""
@@ -1052,9 +1052,6 @@ struct VerifiedTail {
     tail: String,
     /// Earlier content exists beyond the quoted tail.
     truncated: bool,
-    /// The artifact reached the executor's size cap, so the command's real end
-    /// of output was never stored.
-    capped: bool,
 }
 
 /// The last `REPAIR_OUTPUT_TAIL_BYTES` of a private artifact whose current
@@ -1091,7 +1088,6 @@ fn read_verified_tail(
     {
         return None;
     }
-    let capped = bytes.len() as u64 == luuna_executor::MAX_ARTIFACT_BYTES;
     let redacted = redact_secrets(&String::from_utf8_lossy(&bytes), secrets);
     let mut start = redacted.len().saturating_sub(REPAIR_OUTPUT_TAIL_BYTES);
     while !redacted.is_char_boundary(start) {
@@ -1100,7 +1096,6 @@ fn read_verified_tail(
     Some(VerifiedTail {
         tail: redacted[start..].to_owned(),
         truncated: start > 0,
-        capped,
     })
 }
 
@@ -1735,6 +1730,7 @@ mod redaction_tests {
             reason: Some("exit code 1".into()),
             artifact_hashes: [(reference, luuna_executor::sha256_hex(body))].into(),
             tests_detected: None,
+            truncated_artifacts: Vec::new(),
         }
     }
 

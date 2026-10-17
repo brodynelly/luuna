@@ -104,6 +104,12 @@
         "null"
       ],
       "minimum": 0
+    },
+    "truncated_artifacts": {
+      "type": "array",
+      "items": {
+        "type": "string"
+      }
     }
   },
   "allOf": [

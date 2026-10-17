@@ -553,6 +553,12 @@ async fn pipeline(
                 })
                 .collect(),
             tests_detected: result.tests_detected,
+            truncated_artifacts: result
+                .artifacts
+                .iter()
+                .filter(|a| a.truncated)
+                .map(|a| format!("{artifact_recipe}.{}", a.name.trim_end_matches(".log")))
+                .collect(),
         };
         state
             .store

@@ -82,6 +82,10 @@ pub struct CheckResult {
     pub artifact_hashes: BTreeMap<String, String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub tests_detected: Option<u64>,
+    /// Artifact references whose stream reached the executor's size cap, so
+    /// the command's real end of output was not retained.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub truncated_artifacts: Vec<String>,
 }
 
 impl CheckResult {
@@ -283,6 +287,7 @@ mod tests {
             reason: None,
             artifact_hashes: BTreeMap::new(),
             tests_detected: Some(3),
+            truncated_artifacts: Vec::new(),
         }
     }
     fn evidence(

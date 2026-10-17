@@ -160,6 +160,7 @@ fn passed_baseline(store: &mut Store, plan: &PlanRevision) {
                 reason: None,
                 artifact_hashes: BTreeMap::new(),
                 tests_detected: Some(5),
+                truncated_artifacts: Vec::new(),
             },
         )
         .unwrap();
@@ -555,6 +556,7 @@ fn candidate_check(candidate: &CandidateSet, status: CheckStatus) -> CheckResult
         reason: None,
         artifact_hashes: BTreeMap::new(),
         tests_detected: Some(5),
+        truncated_artifacts: Vec::new(),
     }
 }
 
