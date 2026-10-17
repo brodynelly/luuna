@@ -453,8 +453,9 @@ async function startRuntime(label, { credentials = true } = {}) {
     LUUNA_API_TOKEN: token,
     LUUNA_DATA_DIR: dataDir,
     LUUNA_PORT: String(port),
-    LUUNA_PI_COMMAND: profile.pi,
-    LUUNA_PI_ARGS_JSON: JSON.stringify(profile.piArgs),
+    // Real mode: the exact files provenance verified, so the runtime resolves nothing again.
+    LUUNA_PI_COMMAND: verifiedPi()?.command ?? profile.pi,
+    LUUNA_PI_ARGS_JSON: JSON.stringify(verifiedPi()?.args ?? profile.piArgs),
     LUUNA_RUN_TIMEOUT_SECONDS: String(runTimeoutSeconds),
   });
   // The log is opened once, relative to the held output root, exclusively and without following a
@@ -1077,7 +1078,7 @@ function environment() {
     info.pi_provenance = piProvenance();
     // The launcher runs only once its provenance is verified, and without any provider credential.
     if (info.pi_provenance.verified) {
-      try { info.pi_version = execFileSync(profile.pi, [...profile.piArgs, "--version"], { encoding: "utf8", env: credentialFreeEnv(), timeout: 30_000, killSignal: "SIGKILL" }).trim(); } catch (error) { info.pi_version = `unavailable: ${error.message}`; }
+      try { info.pi_version = execFileSync(info.pi_provenance.launcher.path, [...(info.pi_provenance.launcher.path === info.pi_provenance.entrypoint.path ? [] : [info.pi_provenance.entrypoint.path]), "--version"], { encoding: "utf8", env: credentialFreeEnv(), timeout: 30_000, killSignal: "SIGKILL" }).trim(); } catch (error) { info.pi_version = `unavailable: ${error.message}`; }
     } else {
       info.pi_version = "not run: Pi provenance not verified";
     }
@@ -1166,6 +1167,13 @@ function treeDigest(root) {
  * must be byte-identical to a fresh `npm ci` of that lockfile, which verifies each tarball's
  * integrity. The tree is re-hashed after every scenario (see `piTreeUnchanged`).
  */
+/** The verified Pi launcher and arguments as absolute paths, or null outside a verified real run. */
+function verifiedPi() {
+  const pi = evidence.environment?.pi_provenance;
+  if (mode !== "real" || !pi?.verified) return null;
+  return { command: pi.launcher.path, args: pi.launcher.path === pi.entrypoint.path ? [] : [pi.entrypoint.path] };
+}
+
 function piProvenance() {
   const result = { verified: false };
   const sha = (file) => createHash("sha256").update(readFileSync(file)).digest("hex");
@@ -1174,6 +1182,17 @@ function piProvenance() {
     result.launcher = { path: realpathSync(launcher), sha256: sha(realpathSync(launcher)) };
     const entry = profile.piArgs.find((arg) => existsSync(arg) && statSync(arg).isFile()) ?? launcher;
     result.entrypoint = { path: realpathSync(entry), sha256: sha(realpathSync(entry)) };
+    // Only the entrypoint is verified against the lockfile, so the launcher must add nothing of
+    // its own: it is either the Node executable running this harness with the verified entrypoint
+    // as its only argument (no `--require`, loader or other flag), or the entrypoint itself.
+    const harnessNode = realpathSync(process.execPath);
+    if (result.launcher.path === harnessNode && profile.piArgs.length === 1 && realpathSync(profile.piArgs[0]) === result.entrypoint.path) {
+      result.launcher.trusted_as = "the Node executable running the harness";
+    } else if (result.launcher.path === result.entrypoint.path && profile.piArgs.length === 0) {
+      result.launcher.trusted_as = "the verified entrypoint";
+    } else {
+      throw new Error(`the Pi launcher must be the Node running this harness (${harnessNode}) with the verified entrypoint as its only argument, or the entrypoint itself`);
+    }
     const lock = JSON.parse(readFileSync(path.join(repository, "tools", "pi", "package-lock.json"), "utf8"));
     const pinned = lock.packages?.["node_modules/@earendil-works/pi-coding-agent"];
     let root = path.dirname(result.entrypoint.path);
@@ -1252,19 +1271,26 @@ function pinnedRustcSha256(pinned) {
 
 /** The digest `crates/luuna-runtime/build.rs` embeds: SHA-256 over `path\0sha256(content)\n` for every build input, sorted by path. */
 function buildIdentity() {
-  const files = ["Cargo.toml", "Cargo.lock"];
+  // As in build.rs, a symlinked or special build input cannot be bound by content: the digest
+  // is refused, so the identity check fails closed.
+  const unbound = (rel) => { throw new Error(`symlinked or special build input ${rel}`); };
+  const files = [];
+  for (const name of ["Cargo.toml", "Cargo.lock"]) { if (lstatSync(path.join(repository, name)).isFile()) files.push(name); else unbound(name); }
   const collect = (rel) => {
     let entries;
     try { entries = readdirSync(path.join(repository, rel), { withFileTypes: true }); } catch { return; }
     for (const entry of entries) {
       const child = `${rel}/${entry.name}`;
-      if (entry.isDirectory()) collect(child); else if (entry.isFile()) files.push(child);
+      if (entry.isDirectory()) collect(child); else if (entry.isFile()) files.push(child); else unbound(child);
     }
   };
   for (const member of readdirSync(path.join(repository, "crates"), { withFileTypes: true })) {
-    if (!member.isDirectory()) continue;
+    if (member.isFile()) continue;
+    if (!member.isDirectory()) unbound(`crates/${member.name}`);
     for (const file of ["Cargo.toml", "build.rs"]) {
-      try { if (lstatSync(path.join(repository, "crates", member.name, file)).isFile()) files.push(`crates/${member.name}/${file}`); } catch { /* absent */ }
+      let stat = null;
+      try { stat = lstatSync(path.join(repository, "crates", member.name, file)); } catch { /* absent */ }
+      if (stat?.isFile()) files.push(`crates/${member.name}/${file}`); else if (stat) unbound(`crates/${member.name}/${file}`);
     }
     collect(`crates/${member.name}/src`);
     collect(`crates/${member.name}/assets`);
@@ -1277,14 +1303,20 @@ function buildIdentity() {
 
 /** Configured values, deduplicated and longest first: redacting a shorter value that is part of a
  *  longer one first would leave the longer one's remainder in the clear. */
-/** The `user:password` and `password` of every URL userinfo carrying a password, raw and percent-decoded. */
+/**
+ * The credential parts of every URL userinfo, raw and percent-decoded, as the runtime's repair
+ * feedback treats them: `user:password` and `password`, or a credential-length user name used alone
+ * or with an empty password (`http://access-token@proxy`); short names such as `git@` are not.
+ */
 function urlCredentials(text) {
   const found = [];
   for (const match of String(text).matchAll(/:\/\/([^\s\/?#"'@]*)@/g)) {
     const userinfo = match[1];
     const colon = userinfo.indexOf(":");
-    if (colon < 0 || colon === userinfo.length - 1) continue;
-    for (const form of [userinfo, userinfo.slice(colon + 1)]) {
+    const user = colon < 0 ? userinfo : userinfo.slice(0, colon);
+    const password = colon < 0 ? "" : userinfo.slice(colon + 1);
+    const forms = password !== "" ? [userinfo, password] : user.length >= 8 ? [...new Set([userinfo, user])] : [];
+    for (const form of forms) {
       found.push(form);
       try { const decoded = decodeURIComponent(form); if (decoded !== form) found.push(decoded); } catch { /* invalid escape: raw form only */ }
     }

@@ -31,9 +31,11 @@ supported version; the CLI is checked when starting a run. Its `build_identity`
 field is the content digest of the sources the binary was built from, and
 `build_rustc` names the compiler release and commit that built it
 (`build_rustc_sha256` the SHA-256 of that compiler executable;
-`build_rustc_wrapper` any compiler wrapper Cargo used, or `none`; `build_flags`
-the profile, opt-level, debug setting, effective RUSTFLAGS, any profile overrides and any
-Cargo config overrides: dependency substitution, `[profile]` tables or `include`). All other endpoints
+`build_rustc_wrapper` the names of any compiler wrapper variables Cargo used, or `none`;
+`build_flags` the profile, opt-level, debug setting, whether RUSTFLAGS were set, the names of
+any profile, linker or C toolchain override variables, and how many Cargo config files declare
+an override). The route is unauthenticated, so it carries names and none/set status only, never
+flag values, wrapper paths or config file paths. All other endpoints
 require `Authorization: Bearer <token>`:
 
 - `GET /api/v1/runs`: persisted run records.

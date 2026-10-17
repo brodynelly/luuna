@@ -10,19 +10,19 @@ use sha2::{Digest, Sha256};
 use std::fs;
 use std::path::{Path, PathBuf};
 
-fn collect(root: &Path, dir: &Path, files: &mut Vec<String>) {
+/// Collects the regular files under `dir`. Anything else (a symlink, whose
+/// target Cargo would follow but the digest could not bind, or a special
+/// file) is recorded in `unbound`, which makes the identity fail closed.
+fn collect(root: &Path, dir: &Path, files: &mut Vec<String>, unbound: &mut Vec<String>) {
     let Ok(entries) = fs::read_dir(dir) else {
         return;
     };
     for entry in entries.flatten() {
-        let Ok(kind) = entry.file_type() else {
-            continue;
-        };
         let path = entry.path();
-        if kind.is_dir() {
-            collect(root, &path, files);
-        } else if kind.is_file() {
-            files.push(relative(root, &path));
+        match entry.file_type() {
+            Ok(kind) if kind.is_dir() => collect(root, &path, files, unbound),
+            Ok(kind) if kind.is_file() => files.push(relative(root, &path)),
+            _ => unbound.push(relative(root, &path)),
         }
     }
 }
@@ -72,33 +72,39 @@ fn main() {
         .join("..");
     let root = root.canonicalize().expect("workspace root");
     let mut files = Vec::new();
+    let mut unbound = Vec::new();
     for name in ["Cargo.toml", "Cargo.lock"] {
-        files.push(name.to_owned());
+        if fs::symlink_metadata(root.join(name)).is_ok_and(|m| m.is_file()) {
+            files.push(name.to_owned());
+        } else {
+            unbound.push(name.to_owned());
+        }
         println!("cargo:rerun-if-changed={}", root.join(name).display());
     }
     let crates = root.join("crates");
     println!("cargo:rerun-if-changed={}", crates.display());
-    let mut members: Vec<PathBuf> = fs::read_dir(&crates)
-        .expect("crates directory")
-        .flatten()
-        .filter(|entry| entry.file_type().map(|kind| kind.is_dir()).unwrap_or(false))
-        .map(|entry| entry.path())
-        .collect();
+    let mut members: Vec<PathBuf> = Vec::new();
+    for entry in fs::read_dir(&crates).expect("crates directory").flatten() {
+        match entry.file_type() {
+            Ok(kind) if kind.is_dir() => members.push(entry.path()),
+            Ok(kind) if kind.is_file() => {}
+            _ => unbound.push(relative(&root, &entry.path())),
+        }
+    }
     members.sort();
     for member in members {
         for file in ["Cargo.toml", "build.rs"] {
             let path = member.join(file);
-            if fs::symlink_metadata(&path)
-                .map(|m| m.is_file())
-                .unwrap_or(false)
-            {
-                files.push(relative(&root, &path));
+            match fs::symlink_metadata(&path) {
+                Ok(meta) if meta.is_file() => files.push(relative(&root, &path)),
+                Ok(_) => unbound.push(relative(&root, &path)),
+                Err(_) => {}
             }
             println!("cargo:rerun-if-changed={}", path.display());
         }
         for dir in ["src", "assets"] {
             let path = member.join(dir);
-            collect(&root, &path, &mut files);
+            collect(&root, &path, &mut files, &mut unbound);
             println!("cargo:rerun-if-changed={}", path.display());
         }
     }
@@ -117,7 +123,17 @@ fn main() {
         .iter()
         .map(|byte| format!("{byte:02x}"))
         .collect();
-    println!("cargo:rustc-env=LUUNA_BUILD_IDENTITY=sha256:{identity}");
+    if unbound.is_empty() {
+        println!("cargo:rustc-env=LUUNA_BUILD_IDENTITY=sha256:{identity}");
+    } else {
+        // A symlinked or special build input cannot be bound by content, so
+        // the identity never matches a digest (the harness fails the same way).
+        unbound.sort();
+        println!(
+            "cargo:rustc-env=LUUNA_BUILD_IDENTITY=unbound: symlinked or special build inputs {}",
+            unbound.join(",")
+        );
+    }
     // The compiler Cargo actually invokes for this build, not whatever is on PATH.
     let rustc = std::env::var("RUSTC").unwrap_or_else(|_| "rustc".to_owned());
     let version = std::process::Command::new(&rustc)
@@ -161,7 +177,7 @@ fn main() {
             std::env::var(name)
                 .ok()
                 .filter(|value| !value.is_empty())
-                .map(|value| format!("{name}={value}"))
+                .map(|_| (*name).to_owned())
         })
         .collect();
     let wrappers = if wrappers.is_empty() {
@@ -247,13 +263,16 @@ fn main() {
             config_override(&text).then(|| path.display().to_string())
         })
         .collect();
+    // These values are served by the unauthenticated `/health` route, so only
+    // variable names and none/set status are embedded, never flag values,
+    // wrapper paths or config file paths.
     println!(
         "cargo:rustc-env=LUUNA_BUILD_FLAGS=profile={} opt-level={} debug={} rustflags={} overrides={} config-overrides={}",
         value("PROFILE"),
         value("OPT_LEVEL"),
         value("DEBUG"),
-        if rustflags.is_empty() { "none".to_owned() } else { rustflags.replace(' ', ",") },
+        if rustflags.is_empty() { "none" } else { "set" },
         if overrides.is_empty() { "none".to_owned() } else { overrides.join(",") },
-        if dependency_overrides.is_empty() { "none".to_owned() } else { dependency_overrides.join(",") },
+        if dependency_overrides.is_empty() { "none".to_owned() } else { format!("{}-files", dependency_overrides.len()) },
     );
 }

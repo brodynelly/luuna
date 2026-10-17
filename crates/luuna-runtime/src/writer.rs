@@ -1171,8 +1171,14 @@ fn inherited_url_credentials(
         .collect()
 }
 
-/// The `user:password` and `password` parts of every URL userinfo in `text`
-/// that carries a password.
+/// A username-only userinfo (`http://access-token@proxy`) is a credential when
+/// it is at least this long; shorter names (`git@`) are ordinary user names.
+const MIN_USERNAME_CREDENTIAL: usize = 8;
+
+/// The credential parts of every URL userinfo in `text`: `user:password` and
+/// `password` when a password is present, and the user name itself when it
+/// is used alone (or with an empty password) and is credential-length. Each
+/// is also returned percent-decoded, as a client would print it.
 fn url_credentials(text: &str) -> Vec<String> {
     let mut found = Vec::new();
     let mut rest = text;
@@ -1184,17 +1190,17 @@ fn url_credentials(text: &str) -> Vec<String> {
             })
             .unwrap_or(authority.len());
         if let Some(userinfo) = authority[..end].rfind('@').map(|i| &authority[..i]) {
-            if let Some((_, password)) = userinfo.split_once(':') {
-                if !password.is_empty() {
-                    // A check may print the credential as a client decodes
-                    // it, so the percent-decoded forms are secrets too.
-                    for form in [userinfo, password] {
-                        found.push(form.to_owned());
-                        let decoded = percent_decode(form);
-                        if decoded != form {
-                            found.push(decoded);
-                        }
-                    }
+            let forms: Vec<&str> = match userinfo.split_once(':') {
+                Some((_, password)) if !password.is_empty() => vec![userinfo, password],
+                Some((user, _)) if user.len() >= MIN_USERNAME_CREDENTIAL => vec![userinfo, user],
+                None if userinfo.len() >= MIN_USERNAME_CREDENTIAL => vec![userinfo],
+                _ => Vec::new(),
+            };
+            for form in forms {
+                found.push(form.to_owned());
+                let decoded = percent_decode(form);
+                if decoded != form {
+                    found.push(decoded);
                 }
             }
         }
@@ -2496,6 +2502,18 @@ mod redaction_tests {
             view.contains("\"recipe_id\":\"check0\"") && view.contains("\"exit_code\":1"),
             "{view}"
         );
+    }
+
+    #[test]
+    fn username_only_url_credentials_are_known() {
+        let known = url_credentials("http://ghp_accesstoken1234@proxy https://tok%2Den12345:@host");
+        assert!(
+            known.contains(&"ghp_accesstoken1234".to_owned()),
+            "{known:?}"
+        );
+        assert!(known.contains(&"tok-en12345".to_owned()), "{known:?}");
+        // An ordinary short user name is not a credential.
+        assert!(url_credentials("https://git@github.com/x").is_empty());
     }
 
     #[test]
