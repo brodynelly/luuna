@@ -139,6 +139,7 @@ const evidence = { mode, started_at: started.toISOString(), out, runtime_binary:
 const base = `http://127.0.0.1:${port}`;
 let runtime = null;
 let developerHead = null;
+let untrackedAfterBaseline = null;
 
 try {
   evidence.environment = environment();
@@ -253,8 +254,6 @@ function createFixtureRepository() {
   repo("remote", "add", "origin", "https://example.invalid/m3-smoke.git");
   return repo("rev-parse", "HEAD");
 }
-
-let untrackedAfterBaseline = null;
 
 async function registerProjectAndBaseline() {
   developerHead = createFixtureRepository();
