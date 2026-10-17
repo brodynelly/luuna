@@ -29,7 +29,8 @@ not integrated. Missing provider credentials produce a persisted failed run.
 `GET /api/v1/health` is public. Its `pi_version` field reports the required
 supported version; the CLI is checked when starting a run. Its `build_identity`
 field is the content digest of the sources the binary was built from, and
-`build_rustc` names the compiler release and commit that built it. All other endpoints
+`build_rustc` names the compiler release and commit that built it
+(`build_rustc_wrapper` any compiler wrapper Cargo used, or `none`). All other endpoints
 require `Authorization: Bearer <token>`:
 
 - `GET /api/v1/runs`: persisted run records.
