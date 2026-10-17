@@ -5,6 +5,9 @@ use sha2::{Digest, Sha256};
 use std::collections::{BTreeMap, BTreeSet};
 use thiserror::Error;
 
+mod project;
+pub use project::*;
+
 pub const SCHEMA_VERSION: &str = "0.1";
 pub const CANONICALIZATION: &str = "luuna-json-v1";
 
@@ -16,6 +19,8 @@ pub enum DomainError {
     InvalidTransition { from: RunState, to: RunState },
     #[error("approval does not authorize this exact plan revision and permissions")]
     StaleApproval,
+    #[error("repository identity mismatch: {0}")]
+    IdentityMismatch(String),
     #[error("JSON: {0}")]
     Json(#[from] serde_json::Error),
 }
@@ -504,13 +509,13 @@ pub struct EventEnvelope {
     pub payload: serde_json::Value,
 }
 
-fn invalid<T>(message: &str) -> Result<T, DomainError> {
+pub(crate) fn invalid<T>(message: &str) -> Result<T, DomainError> {
     Err(DomainError::Invalid(message.into()))
 }
-fn unique<T: Ord>(values: &[T]) -> bool {
+pub(crate) fn unique<T: Ord>(values: &[T]) -> bool {
     values.iter().collect::<BTreeSet<_>>().len() == values.len()
 }
-fn valid_relative_path(path: &str) -> bool {
+pub(crate) fn valid_relative_path(path: &str) -> bool {
     !path.is_empty()
         && !path.starts_with('/')
         && !path.contains('\\')
@@ -525,20 +530,20 @@ fn path_within(path: &str, prefix: &str) -> bool {
             .strip_prefix(prefix)
             .is_some_and(|p| p.starts_with('/'))
 }
-fn is_commit(value: &str) -> bool {
+pub(crate) fn is_commit(value: &str) -> bool {
     matches!(value.len(), 40 | 64)
         && value
             .bytes()
             .all(|b| b.is_ascii_digit() || (b'a'..=b'f').contains(&b))
 }
-fn is_hash(value: &str) -> bool {
+pub(crate) fn is_hash(value: &str) -> bool {
     value.strip_prefix("sha256:").is_some_and(|s| {
         s.len() == 64
             && s.bytes()
                 .all(|b| b.is_ascii_digit() || (b'a'..=b'f').contains(&b))
     })
 }
-fn hash_value(value: &serde_json::Value) -> Result<String, DomainError> {
+pub(crate) fn hash_value(value: &serde_json::Value) -> Result<String, DomainError> {
     fn sorted(value: &serde_json::Value) -> serde_json::Value {
         match value {
             serde_json::Value::Object(map) => {

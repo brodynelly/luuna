@@ -1,6 +1,6 @@
 # Current Luuna architecture
 
-Date: 2026-10-16. Status: authoritative foundation baseline; implementation evidence is required for each milestone.
+Date: 2026-10-16, updated 2026-10-17 for M2a. Status: authoritative foundation baseline; implementation evidence is required for each milestone.
 
 ## Purpose and precedence
 
@@ -45,6 +45,8 @@ Native execution uses host permissions. Stronger isolation requires an explicitl
 
 SQLite owns Luuna projects, immutable plan revisions, approvals, run/attempt lifecycle, sequenced events, check/review evidence, artifact references, and publication reconciliation. State mutation and emitted durable domain events must be committed consistently. Sensitive transcripts and provider data remain private artifacts with controlled access and retention.
 
+Projects are registered from existing repositories. The confirmed **project manifest** (`schemas/project.schema.json`, hashed with `luuna-json-v1`) is machine-independent and append-only by revision; the **machine registry** maps each repository ID to its local path and the identity observed at registration (redacted remote plus root commits). Discovery proposals and project-scoped events (`project.registered`, `repository.registered`, `discovery.proposed`, `manifest.confirmed`) are durable, and replaying the project stream reconstructs the confirmed map. Inspection never writes to a repository or executes its text; see [ADR 0006](decisions/0006-repository-import.md).
+
 Before the Missions adapter is integrated, a minimal SQLite ticket record may support the M0/M1 demo. It is explicitly temporary. After integration, Missions (Seeds-derived) owns ticket intent, acceptance criteria, dependencies, and source revisions; SQLite stores a revision-aware projection and Luuna execution state. There must never be two independently writable authorities for the same ticket fields. External edits invalidate stale planning assumptions and block scheduling until reconciliation. See [ADR 0003](decisions/0003-ticket-authority.md).
 
 ## Pi and maintained components
@@ -57,18 +59,19 @@ The owner's explicit October 16, 2026 decision is to keep the application and al
 
 ## API and service lifetime
 
-All application routes use `/api/v1`. The canonical create-ticket route is **`POST /api/v1/projects/{id}/tickets`**. Do not add a parallel `POST /api/v1/tickets` alias. Other operations address ticket, plan, and run identities. Commands that can create work require idempotency; operations sensitive to stale state require expected revisions. SSE streams use durable event IDs/cursors for replay and deduplication. Artifacts use authorized IDs, never arbitrary request-supplied filesystem paths.
+All application routes use `/api/v1`. Implemented project routes are `POST /api/v1/projects` (register existing repositories by absolute root path), `GET /api/v1/projects[/{id}]`, `POST /api/v1/projects/{id}/discover` (read-only proposal), `PUT /api/v1/projects/{id}/manifest` (confirm with `expected_revision`) and `GET /api/v1/projects/{id}/events`. The canonical create-ticket route is **`POST /api/v1/projects/{id}/tickets`**. Do not add a parallel `POST /api/v1/tickets` alias. Other operations address ticket, plan, and run identities. Commands that can create work require idempotency; operations sensitive to stale state require expected revisions. SSE streams use durable event IDs/cursors for replay and deduplication. Artifacts use authorized IDs, never arbitrary request-supplied filesystem paths.
 
 Bind the development service to loopback and authenticate protected API actions. A development launch may use an explicitly managed foreground process. The desktop reconnects to that service; closing a window or losing SSE does not decide run lifetime. Explicit shutdown stops or reconciles owned workers and persists interruption. A Tauri child/sidecar alone does not prove independent lifetime. Platform-specific startup, supervision, token storage, and shutdown must be tested before distribution. See [ADR 0004](decisions/0004-service-lifecycle.md).
 
 ## Milestone evidence
 
-The initial executable implementation is a tool-free connectivity slice, not the approved implementation workflow. It exposes authenticated run creation/history, cursor event replay and SSE, and cancellation; the UI currently reconnects through replay polling. Ticket creation, Seeds/Missions reconciliation, implementation scheduling, check execution, independent review, and publication remain subsequent capabilities. The canonical ticket route above is a specification until its implementation and tests exist.
+The initial executable implementation is a tool-free connectivity slice, not the approved implementation workflow. It exposes authenticated run creation/history, cursor event replay and SSE, and cancellation; the UI currently reconnects through replay polling. M2a adds read-only repository import, discovery proposals and confirmed manifest revisions. Ticket creation, Seeds/Missions reconciliation, baseline execution, implementation scheduling, independent review, and publication remain subsequent capabilities. The canonical ticket route above is a specification until its implementation and tests exist.
 
 | Milestone | Required proof | Does not establish completion |
 | --- | --- | --- |
 | M0 | Locked build, schema fixtures, deterministic approval/transition rejection, durable state checks | Folder creation or documentation checks alone |
 | M1 | Real pinned Pi/provider session, streamed API events, persistence, cancellation, error handling and restart evidence | Scripted worker or fixture-only protocol tests |
+| M2a | Real and synthetic imports with byte-identical checkouts, rejected invalid/mismatched repositories, proposed (not executed) recipes, confirmed manifest replay after restart | A proposed manifest, a stored recipe, or any claim that a baseline ran |
 | Desktop integration | Real service connection, run actions, streamed state and reconnection | Frontend build or decorative simulation alone |
 | Full v1 | Original requirements/acceptance matrix including browser/TUI parity and supported platform evidence | Single-repository Linux demo |
 

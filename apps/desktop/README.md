@@ -1,6 +1,6 @@
 # Luuna desktop foundation
 
-The React frontend connects to the independent Rust runtime. It lists persisted runs, starts a tool-free Pi conversation, displays text and raw events, reconnects through durable cursor replay, and requests cancellation. This is an M0/M1 development shell. It does not import repositories, approve code changes, validate builds, or publish pull requests.
+The React frontend connects to the independent Rust runtime. It lists persisted runs, starts a tool-free Pi conversation, displays text and raw events, reconnects through durable cursor replay, and requests cancellation. The Projects panel registers an existing repository root by absolute path, shows the runtime's read-only observation (redacted remote, HEAD, branch, dirty counts), requests a discovery proposal, lets you edit the proposed manifest JSON and confirms it with the current revision guard; the project event record replays from the runtime. This is an M0/M1/M2a development shell. It does not run checks, approve code changes, validate builds, or publish pull requests.
 
 From the repository root:
 

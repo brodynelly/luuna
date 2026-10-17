@@ -6,7 +6,7 @@ Date: 2026-10-16. This is the implementation sequence from the audited foundatio
 
 Keep the application and all three maintained CLI components in **this monorepo**. Missions, Atlas, and Beacon retain independent package/API boundaries, compatible data formats, and upstream MIT notices. Repository separation is a later maintenance decision, not a prerequisite or the next assignment. Do not create repositories, remove component source, or replace these tools with Rust rewrites to advance a milestone.
 
-[FOUNDATION-STATUS.md](FOUNDATION-STATUS.md) records the observed evidence. Its current Linux baseline is 35 Rust tests, 10 API-client tests, 18 positive/negative schema checks, and 3,092 component tests passing, with Rust formatting/lint and frontend type/build checks passing, plus an 18-check synthetic smoke-harness run. Counts describe that audit, not a permanent expected total; future changes must rerun appropriate checks.
+[FOUNDATION-STATUS.md](FOUNDATION-STATUS.md) records the observed evidence. Its current Linux baseline is 53 Rust tests, 13 API-client tests, 18 positive/negative schema checks, and 3,092 component tests passing, with Rust formatting/lint and frontend type/build checks passing, plus an 18-check synthetic smoke-harness run, the 19-check genuine OpenRouter run and the 15-check M2a browser smoke. Counts describe that audit, not a permanent expected total; future changes must rerun appropriate checks.
 
 | Area | Implemented and checked | Partial or not yet demonstrated |
 | --- | --- | --- |
@@ -15,9 +15,9 @@ Keep the application and all three maintained CLI components in **this monorepo*
 | Pi/runtime | Actual Pi 1.3.0 version/RPC handshake, authenticated loopback run API, replay/SSE, timeout/cancel/reap, malformed/error fixtures, durable failed/cancelled attempts | Genuine provider-backed output observed on Linux on October 17, 2026 (OpenRouter `openai/gpt-4o-mini`, 19/19 real-mode smoke checks); Mac/Windows service lifecycle and native client remain unverified |
 | Frontend | Typed client, real service connection, run/history/cancel/reconnect, private in-memory token; browser smoke exercised | Tauri shell exists; native GUI launch, installer, and Mac/Windows results are unverified |
 | Maintained CLIs | Missions, Atlas, Beacon packages with passing standalone tests and compatible legacy aliases | Runtime ticket/knowledge/prompt adapters are not integrated; packages remain private/unpublished |
-| Product workflow | Foundational contracts and negative tests | Import/discovery, actual baseline checks, approved writer worktrees, independent review, multi-repo scheduling, publication, TUI parity and release installation remain planned |
+| Product workflow | Foundational contracts and negative tests; M2a read-only import, discovery proposals and confirmed manifest revisions with replay (October 17, 2026) | Actual baseline checks, approved writer worktrees, independent review, multi-repo scheduling, publication, TUI parity and release installation remain planned |
 
-M0 is substantially established, with remaining API/capability/threat-model details completed alongside their first executable consumers. It is not proof of the operational workflow. M1 is closed on Linux as of October 17, 2026; its native-host step is carried by the MVP native-lifecycle item. Do not restart bootstrap or jump to broad orchestration; the next slice is M2a.
+M0 is substantially established, with remaining API/capability/threat-model details completed alongside their first executable consumers. It is not proof of the operational workflow. M1 is closed on Linux as of October 17, 2026; its native-host step is carried by the MVP native-lifecycle item. M2a closed later the same day (see the status report). Do not restart bootstrap or jump to broad orchestration; the next slice is M2b.
 
 ## What counts as a usable product
 
@@ -50,6 +50,8 @@ Follow the existing M0–M8 naming. Desktop work accompanies real runtime slices
 Register an existing single repository, establish stable identity/remote/base commit, detect dirty state, discover candidate stack/check recipes, and ask the developer to confirm uncertain repository facts. Persist project/manifest revisions and expose them through authenticated API/client contracts. Use canonical `POST /api/v1/projects/{id}/tickets` when ticket creation is introduced.
 
 **Exit:** a real and a synthetic repository import without changing their contents; dirty files remain byte-identical; an invalid or mismatched repository is rejected; replay reconstructs the confirmed map. Discovery proposes commands rather than silently executing arbitrary repository text. This begins R04 and supplies M2 inputs.
+
+**Status (October 17, 2026): closed on Linux.** `luuna-git`, `luuna-discovery`, the project registry in `luuna-storage`, the five project routes, the client and the desktop panel exist with synthetic and real (this checkout) evidence; see [ADR 0006](decisions/0006-repository-import.md) and the status report. Relationships between repositories are accepted by the contract but not discovered; that is M4.
 
 ### M2b — Baseline and check evidence
 
@@ -211,14 +213,14 @@ The earlier desktop proposal estimated **372–600 hours from scratch** for a me
 | Remaining work to a usable single-repo MVP | Focused hours before contingency |
 | --- | ---: |
 | Genuine M1 compatibility and evidence (Linux closed October 17, 2026; native-host step remains) | 0–8 |
-| M2a/M2b/M2c import, baseline, approval and scoped writer | 104–176 |
+| M2b/M2c baseline, approval and scoped writer (M2a closed October 17, 2026) | 72–128 |
 | M3 independent review, repair and recovery | 64–104 |
 | MVP client completion, native smoke and end-to-end hardening | 64–104 |
-| Subtotal | 232–392 |
-| Technical uncertainty allowance, approximately 20% | 46–78 |
-| **Planning range** | **278–470** |
+| Subtotal | 200–344 |
+| Technical uncertainty allowance, approximately 20% | 40–69 |
+| **Planning range** | **240–413** |
 
-That is about **7–12 full 40-hour engineering weeks**, or **9–16 elapsed workweeks at 30 focused hours/week** under these assumptions. A connectivity preview can arrive sooner; it is not the usable MVP defined above.
+That is about **6–10 full 40-hour engineering weeks**, or **8–14 elapsed workweeks at 30 focused hours/week** under these assumptions. A connectivity preview can arrive sooner; it is not the usable MVP defined above.
 
 | Additional work after the MVP to full v1 | Focused hours before contingency |
 | --- | ---: |

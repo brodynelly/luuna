@@ -1,6 +1,6 @@
 import { describe, expect, it, vi } from "vitest";
-import { ApiError, LuunaClient, assistantText, isTerminal, loopbackUrl, mergeEvents } from "../src/index";
-import type { EventEnvelope } from "../src/index";
+import { ApiError, LuunaClient, assistantText, confirmedManifest, isTerminal, loopbackUrl, mergeEvents } from "../src/index";
+import type { EventEnvelope, ProjectManifest } from "../src/index";
 
 describe("local runtime connection", () => {
   it("accepts loopback origins and rejects remote, credential, path and query URLs", () => {
@@ -81,5 +81,52 @@ describe("durable event replay", () => {
     events.push({ ...base, event_id: "c", sequence: 3, type: "pi.message_end", payload: { message: { role: "assistant", content: [{ type: "text", text: "Hello world." }] } } });
     expect(assistantText(events)).toBe("Hello world.");
     expect(isTerminal("running")).toBe(false);
+  });
+});
+
+describe("project import and discovery", () => {
+  const base = { schema_version: "0.1", project_id: "fixture", run_id: "project:fixture", timestamp: "2026-10-17T00:00:00Z" };
+
+  it("registers by absolute path, discovers with POST and confirms with a revision guard", async () => {
+    const fetcher = vi.fn<typeof fetch>().mockImplementation(() => Promise.resolve(new Response("{}")));
+    const client = new LuunaClient("http://127.0.0.1:4242", "test-token", fetcher);
+    await client.registerProject({ id: "fixture", name: "Fixture", repositories: [{ id: "app", path: "/srv/app" }] });
+    await client.discover("fixture");
+    const manifest: ProjectManifest = { schema_version: "0.1", id: "fixture", name: "Fixture", revision: 1, repositories: [], relationships: [], policy: { approval: "plan", testing_prerequisite: true, publish: "automatic_pr", merge: "human", max_explorers: 1, max_implementers: 1, max_task_repairs: 2 } };
+    await client.confirmManifest("fixture", 0, manifest);
+    await client.projectEvents("fixture", 2);
+    const calls = fetcher.mock.calls.map(([url, init]) => [String(url), init?.method ?? "GET", init?.body]);
+    expect(calls[0]).toEqual(["http://127.0.0.1:4242/api/v1/projects", "POST", JSON.stringify({ id: "fixture", name: "Fixture", repositories: [{ id: "app", path: "/srv/app" }] })]);
+    expect(calls[1]).toEqual(["http://127.0.0.1:4242/api/v1/projects/fixture/discover", "POST", undefined]);
+    expect(calls[2]).toEqual(["http://127.0.0.1:4242/api/v1/projects/fixture/manifest", "PUT", JSON.stringify({ expected_revision: 0, manifest })]);
+    expect(calls[3]).toEqual(["http://127.0.0.1:4242/api/v1/projects/fixture/events?after=2", "GET", undefined]);
+    expect(() => client.confirmManifest("fixture", -1, manifest)).toThrow("Invalid manifest revision");
+  });
+
+  it("surfaces short deterministic runtime reasons for conflicts and validation failures only", async () => {
+    const respond = (status: number, body: string) => vi.fn<typeof fetch>().mockResolvedValue(new Response(body, { status, headers: { "Content-Type": "application/json" } }));
+    const conflict = new LuunaClient("http://localhost:4242", "t", respond(409, '{"error":"revision conflict: expected 1, current 0"}'));
+    await expect(conflict.discover("fixture")).rejects.toThrow("revision conflict: expected 1, current 0");
+    const invalid = new LuunaClient("http://localhost:4242", "t", respond(422, '{"error":"default branch release is not a local or origin branch of repository app"}'));
+    await expect(invalid.discover("fixture")).rejects.toThrow("default branch release");
+    const long = new LuunaClient("http://localhost:4242", "t", respond(422, JSON.stringify({ error: "x".repeat(301) })));
+    await expect(long.discover("fixture")).rejects.toThrow("Runtime request failed (HTTP 422)");
+    const server = new LuunaClient("http://localhost:4242", "t", respond(500, '{"error":"secret prompt text"}'));
+    await expect(server.discover("fixture")).rejects.not.toThrow("secret");
+    const text = new LuunaClient("http://localhost:4242", "t", respond(409, "not json"));
+    await expect(text.discover("fixture")).rejects.toThrow("The run state changed");
+  });
+
+  it("reconstructs the confirmed map from the project event stream", () => {
+    const manifest = { schema_version: "0.1", id: "fixture", name: "Fixture", revision: 2, repositories: [], relationships: [], policy: {} } as unknown as ProjectManifest;
+    const events: EventEnvelope[] = [
+      { ...base, event_id: "project:fixture:1", sequence: 1, type: "project.registered", payload: { name: "Fixture" } },
+      { ...base, event_id: "project:fixture:2", sequence: 2, type: "manifest.confirmed", payload: { revision: 1, manifest_hash: "sha256:a", manifest: { ...manifest, revision: 1 } } },
+      { ...base, event_id: "project:fixture:3", sequence: 3, type: "discovery.proposed", payload: { discovery_id: "d" } },
+      { ...base, event_id: "project:fixture:4", sequence: 4, type: "manifest.confirmed", payload: { revision: 2, manifest_hash: "sha256:b", manifest } },
+    ];
+    expect(confirmedManifest(events.slice(0, 1))).toBeNull();
+    expect(confirmedManifest(events)).toEqual({ revision: 2, hash: "sha256:b", manifest });
+    expect(mergeEvents([], events).map((event) => event.sequence)).toEqual([1, 2, 3, 4]);
   });
 });

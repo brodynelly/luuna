@@ -28,6 +28,9 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             std::env::var("LUUNA_PI_COMMAND").unwrap_or_else(|_| "pi".into()),
         ),
         pi_launcher_args: launcher_args,
+        git_program: PathBuf::from(
+            std::env::var("LUUNA_GIT_COMMAND").unwrap_or_else(|_| "git".into()),
+        ),
         provider: std::env::var("LUUNA_PI_PROVIDER").ok(),
         model: std::env::var("LUUNA_PI_MODEL").ok(),
         token,

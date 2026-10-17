@@ -7,6 +7,9 @@ use serde_json::Value;
 use std::{fs, path::Path, time::Duration};
 use thiserror::Error;
 
+mod projects;
+pub use projects::*;
+
 #[derive(Debug, Error)]
 pub enum StorageError {
     #[error("SQLite: {0}")]
@@ -23,6 +26,8 @@ pub enum StorageError {
     RevisionConflict { expected: u64, actual: u64 },
     #[error("plan revision already exists and is immutable")]
     ImmutableRevision,
+    #[error("record already exists: {0}")]
+    AlreadyExists(String),
     #[error("invalid input: {0}")]
     Invalid(String),
 }
@@ -77,6 +82,7 @@ impl Store {
             "PRAGMA foreign_keys=ON; PRAGMA journal_mode=WAL; PRAGMA synchronous=FULL;",
         )?;
         connection.execute_batch(MIGRATION_1)?;
+        connection.execute_batch(MIGRATION_2)?;
         Ok(Self { connection })
     }
 
@@ -426,16 +432,7 @@ fn append(
         [run_id],
         |r| r.get(0),
     )?;
-    let event = EventEnvelope {
-        schema_version: SCHEMA_VERSION.into(),
-        event_id: format!("{run_id}:{sequence}"),
-        sequence,
-        timestamp: now(),
-        project_id,
-        run_id: run_id.into(),
-        event_type: event_type.into(),
-        payload,
-    };
+    let event = append_envelope(&project_id, run_id, sequence, event_type, payload)?;
     tx.execute(
         "INSERT INTO events(run_id,sequence,event_id,envelope) VALUES (?1,?2,?3,?4)",
         params![
@@ -468,6 +465,31 @@ fn authorize_run(tx: &Transaction<'_>, run_id: &str) -> Result<()> {
     Ok(())
 }
 
+/// Build one durable envelope. `stream_id` is a run ID or a project stream ID.
+fn append_envelope(
+    project_id: &str,
+    stream_id: &str,
+    sequence: u64,
+    event_type: &str,
+    payload: Value,
+) -> Result<EventEnvelope> {
+    if event_type.trim().is_empty() || !payload.is_object() {
+        return Err(StorageError::Invalid(
+            "event type and object payload are required".into(),
+        ));
+    }
+    Ok(EventEnvelope {
+        schema_version: SCHEMA_VERSION.into(),
+        event_id: format!("{stream_id}:{sequence}"),
+        sequence,
+        timestamp: now(),
+        project_id: project_id.into(),
+        run_id: stream_id.into(),
+        event_type: event_type.into(),
+        payload,
+    })
+}
+
 fn now() -> String {
     Utc::now().to_rfc3339_opts(SecondsFormat::Millis, true)
 }
@@ -492,5 +514,22 @@ CREATE TABLE IF NOT EXISTS runs(id TEXT PRIMARY KEY, project_id TEXT NOT NULL, s
 CREATE TABLE IF NOT EXISTS events(run_id TEXT NOT NULL REFERENCES runs(id), sequence INTEGER NOT NULL CHECK(sequence>0), event_id TEXT NOT NULL UNIQUE,
  envelope TEXT NOT NULL, PRIMARY KEY(run_id,sequence));
 INSERT OR IGNORE INTO schema_migrations(version) VALUES (1);
+COMMIT;
+";
+
+const MIGRATION_2: &str = "
+BEGIN IMMEDIATE;
+CREATE TABLE IF NOT EXISTS projects(id TEXT PRIMARY KEY, name TEXT NOT NULL, revision INTEGER NOT NULL CHECK(revision>=0),
+ manifest_hash TEXT, created_at TEXT NOT NULL, updated_at TEXT NOT NULL);
+CREATE TABLE IF NOT EXISTS manifest_revisions(project_id TEXT NOT NULL REFERENCES projects(id), revision INTEGER NOT NULL CHECK(revision>0),
+ hash TEXT NOT NULL, payload TEXT NOT NULL, base_commits TEXT NOT NULL, confirmed_at TEXT NOT NULL, PRIMARY KEY(project_id,revision));
+CREATE TRIGGER IF NOT EXISTS immutable_manifests_update BEFORE UPDATE ON manifest_revisions BEGIN SELECT RAISE(ABORT,'immutable manifest revision'); END;
+CREATE TRIGGER IF NOT EXISTS immutable_manifests_delete BEFORE DELETE ON manifest_revisions BEGIN SELECT RAISE(ABORT,'immutable manifest revision'); END;
+CREATE TABLE IF NOT EXISTS repositories(project_id TEXT NOT NULL REFERENCES projects(id), id TEXT NOT NULL, local_path TEXT NOT NULL,
+ observation TEXT NOT NULL, registered_at TEXT NOT NULL, PRIMARY KEY(project_id,id));
+CREATE TABLE IF NOT EXISTS discoveries(id TEXT PRIMARY KEY, project_id TEXT NOT NULL REFERENCES projects(id), created_at TEXT NOT NULL, payload TEXT NOT NULL);
+CREATE TABLE IF NOT EXISTS project_events(project_id TEXT NOT NULL REFERENCES projects(id), sequence INTEGER NOT NULL CHECK(sequence>0),
+ event_id TEXT NOT NULL UNIQUE, envelope TEXT NOT NULL, PRIMARY KEY(project_id,sequence));
+INSERT OR IGNORE INTO schema_migrations(version) VALUES (2);
 COMMIT;
 ";
