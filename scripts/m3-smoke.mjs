@@ -719,8 +719,11 @@ function environment() {
   return info;
 }
 
+/** Configured values, deduplicated and longest first: redacting a shorter value that is part of a
+ *  longer one first would leave the longer one's remainder in the clear. */
 function configuredValues() {
-  return [token, ...CREDENTIAL_NAMES.flatMap((name) => [process.env[name], process.env[`LUUNA_PI_${name}`]])].filter((value) => typeof value === "string" && value.length >= 8);
+  const values = [token, ...CREDENTIAL_NAMES.flatMap((name) => [process.env[name], process.env[`LUUNA_PI_${name}`]])].filter((value) => typeof value === "string" && value.length >= 8);
+  return [...new Set(values)].sort((a, b) => b.length - a.length || (a < b ? -1 : a > b ? 1 : 0));
 }
 
 function redactConfiguredValues(text) {
