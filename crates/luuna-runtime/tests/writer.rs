@@ -1,6 +1,6 @@
-//! M2c through the authenticated API with the synthetic Pi fixture: exact
-//! approval, transactional scheduling, Luuna-owned worktrees and one scoped
-//! writer. No model is involved and the developer checkout is never written.
+//! M2c/M3 through the authenticated API with the synthetic Pi fixture: exact
+//! approval, scoped writers, real candidate checks, fresh reviews and bounded
+//! repair. No model is involved and the developer checkout is never written.
 use axum::{
     body::{to_bytes, Body},
     http::{Request, StatusCode},
@@ -185,6 +185,49 @@ impl Harness {
             Some(json!({"provider": "test", "model": "synthetic"})),
         )
         .await
+    }
+    async fn candidate(&self, run_id: &str) -> Value {
+        let (status, body) = self
+            .request("GET", &format!("/api/v1/runs/{run_id}/candidate"), None)
+            .await;
+        assert_eq!(status, StatusCode::OK, "{body}");
+        body
+    }
+    async fn candidate_action(
+        &self,
+        run_id: &str,
+        action: &str,
+        hash: &Value,
+    ) -> (StatusCode, Value) {
+        self.request(
+            "POST",
+            &format!("/api/v1/runs/{run_id}/{action}"),
+            Some(json!({"candidate_hash":hash,"provider":"test","model":"synthetic"})),
+        )
+        .await
+    }
+    async fn validate_with_repairs(&self, run_id: &str, hash: &Value) -> (StatusCode, Value) {
+        self.request(
+            "POST",
+            &format!("/api/v1/runs/{run_id}/validate"),
+            Some(json!({"candidate_hash":hash,"provider":"test","model":"synthetic","auto_repair":true})),
+        )
+        .await
+    }
+    async fn candidate_settled(&self, run_id: &str) -> Value {
+        for _ in 0..600 {
+            let candidate = self.candidate(run_id).await;
+            if candidate["active"] == false
+                && !matches!(
+                    candidate["evidence"]["status"].as_str(),
+                    Some("pending" | "validating" | "reviewing")
+                )
+            {
+                return candidate;
+            }
+            tokio::time::sleep(Duration::from_millis(25)).await;
+        }
+        panic!("candidate did not settle: {}", self.candidate(run_id).await);
     }
     /// Register, confirm, baseline, ticket, plan, approve: an approved workflow run.
     async fn approved(&self, repo: &Path, scenario: &str, budgets: Value) -> (String, Value) {
@@ -731,4 +774,833 @@ async fn optional_baseline_recipes_do_not_change_the_required_environment_identi
     let (status, body) = harness.implement(&id).await;
     assert_eq!(status, StatusCode::ACCEPTED, "{body}");
     assert_eq!(harness.settled(&id).await["state"], "validating");
+}
+
+#[tokio::test]
+async fn candidate_checks_and_fresh_review_are_bound_to_the_complete_diff() {
+    let harness = Harness::new();
+    let repo = tempfile::tempdir().unwrap();
+    ready(&harness, repo.path()).await;
+    let before = snapshot(repo.path());
+    let (id, plan) = harness
+        .approved(repo.path(), "write_in_scope", json!({}))
+        .await;
+    assert_eq!(harness.implement(&id).await.0, StatusCode::ACCEPTED);
+    assert_eq!(harness.settled(&id).await["state"], "validating");
+    let pending = harness.candidate(&id).await;
+    assert_eq!(pending["evidence"]["status"], "pending");
+    assert_eq!(pending["active"], false);
+    assert_eq!(pending["repair_allowed"], false);
+    let candidate = &pending["evidence"]["candidate"];
+    let hash = &candidate["hash"];
+    let (status, diff) = harness
+        .request("GET", &format!("/api/v1/runs/{id}/diff"), None)
+        .await;
+    assert_eq!(status, StatusCode::OK, "{diff}");
+    assert_eq!(diff["candidate_hash"], *hash);
+    assert_eq!(diff["base_commit"], plan["base_commits"]["app"]);
+    assert_eq!(diff["commit"], candidate["repository_commits"]["app"]);
+    let diff_text = diff["diff"].as_str().unwrap();
+    assert!(diff_text.contains("-print('fixture')"), "{diff_text}");
+    assert!(
+        diff_text.contains("+print('implemented by the synthetic writer')"),
+        "{diff_text}"
+    );
+
+    let (status, response) = harness.candidate_action(&id, "validate", hash).await;
+    assert_eq!(status, StatusCode::ACCEPTED, "{response}");
+    let completed = harness.candidate_settled(&id).await;
+    assert_eq!(harness.run(&id).await["state"], "reviewed");
+    let evidence = &completed["evidence"];
+    assert_eq!(evidence["status"], "reviewed", "{completed}");
+    assert_eq!(evidence["candidate"], *candidate);
+    assert_eq!(evidence["validation_generation"], 1);
+    let checks = evidence["results"].as_array().unwrap();
+    assert_eq!(checks.len(), 1);
+    assert_eq!(checks[0]["status"], "passed");
+    assert_eq!(checks[0]["candidate_hash"], *hash);
+    assert_eq!(checks[0]["commit"], candidate["repository_commits"]["app"]);
+    assert_eq!(checks[0]["command"][0], python());
+    assert_eq!(checks[0]["tests_detected"], 1);
+    let review = &evidence["review"];
+    assert_eq!(review["candidate_hash"], *hash);
+    assert_eq!(review["verdict"], "passed");
+    assert_ne!(review["reviewer_session"], evidence["implementer_session"]);
+    assert!(review["reviewer_session"]
+        .as_str()
+        .unwrap()
+        .starts_with("review-"));
+    assert_eq!(completed["repair_allowed"], false);
+    assert_ne!(
+        harness.candidate_action(&id, "validate", hash).await.0,
+        StatusCode::ACCEPTED
+    );
+    assert_ne!(
+        harness.candidate_action(&id, "repair", hash).await.0,
+        StatusCode::ACCEPTED
+    );
+    assert_eq!(snapshot(repo.path()), before);
+}
+
+#[tokio::test]
+async fn failing_candidate_checks_require_a_new_repair_revision_and_fresh_evidence() {
+    let harness = Harness::new();
+    let repo = tempfile::tempdir().unwrap();
+    clean_repository(repo.path());
+    register(&harness, repo.path()).await;
+    harness.confirm(0, vec![check("unit", "from pathlib import Path; import sys; bad = 'seeded regression' in Path('src/main.py').read_text(); print('running 1 tests'); print('test result: FAILED. 0 passed; 1 failed' if bad else 'test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured'); sys.exit(1 if bad else 0)")]).await;
+    harness.baseline().await;
+    let before = snapshot(repo.path());
+    let (id, _) = harness
+        .approved(repo.path(), "repair_in_scope", json!({"max_attempts":2}))
+        .await;
+    assert_eq!(harness.implement(&id).await.0, StatusCode::ACCEPTED);
+    harness.settled(&id).await;
+    let initial = harness.candidate(&id).await;
+    let first = &initial["evidence"]["candidate"];
+    assert_eq!(
+        harness
+            .candidate_action(&id, "validate", &first["hash"])
+            .await
+            .0,
+        StatusCode::ACCEPTED
+    );
+    let failed = harness.candidate_settled(&id).await;
+    assert_eq!(harness.run(&id).await["state"], "failed");
+    assert_eq!(failed["evidence"]["status"], "failed", "{failed}");
+    assert_eq!(failed["evidence"]["results"][0]["status"], "failed");
+    assert!(failed["evidence"]["review"].is_null());
+    assert_eq!(failed["repair_allowed"], true);
+    assert!(!harness
+        .events(&id)
+        .await
+        .iter()
+        .any(|e| e["type"] == "review.started"));
+
+    let (status, response) = harness
+        .candidate_action(&id, "repair", &first["hash"])
+        .await;
+    assert_eq!(status, StatusCode::ACCEPTED, "{response}");
+    assert_eq!(harness.settled(&id).await["state"], "validating");
+    let repaired = harness.candidate(&id).await;
+    let second = &repaired["evidence"]["candidate"];
+    assert_eq!(second["id"], first["id"]);
+    assert_eq!(second["revision"], 2);
+    assert_ne!(second["hash"], first["hash"]);
+    assert_eq!(second["plan_hash"], first["plan_hash"]);
+    assert!(repaired["evidence"]["results"]
+        .as_array()
+        .unwrap()
+        .is_empty());
+    assert!(repaired["evidence"]["review"].is_null());
+    let (status, diff) = harness
+        .request("GET", &format!("/api/v1/runs/{id}/diff"), None)
+        .await;
+    assert_eq!(status, StatusCode::OK, "{diff}");
+    assert!(diff["diff"]
+        .as_str()
+        .unwrap()
+        .contains("repaired by the synthetic writer"));
+    assert_eq!(
+        harness
+            .candidate_action(&id, "validate", &first["hash"])
+            .await
+            .0,
+        StatusCode::CONFLICT
+    );
+    assert_ne!(
+        harness
+            .candidate_action(&id, "repair", &first["hash"])
+            .await
+            .0,
+        StatusCode::ACCEPTED
+    );
+    assert_eq!(
+        harness
+            .candidate_action(&id, "validate", &second["hash"])
+            .await
+            .0,
+        StatusCode::ACCEPTED
+    );
+    let passed = harness.candidate_settled(&id).await;
+    assert_eq!(passed["evidence"]["status"], "reviewed", "{passed}");
+    let result = &passed["evidence"]["results"][0];
+    assert_eq!(result["candidate_hash"], second["hash"]);
+    assert_eq!(result["status"], "passed");
+    assert_ne!(result["id"], failed["evidence"]["results"][0]["id"]);
+    assert_ne!(
+        result["artifact_refs"],
+        failed["evidence"]["results"][0]["artifact_refs"]
+    );
+    let store = luuna_storage::Store::open(harness.root.join("luuna.sqlite3")).unwrap();
+    let history = store.candidates(&id).unwrap();
+    assert_eq!(history.len(), 2);
+    assert_eq!(history[0].status, luuna_domain::CandidateStatus::Failed);
+    assert_eq!(history[0].results.len(), 1);
+    assert!(history[0].review.is_none());
+    assert_eq!(store.attempts(&id).unwrap().len(), 2);
+    assert!(store.workflow_usage(&id).unwrap().cost_usd_micros >= 1500);
+    assert_eq!(snapshot(repo.path()), before);
+}
+
+#[tokio::test]
+async fn stale_candidate_hash_and_manual_worktree_changes_cannot_start_validation() {
+    let harness = Harness::new();
+    let repo = tempfile::tempdir().unwrap();
+    ready(&harness, repo.path()).await;
+    let (id, _) = harness
+        .approved(repo.path(), "write_in_scope", json!({}))
+        .await;
+    assert_eq!(harness.implement(&id).await.0, StatusCode::ACCEPTED);
+    harness.settled(&id).await;
+    let candidate = harness.candidate(&id).await;
+    let hash = &candidate["evidence"]["candidate"]["hash"];
+    let (status, response) = harness
+        .candidate_action(
+            &id,
+            "validate",
+            &json!(format!("sha256:{}", "0".repeat(64))),
+        )
+        .await;
+    assert_eq!(status, StatusCode::CONFLICT, "{response}");
+    let (_, leases) = harness
+        .request("GET", &format!("/api/v1/runs/{id}/worktrees"), None)
+        .await;
+    let path = PathBuf::from(leases[0]["path"].as_str().unwrap());
+    fs::write(path.join("src/main.py"), "print('manual mutation')\n").unwrap();
+    let (status, response) = harness.candidate_action(&id, "validate", hash).await;
+    assert_eq!(status, StatusCode::CONFLICT, "{response}");
+    assert_eq!(
+        harness
+            .request("GET", &format!("/api/v1/runs/{id}/diff"), None)
+            .await
+            .0,
+        StatusCode::CONFLICT
+    );
+    let refused = harness.candidate(&id).await;
+    assert_eq!(refused["evidence"]["candidate"]["hash"], *hash);
+    assert_eq!(refused["evidence"]["validation_generation"], 0);
+    assert_eq!(refused["active"], false);
+    assert!(!harness
+        .events(&id)
+        .await
+        .iter()
+        .any(|e| e["type"] == "candidate.validation_started"));
+}
+
+#[tokio::test]
+async fn a_check_mutating_tracked_content_cannot_supply_reviewable_evidence() {
+    let harness = Harness::new();
+    let repo = tempfile::tempdir().unwrap();
+    clean_repository(repo.path());
+    register(&harness, repo.path()).await;
+    harness.confirm(0, vec![check("unit", "from pathlib import Path; p = Path('src/main.py'); candidate = 'implemented by' in p.read_text(); p.write_text(\"print('mutated by check')\\n\") if candidate else None; print('running 1 tests'); print('test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured')")]).await;
+    harness.baseline().await;
+    let before = snapshot(repo.path());
+    let (id, _) = harness
+        .approved(repo.path(), "write_in_scope", json!({}))
+        .await;
+    assert_eq!(harness.implement(&id).await.0, StatusCode::ACCEPTED);
+    harness.settled(&id).await;
+    let pending = harness.candidate(&id).await;
+    let hash = &pending["evidence"]["candidate"]["hash"];
+    assert_eq!(
+        harness.candidate_action(&id, "validate", hash).await.0,
+        StatusCode::ACCEPTED
+    );
+    let failed = harness.candidate_settled(&id).await;
+    assert_eq!(failed["evidence"]["status"], "failed", "{failed}");
+    assert_eq!(failed["evidence"]["candidate"]["hash"], *hash);
+    assert_eq!(failed["evidence"]["results"][0]["status"], "passed");
+    assert!(
+        failed["evidence"]["reason"]
+            .as_str()
+            .unwrap()
+            .contains("tracked"),
+        "{failed}"
+    );
+    assert!(failed["evidence"]["review"].is_null());
+    assert!(!harness
+        .events(&id)
+        .await
+        .iter()
+        .any(|e| e["type"] == "review.started"));
+    assert_eq!(snapshot(repo.path()), before);
+}
+
+#[tokio::test]
+async fn blocking_and_malformed_independent_reviews_never_pass() {
+    for (scenario, expected_state, reason) in [
+        (
+            "review_blocking",
+            "paused",
+            "independent review did not pass",
+        ),
+        (
+            "review_malformed",
+            "failed",
+            "invalid structured reviewer response",
+        ),
+        ("review_stale", "failed", "candidate"),
+        ("review_extension_error", "failed", "extension"),
+    ] {
+        let harness = Harness::new();
+        let repo = tempfile::tempdir().unwrap();
+        ready(&harness, repo.path()).await;
+        let (id, _) = harness
+            .approved(repo.path(), scenario, json!({"max_attempts":1}))
+            .await;
+        assert_eq!(harness.implement(&id).await.0, StatusCode::ACCEPTED);
+        harness.settled(&id).await;
+        let pending = harness.candidate(&id).await;
+        let hash = &pending["evidence"]["candidate"]["hash"];
+        assert_eq!(
+            harness.candidate_action(&id, "validate", hash).await.0,
+            StatusCode::ACCEPTED
+        );
+        let result = harness.candidate_settled(&id).await;
+        assert_eq!(result["evidence"]["status"], expected_state, "{result}");
+        assert_eq!(harness.run(&id).await["state"], expected_state);
+        assert_eq!(result["evidence"]["results"][0]["status"], "passed");
+        assert!(
+            result["evidence"]["reason"]
+                .as_str()
+                .unwrap()
+                .contains(reason),
+            "{result}"
+        );
+        if scenario == "review_blocking" {
+            assert_eq!(result["evidence"]["review"]["verdict"], "changes_required");
+            assert_eq!(
+                result["evidence"]["review"]["findings"][0]["severity"],
+                "blocking"
+            );
+        } else {
+            assert!(result["evidence"]["review"].is_null());
+        }
+        assert_eq!(
+            result["repair_allowed"], false,
+            "the first writer consumed max_attempts"
+        );
+        assert_ne!(
+            harness.candidate_action(&id, "repair", hash).await.0,
+            StatusCode::ACCEPTED
+        );
+    }
+}
+
+#[tokio::test]
+async fn scope_guard_extension_errors_fail_the_writer_before_recording_a_candidate() {
+    let harness = Harness::new();
+    let repo = tempfile::tempdir().unwrap();
+    ready(&harness, repo.path()).await;
+    let before = snapshot(repo.path());
+    let (id, _) = harness
+        .approved(repo.path(), "extension_error", json!({}))
+        .await;
+    assert_eq!(harness.implement(&id).await.0, StatusCode::ACCEPTED);
+    let failed = harness.settled(&id).await;
+    assert_eq!(failed["state"], "failed", "{failed}");
+    let events = harness.events(&id).await;
+    let reason = &events
+        .iter()
+        .find(|event| event["type"] == "run.failed")
+        .unwrap()["payload"]["reason"];
+    assert!(reason.as_str().unwrap().contains("extension"), "{reason}");
+    assert!(!events
+        .iter()
+        .any(|event| event["type"] == "candidate.recorded"));
+    assert!(harness.candidate(&id).await["evidence"].is_null());
+    let (_, attempts) = harness
+        .request("GET", &format!("/api/v1/runs/{id}/attempts"), None)
+        .await;
+    assert_eq!(attempts[0]["state"], "failed");
+    let (_, leases) = harness
+        .request("GET", &format!("/api/v1/runs/{id}/worktrees"), None)
+        .await;
+    assert_eq!(leases[0]["state"], "released");
+    assert!(leases[0]["candidate_commit"].is_null());
+    assert_eq!(snapshot(repo.path()), before);
+}
+
+#[tokio::test]
+async fn separate_workflows_can_record_reviews_when_the_model_reuses_its_result_id() {
+    let harness = Harness::new();
+    let repo = tempfile::tempdir().unwrap();
+    ready(&harness, repo.path()).await;
+    let mut review_ids = Vec::new();
+    for _ in 0..2 {
+        let (id, _) = harness
+            .approved(repo.path(), "write_in_scope", json!({}))
+            .await;
+        assert_eq!(harness.implement(&id).await.0, StatusCode::ACCEPTED);
+        harness.settled(&id).await;
+        let initial = harness.candidate(&id).await;
+        let hash = &initial["evidence"]["candidate"]["hash"];
+        assert_eq!(
+            harness.candidate_action(&id, "validate", hash).await.0,
+            StatusCode::ACCEPTED
+        );
+        let passed = harness.candidate_settled(&id).await;
+        assert_eq!(passed["evidence"]["status"], "reviewed", "{passed}");
+        let review = &passed["evidence"]["review"];
+        assert_eq!(review["candidate_hash"], *hash);
+        assert_eq!(review["id"], review["reviewer_session"]);
+        review_ids.push(review["id"].clone());
+    }
+    assert_ne!(review_ids[0], review_ids[1]);
+}
+
+#[tokio::test]
+async fn cancelling_candidate_review_preserves_candidate_checks_and_consumed_attempts() {
+    let harness = Harness::new();
+    let repo = tempfile::tempdir().unwrap();
+    ready(&harness, repo.path()).await;
+    let (id, _) = harness
+        .approved(repo.path(), "review_hold", json!({"max_attempts":1}))
+        .await;
+    assert_eq!(harness.implement(&id).await.0, StatusCode::ACCEPTED);
+    harness.settled(&id).await;
+    let initial = harness.candidate(&id).await;
+    let hash = &initial["evidence"]["candidate"]["hash"];
+    assert_eq!(
+        harness.candidate_action(&id, "validate", hash).await.0,
+        StatusCode::ACCEPTED
+    );
+    harness.wait_for_event(&id, "review.started").await;
+    assert_eq!(harness.candidate(&id).await["active"], true);
+    assert_eq!(
+        harness
+            .request("POST", &format!("/api/v1/runs/{id}/cancel"), None)
+            .await
+            .0,
+        StatusCode::ACCEPTED
+    );
+    let cancelled = harness.candidate_settled(&id).await;
+    assert_eq!(cancelled["evidence"]["status"], "cancelled", "{cancelled}");
+    assert_eq!(
+        cancelled["evidence"]["candidate"],
+        initial["evidence"]["candidate"]
+    );
+    assert_eq!(cancelled["evidence"]["results"][0]["status"], "passed");
+    assert!(cancelled["evidence"]["review"].is_null());
+    assert!(cancelled["evidence"]["reason"]
+        .as_str()
+        .unwrap()
+        .contains("cancelled"));
+    assert_eq!(cancelled["repair_allowed"], false);
+    assert_ne!(
+        harness.candidate_action(&id, "validate", hash).await.0,
+        StatusCode::ACCEPTED
+    );
+    let store = luuna_storage::Store::open(harness.root.join("luuna.sqlite3")).unwrap();
+    assert_eq!(store.attempts(&id).unwrap().len(), 1);
+    assert_eq!(store.workflow_usage(&id).unwrap().attempts, 1);
+    assert!(store.workflow_usage(&id).unwrap().cost_usd_micros >= 500);
+}
+
+#[tokio::test]
+async fn restart_during_review_preserves_candidate_and_reserves_unknown_provider_spend() {
+    let harness = Harness::new();
+    let repo = tempfile::tempdir().unwrap();
+    ready(&harness, repo.path()).await;
+    let (id, _) = harness
+        .approved(repo.path(), "review_hold", json!({"max_attempts":1}))
+        .await;
+    assert_eq!(harness.implement(&id).await.0, StatusCode::ACCEPTED);
+    harness.settled(&id).await;
+    let initial = harness.candidate(&id).await;
+    let hash = &initial["evidence"]["candidate"]["hash"];
+    assert_eq!(
+        harness.candidate_action(&id, "validate", hash).await.0,
+        StatusCode::ACCEPTED
+    );
+    harness.wait_for_event(&id, "review.started").await;
+    let mut store = luuna_storage::Store::open(harness.root.join("luuna.sqlite3")).unwrap();
+    let usage_before = store.workflow_usage(&id).unwrap();
+    assert_eq!(store.interrupt_active_runs().unwrap(), 1);
+    harness.state.cancel_active();
+    let interrupted = harness.candidate_settled(&id).await;
+    assert_eq!(
+        interrupted["evidence"]["status"], "interrupted",
+        "{interrupted}"
+    );
+    assert_eq!(harness.run(&id).await["state"], "interrupted");
+    assert_eq!(
+        interrupted["evidence"]["candidate"],
+        initial["evidence"]["candidate"]
+    );
+    assert!(interrupted["evidence"]["review"].is_null());
+    assert_eq!(
+        store.workflow_usage(&id).unwrap().attempts,
+        usage_before.attempts
+    );
+    assert!(store.workflow_usage(&id).unwrap().cost_usd_micros >= usage_before.cost_usd_micros);
+    assert_eq!(
+        store.workflow_usage(&id).unwrap().cost_usd_micros,
+        1_000_000
+    );
+    assert!(interrupted["evidence"]["reason"]
+        .as_str()
+        .unwrap()
+        .contains("unreported provider spend"));
+    let (status, response) = harness.candidate_action(&id, "validate", hash).await;
+    assert_ne!(status, StatusCode::ACCEPTED, "{response}");
+    assert!(
+        response["error"].as_str().unwrap().contains("budget"),
+        "{response}"
+    );
+    assert_eq!(
+        harness.candidate(&id).await["evidence"]["validation_generation"],
+        1
+    );
+    assert_eq!(store.workflow_usage(&id).unwrap().attempts, 1);
+    assert_eq!(store.attempts(&id).unwrap().len(), 1);
+}
+
+#[tokio::test]
+async fn restart_during_checks_requires_a_fresh_generation_without_resetting_writer_usage() {
+    let harness = Harness::new();
+    let repo = tempfile::tempdir().unwrap();
+    clean_repository(repo.path());
+    register(&harness, repo.path()).await;
+    // The generated marker coordinates an in-flight command without altering
+    // tracked candidate content. A retry can then complete the real command.
+    harness.confirm(0, vec![check("unit", "from pathlib import Path; import time; candidate = 'implemented by' in Path('src/main.py').read_text(); marker = Path('.check-started'); hold = candidate and not marker.exists(); marker.touch() if candidate else None; time.sleep(60) if hold else None; print('running 1 tests'); print('test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured')")]).await;
+    harness.baseline().await;
+    let before = snapshot(repo.path());
+    let (id, _) = harness
+        .approved(repo.path(), "write_in_scope", json!({"max_attempts":1}))
+        .await;
+    assert_eq!(harness.implement(&id).await.0, StatusCode::ACCEPTED);
+    harness.settled(&id).await;
+    let initial = harness.candidate(&id).await;
+    let hash = &initial["evidence"]["candidate"]["hash"];
+    let (_, leases) = harness
+        .request("GET", &format!("/api/v1/runs/{id}/worktrees"), None)
+        .await;
+    let worktree = PathBuf::from(leases[0]["path"].as_str().unwrap());
+    assert_eq!(
+        harness.candidate_action(&id, "validate", hash).await.0,
+        StatusCode::ACCEPTED
+    );
+    for _ in 0..200 {
+        if worktree.join(".check-started").exists() {
+            break;
+        }
+        tokio::time::sleep(Duration::from_millis(25)).await;
+    }
+    assert!(
+        worktree.join(".check-started").exists(),
+        "candidate command must be running before recovery"
+    );
+    let mut store = luuna_storage::Store::open(harness.root.join("luuna.sqlite3")).unwrap();
+    let usage_before = store.workflow_usage(&id).unwrap();
+    assert_eq!(store.interrupt_active_runs().unwrap(), 1);
+    harness.state.cancel_active();
+    let interrupted = harness.candidate_settled(&id).await;
+    assert_eq!(
+        interrupted["evidence"]["status"], "interrupted",
+        "{interrupted}"
+    );
+    assert_eq!(
+        interrupted["evidence"]["candidate"],
+        initial["evidence"]["candidate"]
+    );
+    assert!(interrupted["evidence"]["results"]
+        .as_array()
+        .unwrap()
+        .is_empty());
+    assert!(interrupted["evidence"]["review"].is_null());
+
+    let (status, response) = harness.candidate_action(&id, "validate", hash).await;
+    assert_eq!(status, StatusCode::ACCEPTED, "{response}");
+    let passed = harness.candidate_settled(&id).await;
+    assert_eq!(passed["evidence"]["status"], "reviewed", "{passed}");
+    assert_eq!(passed["evidence"]["validation_generation"], 2);
+    assert_eq!(
+        passed["evidence"]["candidate"],
+        initial["evidence"]["candidate"]
+    );
+    assert_eq!(passed["evidence"]["results"][0]["candidate_hash"], *hash);
+    assert_eq!(passed["evidence"]["results"][0]["status"], "passed");
+    assert_eq!(
+        store.workflow_usage(&id).unwrap().attempts,
+        usage_before.attempts
+    );
+    assert!(
+        store.workflow_usage(&id).unwrap().cost_usd_micros >= usage_before.cost_usd_micros + 500
+    );
+    assert_eq!(store.attempts(&id).unwrap().len(), 1);
+    let generations: Vec<_> = harness
+        .events(&id)
+        .await
+        .into_iter()
+        .filter(|e| e["type"] == "candidate.validation_started")
+        .map(|e| e["payload"]["generation"].clone())
+        .collect();
+    assert_eq!(generations, vec![json!(1), json!(2)]);
+    assert_eq!(snapshot(repo.path()), before);
+}
+
+#[tokio::test]
+async fn automatic_repair_runs_fresh_checks_and_review_on_the_repaired_candidate() {
+    let harness = Harness::new();
+    let repo = tempfile::tempdir().unwrap();
+    clean_repository(repo.path());
+    register(&harness, repo.path()).await;
+    harness.confirm(0, vec![check("unit", "from pathlib import Path; import sys; bad = 'seeded regression' in Path('src/main.py').read_text(); print('running 1 tests'); print('test result: FAILED. 0 passed; 1 failed' if bad else 'test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured'); sys.exit(1 if bad else 0)")]).await;
+    harness.baseline().await;
+    let before = snapshot(repo.path());
+    let (id, _) = harness
+        .approved(repo.path(), "repair_in_scope", json!({"max_attempts":2}))
+        .await;
+    assert_eq!(harness.implement(&id).await.0, StatusCode::ACCEPTED);
+    harness.settled(&id).await;
+    let initial = harness.candidate(&id).await;
+    let first = &initial["evidence"]["candidate"];
+    let (status, response) = harness.validate_with_repairs(&id, &first["hash"]).await;
+    assert_eq!(status, StatusCode::ACCEPTED, "{response}");
+    let passed = harness.candidate_settled(&id).await;
+    let evidence = &passed["evidence"];
+    assert_eq!(evidence["status"], "reviewed", "{passed}");
+    assert_eq!(harness.run(&id).await["state"], "reviewed");
+    assert_eq!(evidence["candidate"]["id"], first["id"]);
+    assert_eq!(evidence["candidate"]["revision"], 2);
+    assert_eq!(evidence["candidate"]["plan_hash"], first["plan_hash"]);
+    assert_ne!(evidence["candidate"]["hash"], first["hash"]);
+    assert_eq!(
+        evidence["results"][0]["candidate_hash"],
+        evidence["candidate"]["hash"]
+    );
+    assert_eq!(evidence["results"][0]["status"], "passed");
+    assert_eq!(
+        evidence["review"]["candidate_hash"],
+        evidence["candidate"]["hash"]
+    );
+    assert_eq!(evidence["review"]["verdict"], "passed");
+    let store = luuna_storage::Store::open(harness.root.join("luuna.sqlite3")).unwrap();
+    let candidates = store.candidates(&id).unwrap();
+    assert_eq!(candidates.len(), 2);
+    assert_eq!(
+        candidates[0].results[0].status,
+        luuna_domain::CheckStatus::Failed
+    );
+    assert!(candidates[0].review.is_none());
+    assert_ne!(candidates[0].results[0].id, candidates[1].results[0].id);
+    assert_eq!(store.attempts(&id).unwrap().len(), 2);
+    assert_eq!(store.workflow_usage(&id).unwrap().attempts, 2);
+    assert!(store.workflow_usage(&id).unwrap().cost_usd_micros >= 1500);
+    assert_eq!(snapshot(repo.path()), before);
+}
+
+#[tokio::test]
+async fn automatic_repair_pauses_when_a_blocking_review_exhausts_the_attempt_budget() {
+    let harness = Harness::new();
+    let repo = tempfile::tempdir().unwrap();
+    ready(&harness, repo.path()).await;
+    let before = snapshot(repo.path());
+    let (id, _) = harness
+        .approved(repo.path(), "review_blocking", json!({"max_attempts":2}))
+        .await;
+    assert_eq!(harness.implement(&id).await.0, StatusCode::ACCEPTED);
+    harness.settled(&id).await;
+    let initial = harness.candidate(&id).await;
+    let (status, response) = harness
+        .validate_with_repairs(&id, &initial["evidence"]["candidate"]["hash"])
+        .await;
+    assert_eq!(status, StatusCode::ACCEPTED, "{response}");
+    let paused = harness.candidate_settled(&id).await;
+    assert_eq!(harness.run(&id).await["state"], "paused");
+    assert_eq!(paused["evidence"]["status"], "paused", "{paused}");
+    assert_eq!(paused["evidence"]["candidate"]["revision"], 2);
+    assert_eq!(paused["evidence"]["review"]["verdict"], "changes_required");
+    assert_eq!(paused["repair_allowed"], false);
+    assert!(
+        paused["evidence"]["reason"]
+            .as_str()
+            .unwrap()
+            .contains("attempt"),
+        "{paused}"
+    );
+    let store = luuna_storage::Store::open(harness.root.join("luuna.sqlite3")).unwrap();
+    assert_eq!(store.attempts(&id).unwrap().len(), 2);
+    assert_eq!(store.workflow_usage(&id).unwrap().attempts, 2);
+    assert!(store.workflow_usage(&id).unwrap().cost_usd_micros >= 2000);
+    let candidates = store.candidates(&id).unwrap();
+    assert_eq!(candidates.len(), 2);
+    assert_eq!(
+        candidates[0].review.as_ref().unwrap().verdict,
+        luuna_domain::ReviewVerdict::ChangesRequired
+    );
+    assert_eq!(
+        candidates[1].review.as_ref().unwrap().verdict,
+        luuna_domain::ReviewVerdict::ChangesRequired
+    );
+    assert_eq!(snapshot(repo.path()), before);
+}
+
+#[cfg(unix)]
+#[tokio::test]
+async fn automatic_repair_does_not_start_a_writer_for_a_missing_check_executable() {
+    use std::os::unix::fs::PermissionsExt;
+    let harness = Harness::new();
+    let repo = tempfile::tempdir().unwrap();
+    clean_repository(repo.path());
+    // Host-local ignored executables can satisfy a developer baseline but are
+    // absent from a fresh candidate worktree. That is an infrastructure block.
+    fs::write(repo.path().join(".git/info/exclude"), "checks/\n").unwrap();
+    fs::create_dir(repo.path().join("checks")).unwrap();
+    let executable = repo.path().join("checks/run");
+    fs::write(&executable, "#!/bin/sh\necho 'running 1 tests'\necho 'test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured'\n").unwrap();
+    fs::set_permissions(&executable, fs::Permissions::from_mode(0o755)).unwrap();
+    register(&harness, repo.path()).await;
+    harness.confirm(0, vec![json!({"id":"unit","executable":"./checks/run","args":[],"required":true,"timeout_seconds":30,"capabilities":[],"cwd":"."})]).await;
+    harness.baseline().await;
+    let before = snapshot(repo.path());
+    let (id, _) = harness
+        .approved(repo.path(), "write_in_scope", json!({"max_attempts":2}))
+        .await;
+    assert_eq!(harness.implement(&id).await.0, StatusCode::ACCEPTED);
+    harness.settled(&id).await;
+    let initial = harness.candidate(&id).await;
+    let (status, response) = harness
+        .validate_with_repairs(&id, &initial["evidence"]["candidate"]["hash"])
+        .await;
+    assert_eq!(status, StatusCode::ACCEPTED, "{response}");
+    let blocked = harness.candidate_settled(&id).await;
+    assert_eq!(harness.run(&id).await["state"], "testing_blocked");
+    assert_eq!(
+        blocked["evidence"]["status"], "testing_blocked",
+        "{blocked}"
+    );
+    assert_eq!(
+        blocked["evidence"]["candidate"],
+        initial["evidence"]["candidate"]
+    );
+    assert_eq!(blocked["evidence"]["results"][0]["status"], "blocked");
+    assert!(blocked["evidence"]["results"][0]["reason"]
+        .as_str()
+        .unwrap()
+        .contains("does not exist"));
+    assert!(blocked["evidence"]["review"].is_null());
+    let store = luuna_storage::Store::open(harness.root.join("luuna.sqlite3")).unwrap();
+    assert_eq!(store.attempts(&id).unwrap().len(), 1);
+    assert_eq!(store.candidates(&id).unwrap().len(), 1);
+    assert!(!harness
+        .events(&id)
+        .await
+        .iter()
+        .any(|event| event["type"] == "candidate.repair_started"));
+    assert_eq!(snapshot(repo.path()), before);
+}
+
+#[tokio::test]
+async fn automatic_repair_does_not_turn_check_deadlines_into_writer_assignments() {
+    let harness = Harness::new();
+    let repo = tempfile::tempdir().unwrap();
+    clean_repository(repo.path());
+    register(&harness, repo.path()).await;
+    let mut timed_check = check("unit", "from pathlib import Path; import time; time.sleep(60) if 'implemented by' in Path('src/main.py').read_text() else None; print('running 1 tests'); print('test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured')");
+    timed_check["timeout_seconds"] = json!(1);
+    harness.confirm(0, vec![timed_check]).await;
+    harness.baseline().await;
+    let (id, _) = harness
+        .approved(repo.path(), "write_in_scope", json!({"max_attempts":2}))
+        .await;
+    assert_eq!(harness.implement(&id).await.0, StatusCode::ACCEPTED);
+    harness.settled(&id).await;
+    let initial = harness.candidate(&id).await;
+    let (status, response) = harness
+        .validate_with_repairs(&id, &initial["evidence"]["candidate"]["hash"])
+        .await;
+    assert_eq!(status, StatusCode::ACCEPTED, "{response}");
+    let failed = harness.candidate_settled(&id).await;
+    assert_eq!(failed["evidence"]["status"], "failed", "{failed}");
+    assert_eq!(
+        failed["evidence"]["candidate"],
+        initial["evidence"]["candidate"]
+    );
+    assert!(failed["evidence"]["results"][0]["reason"]
+        .as_str()
+        .unwrap()
+        .contains("deadline"));
+    let store = luuna_storage::Store::open(harness.root.join("luuna.sqlite3")).unwrap();
+    assert_eq!(store.attempts(&id).unwrap().len(), 1);
+    assert_eq!(store.candidates(&id).unwrap().len(), 1);
+    assert!(!harness
+        .events(&id)
+        .await
+        .iter()
+        .any(|event| event["type"] == "candidate.repair_started"));
+}
+
+#[tokio::test]
+async fn cancelling_an_automatic_repair_stops_its_writer_and_preserves_both_attempts() {
+    let harness = Harness::new();
+    let repo = tempfile::tempdir().unwrap();
+    clean_repository(repo.path());
+    register(&harness, repo.path()).await;
+    harness.confirm(0, vec![check("unit", "from pathlib import Path; import sys; bad = 'seeded regression' in Path('src/main.py').read_text(); print('running 1 tests'); print('test result: FAILED. 0 passed; 1 failed' if bad else 'test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured'); sys.exit(1 if bad else 0)")]).await;
+    harness.baseline().await;
+    let before = snapshot(repo.path());
+    let (id, _) = harness
+        .approved(repo.path(), "repair_hold", json!({"max_attempts":2}))
+        .await;
+    assert_eq!(harness.implement(&id).await.0, StatusCode::ACCEPTED);
+    harness.settled(&id).await;
+    let initial = harness.candidate(&id).await;
+    let (status, response) = harness
+        .validate_with_repairs(&id, &initial["evidence"]["candidate"]["hash"])
+        .await;
+    assert_eq!(status, StatusCode::ACCEPTED, "{response}");
+    for _ in 0..200 {
+        if harness
+            .events(&id)
+            .await
+            .iter()
+            .filter(|event| event["type"] == "pi.agent_start")
+            .count()
+            == 2
+        {
+            break;
+        }
+        tokio::time::sleep(Duration::from_millis(25)).await;
+    }
+    assert_eq!(
+        harness
+            .events(&id)
+            .await
+            .iter()
+            .filter(|event| event["type"] == "pi.agent_start")
+            .count(),
+        2
+    );
+    assert_eq!(harness.run(&id).await["state"], "implementing");
+    assert_eq!(harness.candidate(&id).await["active"], true);
+    assert_eq!(
+        harness
+            .request("POST", &format!("/api/v1/runs/{id}/cancel"), None)
+            .await
+            .0,
+        StatusCode::ACCEPTED
+    );
+    let cancelled = harness.candidate_settled(&id).await;
+    assert_eq!(harness.run(&id).await["state"], "cancelled");
+    assert_eq!(
+        cancelled["evidence"]["candidate"],
+        initial["evidence"]["candidate"]
+    );
+    assert_eq!(cancelled["evidence"]["results"][0]["status"], "failed");
+    assert!(cancelled["evidence"]["review"].is_null());
+    assert_eq!(cancelled["repair_allowed"], false);
+    let store = luuna_storage::Store::open(harness.root.join("luuna.sqlite3")).unwrap();
+    let attempts = store.attempts(&id).unwrap();
+    assert_eq!(attempts.len(), 2);
+    assert_eq!(attempts[0].state, luuna_domain::AttemptState::Completed);
+    assert_eq!(attempts[1].state, luuna_domain::AttemptState::Cancelled);
+    assert_eq!(store.workflow_usage(&id).unwrap().attempts, 2);
+    assert!(store.active_worktree_leases().unwrap().is_empty());
+    assert_eq!(store.worktree_leases(&id).unwrap().len(), 2);
+    assert_eq!(snapshot(repo.path()), before);
 }

@@ -33,6 +33,7 @@ export function App() {
   const [runs, setRuns] = useState<RunRecord[]>([]);
   const [selected, setSelected] = useState<string | null>(null);
   const [events, setEvents] = useState<EventEnvelope[]>([]);
+  const [candidateActive, setCandidateActive] = useState(false);
   const [provider, setProvider] = useState("");
   const [model, setModel] = useState("");
   const [prompt, setPrompt] = useState("");
@@ -42,6 +43,7 @@ export function App() {
   const [refresh, setRefresh] = useState(0);
   const operation = useRef<AbortController | null>(null);
   const active = runs.find((run) => run.id === selected);
+  const selectedWorkflow = active?.metadata.kind === "workflow";
   const output = assistantText(events);
 
   useEffect(() => () => operation.current?.abort(), []);
@@ -72,6 +74,7 @@ export function App() {
 
   useEffect(() => {
     setEvents([]);
+    setCandidateActive(false);
     if (!client || !selected) return;
     const controller = new AbortController();
     let cursor = 0;
@@ -80,10 +83,14 @@ export function App() {
       while (!controller.signal.aborted) {
         try {
           // Authenticated cursor replay also repairs gaps after sleep or disconnection.
-          const incoming = await client.events(selected, cursor, controller.signal);
+          const [incoming, candidate] = await Promise.all([
+            client.events(selected, cursor, controller.signal),
+            selectedWorkflow ? client.candidate(selected, controller.signal) : Promise.resolve(null),
+          ]);
           if (controller.signal.aborted) return;
           received = mergeEvents(received, incoming);
           setEvents(received);
+          setCandidateActive(candidate?.active ?? false);
           cursor = received.at(-1)?.sequence ?? 0;
           setLive("Connected · event replay");
           await pause(700, controller.signal);
@@ -96,7 +103,7 @@ export function App() {
     };
     void follow();
     return () => controller.abort();
-  }, [client, selected, refresh]);
+  }, [client, selected, selectedWorkflow, refresh]);
 
   async function connect(event: FormEvent) {
     event.preventDefault();
@@ -212,7 +219,7 @@ export function App() {
         <div className="main-column">
           <section className="panel" aria-labelledby="new-run-heading">
             <div className="panel-heading"><h2 id="new-run-heading">Start a Pi session</h2><span className="tag">Isolated demo</span></div>
-            <p className="scope">This session runs Pi without repository tools. Approved edits happen through a project ticket, plan and approval below; checks, review and publishing are later milestones.</p>
+            <p className="scope">This session runs Pi without repository tools. Use the project workflow above for approved edits, candidate checks and independent review.</p>
             <form onSubmit={(event) => void start(event)}>
               <fieldset disabled={!client || busy}>
                 <div className="model-fields"><label>Provider<input value={provider} onChange={(event) => setProvider(event.target.value)} placeholder="Runtime default" spellCheck={false} /></label><label>Model<input value={model} onChange={(event) => setModel(event.target.value)} placeholder="Runtime default" spellCheck={false} /></label></div>
@@ -225,7 +232,7 @@ export function App() {
           <section className="panel event-panel" aria-labelledby="events-heading">
             <div className="panel-heading"><h2 id="events-heading">{active ? "Session events" : "Live activity"}</h2>{active && <span className={`state ${active.state}`}>{active.state}</span>}</div>
             {active ? <>
-              <div className="run-detail"><code>{active.id}</code><span>{live}</span>{canCancel(active.state) && <button className="danger" disabled={busy} onClick={() => void cancel()}>Cancel session</button>}</div>
+              <div className="run-detail"><code>{active.id}</code><span>{live}</span>{canCancel(active.state, candidateActive) && <button className="danger" disabled={busy} onClick={() => void cancel()}>Cancel session</button>}</div>
               {active.state === "failed" && <p className="failure-note">This session failed. Open the final events below for the runtime’s recorded reason.</p>}
               {output && <div className="assistant-output"><h3>Pi response</h3><pre aria-live="polite">{output}</pre></div>}
               <ol className="events" aria-label="Durable session events">{events.map((event) => <li key={event.event_id}>
@@ -238,6 +245,6 @@ export function App() {
         </div>
       </div>
     </main>
-    <footer>Luuna · Local-first engineering workbench<span>M0 / M1 foundation · M2a import · M2b baseline · M2c writer</span></footer>
+    <footer>Luuna · Local-first engineering workbench<span>Import · baseline · approved writer · candidate checks and review</span></footer>
   </div>;
 }

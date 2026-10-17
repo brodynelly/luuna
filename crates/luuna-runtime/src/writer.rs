@@ -463,6 +463,8 @@ struct WriterJob {
     registration: RepositoryRegistration,
     provider: Option<String>,
     model: Option<String>,
+    previous_candidate: Option<CandidateSet>,
+    repair_feedback: Option<String>,
 }
 
 /// Schedule the approved workflow's writer. Everything that can be refused is
@@ -475,7 +477,55 @@ pub async fn implement(
     Path(id): Path<String>,
     request: Option<Json<Implement>>,
 ) -> Result<(StatusCode, Json<RunRecord>), ApiError> {
-    let request = request.map(|Json(r)| r).unwrap_or_default();
+    schedule_writer(
+        state,
+        id,
+        request.map(|Json(r)| r).unwrap_or_default(),
+        None,
+        None,
+    )
+    .await
+}
+
+pub async fn repair(
+    State(state): State<AppState>,
+    Path(id): Path<String>,
+    Json(request): Json<crate::candidates::CandidateRequest>,
+) -> Result<(StatusCode, Json<RunRecord>), ApiError> {
+    schedule_writer(
+        state,
+        id,
+        Implement {
+            task_id: None,
+            provider: request.provider,
+            model: request.model,
+        },
+        Some(request.candidate_hash),
+        None,
+    )
+    .await
+}
+
+async fn schedule_writer(
+    state: AppState,
+    id: String,
+    request: Implement,
+    repair_hash: Option<String>,
+    inline_cancel: Option<watch::Receiver<bool>>,
+) -> Result<(StatusCode, Json<RunRecord>), ApiError> {
+    let (previous_candidate, repair_feedback) = if let Some(ref hash) = repair_hash {
+        let store = state.store.lock().map_err(internal)?;
+        store
+            .can_candidate_repair(&id, hash)
+            .map_err(storage_error)?;
+        let evidence = store
+            .current_candidate(&id)
+            .map_err(internal)?
+            .ok_or_else(|| conflict("candidate missing"))?;
+        (Some(evidence.candidate.clone()),Some(format!("Repair feedback: {}",serde_json::to_string(&json!({"reason":evidence.reason,"checks":evidence.results,"review":evidence.review})).map_err(internal)?)))
+    } else {
+        (None, None)
+    };
     let (run, plan, task, ticket, registration, manifest) = {
         let store = state.store.lock().map_err(internal)?;
         let run = store
@@ -485,7 +535,7 @@ pub async fn implement(
         if run.metadata["kind"] != "workflow" {
             return Err(unprocessable("only a plan workflow can be implemented"));
         }
-        if run.state != RunState::Approved {
+        if repair_hash.is_none() && run.state != RunState::Approved {
             return Err(conflict(format!(
                 "workflow is {:?}; an exact approval is required before implementation",
                 run.state
@@ -599,20 +649,30 @@ pub async fn implement(
     )
     .await;
     let (tx, rx) = watch::channel(false);
-    let mut active = state.active.lock().map_err(internal)?;
-    if active.contains_key(&run.id) {
-        return Err(conflict("this workflow already has an active writer"));
-    }
-    if active.len() >= 4 {
-        return Err(ApiError(
-            StatusCode::TOO_MANY_REQUESTS,
-            "four runs are already active".into(),
-        ));
+    if inline_cancel
+        .as_ref()
+        .is_some_and(|cancel| *cancel.borrow())
+    {
+        return Err(conflict("cancelled before automatic repair startup"));
     }
     let (run, attempt) = {
-        let mut store = state.store.lock().map_err(internal)?;
-        let run = store
-            .begin_implementation(&run.id, run.revision, &fingerprint)
+        let mut active = state.active.lock().map_err(internal)?;
+        if inline_cancel.is_none() && active.contains_key(&run.id) {
+            return Err(conflict("this workflow already has an active writer"));
+        }
+        if inline_cancel.is_none() && active.len() >= 4 {
+            return Err(ApiError(
+                StatusCode::TOO_MANY_REQUESTS,
+                "four runs are already active".into(),
+            ));
+        }
+        let (run, attempt) = {
+            let mut store = state.store.lock().map_err(internal)?;
+            let run = if let Some(ref hash) = repair_hash {
+                store.begin_candidate_repair(&run.id, run.revision, hash, &fingerprint)
+            } else {
+                store.begin_implementation(&run.id, run.revision, &fingerprint)
+            }
             .map_err(|e| match e {
                 StorageError::Domain(luuna_domain::DomainError::BaselineRequired(detail)) => {
                     unprocessable(format!("implementation refused: {detail}"))
@@ -628,7 +688,7 @@ pub async fn implement(
                 }
                 other => storage_error(other),
             })?;
-        let attempt = store
+            let attempt = store
             .start_attempt(
                 &format!("attempt-{}", uuid::Uuid::new_v4()),
                 &run.id,
@@ -637,10 +697,13 @@ pub async fn implement(
                 json!({"provider": provider, "model": model, "environment_fingerprint": fingerprint, "pi_version": PI_VERSION}),
             )
             .map_err(storage_error)?;
+            (run, attempt)
+        };
+        if inline_cancel.is_none() {
+            active.insert(run.id.clone(), tx);
+        }
         (run, attempt)
     };
-    active.insert(run.id.clone(), tx);
-    drop(active);
     let job = WriterJob {
         run_id: run.id.clone(),
         attempt,
@@ -650,7 +713,13 @@ pub async fn implement(
         registration,
         provider,
         model,
+        previous_candidate,
+        repair_feedback,
     };
+    if let Some(cancel) = inline_cancel {
+        writer_worker(state, job, cancel).await;
+        return Ok((StatusCode::ACCEPTED, Json(run)));
+    }
     let worker_state = state.clone();
     let run_id = run.id.clone();
     tokio::spawn(async move {
@@ -660,6 +729,29 @@ pub async fn implement(
         }
     });
     Ok((StatusCode::ACCEPTED, Json(run)))
+}
+
+pub(crate) async fn automatic_repair(
+    state: AppState,
+    id: String,
+    hash: String,
+    provider: Option<String>,
+    model: Option<String>,
+    cancel: watch::Receiver<bool>,
+) -> Result<(), ApiError> {
+    schedule_writer(
+        state,
+        id,
+        Implement {
+            task_id: None,
+            provider,
+            model,
+        },
+        Some(hash),
+        Some(cancel),
+    )
+    .await
+    .map(|_| ())
 }
 
 /// Every Pi event is persisted, with long strings truncated: the worktree and
@@ -720,7 +812,11 @@ fn writer_prompt(job: &WriterJob) -> String {
     format!(
         "Ticket: {title}\n\n{intent}\n\nAcceptance criteria:\n{criteria}",
         title = job.ticket.title,
-        intent = job.ticket.intent,
+        intent = format_args!(
+            "{}\n\n{}",
+            job.ticket.intent,
+            job.repair_feedback.as_deref().unwrap_or("")
+        ),
         criteria = criteria.join("\n")
     )
 }
@@ -737,9 +833,10 @@ async fn writer_worker(state: AppState, job: WriterJob, mut cancel: watch::Recei
     let attempt_id = job.attempt.id.clone();
     let repository_id = job.task.repository_id.clone();
     let base = job
-        .plan
-        .base_commits
-        .get(&repository_id)
+        .previous_candidate
+        .as_ref()
+        .and_then(|candidate| candidate.repository_commits.get(&repository_id))
+        .or_else(|| job.plan.base_commits.get(&repository_id))
         .cloned()
         .unwrap_or_default();
     let settle = |state: &AppState,
@@ -905,11 +1002,37 @@ async fn writer_worker(state: AppState, job: WriterJob, mut cancel: watch::Recei
     );
     let started = std::time::Instant::now();
     let budgets = job.plan.budgets.clone();
+    let previous_usage = match state
+        .store
+        .lock()
+        .map_err(|e| e.to_string())
+        .and_then(|store| store.workflow_usage(&run_id).map_err(|e| e.to_string()))
+    {
+        Ok(usage) => usage,
+        Err(error) => {
+            let _ = process.stop().await;
+            settle(
+                &state,
+                AttemptState::Failed,
+                RunState::Failed,
+                Some((&lease_id, LeaseState::Released, None)),
+                &format!("cannot load durable usage: {error}"),
+                json!({}),
+            );
+            return;
+        }
+    };
     let mut usage = BudgetUsage {
         attempts: job.attempt.number,
         workers: 1,
-        ..Default::default()
+        elapsed_seconds: previous_usage.elapsed_seconds,
+        cost_usd_micros: previous_usage.cost_usd_micros,
     };
+    let remaining_seconds = budgets
+        .timeout_seconds
+        .saturating_sub(previous_usage.elapsed_seconds);
+    let mut writer_cost = 0u64;
+    let mut session_usage = luuna_engine_pi::SessionUsage::default();
     let operation = async {
         process
             .command("state-1", "get_state", json!({}))
@@ -937,6 +1060,9 @@ async fn writer_worker(state: AppState, job: WriterJob, mut cancel: watch::Recei
         let mut accepted = false;
         loop {
             let record = process.next().await.map_err(|e| e.to_string())?;
+            if record.kind == "extension_error" {
+                return Err("scope extension failed; session refused".to_owned());
+            }
             state
                 .event(
                     &job.run_id,
@@ -944,17 +1070,11 @@ async fn writer_worker(state: AppState, job: WriterJob, mut cancel: watch::Recei
                     bounded(record.raw.clone()),
                 )
                 .map_err(|_| "cannot persist event".to_owned())?;
-            if let Some(cost) = record.raw["usage"]["cost"]["total"].as_f64() {
-                usage.cost_usd_micros = (cost * 1_000_000.0).round().max(0.0) as u64;
-            }
-            if record.kind == "message_end" {
-                if let Some(cost) = record.raw["message"]["usage"]["cost"]["total"].as_f64() {
-                    usage.cost_usd_micros = usage
-                        .cost_usd_micros
-                        .max((cost * 1_000_000.0).round().max(0.0) as u64);
-                }
-            }
-            usage.elapsed_seconds = started.elapsed().as_secs();
+            writer_cost = session_usage.observe(&record);
+            usage.cost_usd_micros = previous_usage.cost_usd_micros.saturating_add(writer_cost);
+            usage.elapsed_seconds = previous_usage
+                .elapsed_seconds
+                .saturating_add(started.elapsed().as_secs());
             if let Err(error) = budgets.check(usage) {
                 return Err(error.to_string());
             }
@@ -995,7 +1115,7 @@ async fn writer_worker(state: AppState, job: WriterJob, mut cancel: watch::Recei
     let outcome = tokio::select! {
         biased;
         _ = cancel.changed() => Outcome::Cancelled,
-        result = tokio::time::timeout(Duration::from_secs(budgets.timeout_seconds), operation) => match result {
+        result = tokio::time::timeout(Duration::from_secs(remaining_seconds), operation) => match result {
             Ok(Ok(())) => Outcome::Settled,
             Ok(Err(error)) => Outcome::Failed(error),
             Err(_) => Outcome::Timeout,
@@ -1003,7 +1123,7 @@ async fn writer_worker(state: AppState, job: WriterJob, mut cancel: watch::Recei
     };
     // The child is stopped and reaped before any verdict is persisted.
     let stopped = process.stop().await;
-    let usage_json = json!({"elapsed_seconds": started.elapsed().as_secs(), "cost_usd_micros": usage.cost_usd_micros, "attempt": job.attempt.number});
+    let usage_json = json!({"elapsed_seconds": started.elapsed().as_secs(), "cost_usd_micros": writer_cost, "attempt": job.attempt.number});
     if let Err(error) = stopped {
         settle(
             &state,
@@ -1011,6 +1131,17 @@ async fn writer_worker(state: AppState, job: WriterJob, mut cancel: watch::Recei
             RunState::Failed,
             Some((&lease_id, LeaseState::Released, None)),
             &format!("process cleanup failed: {error}"),
+            usage_json,
+        );
+        return;
+    }
+    if *cancel.borrow() {
+        settle(
+            &state,
+            AttemptState::Cancelled,
+            RunState::Cancelled,
+            Some((&lease_id, LeaseState::Released, None)),
+            "cancelled before candidate judgement; worktree preserved",
             usage_json,
         );
         return;
@@ -1116,8 +1247,16 @@ async fn writer_worker(state: AppState, job: WriterJob, mut cancel: watch::Recei
     };
     let candidate = CandidateSet {
         schema_version: SCHEMA_VERSION.into(),
-        id: format!("candidate-{}", uuid::Uuid::new_v4()),
-        revision: 1,
+        id: job
+            .previous_candidate
+            .as_ref()
+            .map(|c| c.id.clone())
+            .unwrap_or_else(|| format!("candidate-{}", uuid::Uuid::new_v4())),
+        revision: job
+            .previous_candidate
+            .as_ref()
+            .map(|c| c.revision + 1)
+            .unwrap_or(1),
         plan_hash: job.plan.hash.clone(),
         repository_commits: BTreeMap::from([(repository_id.clone(), commit.clone())]),
         dependency_bindings: BTreeMap::new(),
@@ -1137,28 +1276,68 @@ async fn writer_worker(state: AppState, job: WriterJob, mut cancel: watch::Recei
             return;
         }
     };
-    let _ = state.event(
-        &job.run_id,
-        "candidate.recorded",
-        json!({"candidate": candidate, "lease_id": lease_id, "worktree": lease.path, "changes": changes.len()}),
-    );
-    if let Ok(mut store) = state.store.lock() {
-        let _ = store.release_worktree_lease(
-            &lease_id,
-            LeaseState::Released,
-            Some(&commit),
-            Some("in-scope candidate committed; worktree preserved for validation"),
+    let tree = match state.git.commit_tree(&worktree, &commit).await {
+        Ok(tree) => tree,
+        Err(error) => {
+            settle(
+                &state,
+                AttemptState::Failed,
+                RunState::Failed,
+                Some((&lease_id, LeaseState::Released, Some(&commit))),
+                &format!("cannot identify candidate tree: {error}"),
+                usage_json,
+            );
+            return;
+        }
+    };
+    if *cancel.borrow() {
+        settle(
+            &state,
+            AttemptState::Cancelled,
+            RunState::Cancelled,
+            Some((&lease_id, LeaseState::Released, Some(&commit))),
+            "cancelled before candidate verdict; committed worktree preserved",
+            usage_json,
         );
-        let _ = store.finish_attempt(
-            &attempt_id,
-            AttemptState::Completed,
-            json!({"candidate_hash": candidate.hash, "commit": commit, "changes": changes.len(), "usage": usage_json}),
+        return;
+    }
+    let recorded = (|| -> Result<(), String> {
+        let mut store = state.store.lock().map_err(|e| e.to_string())?;
+        store
+            .release_worktree_lease(
+                &lease_id,
+                LeaseState::Released,
+                Some(&commit),
+                Some("candidate preserved for checks and review"),
+            )
+            .map_err(|e| e.to_string())?;
+        store
+            .finish_attempt(
+                &attempt_id,
+                AttemptState::Completed,
+                json!({"candidate_hash":candidate.hash,"commit":commit,"usage":usage_json}),
+            )
+            .map_err(|e| e.to_string())?;
+        let run = store
+            .get_run(&run_id)
+            .map_err(|e| e.to_string())?
+            .ok_or("run missing")?;
+        store
+            .record_candidate(
+                &run_id,
+                run.revision,
+                &candidate,
+                &BTreeMap::from([(repository_id, tree)]),
+                &attempt_id,
+            )
+            .map_err(|e| e.to_string())?;
+        Ok(())
+    })();
+    if let Err(error) = recorded {
+        let _ = state.finish(
+            &run_id,
+            RunState::Failed,
+            json!({"reason":format!("cannot persist candidate: {error}")}),
         );
     }
-    // Validation (M3) is the next gate; the run waits there with its candidate.
-    let _ = state.finish(
-        &run_id,
-        RunState::Validating,
-        json!({"reason": "candidate recorded; validation is the next gate", "candidate_hash": candidate.hash, "candidate": candidate}),
-    );
 }

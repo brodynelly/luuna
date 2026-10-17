@@ -7,9 +7,11 @@ use thiserror::Error;
 
 mod baseline;
 mod project;
+mod validation;
 mod writer;
 pub use baseline::*;
 pub use project::*;
+pub use validation::*;
 pub use writer::*;
 
 pub const SCHEMA_VERSION: &str = "0.1";
@@ -93,6 +95,10 @@ impl RunState {
                     Reviewed | Paused | Failed | Cancelled | Interrupted
                 )
                 | (Paused, Exploring | Cancelled)
+                | (Paused | Failed | TestingBlocked, Implementing)
+                | (Failed | TestingBlocked, Paused)
+                | (Failed, Cancelled)
+                | (Interrupted, Validating)
         );
         if valid {
             Ok(to)

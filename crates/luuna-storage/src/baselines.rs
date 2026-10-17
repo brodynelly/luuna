@@ -219,6 +219,11 @@ impl Store {
         let tx = self
             .connection
             .transaction_with_behavior(rusqlite::TransactionBehavior::Immediate)?;
+        let run =
+            crate::get_run(&tx, run_id)?.ok_or_else(|| StorageError::NotFound(run_id.into()))?;
+        if run.state != RunState::Approved {
+            return Err(StorageError::Invalid("initial implementation requires an approved workflow; repairs use begin_candidate_repair".into()));
+        }
         authorize_run(&tx, run_id)?;
         let (plan_id, plan_revision): (String, u64) = tx
             .query_row(
@@ -356,7 +361,7 @@ fn load_baseline(connection: &Connection, id: &str) -> Result<Option<BaselineEvi
     Ok(Some(evidence))
 }
 
-fn latest_baseline(
+pub(crate) fn latest_baseline(
     connection: &Connection,
     project_id: &str,
     repository_id: &str,

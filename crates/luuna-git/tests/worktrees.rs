@@ -188,3 +188,202 @@ async fn managed_operations_never_execute_configured_content_filters() {
         }
     }
 }
+
+#[tokio::test]
+async fn candidate_verification_rejects_tracked_edits_and_moved_identity_but_allows_check_artifacts(
+) {
+    let developer = tempfile::tempdir().unwrap();
+    let private = tempfile::tempdir().unwrap();
+    let base = repository(developer.path());
+    let inspector = GitInspector::default();
+    let worktree = private.path().join("candidate");
+    inspector
+        .add_detached_worktree(developer.path(), &worktree, &base)
+        .await
+        .unwrap();
+    fs::write(worktree.join("src/main.py"), "print('candidate')\n").unwrap();
+    let candidate = inspector.commit_all(&worktree, "candidate").await.unwrap();
+    let tree = inspector.commit_tree(&worktree, &candidate).await.unwrap();
+    inspector
+        .verify_candidate(&worktree, &candidate, &tree)
+        .await
+        .unwrap();
+    fs::create_dir(worktree.join("test-results")).unwrap();
+    fs::write(
+        worktree.join("test-results/output.txt"),
+        "checks generated this\n",
+    )
+    .unwrap();
+    inspector
+        .verify_candidate(&worktree, &candidate, &tree)
+        .await
+        .unwrap();
+    assert!(inspector
+        .verify_candidate(&worktree, &base, &tree)
+        .await
+        .is_err());
+    let base_tree = inspector.commit_tree(&worktree, &base).await.unwrap();
+    assert!(inspector
+        .verify_candidate(&worktree, &candidate, &base_tree)
+        .await
+        .is_err());
+    fs::write(
+        worktree.join("src/main.py"),
+        "print('check mutated a tracked file')\n",
+    )
+    .unwrap();
+    assert!(inspector
+        .verify_candidate(&worktree, &candidate, &tree)
+        .await
+        .is_err());
+    git(&worktree, &["add", "src/main.py"]);
+    assert!(inspector
+        .verify_candidate(&worktree, &candidate, &tree)
+        .await
+        .is_err());
+    git(&worktree, &["reset", "--hard", "-q", &candidate]);
+    inspector
+        .verify_candidate(&worktree, &candidate, &tree)
+        .await
+        .unwrap();
+    for flag in ["--assume-unchanged", "--skip-worktree"] {
+        git(&worktree, &["update-index", flag, "src/main.py"]);
+        fs::write(
+            worktree.join("src/main.py"),
+            "print('hidden tracked drift')\n",
+        )
+        .unwrap();
+        assert!(git(
+            &worktree,
+            &["status", "--porcelain=v2", "--untracked-files=no"]
+        )
+        .is_empty());
+        assert!(inspector
+            .verify_candidate(&worktree, &candidate, &tree)
+            .await
+            .is_err());
+        git(
+            &worktree,
+            &["update-index", "--no-assume-unchanged", "src/main.py"],
+        );
+        git(
+            &worktree,
+            &["update-index", "--no-skip-worktree", "src/main.py"],
+        );
+        git(&worktree, &["reset", "--hard", "-q", &candidate]);
+        inspector
+            .verify_candidate(&worktree, &candidate, &tree)
+            .await
+            .unwrap();
+    }
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        git(&worktree, &["config", "core.filemode", "false"]);
+        fs::set_permissions(
+            worktree.join("src/main.py"),
+            fs::Permissions::from_mode(0o755),
+        )
+        .unwrap();
+        assert!(git(
+            &worktree,
+            &["status", "--porcelain=v2", "--untracked-files=no"]
+        )
+        .is_empty());
+        assert!(inspector
+            .verify_candidate(&worktree, &candidate, &tree)
+            .await
+            .is_err());
+        fs::set_permissions(
+            worktree.join("src/main.py"),
+            fs::Permissions::from_mode(0o644),
+        )
+        .unwrap();
+        inspector
+            .verify_candidate(&worktree, &candidate, &tree)
+            .await
+            .unwrap();
+    }
+    git(&worktree, &["checkout", "--detach", "-q", &base]);
+    assert!(inspector
+        .verify_candidate(&worktree, &candidate, &tree)
+        .await
+        .is_err());
+}
+
+#[tokio::test]
+async fn candidate_diff_never_executes_external_drivers_or_textconv_and_refuses_oversized_output() {
+    let developer = tempfile::tempdir().unwrap();
+    let private = tempfile::tempdir().unwrap();
+    repository(developer.path());
+    fs::write(
+        developer.path().join(".gitattributes"),
+        "*.py diff=unsafe filter=unsafe\n",
+    )
+    .unwrap();
+    git(developer.path(), &["add", "."]);
+    git(developer.path(), &["commit", "-qm", "attributes"]);
+    let base = git(developer.path(), &["rev-parse", "HEAD"]);
+    let marker = private.path().join("external-command-ran");
+    let command = format!("touch '{}'; cat", marker.display());
+    for key in [
+        "diff.external",
+        "diff.unsafe.command",
+        "diff.unsafe.textconv",
+        "filter.unsafe.clean",
+        "filter.unsafe.smudge",
+        "filter.unsafe.process",
+    ] {
+        git(developer.path(), &["config", key, &command]);
+    }
+    git(
+        developer.path(),
+        &["config", "filter.unsafe.required", "true"],
+    );
+    let inspector = GitInspector::default();
+    let worktree = private.path().join("candidate");
+    inspector
+        .add_detached_worktree(developer.path(), &worktree, &base)
+        .await
+        .unwrap();
+    fs::write(
+        worktree.join("src/main.py"),
+        format!("print('candidate')\n# {}\n", "x".repeat(10_000)),
+    )
+    .unwrap();
+    let candidate = inspector.commit_all(&worktree, "candidate").await.unwrap();
+    let tree = inspector.commit_tree(&worktree, &candidate).await.unwrap();
+    inspector
+        .verify_candidate(&worktree, &candidate, &tree)
+        .await
+        .unwrap();
+    let patch = inspector
+        .candidate_diff(&worktree, &base, &candidate)
+        .await
+        .unwrap();
+    assert!(patch.contains("-print('fixture')"));
+    assert!(patch.contains("+print('candidate')"));
+    assert!(
+        !marker.exists(),
+        "candidate inspection executed repository commands"
+    );
+    let capped = GitInspector {
+        max_output_bytes: 2048,
+        ..inspector
+    };
+    assert!(matches!(
+        capped.candidate_diff(&worktree, &base, &candidate).await,
+        Err(luuna_git::GitError::Oversized)
+    ));
+    for invalid in ["HEAD", "--output=/tmp/unapproved", "-p", "abc"] {
+        assert!(capped
+            .candidate_diff(&worktree, invalid, &candidate)
+            .await
+            .is_err());
+        assert!(capped
+            .verify_candidate(&worktree, &candidate, invalid)
+            .await
+            .is_err());
+    }
+    assert!(!marker.exists());
+}

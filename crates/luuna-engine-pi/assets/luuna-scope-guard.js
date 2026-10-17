@@ -1,5 +1,5 @@
 // Luuna scope guard: a Pi extension loaded explicitly by the runtime for writer
-// sessions. It blocks every tool call that would read or change a path outside
+// and independent reviewer sessions. It blocks every tool call outside
 // the leased worktree and the approved task paths, and every tool the session
 // does not declare. Scope comes from LUUNA_SCOPE_JSON, which the runtime sets:
 //   {"root": "/abs/worktree", "paths": ["src", "docs/CHANGELOG.md"],
@@ -44,7 +44,7 @@ export function decide(toolName, input, cwd, scope) {
   const operations = Array.isArray(scope.operations) ? scope.operations : [];
   const writes = WRITE_TOOLS.has(toolName);
   if (!writes && !READ_TOOLS.has(toolName)) {
-    return `tool ${toolName} is not part of the approved writer profile`;
+    return `tool ${toolName} is not part of the approved writer profile or read-only reviewer profile`;
   }
   if (writes && !operations.includes("write")) {
     return `tool ${toolName} needs the write operation, which the task does not permit`;

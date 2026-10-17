@@ -1,10 +1,6 @@
 # Local runtime connectivity foundation
 
-This is an authenticated, loopback-only, **tool-free Pi demo**. Every run starts
-a fresh Pi process with a private empty cwd and config directory, no context
-files, no extensions, no MCP, no skills, and no tools. It cannot implement a
-plan or edit a repository. These flags are a narrow demo profile, not an OS
-sandbox for future execution tools.
+The independent runtime is authenticated and loopback-only. It owns repository import, baseline checks, immutable approval, scoped writers, candidate-bound validation, fresh read-only review and bounded repair. The tool-free connectivity demo remains available as a separate profile: those sessions use a private empty cwd/config with repository tools disabled. Writer and reviewer scope guards are runtime policy, not an OS sandbox. Genuine-provider M3 acceptance remains separate from fixture coverage.
 
 Install the supported `@earendil-works/pi-coding-agent@1.3.0` distribution.
 The launcher verifies `--version` before each run. Configure these environment
@@ -119,3 +115,13 @@ evidence.
 `cargo test -p luuna-runtime -p luuna-engine-pi` uses the labeled synthetic
 Python protocol fixture in `fixtures/pi-rpc`. Python 3 is required for these
 subprocess tests. The genuine credential-free RPC probe is documented there.
+
+## Candidate checks, independent review and repair (M3)
+
+After a writer records a candidate, `GET /api/v1/runs/{id}/candidate` returns its exact commit/tree/hash, validation generation, checks, structured review, active state and repair availability. `GET /api/v1/runs/{id}/diff` verifies candidate identity and returns a bounded diff with repository-selected execution drivers disabled.
+
+`POST /api/v1/runs/{id}/validate` accepts `{ "candidate_hash": "sha256:…", "provider": "…", "model": "…", "auto_repair": false }`. Provider/model may use server defaults. Required checks execute in the owned worktree through the supervised executor. A fresh Pi process with read-only tools reviews requirements/code/diff/check records, without the implementation conversation. A valid pass reaches `reviewed`; infrastructure failures, invalid output, stale identities and blocking findings never pass.
+
+`POST /api/v1/runs/{id}/repair` accepts the same candidate hash and optional model settings. The repair gate rechecks current approval, ticket/manifest/base, passed host-matching baseline and all aggregate budgets. Repairs create a fresh candidate revision and require fresh checks/review. Set `auto_repair: true` on validation to opt into bounded repair cycles for ordinary failed commands or `changes_required` reviews; infrastructure failures stop without automatic edits. The existing cancel endpoint covers the active pipeline, including automatic repairs. Candidate log artifact IDs include `c{revision}-g{generation}-{recipe}.{stdout|stderr}`.
+
+Interrupted checks retain elapsed usage and need a fresh generation. Interrupted model execution reserves unknown spend, so recovery can require a new plan/approval rather than retry with fresh budget. Native host permissions remain unchanged. No publication or merge endpoint is introduced. Real-provider M3 acceptance is recorded separately from deterministic fixture evidence.

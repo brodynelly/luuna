@@ -196,3 +196,55 @@ describe("tickets, plans, approvals and the writer (M2c)", () => {
     expect(isTerminal("reviewed")).toBe(true);
   });
 });
+
+describe("candidate validation and repair (M3)", () => {
+  const candidate_hash = `sha256:${"a".repeat(64)}`;
+
+  it("reads candidate-bound evidence and diff and submits the expected hash for both actions", async () => {
+    const fetcher = vi.fn<typeof fetch>().mockImplementation(() => Promise.resolve(new Response("{}")));
+    const client = new LuunaClient("http://127.0.0.1:4242", "test-token", fetcher);
+    const signal = new AbortController().signal;
+    await client.candidate("run/1", signal);
+    await client.candidateDiff("run/1", signal);
+    await client.validateCandidate("run/1", { candidate_hash, provider: "openrouter", model: "review-model" }, signal);
+    await client.repairCandidate("run/1", { candidate_hash }, signal);
+    expect(fetcher.mock.calls.map(([url, init]) => [String(url), init?.method ?? "GET", init?.body])).toEqual([
+      ["http://127.0.0.1:4242/api/v1/runs/run%2F1/candidate", "GET", undefined],
+      ["http://127.0.0.1:4242/api/v1/runs/run%2F1/diff", "GET", undefined],
+      ["http://127.0.0.1:4242/api/v1/runs/run%2F1/validate", "POST", JSON.stringify({ candidate_hash, provider: "openrouter", model: "review-model" })],
+      ["http://127.0.0.1:4242/api/v1/runs/run%2F1/repair", "POST", JSON.stringify({ candidate_hash })],
+    ]);
+    for (const [, init] of fetcher.mock.calls) {
+      expect(init?.signal).toBe(signal);
+      expect(init?.redirect).toBe("error");
+      expect(init?.credentials).toBe("omit");
+      expect(new Headers(init?.headers).get("Authorization")).toBe("Bearer test-token");
+    }
+  });
+
+  it("requires a complete candidate hash before any work request reaches the runtime", () => {
+    const fetcher = vi.fn<typeof fetch>();
+    const client = new LuunaClient("http://localhost:4242", "test-token", fetcher);
+    for (const bad of ["", "sha256:a", "a".repeat(64), `sha256:${"z".repeat(64)}`]) {
+      expect(() => client.validateCandidate("r", { candidate_hash: bad })).toThrow("complete hash");
+      expect(() => client.repairCandidate("r", { candidate_hash: bad })).toThrow("complete hash");
+    }
+    expect(fetcher).not.toHaveBeenCalled();
+  });
+
+  it("surfaces stale candidate and exhausted repair reasons without treating a refusal as success", async () => {
+    const fetcher = vi.fn<typeof fetch>()
+      .mockResolvedValueOnce(new Response(JSON.stringify({ error: "candidate hash changed; reload" }), { status: 409 }))
+      .mockResolvedValueOnce(new Response(JSON.stringify({ error: "repair budget exhausted" }), { status: 422 }));
+    const client = new LuunaClient("http://localhost:4242", "test-token", fetcher);
+    await expect(client.validateCandidate("r", { candidate_hash })).rejects.toThrow("candidate hash changed");
+    await expect(client.repairCandidate("r", { candidate_hash })).rejects.toThrow("repair budget exhausted");
+  });
+
+  it("requests automatic repairs only through explicit validation settings", async () => {
+    const fetcher = vi.fn<typeof fetch>().mockResolvedValue(new Response("{}"));
+    const client = new LuunaClient("http://localhost:4242", "test-token", fetcher);
+    await client.validateCandidate("r", { candidate_hash, auto_repair: true });
+    expect(JSON.parse(String(fetcher.mock.calls[0][1]?.body))).toEqual({ candidate_hash, auto_repair: true });
+  });
+});

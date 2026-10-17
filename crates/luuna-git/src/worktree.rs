@@ -14,6 +14,112 @@ pub const WRITER_AUTHOR_NAME: &str = "Luuna Writer";
 pub const WRITER_AUTHOR_EMAIL: &str = "writer@luuna.invalid";
 
 impl GitInspector {
+    /// Verify the exact frozen candidate before and after validation/review.
+    /// Check-created untracked artifacts do not alter the commit/tree; tracked
+    /// edits, staged changes, conflicts and a moved HEAD always invalidate it.
+    pub async fn verify_candidate(
+        &self,
+        worktree: &Path,
+        expected_commit: &str,
+        expected_tree: &str,
+    ) -> Result<(), GitError> {
+        require_object_id(expected_commit)?;
+        require_object_id(expected_tree)?;
+        let head = self.head_commit(worktree).await?;
+        let tree = self.commit_tree(worktree, &head).await?;
+        if head != expected_commit || tree != expected_tree {
+            return Err(GitError::Command {
+                command: "verify candidate".into(),
+                detail: "candidate HEAD or tree changed".into(),
+            });
+        }
+        let mut overrides = self.filter_overrides(worktree).await?;
+        overrides.extend([
+            "core.ignoreStat=false".to_owned(),
+            "core.trustctime=true".to_owned(),
+            "core.checkStat=default".to_owned(),
+        ]);
+        #[cfg(unix)]
+        overrides.push("core.filemode=true".to_owned());
+        // Status intentionally trusts assume-unchanged/skip-worktree flags.
+        // Checks can run Git under native permissions; those flags cannot hide
+        // a tracked edit and turn it into evidence for an immutable candidate.
+        let index = self
+            .git(Some(worktree), &["ls-files", "-v", "-z"], &overrides)
+            .await?;
+        if index.status != Some(0) {
+            return Err(GitError::Command {
+                command: "ls-files".into(),
+                detail: index.stderr,
+            });
+        }
+        if index.stdout.split(|byte| *byte == 0).any(|entry| {
+            entry
+                .first()
+                .is_some_and(|flag| *flag == b'S' || flag.is_ascii_lowercase())
+        }) {
+            return Err(GitError::Command {
+                command: "verify candidate".into(),
+                detail: "candidate index hides tracked paths with assume-unchanged or skip-worktree flags".into(),
+            });
+        }
+        let status = self
+            .expect(
+                worktree,
+                &[
+                    "status",
+                    "--porcelain=v2",
+                    "-z",
+                    "--no-renames",
+                    "--untracked-files=no",
+                    "--ignore-submodules=none",
+                ],
+                &overrides,
+            )
+            .await?;
+        if !status.is_empty() {
+            return Err(GitError::Command {
+                command: "verify candidate".into(),
+                detail: "candidate has tracked changes".into(),
+            });
+        }
+        Ok(())
+    }
+
+    /// A bounded patch between exact commits, never an external diff driver or
+    /// textconv command selected by repository configuration/attributes. Filters
+    /// are disabled as for all managed worktree operations. Oversized output is
+    /// rejected rather than truncated into apparently complete review evidence.
+    pub async fn candidate_diff(
+        &self,
+        worktree: &Path,
+        base_commit: &str,
+        candidate_commit: &str,
+    ) -> Result<String, GitError> {
+        require_object_id(base_commit)?;
+        require_object_id(candidate_commit)?;
+        let overrides = self.filter_overrides(worktree).await?;
+        self.expect(
+            worktree,
+            &[
+                "diff",
+                "--no-ext-diff",
+                "--no-textconv",
+                "--no-renames",
+                "--binary",
+                "--no-color",
+                "--no-relative",
+                "--src-prefix=a/",
+                "--dst-prefix=b/",
+                base_commit,
+                candidate_commit,
+                "--",
+            ],
+            &overrides,
+        )
+        .await
+    }
+
     /// Create a detached worktree for `commit` at `path`, which must not exist yet,
     /// and verify its HEAD is exactly that commit. Repository-selected content
     /// filters are disabled: executing them is outside the writer approval.
@@ -122,6 +228,16 @@ impl GitInspector {
             .await?;
         Ok(())
     }
+}
+
+fn require_object_id(value: &str) -> Result<(), GitError> {
+    if matches!(value.len(), 40 | 64) && value.bytes().all(|byte| byte.is_ascii_hexdigit()) {
+        return Ok(());
+    }
+    Err(GitError::Command {
+        command: "verify candidate".into(),
+        detail: "candidate identities must be full Git object IDs".into(),
+    })
 }
 
 /// `git status --porcelain=v2 -z --no-renames --untracked-files=all` entries.

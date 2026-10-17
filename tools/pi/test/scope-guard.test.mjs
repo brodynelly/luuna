@@ -48,3 +48,16 @@ test("realize follows symlinks in the existing prefix and keeps the missing tail
   const { base, root } = fixture();
   assert.equal(realize(join(root, "escape", "deep", "file.txt")), realize(join(base, "outside", "deep", "file.txt")));
 });
+
+test("independent reviewer can inspect candidate files but cannot mutate them", () => {
+  const { root, scope } = fixture();
+  const reviewer = { ...scope, operations: ["read"] };
+  for (const tool of ["read", "grep", "find", "ls"]) {
+    assert.equal(decide(tool, { path: "src" }, root, reviewer), null);
+    assert.match(decide(tool, { path: "escape/secret.txt" }, root, reviewer), /outside the leased worktree/);
+  }
+  for (const tool of ["write", "edit"]) {
+    assert.match(decide(tool, { path: "src/main.py" }, root, reviewer), /needs the write operation/);
+  }
+  assert.match(decide("bash", { command: "touch src/x" }, root, reviewer), /not part of the approved/);
+});

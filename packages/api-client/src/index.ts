@@ -328,6 +328,82 @@ export interface ImplementRequest {
   model?: string;
 }
 
+/** The runtime's immutable identity for an exact set of repository commits. */
+export interface CandidateSet {
+  schema_version: string;
+  id: string;
+  revision: number;
+  plan_hash: string;
+  repository_commits: Record<string, string>;
+  dependency_bindings: Record<string, string>;
+  hash: string;
+}
+
+export interface ReviewFinding {
+  severity: "info" | "warning" | "blocking";
+  path: string;
+  line: number;
+  explanation: string;
+  evidence: string[];
+}
+
+/** A structured, independently recorded review of one exact candidate. */
+export interface ReviewResult {
+  schema_version: string;
+  id: string;
+  candidate_hash: string;
+  reviewer_session: string;
+  findings: ReviewFinding[];
+  verdict: "passed" | "changes_required" | "blocked";
+  evidence: string[];
+}
+
+export type CandidateStatus = "pending" | "validating" | "reviewing" | "reviewed" | "failed" | "testing_blocked" | "paused" | "cancelled" | "interrupted";
+
+export interface CandidateEvidence {
+  candidate: CandidateSet;
+  run_id: string;
+  implementer_session: string;
+  repository_trees: Record<string, string>;
+  status: CandidateStatus;
+  results: CheckResult[];
+  review?: ReviewResult | null;
+  started_at: string;
+  finished_at?: string;
+  reason?: string;
+  elapsed_seconds: number;
+  cost_usd_micros: number;
+  validation_generation: number;
+}
+
+export interface CandidateView {
+  evidence: CandidateEvidence | null;
+  /** Whether the runtime currently owns a worker for this workflow. */
+  active: boolean;
+  /** The runtime's decision after checking state, repair and attempt budgets. */
+  repair_allowed: boolean;
+}
+
+export interface CandidateDiff {
+  candidate_hash: string;
+  repository_id: string;
+  base_commit: string;
+  commit: string;
+  diff: string;
+}
+
+export interface CandidateActionRequest {
+  /** The full candidate hash shown to the developer; stale requests are refused. */
+  candidate_hash: string;
+  provider?: string;
+  model?: string;
+}
+
+export interface ValidateCandidateRequest extends CandidateActionRequest {
+  /** Opt in to bounded automatic repair under this immutable plan's approval. */
+  auto_repair?: boolean;
+}
+
 export type LeaseState = "active" | "released" | "abandoned";
 
 export interface WorktreeLease {
@@ -540,6 +616,29 @@ export class LuunaClient {
 
   attempts(runId: string, signal?: AbortSignal): Promise<AttemptRecord[]> {
     return this.request(`/runs/${encodeURIComponent(runId)}/attempts`, { signal });
+  }
+
+  candidate(runId: string, signal?: AbortSignal): Promise<CandidateView> {
+    return this.request(`/runs/${encodeURIComponent(runId)}/candidate`, { signal });
+  }
+
+  candidateDiff(runId: string, signal?: AbortSignal): Promise<CandidateDiff> {
+    return this.request(`/runs/${encodeURIComponent(runId)}/diff`, { signal });
+  }
+
+  /** Runs the approved recipes and an independent reviewer for this exact candidate. */
+  validateCandidate(runId: string, request: ValidateCandidateRequest, signal?: AbortSignal): Promise<RunRecord> {
+    return this.candidateAction(runId, "validate", request, signal);
+  }
+
+  /** Requests a bounded writer repair under the existing approval. */
+  repairCandidate(runId: string, request: CandidateActionRequest, signal?: AbortSignal): Promise<RunRecord> {
+    return this.candidateAction(runId, "repair", request, signal);
+  }
+
+  private candidateAction(runId: string, action: "validate" | "repair", request: CandidateActionRequest, signal?: AbortSignal): Promise<RunRecord> {
+    if (!/^sha256:[a-f0-9]{64}$/.test(request.candidate_hash)) throw new Error("Use the candidate's complete hash.");
+    return this.request(`/runs/${encodeURIComponent(runId)}/${action}`, { method: "POST", body: JSON.stringify(request), signal });
   }
 
   /** Reads a private check log by record identity (`<recipe>.stdout` or `<recipe>.stderr`). */
