@@ -582,7 +582,29 @@ impl Executor {
             }
         }
         let tests_detected = detect_tests(&stdout_path, &stderr_path);
+        // Cancellation and the deadline are authoritative outcomes; a capture
+        // problem (for example a descendant still holding a pipe on a host without
+        // process groups) is recorded in the reason, never as a different status.
+        let capture_note = capture_error
+            .as_deref()
+            .map(|error| format!("; output capture incomplete: {error}"))
+            .unwrap_or_default();
         let (status, exit_code, reason) = match outcome {
+            Outcome::Cancelled => (
+                CheckStatus::Cancelled,
+                None,
+                Some(format!(
+                    "cancelled; process group terminated and reaped{capture_note}"
+                )),
+            ),
+            Outcome::Timeout => (
+                CheckStatus::Failed,
+                None,
+                Some(format!(
+                    "deadline of {}s exceeded; process group terminated{capture_note}",
+                    spec.timeout.as_secs()
+                )),
+            ),
             _ if capture_error.is_some() => (
                 CheckStatus::Failed,
                 None,
@@ -597,19 +619,6 @@ impl Executor {
                 Some(format!(
                     "a descendant process kept the output open for {}s after the command exited; process group terminated",
                     self.drain_grace.as_secs()
-                )),
-            ),
-            Outcome::Cancelled => (
-                CheckStatus::Cancelled,
-                None,
-                Some("cancelled; process group terminated and reaped".into()),
-            ),
-            Outcome::Timeout => (
-                CheckStatus::Failed,
-                None,
-                Some(format!(
-                    "deadline of {}s exceeded; process group terminated",
-                    spec.timeout.as_secs()
                 )),
             ),
             Outcome::WaitFailed(error) => (CheckStatus::Failed, None, Some(error)),
