@@ -15,7 +15,7 @@
 // provider credential in this process environment; the runtime forwards only the
 // supported names (or their LUUNA_PI_ aliases) to the isolated Pi children. The
 // report records credential names only and is scanned for leaked values.
-import { spawn, execFileSync } from "node:child_process";
+import { spawn, spawnSync, execFileSync } from "node:child_process";
 import { mkdirSync, writeFileSync, writeSync, rmdirSync, readdirSync, readFileSync, opendirSync, statSync, lstatSync, readlinkSync, realpathSync, existsSync, openSync, readSync, closeSync, unlinkSync, fstatSync, fchmodSync, ftruncateSync, constants as fsConstants } from "node:fs";
 import { randomBytes, createHash } from "node:crypto";
 import { tmpdir, platform, release, arch, devNull } from "node:os";
@@ -23,6 +23,64 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 import process from "node:process";
 import { setTimeout as sleep } from "node:timers/promises";
+
+// Linux: the harness runs under a child subreaper, so every process of the run that outlives its
+// parent (a check that detaches a child with closed stdio, a Pi orphaned by a hard kill) is
+// reparented to that reaper instead of init and can be found and killed before the leak scan
+// (see `reapStrays`). The reaper exports its pid; the harness re-executes itself beneath it.
+const REAPER_SCRIPT = String.raw`
+import ctypes, os, signal, sys
+if ctypes.CDLL(None, use_errno=True).prctl(36, 1, 0, 0, 0) != 0:  # PR_SET_CHILD_SUBREAPER
+    sys.stderr.write("m3-smoke: cannot become a child subreaper\n")
+    sys.exit(2)
+os.environ["LUUNA_M3_REAPER"] = str(os.getpid())
+harness = os.fork()
+if harness == 0:
+    try:
+        os.execv(sys.argv[1], sys.argv[1:])
+    finally:
+        os._exit(127)
+def forward(signum, frame):
+    try:
+        os.kill(harness, signum)
+    except ProcessLookupError:
+        pass
+for signum in (signal.SIGINT, signal.SIGTERM, signal.SIGHUP):
+    signal.signal(signum, forward)
+def children():
+    found = []
+    for task in os.listdir("/proc/self/task"):
+        try:
+            with open("/proc/self/task/%s/children" % task) as listing:
+                found += [int(pid) for pid in listing.read().split()]
+        except OSError:
+            pass
+    return found
+status = None
+while True:
+    if status is not None:
+        # The harness has exited: nothing of the run may outlive it.
+        for pid in children():
+            try:
+                os.kill(pid, signal.SIGKILL)
+            except ProcessLookupError:
+                pass
+    try:
+        pid, code = os.waitpid(-1, 0)
+    except ChildProcessError:
+        break
+    if pid == harness:
+        status = code
+sys.exit(os.WEXITSTATUS(status) if os.WIFEXITED(status) else 128 + os.WTERMSIG(status))
+`;
+if (process.platform === "linux" && process.env.LUUNA_M3_REAPER !== String(process.ppid)) {
+  const reaped = spawnSync("python3", ["-I", "-c", REAPER_SCRIPT, process.execPath, ...process.execArgv, fileURLToPath(import.meta.url), ...process.argv.slice(2)], { stdio: "inherit" });
+  if (reaped.error) {
+    console.error(`m3-smoke: cannot start the python3 child subreaper (${reaped.error.code ?? reaped.error.message})`);
+    process.exit(2);
+  }
+  process.exit(reaped.status ?? 1);
+}
 
 const options = parseArguments(process.argv.slice(2));
 const mode = options.mode ?? "real";
@@ -239,10 +297,16 @@ evidence.notes = notes;
 // The scan only means something once nothing else can write under the output tree:
 // a runtime whose exit was not observed fails the run and the scan is not trusted.
 record("the runtime exited before the leak scan", finalStop.exited, finalStop.exited ? "exit observed" : "the runtime did not exit after SIGTERM and SIGKILL; the leak scan below cannot establish what remains on disk");
+// No process of the run may still be able to write when the scan runs: every survivor (a detached
+// check descendant, an orphaned Pi) is killed and its exit observed first.
+const strays = await reapStrays();
+evidence.stray_processes = strays;
+record("no process of the run outlived it before the leak scan (Linux child subreaper; survivors killed)", strays.contained || process.platform !== "linux", strays.contained ? `${strays.killed} surviving process(es) killed and reaped` : process.platform === "linux" ? `not contained: ${strays.reason}` : `unavailable on ${process.platform}: descendants that detach from the runtime are not tracked`);
 evidence.leak_scan = scanForCredentialValues();
 // Held handles are required where they exist (Linux); elsewhere the weaker fallback is recorded, not hidden.
 record("the leak scan and quarantine resolved paths through held directory handles where the platform provides them", evidence.leak_scan.held_handles || process.platform !== "linux", evidence.leak_scan.held_handles ? "/proc/self/fd handles" : `unavailable on ${process.platform}: pinned-root path checks only, recursive cleanup refused`);
 if (!finalStop.exited) { evidence.leak_scan.leaks += 1; evidence.leak_scan.untrusted = "runtime still running during the scan"; }
+else if (!strays.contained && process.platform === "linux") { evidence.leak_scan.leaks += 1; evidence.leak_scan.untrusted = "a process of the run may still have been running during the scan"; }
 record("no credential value appears in the report, runtime logs or durable state", evidence.leak_scan.leaks === 0, `${evidence.leak_scan.files_scanned} files scanned against ${evidence.leak_scan.values_checked} configured values`);
 // A file that carries a configured value, or that could not be scanned, must not
 // outlive the run: remove it (and the durable state, whose contents it may have
@@ -302,8 +366,8 @@ function ticket(title, intent, acceptance_criteria, paths, maxAttempts) {
  */
 /** Stops the runtime and reports whether its exit was observed. */
 async function stopRuntime(child) {
-  if (!child || child.exitCode !== null || child.signalCode !== null) return { exited: true };
-  child.kill(process.platform === "win32" ? undefined : "SIGTERM");
+  if (!child || settled(child)) return { exited: true };
+  if (child.exitCode === null && child.signalCode === null) child.kill(process.platform === "win32" ? undefined : "SIGTERM");
   const orderly = await waitForExit(child, 15_000);
   if (orderly.exited) return { exited: true };
   child.kill("SIGKILL");
@@ -349,7 +413,11 @@ async function startRuntime(label) {
       if (logged >= RUNTIME_LOG_LIMIT) writeSync(logFd, `\n[log truncated at ${RUNTIME_LOG_LIMIT} bytes; later output was drained, not kept]\n`);
     } catch { /* kept as the in-memory tail only */ }
   });
-  child.on("close", () => { if (typeof logFd === "number") { try { closeSync(logFd); } catch { /* already closed */ } } });
+  child.stdioClosed = false;
+  child.on("close", () => {
+    child.stdioClosed = true;
+    if (typeof logFd === "number") { try { closeSync(logFd); } catch { /* already closed */ } }
+  });
   const deadline = Date.now() + 30_000;
   while (Date.now() < deadline) {
     // A child that never spawned or already exited leaves nothing to stop.
@@ -831,14 +899,55 @@ function assistantText(events) {
   return finalText;
 }
 
+/** The live children of `pid` as /proc lists them (every thread's list). */
+function childrenOf(pid) {
+  const found = [];
+  for (const task of readdirSync(`/proc/${pid}/task`)) {
+    try { found.push(...readFileSync(`/proc/${pid}/task/${task}/children`, "utf8").split(/\s+/).filter(Boolean).map(Number)); } catch { /* thread gone */ }
+  }
+  return found;
+}
+
+/**
+ * Kills every process of the run still alive once the runtime has stopped: the harness's own
+ * children and everything reparented to the child subreaper the harness runs under. A killed
+ * process's children are reparented to the reaper in turn, so this repeats until neither has a
+ * child left. Every PID found here is a descendant of the run, so none can be a recycled stranger.
+ */
+async function reapStrays() {
+  if (process.platform !== "linux") return { contained: false, killed: 0, reason: "no child subreaper on this platform" };
+  const reaper = Number(process.env.LUUNA_M3_REAPER);
+  if (!Number.isInteger(reaper) || reaper !== process.ppid) return { contained: false, killed: 0, reason: "the harness is not running under its child subreaper" };
+  const killed = new Set();
+  const deadline = Date.now() + 15_000;
+  for (;;) {
+    let survivors;
+    try { survivors = [...childrenOf(reaper), ...childrenOf(process.pid)].filter((pid) => pid !== process.pid); } catch (error) { return { contained: false, killed: killed.size, reason: `cannot list processes: ${error.code ?? error.message}` }; }
+    if (survivors.length === 0) return { contained: true, killed: killed.size };
+    if (Date.now() > deadline) return { contained: false, killed: killed.size, reason: `${survivors.length} process(es) still present after 15s` };
+    for (const pid of survivors) {
+      try { process.kill(pid, "SIGKILL"); killed.add(pid); } catch { /* already gone */ }
+    }
+    await sleep(50);
+  }
+}
+
 function processAlive(pid) {
   try { process.kill(pid, 0); return true; } catch (error) { return error.code === "EPERM"; }
+}
+
+/**
+ * A runtime is settled only once it has exited and its stdio has closed: Node may still deliver
+ * queued stderr after 'exit', and only 'close' guarantees the log writer has seen the last chunk.
+ */
+function settled(child) {
+  return (child.exitCode !== null || child.signalCode !== null) && child.stdioClosed !== false;
 }
 
 async function waitForExit(child, timeoutMs) {
   const startedAt = Date.now();
   while (Date.now() - startedAt < timeoutMs) {
-    if (child.exitCode !== null || child.signalCode !== null) return { exited: true, elapsed: Date.now() - startedAt };
+    if (settled(child)) return { exited: true, elapsed: Date.now() - startedAt };
     await sleep(50);
   }
   return { exited: false, elapsed: Date.now() - startedAt };
@@ -888,8 +997,10 @@ function environment() {
     return candidates.filter((file) => {
       let text;
       try { text = readFileSync(file, "utf8"); } catch { return false; }
-      // The same rule as build.rs: dependency substitution, profile changes or further includes.
-      return text.split("\n").map((line) => line.trim()).some((line) => /^(paths|include|replace-with)\s*=/.test(line) || /^\[(patch|profile)/.test(line) || /^(patch|profile)\./.test(line));
+      // The same lexical, fail-closed rule as build.rs: any of these names as a whole key token
+      // anywhere (table header, dotted, inline or quoted key, or a mere mention), or any
+      // backslash, since an escape in a quoted key can spell any name.
+      return text.includes("\\") || /(?<![A-Za-z0-9_-])(paths|include|replace-with|patch|profile)(?![A-Za-z0-9_-])/.test(text);
     });
   })();
   // Bind the binary to the recorded revision by content: the runtime reports the digest its
@@ -909,6 +1020,9 @@ function environment() {
 function treeDigest(root) {
   const LIMITS = { entries: 100_000, bytes: 1024 * 1024 * 1024, depth: 64 };
   const entries = [];
+  // Every directory entry counts against the limit, directories included, so a tree of empty
+  // directories is bounded as well.
+  let visited = 0;
   let bytes = 0;
   const chunk = Buffer.alloc(1024 * 1024);
   const hashFile = (file) => {
@@ -930,7 +1044,7 @@ function treeDigest(root) {
     try {
       for (let entry = listing.readSync(); entry !== null; entry = listing.readSync()) {
         const child = rel ? `${rel}/${entry.name}` : entry.name;
-        if (entries.length >= LIMITS.entries) throw new Error(`tree has more than ${LIMITS.entries} entries`);
+        if (++visited > LIMITS.entries) throw new Error(`tree has more than ${LIMITS.entries} entries`);
         if (entry.isDirectory()) walkTree(child, depth + 1);
         else if (entry.isSymbolicLink()) entries.push(`${child}\0link\0${readlinkSync(path.join(root, child))}`);
         else entries.push(`${child}\0${hashFile(path.join(root, child))}`);

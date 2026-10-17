@@ -27,24 +27,26 @@ fn collect(root: &Path, dir: &Path, files: &mut Vec<String>) {
     }
 }
 
-/// Whether Cargo config text changes what or how the runtime is built beyond
-/// the repository's own manifests: a `paths` dependency override, a `[patch…]`
-/// table, a source `replace-with`, a `[profile…]` table (overflow checks, panic
-/// strategy, LTO, ...) or an `include` of further config that is not read here.
+/// Whether Cargo config text may change what or how the runtime is built
+/// beyond the repository's own manifests: a `paths` dependency override, a
+/// `patch` table, a source `replace-with`, a `profile` setting (overflow
+/// checks, panic strategy, LTO, ...) or an `include` of further config that is
+/// not read here. TOML can spell these keys as table headers, dotted keys,
+/// inline tables or quoted keys, so the rule is lexical and fails closed: the
+/// text is flagged if any of these names appears as a whole key token
+/// anywhere, or if it contains a backslash (an escape in a quoted key can
+/// spell any name). A comment or value that mentions a name is flagged too.
 fn config_override(text: &str) -> bool {
-    let key = |line: &str, name: &str| {
-        line.strip_prefix(name)
-            .is_some_and(|rest| rest.trim_start().starts_with('='))
-    };
-    text.lines().map(str::trim).any(|line| {
-        key(line, "paths")
-            || key(line, "include")
-            || key(line, "replace-with")
-            || line.starts_with("[patch")
-            || line.starts_with("[profile")
-            || line.starts_with("profile.")
-            || line.starts_with("patch.")
-    })
+    let key_char = |c: char| c.is_ascii_alphanumeric() || c == '_' || c == '-';
+    text.contains('\\')
+        || ["paths", "include", "replace-with", "patch", "profile"]
+            .iter()
+            .any(|name| {
+                text.match_indices(name).any(|(at, _)| {
+                    !text[..at].chars().next_back().is_some_and(key_char)
+                        && !text[at + name.len()..].chars().next().is_some_and(key_char)
+                })
+            })
 }
 
 fn relative(root: &Path, path: &Path) -> String {

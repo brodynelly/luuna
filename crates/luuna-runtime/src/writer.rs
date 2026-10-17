@@ -1183,14 +1183,47 @@ fn url_credentials(text: &str) -> Vec<String> {
         if let Some(userinfo) = authority[..end].rfind('@').map(|i| &authority[..i]) {
             if let Some((_, password)) = userinfo.split_once(':') {
                 if !password.is_empty() {
-                    found.push(userinfo.to_owned());
-                    found.push(password.to_owned());
+                    // A check may print the credential as a client decodes
+                    // it, so the percent-decoded forms are secrets too.
+                    for form in [userinfo, password] {
+                        found.push(form.to_owned());
+                        let decoded = percent_decode(form);
+                        if decoded != form {
+                            found.push(decoded);
+                        }
+                    }
                 }
             }
         }
         rest = &authority[end..];
     }
     found
+}
+
+/// Decodes `%XX` escapes as a URL client would; invalid escapes stay as they
+/// are and bytes that are not UTF-8 are replaced.
+fn percent_decode(text: &str) -> String {
+    let bytes = text.as_bytes();
+    let mut decoded = Vec::with_capacity(bytes.len());
+    let mut index = 0;
+    while index < bytes.len() {
+        let escape = (bytes[index] == b'%')
+            .then(|| bytes.get(index + 1..index + 3))
+            .flatten()
+            .and_then(|hex| std::str::from_utf8(hex).ok())
+            .and_then(|hex| u8::from_str_radix(hex, 16).ok());
+        match escape {
+            Some(byte) => {
+                decoded.push(byte);
+                index += 3;
+            }
+            None => {
+                decoded.push(bytes[index]);
+                index += 1;
+            }
+        }
+    }
+    String::from_utf8_lossy(&decoded).into_owned()
 }
 
 /// Replaces the userinfo of every URL (`scheme://user:pass@host`) with a
@@ -1605,6 +1638,43 @@ async fn writer_worker(state: AppState, job: WriterJob, mut cancel: watch::Recei
             json!({}),
         );
         return;
+    }
+    // Preparation (reading repair feedback) is charged against the approved
+    // timeout, so an attempt left with no approved time settles here, before
+    // any worktree is created or Pi is started outside the deadline.
+    let spent = state
+        .store
+        .lock()
+        .map_err(|e| e.to_string())
+        .and_then(|store| store.workflow_usage(&run_id).map_err(|e| e.to_string()))
+        .map(|usage| usage.elapsed_seconds.saturating_add(preparation_seconds));
+    match spent {
+        Ok(spent) if spent >= job.plan.budgets.timeout_seconds => {
+            settle(
+                &state,
+                AttemptState::Failed,
+                RunState::Failed,
+                None,
+                &format!(
+                    "budget exceeded: timeout_seconds {} elapsed before the writer started",
+                    job.plan.budgets.timeout_seconds
+                ),
+                json!({}),
+            );
+            return;
+        }
+        Ok(_) => {}
+        Err(error) => {
+            settle(
+                &state,
+                AttemptState::Failed,
+                RunState::Failed,
+                None,
+                &format!("cannot load durable usage: {error}"),
+                json!({}),
+            );
+            return;
+        }
     }
     // Lease first so the path is reserved durably, then create the worktree.
     let attempt_dir = state.config.data_dir.join("attempts").join(&job.attempt.id);
@@ -2334,6 +2404,17 @@ mod redaction_tests {
             vec!["alice:s3cr3t-pw".to_owned(), "s3cr3t-pw".to_owned()]
         );
         assert!(url_credentials("https://example.com/a@b").is_empty());
+    }
+
+    #[test]
+    fn percent_encoded_url_credentials_are_known_decoded_too() {
+        let known = url_credentials("http://alice:p%40ss%3Aword@proxy");
+        assert!(known.contains(&"p%40ss%3Aword".to_owned()));
+        assert!(known.contains(&"p@ss:word".to_owned()));
+        assert!(known.contains(&"alice:p@ss:word".to_owned()));
+        let out = redact_secrets("check printed password p@ss:word", &known);
+        assert!(!out.contains("p@ss:word"), "{out}");
+        assert_eq!(percent_decode("a%zzb%4"), "a%zzb%4");
     }
 
     #[test]
