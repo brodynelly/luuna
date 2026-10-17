@@ -404,6 +404,16 @@ impl Executor {
             .kill_on_drop(true);
         #[cfg(unix)]
         command.process_group(0);
+        // If the runtime itself dies, Linux delivers SIGKILL to the direct child so
+        // a check cannot outlive its supervisor; grandchildren rely on the group kill.
+        #[cfg(target_os = "linux")]
+        // SAFETY: prctl only changes this child's parent-death signal before exec.
+        unsafe {
+            command.pre_exec(|| {
+                libc::prctl(libc::PR_SET_PDEATHSIG, libc::SIGKILL);
+                Ok(())
+            });
+        }
         let mut child = match command.spawn() {
             Ok(child) => child,
             Err(error) => {
