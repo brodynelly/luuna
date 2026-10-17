@@ -12,12 +12,12 @@ Keep the application and all three maintained CLI components in **this monorepo*
 | --- | --- | --- |
 | Repository | MIT/notices, cleaned current tracking, contributor rules, pinned tools/locks, CI definitions | Historical session files remain in earlier commits; remote CI and distribution need separate evidence |
 | Domain/storage | Immutable plan hashing, exact approval/revision/project guards, candidate/review guards, transactional state/events, durable SQLite runs, restart interruption | A real baseline executor is absent; storage deliberately rejects entry to feature implementation |
-| Pi/runtime | Actual Pi 1.3.0 version/RPC handshake, authenticated loopback run API, replay/SSE, timeout/cancel/reap, malformed/error fixtures, durable failed/cancelled attempts | Successful provider-backed model output has **not** been observed; handshake and missing-key failure do not complete M1 |
+| Pi/runtime | Actual Pi 1.3.0 version/RPC handshake, authenticated loopback run API, replay/SSE, timeout/cancel/reap, malformed/error fixtures, durable failed/cancelled attempts | Genuine provider-backed output observed on Linux on October 17, 2026 (OpenRouter `openai/gpt-4o-mini`, 19/19 real-mode smoke checks); Mac/Windows service lifecycle and native client remain unverified |
 | Frontend | Typed client, real service connection, run/history/cancel/reconnect, private in-memory token; browser smoke exercised | Tauri shell exists; native GUI launch, installer, and Mac/Windows results are unverified |
 | Maintained CLIs | Missions, Atlas, Beacon packages with passing standalone tests and compatible legacy aliases | Runtime ticket/knowledge/prompt adapters are not integrated; packages remain private/unpublished |
 | Product workflow | Foundational contracts and negative tests | Import/discovery, actual baseline checks, approved writer worktrees, independent review, multi-repo scheduling, publication, TUI parity and release installation remain planned |
 
-M0 is substantially established, with remaining API/capability/threat-model details completed alongside their first executable consumers. It is not proof of the operational workflow. M1 is partial. Do not restart bootstrap or jump to broad orchestration before closing that gap.
+M0 is substantially established, with remaining API/capability/threat-model details completed alongside their first executable consumers. It is not proof of the operational workflow. M1 is closed on Linux as of October 17, 2026; its native-host step is carried by the MVP native-lifecycle item. Do not restart bootstrap or jump to broad orchestration; the next slice is M2a.
 
 ## What counts as a usable product
 
@@ -206,19 +206,19 @@ That probe makes **no model request**. For genuine M1 proof, securely set the pr
 
 These are engineering estimates from this foundation, **not promised dates**. Assume one experienced full-time engineer using AI assistance, about 40 scheduled hours/week with **30 focused engineering hours**, a stable model/provider budget, Mac and Windows capable hosts, and timely feedback. AI assistance is included in the assumption; it does not remove integration, review, native packaging, or failure-testing work. Waiting for credentials, network changes, host access, signing, or external service approval adds elapsed time.
 
-The earlier desktop proposal estimated **372–600 hours from scratch** for a meaningful single-repository MVP. Some bootstrap work now exists, but its successful model/native paths remain unproven. Use the following remaining-work range provisionally and re-estimate after M1 and the first real M2 writer.
+The earlier desktop proposal estimated **372–600 hours from scratch** for a meaningful single-repository MVP. Some bootstrap work now exists and its model path was proved on October 17, 2026; its native paths remain unproven. Use the following remaining-work range provisionally and re-estimate after the first real M2 writer.
 
 | Remaining work to a usable single-repo MVP | Focused hours before contingency |
 | --- | ---: |
-| Genuine M1 compatibility and evidence | 24–48 |
+| Genuine M1 compatibility and evidence (Linux closed October 17, 2026; native-host step remains) | 0–8 |
 | M2a/M2b/M2c import, baseline, approval and scoped writer | 104–176 |
 | M3 independent review, repair and recovery | 64–104 |
 | MVP client completion, native smoke and end-to-end hardening | 64–104 |
-| Subtotal | 256–432 |
-| Technical uncertainty allowance, approximately 20% | 51–86 |
-| **Planning range** | **310–520** |
+| Subtotal | 232–392 |
+| Technical uncertainty allowance, approximately 20% | 46–78 |
+| **Planning range** | **278–470** |
 
-That is about **8–13 full 40-hour engineering weeks**, or **11–18 elapsed workweeks at 30 focused hours/week** under these assumptions. A connectivity preview can arrive sooner; it is not the usable MVP defined above.
+That is about **7–12 full 40-hour engineering weeks**, or **9–16 elapsed workweeks at 30 focused hours/week** under these assumptions. A connectivity preview can arrive sooner; it is not the usable MVP defined above.
 
 | Additional work after the MVP to full v1 | Focused hours before contingency |
 | --- | ---: |
@@ -231,6 +231,6 @@ That is about **8–13 full 40-hour engineering weeks**, or **11–18 elapsed wo
 | Technical uncertainty allowance, approximately 20% | 106–184 |
 | **Additional planning range** | **640–1,110** |
 
-The combined remaining full-v1 range is roughly **950–1,630 focused hours**, about **24–41 full engineering weeks** or **32–55 elapsed workweeks at the assumed focused capacity**. Treat the upper range seriously: native/mobile profiles, TUI parity, independent service installation and publication recovery are substantial product work. Requirements changes or missing platforms can exceed this range.
+The combined remaining full-v1 range is roughly **920–1,580 focused hours**, about **23–40 full engineering weeks** or **31–53 elapsed workweeks at the assumed focused capacity**. Treat the upper range seriously: native/mobile profiles, TUI parity, independent service installation and publication recovery are substantial product work. Requirements changes or missing platforms can exceed this range.
 
 The execution critical path is **genuine M1 → import/baseline → exact approval/scoped writer → candidate checks/fresh review → reliable multi-repo integration**. Full-v1 release also depends on client parity, profile/platform proof and publication/installers. Stack/client contracts can be prepared alongside core work once stable, but one engineer's parallel tasks do not create extra capacity. Re-estimate from measured milestone throughput and preserve required gates; if time is short, narrow the MVP scope explicitly rather than declaring full v1 early.
