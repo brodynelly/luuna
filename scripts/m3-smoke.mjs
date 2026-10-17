@@ -183,15 +183,10 @@ const NPM_INSTALL_TIMEOUT_MS = 10 * 60_000;
 const GIT_TIMEOUT_MS = 2 * 60_000;
 const RUNTIME_BUILD_TIMEOUT_MS = 30 * 60_000;
 
-/** This process's environment without any provider credential or LUUNA_PI_ alias. */
-function credentialFreeEnv() {
-  return Object.fromEntries(Object.entries(process.env).filter(([name]) => !CREDENTIAL_NAMES.includes(name) && !name.startsWith("LUUNA_PI_")));
-}
-
 /**
- * The environment for host tools the harness runs before Pi provenance is established (rustup,
- * the Python version probe): an allowlist of what locating and running them needs, so no provider
- * key, other token, password or credential-bearing URL reaches an executable nothing has verified.
+ * The environment for host tools the harness runs (Git, rustup, the Python and Pi version
+ * probes): an allowlist of what locating and running them needs, so no provider key, other token,
+ * password or credential-bearing URL reaches them.
  */
 function toolEnv() {
   const keep = new Set(["PATH", "HOME", "USER", "LOGNAME", "LANG", "LC_ALL", "TMPDIR", "TERM", "RUSTUP_HOME", "CARGO_HOME", "SystemRoot", "SYSTEMROOT", "windir", "PATHEXT", "USERPROFILE", "TEMP", "TMP", "ComSpec"]);
@@ -203,6 +198,17 @@ function toolEnv() {
  * with a directory part is taken as given; otherwise the first regular, executable file in a PATH
  * directory (with each PATHEXT extension on Windows) is returned, or null.
  */
+/**
+ * What a network client needs beyond `toolEnv()`: the certificate and proxy variables the runtime
+ * passes to Pi (and npm needs for the public registry). Nothing else of the harness's environment.
+ */
+const NETWORK_NAMES = ["SSL_CERT_FILE", "SSL_CERT_DIR", "NODE_EXTRA_CA_CERTS", "HTTP_PROXY", "HTTPS_PROXY", "ALL_PROXY", "NO_PROXY", "http_proxy", "https_proxy", "all_proxy", "no_proxy", "NODE_USE_ENV_PROXY"];
+function networkEnv() {
+  const env = toolEnv();
+  for (const name of NETWORK_NAMES) if (process.env[name] !== undefined) env[name] = process.env[name];
+  return env;
+}
+
 function resolveOnPath(name) {
   if (name.includes("/") || name.includes(path.sep)) return name;
   const extensions = process.platform === "win32" ? ["", ...(process.env.PATHEXT ?? ".COM;.EXE;.BAT;.CMD").split(";").filter(Boolean)] : [""];
@@ -435,7 +441,7 @@ record("the developer checkout was still untouched once every process of the run
 const sameMetadata = checkoutAfter.git_metadata_digest.startsWith("sha256:") && checkoutAfter.git_metadata_digest === evidence.environment?.git_metadata_digest;
 const sameIgnored = checkoutAfter.ignored_digest.startsWith("sha256:") && checkoutAfter.ignored_digest === evidence.environment?.ignored_digest;
 const sameObjects = checkoutAfter.git_objects_digest.startsWith("sha256:") && checkoutAfter.git_objects_digest === evidence.environment?.git_objects_digest;
-record("the Luuna checkout was still the recorded revision, clean, with the same build inputs, Git metadata, history and ignored files once every process of the run had stopped", checkoutAfter.git_revision === evidence.environment?.git_revision && checkoutAfter.git_dirty === false && checkoutAfter.build_identity === evidence.environment?.expected_build_identity && sameMetadata && sameObjects && sameIgnored, `revision ${checkoutAfter.git_revision}, ${checkoutAfter.git_dirty === false ? "clean" : checkoutAfter.git_dirty === null ? "status unknown" : `modified: ${checkoutAfter.git_dirty_paths}`}, build inputs ${checkoutAfter.build_identity === evidence.environment?.expected_build_identity ? "unchanged" : "changed"}, Git metadata (config, HEAD, refs, hooks, info, alternates) ${sameMetadata ? "unchanged" : "changed or unreadable"}, objects reachable from every ref ${sameObjects ? "unchanged and intact (fsck --full)" : "changed, corrupt or unreadable"}, ignored files outside target/node_modules/dist ${sameIgnored ? `unchanged (${checkoutAfter.ignored_files})` : "changed or unreadable"}`);
+record("the Luuna checkout was still the recorded revision, clean, with the same build inputs, Git metadata, history and ignored files once every process of the run had stopped", checkoutAfter.git_revision === evidence.environment?.git_revision && checkoutAfter.git_dirty === false && checkoutAfter.build_identity === evidence.environment?.expected_build_identity && sameMetadata && sameObjects && sameIgnored, `revision ${checkoutAfter.git_revision}, ${checkoutAfter.git_dirty === false ? "clean" : checkoutAfter.git_dirty === null ? "status unknown" : `modified: ${checkoutAfter.git_dirty_paths}`}, build inputs ${checkoutAfter.build_identity === evidence.environment?.expected_build_identity ? "unchanged" : "changed"}, Git metadata (config, HEAD, refs, reflogs, hooks, info, alternates) ${sameMetadata ? "unchanged" : "changed or unreadable"}, objects reachable from every ref ${sameObjects ? "unchanged and intact (fsck --full)" : "changed, corrupt or unreadable"}, ignored files outside target/node_modules/dist ${sameIgnored ? `unchanged (${checkoutAfter.ignored_files})` : "changed or unreadable"}`);
 // Containment is required on every platform: without a subreaper (macOS, Windows) a detached
 // descendant of a check could keep writing under the output tree after the scan, so the check
 // fails there and the scan below is marked untrusted rather than accepted.
@@ -517,7 +523,13 @@ async function startRuntime(label, { credentials = true } = {}) {
   // /health, built from an allowlist: no provider key, no other token, password or
   // credential-bearing URL from the harness's environment reaches an unverified binary.
   const minimal = new Set(["PATH", "HOME", "USER", "LOGNAME", "LANG", "LC_ALL", "TMPDIR", "TERM", "SystemRoot", "SYSTEMROOT", "windir", "PATHEXT", "USERPROFILE", "TEMP", "TMP", "ComSpec"]);
-  const env = credentials ? { ...process.env } : Object.fromEntries(Object.entries(process.env).filter(([name]) => minimal.has(name)));
+  // The credentialed start is built the same way: the minimal set, the certificate and proxy
+  // variables Pi is given, and the named provider credentials, so nothing else inherited (a
+  // preloaded library, NODE_OPTIONS, an unrelated token) reaches the verified binary.
+  const env = Object.fromEntries(Object.entries(process.env).filter(([name]) => minimal.has(name)));
+  if (credentials) {
+    for (const name of [...NETWORK_NAMES, ...CREDENTIAL_NAMES, ...CREDENTIAL_NAMES.map((name) => `LUUNA_PI_${name}`)]) if (process.env[name] !== undefined) env[name] = process.env[name];
+  }
   delete env.LUUNA_PI_PROVIDER;
   delete env.LUUNA_PI_MODEL;
   Object.assign(env, {
@@ -931,7 +943,7 @@ async function hardKillDuringReviewReservesSpend(name) {
 /** The fixture (developer) checkout's HEAD, tracked changes and untracked files. */
 /**
  * The developer checkout as a check could damage it: HEAD, tracked and untracked content, and what
- * porcelain status does not show, its Git metadata (config, HEAD, refs, hooks, info, alternates)
+ * porcelain status does not show, its Git metadata (config, HEAD, refs, reflogs, hooks, info, alternates)
  * and every ignored file. Luuna's own worktrees are detached and it writes no ref or config here,
  * so none of these may change during a run. A digest that cannot be read is reported as such and
  * fails the comparison.
@@ -943,7 +955,7 @@ function fixtureCheckoutState() {
     untracked: git(fixtureRepo, "status", "--porcelain").split("\n").filter((line) => line.startsWith("??")).sort(),
   };
   try {
-    state.metadata_digest = pathsDigest(git(fixtureRepo, "rev-parse", "--absolute-git-dir"), ["config", "HEAD", "packed-refs", "info", "hooks", "refs", "objects/info", "shallow"]);
+    state.metadata_digest = pathsDigest(git(fixtureRepo, "rev-parse", "--absolute-git-dir"), ["config", "HEAD", "packed-refs", "info", "hooks", "refs", "logs", "objects/info", "shallow"]);
   } catch (error) { state.metadata_digest = `unavailable: ${error.message}`; }
   try {
     const ignored = git(fixtureRepo, "ls-files", "--others", "--ignored", "--exclude-standard", "--directory", "-z").split("\0").filter(Boolean).map((rel) => rel.replace(/\/$/, ""));
@@ -1191,7 +1203,7 @@ function checkoutState() {
   // index and logs are left out: Git itself rewrites them.
   try {
     const gitDir = git(repository, "rev-parse", "--absolute-git-dir");
-    state.git_metadata_digest = pathsDigest(gitDir, ["config", "HEAD", "packed-refs", "info", "hooks", "refs", "objects/info", "shallow"]);
+    state.git_metadata_digest = pathsDigest(gitDir, ["config", "HEAD", "packed-refs", "info", "hooks", "refs", "logs", "objects/info", "shallow"]);
   } catch (error) { state.git_metadata_digest = `unavailable: ${error.message}`; }
   // History itself: every object reachable from any ref (other branches and tags included, not
   // only what the checkout shows) is listed, and a full fsck verifies each stored object's content
@@ -1243,7 +1255,7 @@ function environment() {
     info.pi_provenance = piProvenance();
     // The launcher runs only once its provenance is verified, and without any provider credential.
     if (info.pi_provenance.verified) {
-      try { info.pi_version = execFileSync(info.pi_provenance.launcher.path, [info.pi_provenance.entrypoint.path, "--version"], { encoding: "utf8", env: credentialFreeEnv(), timeout: 30_000, killSignal: "SIGKILL" }).trim(); } catch (error) { info.pi_version = `unavailable: ${error.message}`; }
+      try { info.pi_version = execFileSync(info.pi_provenance.launcher.path, [info.pi_provenance.entrypoint.path, "--version"], { encoding: "utf8", env: toolEnv(), timeout: 30_000, killSignal: "SIGKILL" }).trim(); } catch (error) { info.pi_version = `unavailable: ${error.message}`; }
     } else {
       info.pi_version = "not run: Pi provenance not verified";
     }
@@ -1314,7 +1326,8 @@ function treeDigest(root) {
       for (let entry = listing.readSync(); entry !== null; entry = listing.readSync()) {
         const child = rel ? `${rel}/${entry.name}` : entry.name;
         if (++visited > LIMITS.entries) throw new Error(`tree has more than ${LIMITS.entries} entries`);
-        if (entry.isDirectory()) walkTree(child, depth + 1);
+        // Directories are recorded too, so an added or removed empty directory changes the digest.
+        if (entry.isDirectory()) { entries.push(`${child}\0dir`); walkTree(child, depth + 1); }
         else if (entry.isSymbolicLink()) entries.push(`${child}\0link\0${readlinkSync(path.join(root, child))}`);
         else entries.push(`${child}\0${hashFile(path.join(root, child))}`);
       }
@@ -1380,7 +1393,10 @@ function piProvenance() {
       ? path.join(path.dirname(process.execPath), "node_modules", "npm", "bin", "npm-cli.js")
       : path.join(path.dirname(path.dirname(process.execPath)), "lib", "node_modules", "npm", "bin", "npm-cli.js");
     if (!existsSync(npmCli)) throw new Error(`no npm bundled with ${process.execPath} (expected ${npmCli})`);
-    const env = credentialFreeEnv();
+    // An allowlist, not a deny-list: npm is not verified before it runs, so it gets what a public
+    // install needs (host basics, certificates, proxies) and no other inherited secret. The user's
+    // npm configuration is not read, so a token in it cannot reach the registry or an altered CLI.
+    const env = { ...networkEnv(), npm_config_userconfig: devNull, npm_config_globalconfig: devNull };
     result.npm = { node: process.execPath, cli: realpathSync(npmCli), version: execFileSync(process.execPath, [npmCli, "--version"], { env, encoding: "utf8", stdio: ["ignore", "pipe", "ignore"], timeout: 30_000, killSignal: "SIGKILL" }).trim() };
     const work = realpathSync(mkdtempSync(path.join(tmpdir(), "luuna-pi-provenance-")));
     try {
@@ -1486,10 +1502,23 @@ function urlCredentials(text) {
     const forms = [...new Set([...(password !== "" ? [userinfo, password] : []), ...(user.length >= 8 ? [userinfo, user] : [])])];
     for (const form of forms) {
       found.push(form);
-      try { const decoded = decodeURIComponent(form); if (decoded !== form) found.push(decoded); } catch { /* invalid escape: raw form only */ }
+      const decoded = percentDecode(form);
+      if (decoded !== form) found.push(decoded);
     }
   }
   return found;
+}
+
+/** Decodes each valid `%XX` escape on its own and keeps any other byte, as the runtime's redactor does. */
+function percentDecode(text) {
+  const bytes = Buffer.from(text, "utf8");
+  const out = [];
+  for (let index = 0; index < bytes.length; index += 1) {
+    const hex = bytes.subarray(index + 1, index + 3).toString("latin1");
+    if (bytes[index] === 0x25 && /^[0-9A-Fa-f]{2}$/.test(hex)) { out.push(parseInt(hex, 16)); index += 2; }
+    else out.push(bytes[index]);
+  }
+  return Buffer.from(out).toString("utf8");
 }
 
 function configuredValues() {

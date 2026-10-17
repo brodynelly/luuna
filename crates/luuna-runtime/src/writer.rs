@@ -1299,6 +1299,7 @@ fn percent_decode(text: &str) -> String {
         let escape = (bytes[index] == b'%')
             .then(|| bytes.get(index + 1..index + 3))
             .flatten()
+            .filter(|hex| hex.iter().all(u8::is_ascii_hexdigit))
             .and_then(|hex| std::str::from_utf8(hex).ok())
             .and_then(|hex| u8::from_str_radix(hex, 16).ok());
         match escape {
@@ -1775,13 +1776,17 @@ async fn writer_worker(state: AppState, job: WriterJob, mut cancel: watch::Recei
     );
     let started = std::time::Instant::now();
     let deadline = tokio::time::Instant::now() + remaining;
+    // Every exit from here on charges the time it took, whatever the reason:
+    // a startup step that fails slowly (a Git command at its own timeout, say)
+    // spent approved time as surely as one that ran into the deadline.
+    let spent = |started: std::time::Instant| json!({"elapsed_seconds": started.elapsed().as_secs().saturating_add(preparation_seconds)});
     let startup_exceeded = |started: std::time::Instant| {
         (
             format!(
                 "budget exceeded: timeout_seconds {} elapsed during writer startup",
                 job.plan.budgets.timeout_seconds
             ),
-            json!({"elapsed_seconds": started.elapsed().as_secs().saturating_add(preparation_seconds)}),
+            spent(started),
         )
     };
     // Lease first so the path is reserved durably, then create the worktree.
@@ -1822,7 +1827,7 @@ async fn writer_worker(state: AppState, job: WriterJob, mut cancel: watch::Recei
             RunState::Failed,
             None,
             &format!("worktree lease refused: {error}"),
-            json!({}),
+            spent(started),
         );
         return;
     }
@@ -1842,7 +1847,7 @@ async fn writer_worker(state: AppState, job: WriterJob, mut cancel: watch::Recei
                 RunState::Failed,
                 Some((&lease_id, LeaseState::Released, None)),
                 &format!("cannot create worktree: {error}"),
-                json!({}),
+                spent(started),
             );
             return;
         }
@@ -1864,7 +1869,17 @@ async fn writer_worker(state: AppState, job: WriterJob, mut cancel: watch::Recei
         "worktree.created",
         json!({"lease_id": lease_id, "repository_id": repository_id, "path": lease.path, "base_commit": base}),
     );
-    let guard = match install_guard_by(attempt_dir.join("pi"), deadline).await {
+    // Installation also yields to cancellation: a stalled guard write must not
+    // hold a cancelled attempt until the deadline.
+    let installed = tokio::select! {
+        biased;
+        _ = cancel.changed() => {
+            settle(&state, AttemptState::Cancelled, RunState::Cancelled, Some((&lease_id, LeaseState::Released, None)), "cancelled during startup; worktree preserved", spent(started));
+            return;
+        }
+        installed = install_guard_by(attempt_dir.join("pi"), deadline) => installed,
+    };
+    let guard = match installed {
         Ok(Some(path)) => path,
         Ok(None) => {
             let (reason, usage) = startup_exceeded(started);
@@ -1885,7 +1900,7 @@ async fn writer_worker(state: AppState, job: WriterJob, mut cancel: watch::Recei
                 RunState::Failed,
                 Some((&lease_id, LeaseState::Released, None)),
                 &format!("cannot install scope guard: {error}"),
-                json!({}),
+                spent(started),
             );
             return;
         }
@@ -1919,7 +1934,7 @@ async fn writer_worker(state: AppState, job: WriterJob, mut cancel: watch::Recei
     let spawned = tokio::select! {
         biased;
         _ = cancel.changed() => {
-            settle(&state, AttemptState::Cancelled, RunState::Cancelled, Some((&lease_id, LeaseState::Released, None)), "cancelled during startup; worktree preserved", json!({}));
+            settle(&state, AttemptState::Cancelled, RunState::Cancelled, Some((&lease_id, LeaseState::Released, None)), "cancelled during startup; worktree preserved", spent(started));
             return;
         }
         _ = tokio::time::sleep_until(deadline) => {
@@ -1938,7 +1953,7 @@ async fn writer_worker(state: AppState, job: WriterJob, mut cancel: watch::Recei
                 RunState::Failed,
                 Some((&lease_id, LeaseState::Released, None)),
                 &format!("cannot start Pi: {error}"),
-                json!({}),
+                spent(started),
             );
             return;
         }
@@ -1964,7 +1979,7 @@ async fn writer_worker(state: AppState, job: WriterJob, mut cancel: watch::Recei
                 RunState::Failed,
                 Some((&lease_id, LeaseState::Released, None)),
                 &format!("cannot load durable usage: {error}"),
-                json!({}),
+                spent(started),
             );
             return;
         }
@@ -2234,6 +2249,32 @@ async fn writer_worker(state: AppState, job: WriterJob, mut cancel: watch::Recei
         _ = cancel.changed() => None,
         result = tokio::time::timeout_at(deadline, judge) => Some(result),
     };
+    // An interruption (cancellation, the deadline, or a failure reported after
+    // `git commit` ran) can leave a commit in the worktree that the judgement
+    // never returned. The worktree's HEAD is read back, bounded, so the lease
+    // records the commit that exists; a HEAD that cannot be read is reported
+    // as uncertain rather than recorded as no commit.
+    let known_commit = match &judged {
+        Some(Ok(Ok((commit, _, _)))) => Some(commit.clone()),
+        Some(Ok(Err(rejected))) => rejected.commit.clone(),
+        _ => None,
+    };
+    let (reconciled, uncertain) = match (&judged, known_commit) {
+        (Some(Ok(Ok(_))), _) => (None, false),
+        (_, Some(commit)) => (Some(commit), false),
+        _ => match tokio::time::timeout(Duration::from_secs(10), state.git.head_commit(&worktree))
+            .await
+        {
+            Ok(Ok(head)) if head != base => (Some(head), false),
+            Ok(Ok(_)) => (None, false),
+            _ => (None, true),
+        },
+    };
+    let note = match (&reconciled, uncertain) {
+        (Some(commit), _) => format!("; commit {commit} found in the worktree"),
+        (None, true) => "; worktree HEAD could not be read, so a commit may exist".to_owned(),
+        (None, false) => String::new(),
+    };
     let usage_json = usage_now(started);
     let (commit, candidate, tree) = match judged {
         None => {
@@ -2241,8 +2282,8 @@ async fn writer_worker(state: AppState, job: WriterJob, mut cancel: watch::Recei
                 &state,
                 AttemptState::Cancelled,
                 RunState::Cancelled,
-                Some((&lease_id, LeaseState::Released, None)),
-                "cancelled during candidate judgement; worktree preserved",
+                Some((&lease_id, LeaseState::Released, reconciled.as_deref())),
+                &format!("cancelled during candidate judgement; worktree preserved{note}"),
                 usage_json,
             );
             return;
@@ -2252,9 +2293,9 @@ async fn writer_worker(state: AppState, job: WriterJob, mut cancel: watch::Recei
                 &state,
                 AttemptState::Failed,
                 RunState::Failed,
-                Some((&lease_id, LeaseState::Released, None)),
+                Some((&lease_id, LeaseState::Released, reconciled.as_deref())),
                 &format!(
-                    "budget exceeded: timeout_seconds {} elapsed during candidate judgement; worktree preserved",
+                    "budget exceeded: timeout_seconds {} elapsed during candidate judgement; worktree preserved{note}",
                     budgets.timeout_seconds
                 ),
                 usage_json,
@@ -2266,12 +2307,17 @@ async fn writer_worker(state: AppState, job: WriterJob, mut cancel: watch::Recei
                 Some(changes) => json!({"changes": changes, "usage": usage_json}),
                 None => usage_json,
             };
+            let reason = if rejected.commit.is_some() {
+                rejected.reason
+            } else {
+                format!("{}{note}", rejected.reason)
+            };
             settle(
                 &state,
                 AttemptState::Failed,
                 RunState::Failed,
-                Some((&lease_id, LeaseState::Released, rejected.commit.as_deref())),
-                &rejected.reason,
+                Some((&lease_id, LeaseState::Released, reconciled.as_deref())),
+                &reason,
                 extra,
             );
             return;
@@ -2707,6 +2753,16 @@ mod redaction_tests {
         // An ordinary short user name is not a credential.
         assert!(url_credentials("https://git@github.com/x").is_empty());
         assert!(!url_credentials("http://bob:hunter22@h").contains(&"bob".to_owned()));
+    }
+
+    #[test]
+    fn each_valid_escape_is_decoded_on_its_own() {
+        // A malformed escape does not stop the valid ones being decoded, and
+        // only two hex digits form an escape (`%+F` is left as it is).
+        assert_eq!(percent_decode("access%2Dtoken%ZZ"), "access-token%ZZ");
+        assert_eq!(percent_decode("a%+Fb%4"), "a%+Fb%4");
+        let known = url_credentials("http://access%2Dtoken%ZZ@proxy");
+        assert!(known.contains(&"access-token%ZZ".to_owned()), "{known:?}");
     }
 
     #[test]
