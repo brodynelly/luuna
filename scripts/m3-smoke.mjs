@@ -44,6 +44,8 @@ const python = process.platform === "win32" ? "python" : "python3";
 const PROJECT = "m3-smoke";
 /** Every request is bounded so a runtime that accepts a connection but never answers cannot hang the evidence run. */
 const REQUEST_TIMEOUT_MS = 30_000;
+// Largest file the leak scan will read; anything bigger is an unscannable target that fails the run.
+const SCAN_FILE_LIMIT = 512 * 1024 * 1024;
 const CREDENTIAL_NAMES = ["ANTHROPIC_API_KEY", "OPENAI_API_KEY", "GEMINI_API_KEY", "GOOGLE_API_KEY", "MISTRAL_API_KEY", "GROQ_API_KEY", "XAI_API_KEY", "OPENROUTER_API_KEY"];
 
 // Fixture mode: the synthetic writer/reviewer read their scenario from
@@ -817,9 +819,6 @@ function quarantineLeaks(scan) {
   }
   return { removed, failed };
 }
-
-/** Largest file the leak scan will read; anything bigger is an unscannable target that fails the run. */
-const SCAN_FILE_LIMIT = 512 * 1024 * 1024;
 
 /** Streams a file through a sliding window so a value spanning two chunks is still found; bounded by size and growth. */
 function fileContainsAny(file, values) {
