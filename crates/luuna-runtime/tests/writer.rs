@@ -365,8 +365,11 @@ async fn an_approved_writer_changes_only_its_worktree_and_records_a_candidate() 
         "{}",
         worktree.display()
     );
+    // The synthetic writer writes through Python text mode, which emits CRLF on Windows.
     assert_eq!(
-        fs::read_to_string(worktree.join("src/main.py")).unwrap(),
+        fs::read_to_string(worktree.join("src/main.py"))
+            .unwrap()
+            .replace("\r\n", "\n"),
         "print('implemented by the synthetic writer')\n"
     );
     assert!(!worktree.join("notes.txt").exists());
@@ -561,7 +564,9 @@ async fn out_of_scope_changes_are_rejected_and_the_worktree_is_preserved() {
         "worktree preserved for inspection"
     );
     assert_eq!(
-        fs::read_to_string(worktree.join("README.md")).unwrap(),
+        fs::read_to_string(worktree.join("README.md"))
+            .unwrap()
+            .replace("\r\n", "\n"),
         "tampered outside the task paths\n"
     );
     assert_eq!(
