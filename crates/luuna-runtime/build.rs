@@ -31,7 +31,8 @@ fn collect(root: &Path, dir: &Path, files: &mut Vec<String>, unbound: &mut Vec<S
 /// beyond the repository's own manifests: a `paths` dependency override, a
 /// `patch` table, a source `replace-with`, a `profile` setting (overflow
 /// checks, panic strategy, LTO, ...) or an `include` of further config that is
-/// not read here, or a `rustc` compiler or `linker` substitution. TOML can
+/// not read here, a `rustc` compiler or `linker` substitution, or an `env`
+/// table that sets variables for every build script. TOML can
 /// spell these keys as table headers, dotted keys, inline tables or quoted
 /// keys, so the rule is lexical and fails closed: the
 /// text is flagged if any of these names appears as a whole key token
@@ -48,6 +49,7 @@ fn config_override(text: &str) -> bool {
             "profile",
             "rustc",
             "linker",
+            "env",
         ]
         .iter()
         .any(|name| {
@@ -220,6 +222,10 @@ fn main() {
                 || name == "CARGO_BUILD_RUSTFLAGS"
                 || name == "RUSTC_LINKER"
                 || name.starts_with("CRATE_CC_")
+                // Build-time settings the bundled SQLite (`libsqlite3-sys`) honours.
+                || name.starts_with("SQLITE_")
+                || name.starts_with("SQLITE3_")
+                || name.starts_with("LIBSQLITE3_")
                 || C_TOOLCHAIN.iter().any(|tool| {
                     name == tool
                         || ["TARGET_", "HOST_"]

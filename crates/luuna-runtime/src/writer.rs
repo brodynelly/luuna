@@ -1176,9 +1176,10 @@ fn inherited_url_credentials(
 const MIN_USERNAME_CREDENTIAL: usize = 8;
 
 /// The credential parts of every URL userinfo in `text`: `user:password` and
-/// `password` when a password is present, and the user name itself when it
-/// is used alone (or with an empty password) and is credential-length. Each
-/// is also returned percent-decoded, as a client would print it.
+/// `password` when a password is present, and the user name whenever it is
+/// credential-length (alone, with an empty password, or beside a password,
+/// since a token can be the user part). Each is also returned
+/// percent-decoded, as a client would print it.
 fn url_credentials(text: &str) -> Vec<String> {
     let mut found = Vec::new();
     let mut rest = text;
@@ -1190,12 +1191,16 @@ fn url_credentials(text: &str) -> Vec<String> {
             })
             .unwrap_or(authority.len());
         if let Some(userinfo) = authority[..end].rfind('@').map(|i| &authority[..i]) {
-            let forms: Vec<&str> = match userinfo.split_once(':') {
-                Some((_, password)) if !password.is_empty() => vec![userinfo, password],
-                Some((user, _)) if user.len() >= MIN_USERNAME_CREDENTIAL => vec![userinfo, user],
-                None if userinfo.len() >= MIN_USERNAME_CREDENTIAL => vec![userinfo],
-                _ => Vec::new(),
-            };
+            let (user, password) = userinfo.split_once(':').unwrap_or((userinfo, ""));
+            let mut forms: Vec<&str> = Vec::new();
+            if !password.is_empty() {
+                forms.extend([userinfo, password]);
+            }
+            if user.len() >= MIN_USERNAME_CREDENTIAL {
+                forms.extend([userinfo, user]);
+            }
+            forms.sort_unstable();
+            forms.dedup();
             for form in forms {
                 found.push(form.to_owned());
                 let decoded = percent_decode(form);
@@ -2512,8 +2517,15 @@ mod redaction_tests {
             "{known:?}"
         );
         assert!(known.contains(&"tok-en12345".to_owned()), "{known:?}");
+        // A token in the user part stays a secret beside a password.
+        let both = url_credentials("http://access-token:pw@proxy");
+        assert!(
+            both.contains(&"access-token".to_owned()) && both.contains(&"pw".to_owned()),
+            "{both:?}"
+        );
         // An ordinary short user name is not a credential.
         assert!(url_credentials("https://git@github.com/x").is_empty());
+        assert!(!url_credentials("http://bob:hunter22@h").contains(&"bob".to_owned()));
     }
 
     #[test]

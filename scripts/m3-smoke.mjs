@@ -194,13 +194,19 @@ function buildRuntime() {
   ]);
   const env = Object.fromEntries(Object.entries(process.env).filter(([name]) => keep.has(name)));
   env.CARGO_TARGET_DIR = runtimeTarget;
+  // Cargo is the pinned toolchain's own executable, located by rustup (as the compiler is for the
+  // compiler-bytes check), not whatever `cargo` comes first on PATH. rustup is the trust root here.
+  const pinned = pinnedToolchain();
+  if (pinned === null) throw new Error("rust-toolchain.toml pins no exact release; the runtime is not built");
+  let cargo;
+  try { cargo = realpathSync(execFileSync("rustup", ["which", "cargo", "--toolchain", pinned], { encoding: "utf8", stdio: ["ignore", "pipe", "ignore"], timeout: 30_000 }).trim()); } catch (error) { throw new Error(`rustup could not locate cargo for the pinned toolchain ${pinned}: ${error.code ?? error.message}`); }
   const startedAt = Date.now();
   try {
-    execFileSync("cargo", ["build", "--locked", "-p", "luuna-runtime"], { cwd: repository, env, stdio: ["ignore", "ignore", "pipe"], timeout: RUNTIME_BUILD_TIMEOUT_MS, killSignal: "SIGKILL", maxBuffer: 64 * 1024 * 1024 });
+    execFileSync(cargo, ["build", "--locked", "-p", "luuna-runtime"], { cwd: repository, env, stdio: ["ignore", "ignore", "pipe"], timeout: RUNTIME_BUILD_TIMEOUT_MS, killSignal: "SIGKILL", maxBuffer: 64 * 1024 * 1024 });
   } catch (error) {
     throw new Error(`the harness could not build the runtime: ${String(error.stderr ?? error.message).trim().split("\n").slice(-5).join(" | ")}`);
   }
-  return { command: "cargo build --locked -p luuna-runtime", target_dir: runtimeTarget, environment: Object.keys(env).sort(), seconds: Math.round((Date.now() - startedAt) / 1000) };
+  return { command: "cargo build --locked -p luuna-runtime", cargo: { path: cargo, sha256: createHash("sha256").update(readFileSync(cargo)).digest("hex") }, target_dir: runtimeTarget, environment: Object.keys(env).sort(), seconds: Math.round((Date.now() - startedAt) / 1000) };
 }
 
 // Fixture mode: the synthetic writer/reviewer read their scenario from
@@ -1078,7 +1084,7 @@ function environment() {
     info.pi_provenance = piProvenance();
     // The launcher runs only once its provenance is verified, and without any provider credential.
     if (info.pi_provenance.verified) {
-      try { info.pi_version = execFileSync(info.pi_provenance.launcher.path, [...(info.pi_provenance.launcher.path === info.pi_provenance.entrypoint.path ? [] : [info.pi_provenance.entrypoint.path]), "--version"], { encoding: "utf8", env: credentialFreeEnv(), timeout: 30_000, killSignal: "SIGKILL" }).trim(); } catch (error) { info.pi_version = `unavailable: ${error.message}`; }
+      try { info.pi_version = execFileSync(info.pi_provenance.launcher.path, [info.pi_provenance.entrypoint.path, "--version"], { encoding: "utf8", env: credentialFreeEnv(), timeout: 30_000, killSignal: "SIGKILL" }).trim(); } catch (error) { info.pi_version = `unavailable: ${error.message}`; }
     } else {
       info.pi_version = "not run: Pi provenance not verified";
     }
@@ -1104,7 +1110,7 @@ function environment() {
       // The same lexical, fail-closed rule as build.rs: any of these names as a whole key token
       // anywhere (table header, dotted, inline or quoted key, or a mere mention), or any
       // backslash, since an escape in a quoted key can spell any name.
-      return text.includes("\\") || /(?<![A-Za-z0-9_-])(paths|include|replace-with|patch|profile|rustc|linker)(?![A-Za-z0-9_-])/.test(text);
+      return text.includes("\\") || /(?<![A-Za-z0-9_-])(paths|include|replace-with|patch|profile|rustc|linker|env)(?![A-Za-z0-9_-])/.test(text);
     });
   })();
   // Bind the binary to the recorded revision by content: the runtime reports the digest its
@@ -1171,7 +1177,7 @@ function treeDigest(root) {
 function verifiedPi() {
   const pi = evidence.environment?.pi_provenance;
   if (mode !== "real" || !pi?.verified) return null;
-  return { command: pi.launcher.path, args: pi.launcher.path === pi.entrypoint.path ? [] : [pi.entrypoint.path] };
+  return { command: pi.launcher.path, args: [pi.entrypoint.path] };
 }
 
 function piProvenance() {
@@ -1183,15 +1189,14 @@ function piProvenance() {
     const entry = profile.piArgs.find((arg) => existsSync(arg) && statSync(arg).isFile()) ?? launcher;
     result.entrypoint = { path: realpathSync(entry), sha256: sha(realpathSync(entry)) };
     // Only the entrypoint is verified against the lockfile, so the launcher must add nothing of
-    // its own: it is either the Node executable running this harness with the verified entrypoint
-    // as its only argument (no `--require`, loader or other flag), or the entrypoint itself.
+    // its own: it is the Node executable running this harness with the verified entrypoint as its
+    // only argument (no `--require`, loader or other flag). The entrypoint is not run directly,
+    // since its shebang would resolve an interpreter through PATH.
     const harnessNode = realpathSync(process.execPath);
     if (result.launcher.path === harnessNode && profile.piArgs.length === 1 && realpathSync(profile.piArgs[0]) === result.entrypoint.path) {
       result.launcher.trusted_as = "the Node executable running the harness";
-    } else if (result.launcher.path === result.entrypoint.path && profile.piArgs.length === 0) {
-      result.launcher.trusted_as = "the verified entrypoint";
     } else {
-      throw new Error(`the Pi launcher must be the Node running this harness (${harnessNode}) with the verified entrypoint as its only argument, or the entrypoint itself`);
+      throw new Error(`the Pi launcher must be the Node running this harness (${harnessNode}) with the verified entrypoint as its only argument`);
     }
     const lock = JSON.parse(readFileSync(path.join(repository, "tools", "pi", "package-lock.json"), "utf8"));
     const pinned = lock.packages?.["node_modules/@earendil-works/pi-coding-agent"];
@@ -1305,8 +1310,9 @@ function buildIdentity() {
  *  longer one first would leave the longer one's remainder in the clear. */
 /**
  * The credential parts of every URL userinfo, raw and percent-decoded, as the runtime's repair
- * feedback treats them: `user:password` and `password`, or a credential-length user name used alone
- * or with an empty password (`http://access-token@proxy`); short names such as `git@` are not.
+ * feedback treats them: `user:password` and `password`, and a credential-length user name whether
+ * alone, with an empty password or beside a password (`http://access-token@proxy`); short names
+ * such as `git@` are not.
  */
 function urlCredentials(text) {
   const found = [];
@@ -1315,7 +1321,7 @@ function urlCredentials(text) {
     const colon = userinfo.indexOf(":");
     const user = colon < 0 ? userinfo : userinfo.slice(0, colon);
     const password = colon < 0 ? "" : userinfo.slice(colon + 1);
-    const forms = password !== "" ? [userinfo, password] : user.length >= 8 ? [...new Set([userinfo, user])] : [];
+    const forms = [...new Set([...(password !== "" ? [userinfo, password] : []), ...(user.length >= 8 ? [userinfo, user] : [])])];
     for (const form of forms) {
       found.push(form);
       try { const decoded = decodeURIComponent(form); if (decoded !== form) found.push(decoded); } catch { /* invalid escape: raw form only */ }

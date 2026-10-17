@@ -639,7 +639,15 @@ async fn pipeline(
     if remaining == 0 {
         return Err("budget exceeded before review".into());
     }
-    let mut process = tokio::select! { biased; _ = cancel.changed()=>return Err("cancelled during reviewer startup".into()), process=PiProcess::spawn(&config)=>process.map_err(|e|e.to_string())? };
+    // One deadline bounds the reviewer's startup (spawn and version probe)
+    // and its session together, so startup cannot run past the approved time.
+    let deadline = tokio::time::Instant::now() + Duration::from_secs(remaining);
+    let mut process = tokio::select! {
+        biased;
+        _ = cancel.changed() => return Err("cancelled during reviewer startup".into()),
+        _ = tokio::time::sleep_until(deadline) => return Err("review deadline exceeded during reviewer startup".into()),
+        process = PiProcess::spawn(&config) => process.map_err(|e| e.to_string())?,
+    };
     if state
         .event(
             id,
@@ -707,7 +715,7 @@ async fn pipeline(
             }
         }
     };
-    let result = tokio::select! {biased; _=cancel.changed()=>Err("cancelled; reviewer stopped".into()), result=tokio::time::timeout(Duration::from_secs(remaining),operation)=>result.map_err(|_|"review deadline exceeded".to_owned()).and_then(|r|r)};
+    let result = tokio::select! {biased; _=cancel.changed()=>Err("cancelled; reviewer stopped".into()), result=tokio::time::timeout_at(deadline,operation)=>result.map_err(|_|"review deadline exceeded".to_owned()).and_then(|r|r)};
     let stopped = process
         .stop()
         .await

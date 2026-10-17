@@ -1064,6 +1064,57 @@ async fn a_check_mutating_tracked_content_cannot_supply_reviewable_evidence() {
 }
 
 #[tokio::test]
+async fn reviewer_startup_is_bounded_by_the_remaining_workflow_time() {
+    // The mock Pi, except that once the flag exists its startup version probe
+    // stalls: the writer starts normally, the reviewer's startup hangs.
+    let pi = tempfile::tempdir().unwrap();
+    let flag = pi.path().join("stall");
+    let mock = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+        .join("../../fixtures/pi-rpc/mock_pi.py")
+        .canonicalize()
+        .unwrap();
+    let script = pi.path().join("stalling_pi.py");
+    std::fs::write(
+        &script,
+        format!(
+            "import os, runpy, sys, time\nif '--version' in sys.argv and os.path.exists({flag:?}):\n    time.sleep(60)\nsys.argv[0] = {mock:?}\nrunpy.run_path({mock:?}, run_name='__main__')\n"
+        ),
+    )
+    .unwrap();
+    let harness = Harness::with_pi(script);
+    let repo = tempfile::tempdir().unwrap();
+    ready(&harness, repo.path()).await;
+    let (id, _) = harness
+        .approved(
+            repo.path(),
+            "write_in_scope",
+            json!({"timeout_seconds": 10}),
+        )
+        .await;
+    assert_eq!(harness.implement(&id).await.0, StatusCode::ACCEPTED);
+    harness.settled(&id).await;
+    let pending = harness.candidate(&id).await;
+    let hash = &pending["evidence"]["candidate"]["hash"];
+    std::fs::write(&flag, "").unwrap();
+    let started = std::time::Instant::now();
+    assert_eq!(
+        harness.candidate_action(&id, "validate", hash).await.0,
+        StatusCode::ACCEPTED
+    );
+    let result = harness.candidate_settled(&id).await;
+    // Without the deadline, startup would wait out the engine's 15-second probe.
+    assert!(started.elapsed() < Duration::from_secs(12), "{result}");
+    assert_eq!(result["evidence"]["status"], "failed", "{result}");
+    assert!(
+        result["evidence"]["reason"]
+            .as_str()
+            .unwrap_or_default()
+            .contains("deadline exceeded during reviewer startup"),
+        "{result}"
+    );
+}
+
+#[tokio::test]
 async fn blocking_and_malformed_independent_reviews_never_pass() {
     for (scenario, expected_state, reason) in [
         (
