@@ -203,7 +203,7 @@ async function startRuntime(label) {
   while (Date.now() < deadline) {
     if (child.exitCode !== null) throw new Error(`runtime exited early (${child.exitCode}): ${stderr.trim()}`);
     try {
-      const response = await fetch(`${base}/api/v1/health`);
+      const response = await fetch(`${base}/api/v1/health`, { signal: AbortSignal.timeout(5_000) });
       if (response.ok) {
         const health = await response.json();
         record(`runtime ${label} start`, health.status === "ok", `health ${JSON.stringify(health)}`);
@@ -212,7 +212,11 @@ async function startRuntime(label) {
     } catch { /* not yet listening */ }
     await sleep(100);
   }
-  throw new Error(`runtime did not become healthy: ${stderr.trim()}`);
+  // A child that never became healthy is still ours: reap it before failing so
+  // no credential-bearing runtime outlives the harness holding the port and data directory.
+  child.kill("SIGKILL");
+  await waitForExit(child, 10_000);
+  throw new Error(`runtime did not become healthy (child terminated): ${stderr.trim()}`);
 }
 
 /**
@@ -273,7 +277,7 @@ async function registerProjectAndBaseline() {
   const baselines = (await api("GET", `/projects/${PROJECT}/baselines`)).body;
   const latest = Array.isArray(baselines) ? baselines[0] : null;
   evidence.baseline = latest ? { id: latest.id, status: latest.status, reason: latest.reason ?? null, results: summarizeResults(latest.results) } : baselines;
-  record("baseline required check passed on the fixture repository (real host command)", latest?.status === "passed", `status=${latest?.status} results=${JSON.stringify(summarizeResults(latest?.results))}`);
+  record("baseline ran every configured required check on the fixture repository (real host commands) and passed", latest?.status === "passed" && allRequiredPassed(latest?.results), `status=${latest?.status} results=${JSON.stringify(summarizeResults(latest?.results))}`);
   // Baselines run in the developer checkout by design (M2b) and may leave build
   // output such as __pycache__; everything after this point must add nothing.
   untrackedAfterBaseline = git(fixtureRepo, "status", "--porcelain").split("\n").filter((line) => line.startsWith("??")).sort();
@@ -402,7 +406,9 @@ async function failingCheckRequiresManualRepairAndFreshEvidence(name) {
   const finalEvents = await eventsOf(runId);
   summary.validation_r2 = describeEvidence(final, finalEvents, reviewStarted);
   const ev = final.evidence;
-  record(`${name}: revision 2 earned fresh check and review evidence and reached reviewed`, ev.candidate.hash === hash2 && ev.results?.every((result) => result.status === "passed") && ev.validation_generation === 1 && Boolean(ev.review) && ev.review.candidate_hash === hash2 && ev.status === "reviewed" && ev.results.every((result) => !first.evidence.results.some((old) => old.id === result.id)), `status=${ev.status} verdict=${ev.review?.verdict} results=${JSON.stringify(summarizeResults(ev.results))} reason=${truncate(ev.reason ?? "", 120)}`);
+  const requiredCount = profile.checks.filter((check) => check.required).length;
+  const r2Checks = finalEvents.filter((event) => event.type === "candidate.check_finished" && event.payload?.candidate_hash === hash2).length;
+  record(`${name}: revision 2 earned fresh evidence for every required check plus a fresh review and reached reviewed`, ev.candidate.hash === hash2 && allRequiredPassed(ev.results) && r2Checks === requiredCount && ev.validation_generation === 1 && Boolean(ev.review) && ev.review.candidate_hash === hash2 && ev.status === "reviewed" && ev.results.every((result) => !first.evidence.results.some((old) => old.id === result.id)), `status=${ev.status} verdict=${ev.review?.verdict} results=${JSON.stringify(summarizeResults(ev.results))} reason=${truncate(ev.reason ?? "", 120)}`);
   const attempts = (await api("GET", `/runs/${runId}/attempts`)).body;
   summary.attempts = Array.isArray(attempts) ? attempts.map((attempt) => ({ number: attempt.number, state: attempt.state })) : attempts;
   record(`${name}: two writer attempts are durably recorded against the shared budget`, Array.isArray(attempts) && attempts.length === 2, `attempts=${JSON.stringify(summary.attempts)}`);
