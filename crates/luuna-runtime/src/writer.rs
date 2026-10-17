@@ -816,18 +816,26 @@ fn repair_check_output(
             if !safe {
                 continue;
             }
-            let Some((bytes, truncated)) =
-                read_tail(&artifact_dir.join(format!("{reference}.log")))
+            let Some(expected) = result.artifact_hashes.get(reference) else {
+                continue;
+            };
+            let Some(verified) =
+                read_verified_tail(&artifact_dir.join(format!("{reference}.log")), expected)
             else {
                 continue;
             };
-            let tail = redact_known_secrets(String::from_utf8_lossy(&bytes).trim(), state);
+            let tail = redact_known_secrets(String::from_utf8_lossy(&verified.tail).trim(), state);
             if !tail.is_empty() {
-                let text = if truncated {
+                let mut text = if verified.truncated {
                     format!("…{tail}")
                 } else {
                     tail
                 };
+                if verified.capped {
+                    text.push_str(
+                        " [artifact capped at the executor limit; output after the cap was not retained]",
+                    );
+                }
                 output.insert(reference.clone(), Value::String(text));
             }
         }
@@ -860,19 +868,39 @@ fn redact_known_secrets(text: &str, state: &AppState) -> String {
     output
 }
 
-/// Reads at most the last `REPAIR_OUTPUT_TAIL_BYTES` of a log without loading
-/// the whole file; the flag says whether earlier content was skipped.
-fn read_tail(path: &FsPath) -> Option<(Vec<u8>, bool)> {
-    use std::io::{Read, Seek, SeekFrom};
-    let mut file = std::fs::File::open(path).ok()?;
-    let len = file.metadata().ok()?.len();
-    let skip = len.saturating_sub(REPAIR_OUTPUT_TAIL_BYTES as u64);
-    file.seek(SeekFrom::Start(skip)).ok()?;
-    let mut bytes = Vec::with_capacity(REPAIR_OUTPUT_TAIL_BYTES);
-    file.take(REPAIR_OUTPUT_TAIL_BYTES as u64)
-        .read_to_end(&mut bytes)
-        .ok()?;
-    Some((bytes, skip > 0))
+struct VerifiedTail {
+    tail: Vec<u8>,
+    /// Earlier content exists beyond the quoted tail.
+    truncated: bool,
+    /// The artifact reached the executor's size cap, so the command's real end
+    /// of output was never stored.
+    capped: bool,
+}
+
+/// The last `REPAIR_OUTPUT_TAIL_BYTES` of a private artifact whose current
+/// content still matches the digest recorded with the check result. A symlink,
+/// a non-file, an oversized file or a digest mismatch yields nothing: native
+/// checks run with host permissions, so bytes that no longer match the durable
+/// evidence must not reach a model prompt.
+fn read_verified_tail(path: &FsPath, expected_hash: &str) -> Option<VerifiedTail> {
+    let metadata = std::fs::symlink_metadata(path).ok()?;
+    if metadata.file_type().is_symlink()
+        || !metadata.is_file()
+        || metadata.len() > luuna_executor::MAX_ARTIFACT_BYTES
+    {
+        return None;
+    }
+    let bytes = std::fs::read(path).ok()?;
+    if luuna_executor::sha256_hex(&bytes) != expected_hash {
+        return None;
+    }
+    let capped = bytes.len() as u64 == luuna_executor::MAX_ARTIFACT_BYTES;
+    let start = bytes.len().saturating_sub(REPAIR_OUTPUT_TAIL_BYTES);
+    Some(VerifiedTail {
+        tail: bytes[start..].to_vec(),
+        truncated: start > 0,
+        capped,
+    })
 }
 
 fn writer_system_prompt(job: &WriterJob, worktree: &FsPath) -> String {

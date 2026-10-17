@@ -208,27 +208,41 @@ async function startRuntime(label) {
   throw new Error(`runtime did not become healthy: ${stderr.trim()}`);
 }
 
-function createFixtureRepository() {
-  mkdirSync(fixtureRepo, { recursive: true });
-  // Isolated Git: no user/system configuration, no inherited hooks or
-  // templates, and no provider credentials in the environment of any hook.
+/**
+ * Every Git command the harness runs is isolated: no user/system configuration,
+ * no inherited hooks, templates or file-system monitor, no inherited GIT_*
+ * variables and no provider credentials in the environment of anything Git
+ * could execute. Identity is fixed for the fixture commits.
+ */
+function git(cwd, ...args) {
   const noHooks = path.join(out, "no-hooks");
   mkdirSync(noHooks, { recursive: true });
-  const env = { ...process.env, GIT_CONFIG_NOSYSTEM: "1", GIT_CONFIG_GLOBAL: devNull, GIT_TEMPLATE_DIR: noHooks, GIT_AUTHOR_NAME: "Fixture", GIT_AUTHOR_EMAIL: "fixture@example.invalid", GIT_COMMITTER_NAME: "Fixture", GIT_COMMITTER_EMAIL: "fixture@example.invalid" };
-  for (const name of CREDENTIAL_NAMES) { delete env[name]; delete env[`LUUNA_PI_${name}`]; }
-  const git = (...args) => execFileSync("git", ["-C", fixtureRepo, "-c", `core.hooksPath=${noHooks}`, "-c", "commit.gpgsign=false", ...args], { encoding: "utf8", env }).trim();
-  git("init", "-q", "-b", "main");
-  git("config", "commit.gpgsign", "false");
-  git("config", "core.hooksPath", noHooks);
+  const env = {};
+  for (const [name, value] of Object.entries(process.env)) {
+    if (name.startsWith("GIT_") || CREDENTIAL_NAMES.includes(name) || name.startsWith("LUUNA_PI_")) continue;
+    env[name] = value;
+  }
+  Object.assign(env, { GIT_CONFIG_NOSYSTEM: "1", GIT_CONFIG_GLOBAL: devNull, GIT_TEMPLATE_DIR: noHooks, GIT_AUTHOR_NAME: "Fixture", GIT_AUTHOR_EMAIL: "fixture@example.invalid", GIT_COMMITTER_NAME: "Fixture", GIT_COMMITTER_EMAIL: "fixture@example.invalid" });
+  const config = ["-c", `core.hooksPath=${noHooks}`, "-c", "core.fsmonitor=false", "-c", "commit.gpgsign=false"];
+  return execFileSync("git", ["-C", cwd, ...config, ...args], { encoding: "utf8", env }).trim();
+}
+
+function createFixtureRepository() {
+  mkdirSync(fixtureRepo, { recursive: true });
+  const noHooks = path.join(out, "no-hooks");
+  const repo = (...args) => git(fixtureRepo, ...args);
+  repo("init", "-q", "-b", "main");
+  repo("config", "commit.gpgsign", "false");
+  repo("config", "core.hooksPath", noHooks);
   for (const [relative, content] of Object.entries(profile.files)) {
     const target = path.join(fixtureRepo, relative);
     mkdirSync(path.dirname(target), { recursive: true });
     writeFileSync(target, content);
   }
-  git("add", ".");
-  git("commit", "-q", "-m", "fixture");
-  git("remote", "add", "origin", "https://example.invalid/m3-smoke.git");
-  return git("rev-parse", "HEAD");
+  repo("add", ".");
+  repo("commit", "-q", "-m", "fixture");
+  repo("remote", "add", "origin", "https://example.invalid/m3-smoke.git");
+  return repo("rev-parse", "HEAD");
 }
 
 async function registerProjectAndBaseline() {
@@ -310,8 +324,10 @@ async function approvedFeatureIsCheckedAndIndependentlyReviewed(name) {
   const runId = summary.run_id;
   const hash = view.evidence.candidate.hash;
   const diff = await api("GET", `/runs/${runId}/diff`);
-  summary.diff = { status: diff.status, candidate_hash: diff.body?.candidate_hash, base_commit: diff.body?.base_commit, commit: diff.body?.commit, bytes: diff.body?.diff?.length ?? 0, touches: profile.scenarios[name].paths.map((p) => [p, String(diff.body?.diff ?? "").includes(p)]) };
-  record(`${name}: candidate diff is bound to the exact candidate hash and stays inside the approved paths`, diff.status === 200 && diff.body.candidate_hash === hash && summary.diff.touches.every(([, hit]) => hit) && !/^\+\+\+ b\/(?!src\/)/m.test(diff.body.diff ?? "+++ b/src/"), `status=${diff.status} bytes=${summary.diff.bytes}`);
+  const changed = diffPaths(diff.body?.diff ?? "");
+  const approved = profile.scenarios[name].paths;
+  summary.diff = { status: diff.status, candidate_hash: diff.body?.candidate_hash, base_commit: diff.body?.base_commit, commit: diff.body?.commit, bytes: diff.body?.diff?.length ?? 0, changed_paths: changed, approved_paths: approved };
+  record(`${name}: candidate diff is bound to the exact candidate hash and changes exactly the approved paths`, diff.status === 200 && diff.body.candidate_hash === hash && changed.length > 0 && changed.every((p) => approved.includes(p)) && approved.every((p) => changed.includes(p)), `status=${diff.status} bytes=${summary.diff.bytes} changed=${JSON.stringify(changed)}`);
   const stale = await validate(runId, "sha256:" + "0".repeat(64));
   record(`${name}: validation names the exact candidate; a stale hash is refused`, stale.status === 409 || stale.status === 422, `status ${stale.status} ${truncate(JSON.stringify(stale.body), 120)}`);
   const accepted = await validate(runId, hash);
@@ -321,7 +337,9 @@ async function approvedFeatureIsCheckedAndIndependentlyReviewed(name) {
   const events = await eventsOf(runId);
   const ev = settled.evidence;
   summary.validation = describeEvidence(settled, events, reviewStarted);
-  record(`${name}: required check ran in the owned worktree and passed before any review`, ev.results?.length >= 1 && ev.results.every((result) => result.status === "passed") && Boolean(reviewStarted) && events.findIndex((e) => e.type === "candidate.check_finished") < events.findIndex((e) => e.type === "review.started"), JSON.stringify(summarizeResults(ev.results)));
+  const requiredIds = profile.checks.filter((check) => check.required).map((check) => check.id).sort();
+  const observedIds = (ev.results ?? []).map((result) => result.recipe_id).sort();
+  record(`${name}: every configured required check ran in the owned worktree and passed before any review`, JSON.stringify(observedIds) === JSON.stringify(requiredIds) && ev.results.every((result) => result.status === "passed") && Boolean(reviewStarted) && events.filter((e) => e.type === "candidate.check_finished").length === requiredIds.length && events.findLastIndex((e) => e.type === "candidate.check_finished") < events.findIndex((e) => e.type === "review.started"), `required=${JSON.stringify(requiredIds)} ${JSON.stringify(summarizeResults(ev.results))}`);
   record(`${name}: a fresh independent reviewer session reviewed the exact candidate`, Boolean(ev.review) && ev.review.candidate_hash === hash && typeof ev.review.reviewer_session === "string" && ev.review.reviewer_session.startsWith("review-") && reviewStarted?.payload?.reviewer_session === ev.review.reviewer_session && ev.review.reviewer_session !== ev.implementer_session, `reviewer=${ev.review?.reviewer_session} implementer=${ev.implementer_session} verdict=${ev.review?.verdict}`);
   record(`${name}: candidate reached reviewed with evidence generation 1 and durable usage`, ev.status === "reviewed" && (await api("GET", `/runs/${runId}`)).body.state === "reviewed" && ev.validation_generation === 1 && ev.cost_usd_micros >= 0 && settled.active === false, `status=${ev.status} generation=${ev.validation_generation} cost_usd_micros=${ev.cost_usd_micros} elapsed_seconds=${ev.elapsed_seconds} reason=${truncate(ev.reason ?? "", 160)}`);
   const again = await validate(runId, hash);
@@ -400,15 +418,15 @@ async function blockingFindingsAreBoundedByAutomaticRepair(name) {
   }
   // Automatic repair only follows `changes_required` and stops when the repair
   // writer produces no fresh candidate; a `blocked` verdict pauses at once.
+  // A reviewer that passes the unmet requirement observed nothing; only a non-passing verdict with bounded repair counts.
   const consistent = ev.results?.every((result) => result.status === "passed") && (
-    (ev.status === "reviewed" && ev.review?.verdict === "passed" && !blocking)
-    || (ev.status === "paused" && ev.review?.verdict === "changes_required" && ev.candidate.revision <= 2 && repairs.length === 1)
+    (ev.status === "paused" && ev.review?.verdict === "changes_required" && ev.candidate.revision <= 2 && repairs.length === 1)
     || (ev.status === "paused" && blocking && ev.review?.verdict === "blocked" && ev.candidate.revision === 1 && repairs.length === 0)
   );
-  record(`${name}: the runtime honours the real reviewer's verdict (blocking findings cannot pass; repairs stay within max_attempts=2)`, consistent, `status=${ev.status} revision=${ev.candidate.revision} verdict=${ev.review?.verdict} blocking=${blocking} repair_allowed=${final.repair_allowed} repairs=${repairs.length} reviews=${reviews.length} reason=${truncate(ev.reason ?? "", 160)}`);
+  record(`${name}: the real reviewer did not pass the unmet requirement and bounded automatic repair stopped within max_attempts=2`, consistent, `status=${ev.status} revision=${ev.candidate.revision} verdict=${ev.review?.verdict} blocking=${blocking} repair_allowed=${final.repair_allowed} repairs=${repairs.length} reviews=${reviews.length} reason=${truncate(ev.reason ?? "", 160)}`);
   note(name, ev.review?.verdict && ev.review.verdict !== "passed"
     ? `the real reviewer did not pass the out-of-scope README requirement (verdict=${ev.review.verdict}, blocking finding=${blocking}): ${JSON.stringify(summarizeFindings(ev.review?.findings))}`
-    : `the real reviewer passed the candidate despite the unmet README requirement (verdict=${ev.review?.verdict}); real non-passing behaviour was not observed in this run, fixture mode proves the runtime path`);
+    : `the real reviewer passed the candidate despite the unmet README requirement (verdict=${ev.review?.verdict}); the scenario failed because no non-passing verdict was observed`);
 }
 
 async function cancellationDuringReviewPreservesChecks(name) {
@@ -466,10 +484,9 @@ async function hardKillDuringReviewReservesSpend(name) {
 }
 
 async function developerCheckoutUntouched() {
-  const git = (...args) => execFileSync("git", ["-C", fixtureRepo, ...args], { encoding: "utf8" }).trim();
-  const head = git("rev-parse", "HEAD");
-  const tracked = git("status", "--porcelain", "--untracked-files=no");
-  const untracked = git("status", "--porcelain").split("\n").filter((line) => line.startsWith("??"));
+  const head = git(fixtureRepo, "rev-parse", "HEAD");
+  const tracked = git(fixtureRepo, "status", "--porcelain", "--untracked-files=no");
+  const untracked = git(fixtureRepo, "status", "--porcelain").split("\n").filter((line) => line.startsWith("??"));
   const worktrees = Object.values(evidence.scenarios).map((item) => item.run_id).filter(Boolean);
   evidence.developer_checkout = { head_before: developerHead, head_after: head, tracked_changes: tracked, untracked: untracked, runs: worktrees.length };
   record("developer checkout HEAD and tracked content are untouched by every writer, check, repair and review", head === developerHead && tracked === "", `head=${head.slice(0, 12)} tracked_changes=${JSON.stringify(tracked)} untracked=${JSON.stringify(untracked)}`);
@@ -563,6 +580,18 @@ function describeEvidence(view, events, reviewStarted) {
   };
 }
 
+/** Every path a unified diff touches, from its `diff --git` headers; /dev/null never counts. */
+function diffPaths(text) {
+  const paths = new Set();
+  for (const line of String(text).split("\n")) {
+    const header = /^diff --git a\/(.+?) b\/(.+)$/.exec(line);
+    if (header) { paths.add(header[1]); paths.add(header[2]); continue; }
+    const side = /^(?:---|\+\+\+) (?:a|b)\/(.+)$/.exec(line);
+    if (side) paths.add(side[1]);
+  }
+  return [...paths].filter((p) => p !== "dev/null").sort();
+}
+
 function summarizeResults(results) {
   return (Array.isArray(results) ? results : []).map((result) => ({ id: result.id, recipe_id: result.recipe_id, status: result.status, exit_code: result.exit_code ?? null, tests_detected: result.tests_detected ?? null, reason: result.reason ?? null, artifacts: result.artifact_refs?.length ?? 0 }));
 }
@@ -607,8 +636,8 @@ async function waitUntil(predicate, timeoutMs) {
 
 function environment() {
   const info = { platform: `${platform()} ${release()} ${arch()}`, node: process.version, pi_launcher: profile.pi, pi_launcher_args: profile.piArgs, provider: profile.provider, model: profile.model, required_check: profile.checks.map((check) => [check.executable, ...check.args.map((arg) => truncate(arg, 40))].join(" ")) };
-  try { info.git_revision = execFileSync("git", ["rev-parse", "HEAD"], { cwd: repository, encoding: "utf8" }).trim(); } catch { info.git_revision = "unknown"; }
-  try { info.git_dirty = execFileSync("git", ["status", "--porcelain"], { cwd: repository, encoding: "utf8" }).trim().length > 0; } catch { info.git_dirty = null; }
+  try { info.git_revision = git(repository, "rev-parse", "HEAD"); } catch { info.git_revision = "unknown"; }
+  try { info.git_dirty = git(repository, "status", "--porcelain").length > 0; } catch { info.git_dirty = null; }
   try { info.python_version = execFileSync(python, ["--version"], { encoding: "utf8" }).trim(); } catch (error) { info.python_version = `unavailable: ${error.message}`; }
   if (mode === "real") {
     try { info.pi_version = execFileSync(profile.pi, [...profile.piArgs, "--version"], { encoding: "utf8" }).trim(); } catch (error) { info.pi_version = `unavailable: ${error.message}`; }

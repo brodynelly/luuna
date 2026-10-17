@@ -150,7 +150,9 @@ fn now() -> String {
     Utc::now().to_rfc3339_opts(SecondsFormat::Millis, true)
 }
 
-fn sha256_hex(bytes: &[u8]) -> String {
+/// `sha256:` plus the lower-case hex SHA-256 of `bytes`, the digest form
+/// artifact identities and check results record.
+pub fn sha256_hex(bytes: &[u8]) -> String {
     format!("sha256:{:x}", Sha256::digest(bytes))
 }
 
