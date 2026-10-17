@@ -1,6 +1,6 @@
 # Current Luuna architecture
 
-Date: 2026-10-16, updated 2026-10-17 for M2a. Status: authoritative foundation baseline; implementation evidence is required for each milestone.
+Date: 2026-10-16, updated 2026-10-17 for M2a and M2b. Status: authoritative foundation baseline; implementation evidence is required for each milestone.
 
 ## Purpose and precedence
 
