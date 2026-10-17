@@ -38,7 +38,6 @@ use tokio::sync::watch;
 /// Longest string kept inside a persisted Pi event; tool arguments and results
 /// beyond this are truncated in the durable stream (the worktree is the record).
 const MAX_EVENT_STRING: usize = 4096;
-const MAX_TICKETS_PER_PROJECT: usize = 1000;
 
 fn now() -> String {
     Utc::now().to_rfc3339_opts(SecondsFormat::Millis, true)
@@ -191,9 +190,6 @@ pub async fn create_ticket(
         .get_project(&id)
         .map_err(internal)?
         .ok_or_else(project_not_found)?;
-    if store.tickets(&id).map_err(internal)?.len() >= MAX_TICKETS_PER_PROJECT {
-        return Err(unprocessable("ticket limit reached for this project"));
-    }
     let (stored, created) = store
         .create_ticket(&ticket, &request.idempotency_key)
         .map_err(|e| match e {

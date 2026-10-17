@@ -699,3 +699,36 @@ async fn restart_interrupts_the_writer_and_abandons_its_lease_with_files_kept() 
     );
     assert!(store.active_worktree_leases().unwrap().is_empty());
 }
+
+#[tokio::test]
+async fn optional_baseline_recipes_do_not_change_the_required_environment_identity() {
+    let harness = Harness::new();
+    let repo = tempfile::tempdir().unwrap();
+    clean_repository(repo.path());
+    register(&harness, repo.path()).await;
+    let mut optional = passing_check();
+    optional["id"] = json!("optional");
+    optional["required"] = json!(false);
+    optional["executable"] = json!("git");
+    optional["args"] = json!(["--version"]);
+    optional["capabilities"] = json!([]);
+    harness.confirm(0, vec![passing_check(), optional]).await;
+    let (status, baseline) = harness
+        .request(
+            "POST",
+            "/api/v1/projects/fixture/baselines",
+            Some(json!({"repository_id": "app", "include_optional": true})),
+        )
+        .await;
+    assert_eq!(status, StatusCode::ACCEPTED);
+    assert_eq!(
+        harness.settled(baseline["id"].as_str().unwrap()).await["state"],
+        "completed"
+    );
+    let (id, _) = harness
+        .approved(repo.path(), "write_in_scope", json!({}))
+        .await;
+    let (status, body) = harness.implement(&id).await;
+    assert_eq!(status, StatusCode::ACCEPTED, "{body}");
+    assert_eq!(harness.settled(&id).await["state"], "validating");
+}

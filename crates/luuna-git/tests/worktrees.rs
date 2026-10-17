@@ -128,3 +128,63 @@ async fn detached_worktree_reports_changes_and_commits_without_touching_the_chec
         .unwrap();
     assert!(!worktree.exists());
 }
+
+#[tokio::test]
+async fn managed_operations_never_execute_configured_content_filters() {
+    for process in [false, true] {
+        let developer = tempfile::tempdir().unwrap();
+        let private = tempfile::tempdir().unwrap();
+        repository(developer.path());
+        fs::write(
+            developer.path().join(".gitattributes"),
+            "*.py filter=unsafe\n",
+        )
+        .unwrap();
+        git(developer.path(), &["add", "."]);
+        git(developer.path(), &["commit", "-qm", "attributes"]);
+        let base = git(developer.path(), &["rev-parse", "HEAD"]);
+        let marker = private.path().join("escaped");
+        let command = format!("touch '{}'; cat", marker.display());
+        for key in ["filter.unsafe.clean", "filter.unsafe.smudge"] {
+            git(developer.path(), &["config", key, &command]);
+        }
+        if process {
+            git(
+                developer.path(),
+                &["config", "filter.unsafe.process", &command],
+            );
+        }
+        git(
+            developer.path(),
+            &["config", "filter.unsafe.required", "true"],
+        );
+        let before = snapshot(developer.path());
+        let inspector = GitInspector::default();
+        let worktree = private.path().join("writer");
+        inspector
+            .add_detached_worktree(developer.path(), &worktree, &base)
+            .await
+            .unwrap();
+        assert!(!marker.exists(), "checkout executed a filter");
+        assert_eq!(
+            fs::read(worktree.join("src/main.py")).unwrap(),
+            b"print('fixture')\n"
+        );
+        fs::write(worktree.join("src/main.py"), "print('candidate')\n").unwrap();
+        assert_eq!(inspector.changed_paths(&worktree).await.unwrap().len(), 1);
+        assert!(!marker.exists(), "status executed a filter");
+        inspector.commit_all(&worktree, "candidate").await.unwrap();
+        assert!(!marker.exists(), "staging or commit executed a filter");
+        assert_eq!(
+            git(&worktree, &["show", "HEAD:src/main.py"]),
+            "print('candidate')"
+        );
+        for (path, bytes) in before {
+            assert_eq!(
+                snapshot(developer.path()).get(&path),
+                Some(&bytes),
+                "{path}"
+            );
+        }
+    }
+}

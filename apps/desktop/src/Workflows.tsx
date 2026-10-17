@@ -1,6 +1,7 @@
 import { useEffect, useState } from "react";
 import type { FormEvent } from "react";
 import type { LuunaClient, Operation, PlanRevision, RunRecord, Ticket, WorktreeLease } from "@luuna/api-client";
+import { workflowReason } from "./workflow-state";
 import { awaitsValidation, isTerminal } from "@luuna/api-client";
 
 function message(error: unknown): string {
@@ -21,6 +22,7 @@ interface Props {
  * this panel submits the developer's intent and approval and displays records.
  */
 export function Workflows({ client, projectId, repositoryId, manifestConfirmed, onChanged }: Props) {
+  const [reasons, setReasons] = useState<Record<string, string>>({});
   const [tickets, setTickets] = useState<Ticket[]>([]);
   const [plans, setPlans] = useState<Record<string, PlanRevision[]>>({});
   const [runs, setRuns] = useState<RunRecord[]>([]);
@@ -44,6 +46,11 @@ export function Workflows({ client, projectId, repositoryId, manifestConfirmed, 
     if (signal.aborted) return;
     const leaseLists = await Promise.all(workflowRuns.map((run) => client.worktrees(run.id, signal).catch(() => [] as WorktreeLease[])));
     if (signal.aborted) return;
+    const eventLists = await Promise.all(workflowRuns.map((run) => client.events(run.id, 0, signal)));
+    if (signal.aborted) return;
+    setReasons(Object.fromEntries(workflowRuns.map((run, index) => {
+      return [run.id, workflowReason(eventLists[index])];
+    })));
     setTickets(list);
     setPlans(Object.fromEntries(list.map((ticket, index) => [ticket.id, planLists[index]])));
     setRuns(workflowRuns);
@@ -156,14 +163,26 @@ export function Workflows({ client, projectId, repositoryId, manifestConfirmed, 
         <small>{ticket.intent}</small>
         <div className="ticket-actions">
           <button type="button" disabled={busy || !client} onClick={() => plan(ticket)}>{latest ? `Plan r${latest.revision + 1}` : "Plan"}</button>
-          {latest && run && run.state === "plan_ready" && <button type="button" disabled={busy} onClick={() => approve(latest)}>Approve r{latest.revision} · <code>{latest.hash.slice(7, 19)}</code></button>}
           {latest && run && run.state === "approved" && <button type="button" className="primary" disabled={busy} onClick={() => implement(run)}>Implement</button>}
           {run && <span className={`state ${run.state}`}>{run.state}{awaitsValidation(run.state) && " · candidate recorded"}</span>}
         </div>
+        {latest && <PlanReview key={latest.hash} plan={latest} canApprove={run?.state === "plan_ready"} busy={busy} onApprove={() => approve(latest)} />}
         {latest && <small>plan {latest.id} r{latest.revision} · base <code>{Object.values(latest.base_commits)[0]?.slice(0, 12)}</code> · paths {latest.tasks[0]?.paths.join(", ")} · budget {latest.budgets.max_attempts} attempt(s), {latest.budgets.timeout_seconds}s</small>}
-        {run && isTerminal(run.state) && typeof run.metadata.reason === "string" && <small className="failure-note">{run.metadata.reason}</small>}
+        {run && isTerminal(run.state) && reasons[run.id] && <small className="failure-note">{reasons[run.id]}</small>}
         {runLeases.map((lease) => <small key={lease.id}>worktree <code>{lease.path}</code> · {lease.state}{lease.candidate_commit && <> · candidate <code>{lease.candidate_commit.slice(0, 12)}</code></>}{lease.reason && ` · ${lease.reason}`}</small>)}
       </li>;
     })}</ul>}
   </section>;
+}
+
+export function PlanReview({ plan, canApprove, busy, onApprove }: { plan: PlanRevision; canApprove: boolean; busy: boolean; onApprove: () => void }) {
+  const [reviewed, setReviewed] = useState(false);
+  return <div className="plan-review">
+    <p>Immutable plan hash: <code style={{ overflowWrap: "anywhere" }}>{plan.hash}</code></p>
+    <pre style={{ whiteSpace: "pre-wrap", overflowWrap: "anywhere" }} aria-label="Complete immutable plan">{JSON.stringify(plan, null, 2)}</pre>
+    {canApprove && <>
+      <label><input type="checkbox" checked={reviewed} onChange={(event) => setReviewed(event.target.checked)} /> I reviewed this complete plan and hash.</label>
+      <button type="button" disabled={busy || !reviewed} onClick={() => { if (reviewed) onApprove(); }}>Approve r{plan.revision}</button>
+    </>}
+  </div>;
 }

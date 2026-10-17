@@ -15,8 +15,8 @@ pub const WRITER_AUTHOR_EMAIL: &str = "writer@luuna.invalid";
 
 impl GitInspector {
     /// Create a detached worktree for `commit` at `path`, which must not exist yet,
-    /// and verify its HEAD is exactly that commit. Content filters are left as the
-    /// repository configures them so the checkout matches a normal one.
+    /// and verify its HEAD is exactly that commit. Repository-selected content
+    /// filters are disabled: executing them is outside the writer approval.
     pub async fn add_detached_worktree(
         &self,
         root: &Path,
@@ -29,11 +29,12 @@ impl GitInspector {
                 detail: format!("{} already exists", path.display()),
             });
         }
+        let overrides = self.filter_overrides(root).await?;
         let target = path.to_string_lossy().into_owned();
         self.expect(
             root,
             &["worktree", "add", "--detach", "--quiet", &target, commit],
-            &[],
+            &overrides,
         )
         .await?;
         let head = self.head_commit(path).await?;
@@ -61,6 +62,7 @@ impl GitInspector {
     /// files inside untracked directories. Output beyond the configured cap is an
     /// error: a change set too large to list is never judged in scope.
     pub async fn changed_paths(&self, worktree: &Path) -> Result<Vec<ChangedPath>, GitError> {
+        let overrides = self.filter_overrides(worktree).await?;
         let output = self
             .git(
                 Some(worktree),
@@ -71,7 +73,7 @@ impl GitInspector {
                     "--no-renames",
                     "--untracked-files=all",
                 ],
-                &[],
+                &overrides,
             )
             .await?;
         if output.status != Some(0) {
@@ -87,13 +89,15 @@ impl GitInspector {
     /// Returns the new HEAD. Hooks do not run; validation is a separate gate.
     pub async fn commit_all(&self, worktree: &Path, message: &str) -> Result<String, GitError> {
         let before = self.head_commit(worktree).await?;
-        self.expect(worktree, &["add", "--all"], &[]).await?;
-        let identity = [
+        let overrides = self.filter_overrides(worktree).await?;
+        self.expect(worktree, &["add", "--all"], &overrides).await?;
+        let mut identity = vec![
             format!("user.name={WRITER_AUTHOR_NAME}"),
             format!("user.email={WRITER_AUTHOR_EMAIL}"),
             "commit.gpgsign=false".to_owned(),
             "core.editor=false".to_owned(),
         ];
+        identity.extend(overrides);
         self.expect(
             worktree,
             &["commit", "--quiet", "--no-verify", "--message", message],

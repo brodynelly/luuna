@@ -442,3 +442,32 @@ fn leases_are_exclusive_attempts_are_budgeted_and_restart_abandons_both() {
     assert_eq!(attempts[2].state, AttemptState::Interrupted);
     assert!(store.active_worktree_leases().unwrap().is_empty());
 }
+
+#[test]
+fn ticket_retries_at_quota_replay_but_new_deliveries_are_refused() {
+    let (mut store, _) = confirmed_store();
+    for index in 0..1000 {
+        let mut input = ticket();
+        input.id = format!("ticket-{index}");
+        assert!(
+            store
+                .create_ticket(&input, &format!("key-{index}"))
+                .unwrap()
+                .1
+        );
+    }
+    let mut input = ticket();
+    input.id = "new-delivery".into();
+    let (replayed, created) = store.create_ticket(&input, "key-999").unwrap();
+    assert!(!created);
+    assert_eq!(replayed.id, "ticket-999");
+    assert!(matches!(
+        store.create_ticket(&input, "new-key"),
+        Err(StorageError::Invalid(_))
+    ));
+    input.title = "different intent".into();
+    assert!(matches!(
+        store.create_ticket(&input, "key-999"),
+        Err(StorageError::AlreadyExists(_))
+    ));
+}

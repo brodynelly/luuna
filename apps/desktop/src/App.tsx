@@ -2,6 +2,7 @@ import { useEffect, useRef, useState } from "react";
 import type { FormEvent } from "react";
 import { LuunaClient, assistantText, isTerminal, mergeEvents } from "@luuna/api-client";
 import type { EventEnvelope, Health, RunRecord } from "@luuna/api-client";
+import { canCancel } from "./workflow-state";
 import { Projects } from "./Projects";
 
 function message(error: unknown): string {
@@ -224,7 +225,7 @@ export function App() {
           <section className="panel event-panel" aria-labelledby="events-heading">
             <div className="panel-heading"><h2 id="events-heading">{active ? "Session events" : "Live activity"}</h2>{active && <span className={`state ${active.state}`}>{active.state}</span>}</div>
             {active ? <>
-              <div className="run-detail"><code>{active.id}</code><span>{live}</span>{!isTerminal(active.state) && <button className="danger" disabled={busy} onClick={() => void cancel()}>Cancel session</button>}</div>
+              <div className="run-detail"><code>{active.id}</code><span>{live}</span>{canCancel(active.state) && <button className="danger" disabled={busy} onClick={() => void cancel()}>Cancel session</button>}</div>
               {active.state === "failed" && <p className="failure-note">This session failed. Open the final events below for the runtime’s recorded reason.</p>}
               {output && <div className="assistant-output"><h3>Pi response</h3><pre aria-live="polite">{output}</pre></div>}
               <ol className="events" aria-label="Durable session events">{events.map((event) => <li key={event.event_id}>

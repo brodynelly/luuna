@@ -202,7 +202,7 @@ pub(crate) fn artifact_dir(state: &AppState, run_id: &str) -> PathBuf {
     state.config.data_dir.join("artifacts").join(run_id)
 }
 
-/// The host's environment fingerprint for a set of recipes: resolved
+/// The host's environment fingerprint for required recipes: resolved
 /// executables and versions, probed without running any recipe. Baselines
 /// record it; scheduling recomputes it so evidence from another host or
 /// toolchain never authorizes a writer.
@@ -222,7 +222,9 @@ pub(crate) async fn probe_fingerprint(
             Probe::Resolved { fingerprint, .. } => fingerprint,
             Probe::Unavailable(reason) => format!("unavailable:{}:{reason}", recipe.id),
         };
-        parts.push(part);
+        if recipe.required {
+            parts.push(part);
+        }
     }
     Executor::combine_fingerprints(&parts)
 }
@@ -332,7 +334,8 @@ async fn baseline_worker(state: AppState, job: BaselineJob, cancel: watch::Recei
         None
     };
 
-    // Probe every recipe first so the baseline's environment fingerprint is fixed
+    // Probe every recipe, but bind the aggregate to required checks only so
+    // optional checks do not change scheduling's environment identity. It is fixed
     // before any command runs.
     let artifacts = artifact_dir(&state, &job.run_id);
     let mut parts = Vec::new();
@@ -350,7 +353,9 @@ async fn baseline_worker(state: AppState, job: BaselineJob, cancel: watch::Recei
             Probe::Resolved { fingerprint, .. } => fingerprint,
             Probe::Unavailable(reason) => format!("unavailable:{}:{reason}", recipe.id),
         };
-        parts.push(part);
+        if recipe.required {
+            parts.push(part);
+        }
     }
     let environment_fingerprint = Executor::combine_fingerprints(&parts);
     let baseline_id = uuid::Uuid::new_v4().to_string();

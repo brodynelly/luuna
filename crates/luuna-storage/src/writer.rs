@@ -86,6 +86,16 @@ impl Store {
             }
             return Ok((existing, false));
         }
+        let count: i64 = tx.query_row(
+            "SELECT COUNT(*) FROM tickets WHERE project_id=?1",
+            [&ticket.project_id],
+            |row| row.get(0),
+        )?;
+        if count >= 1000 {
+            return Err(StorageError::Invalid(
+                "ticket limit reached for this project".into(),
+            ));
+        }
         if load_ticket(&tx, &ticket.id)?.is_some() {
             return Err(StorageError::AlreadyExists(ticket.id.clone()));
         }
