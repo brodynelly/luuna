@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState } from "react";
 import type { FormEvent } from "react";
-import type { Discovery, EventEnvelope, LuunaClient, ProjectRecord, ProjectView } from "@luuna/api-client";
-import { mergeEvents } from "@luuna/api-client";
+import type { BaselineEvidence, Discovery, EventEnvelope, LuunaClient, ProjectRecord, ProjectView } from "@luuna/api-client";
+import { isTerminal, mergeEvents } from "@luuna/api-client";
 
 function message(error: unknown): string {
   return error instanceof Error ? error.message : "The runtime could not be reached.";
@@ -23,6 +23,8 @@ export function Projects({ client }: { client: LuunaClient | null }) {
   const [path, setPath] = useState("");
   const [draft, setDraft] = useState("");
   const [discovery, setDiscovery] = useState<Discovery | null>(null);
+  const [baselines, setBaselines] = useState<BaselineEvidence[]>([]);
+  const [pendingBaselineRun, setPendingBaselineRun] = useState<string | null>(null);
   const [error, setError] = useState("");
   const [busy, setBusy] = useState(false);
   const operation = useRef<AbortController | null>(null);
@@ -39,6 +41,7 @@ export function Projects({ client }: { client: LuunaClient | null }) {
     setDiscovery(null);
     setDraft("");
     setEvents([]);
+    setBaselines([]);
     if (!client) return;
     const controller = new AbortController();
     client.listProjects(controller.signal).then((list) => {
@@ -54,12 +57,15 @@ export function Projects({ client }: { client: LuunaClient | null }) {
     setEvents([]);
     setDiscovery(null);
     setDraft("");
+    setBaselines([]);
+    setPendingBaselineRun(null);
     if (!client || !selected) return;
     const controller = new AbortController();
-    Promise.all([client.project(selected, controller.signal), client.projectEvents(selected, 0, controller.signal)]).then(([next, replay]) => {
+    Promise.all([client.project(selected, controller.signal), client.projectEvents(selected, 0, controller.signal), client.listBaselines(selected, controller.signal)]).then(([next, replay, recorded]) => {
       if (controller.signal.aborted) return;
       setView(next);
       setEvents(mergeEvents([], replay));
+      setBaselines(recorded);
       if (next.discovery) {
         setDiscovery(next.discovery);
         setDraft(JSON.stringify(next.discovery.proposed_manifest, null, 2));
@@ -86,12 +92,57 @@ export function Projects({ client }: { client: LuunaClient | null }) {
 
   async function refresh(id: string, signal: AbortSignal) {
     if (!client) return;
-    const [next, replay, list] = await Promise.all([client.project(id, signal), client.projectEvents(id, 0, signal), client.listProjects(signal)]);
+    const [next, replay, list, recorded] = await Promise.all([client.project(id, signal), client.projectEvents(id, 0, signal), client.listProjects(signal), client.listBaselines(id, signal)]);
     if (signal.aborted) return;
     setProjects(list);
     setView(next);
     setEvents(mergeEvents([], replay));
+    setBaselines(recorded);
     setSelected(id);
+  }
+
+  // A baseline advances on the runtime: poll its durable record from the moment the
+  // run is accepted (its record appears after inspection and probing) until it settles.
+  const baselineInFlight = pendingBaselineRun !== null || baselines.some((baseline) => baseline.status === "running");
+  useEffect(() => {
+    if (!client || !selected || !baselineInFlight) return;
+    const controller = new AbortController();
+    const pending = pendingBaselineRun;
+    const timer = setTimeout(() => {
+      // A run can settle before any baseline record exists (inspection or identity
+      // failure), so the run itself is polled too; otherwise the button never returns.
+      Promise.all([
+        client.listBaselines(selected, controller.signal),
+        pending ? client.run(pending, controller.signal) : Promise.resolve(null),
+      ]).then(([recorded, run]) => {
+        if (controller.signal.aborted) return;
+        setBaselines(recorded);
+        if (!pending) return;
+        const recordSettled = recorded.some((baseline) => baseline.run_id === pending && baseline.status !== "running");
+        const runSettled = run !== null && isTerminal(run.state);
+        if (recordSettled || runSettled) {
+          setPendingBaselineRun(null);
+          if (!recordSettled && run !== null) {
+            const reason = run.metadata.reason;
+            setError(typeof reason === "string" && reason ? `Baseline run ${run.state}: ${reason}` : `Baseline run ${run.state} before a baseline was recorded`);
+          }
+        }
+      }).catch(() => undefined);
+    }, 1500);
+    return () => { controller.abort(); clearTimeout(timer); };
+  }, [client, selected, baselines, baselineInFlight, pendingBaselineRun]);
+
+  function runBaseline() {
+    if (!selected || !view) return;
+    const repository = view.repositories[0];
+    if (!repository) return;
+    void guarded(async (signal) => {
+      if (!client) return;
+      const run = await client.startBaseline(selected, { repository_id: repository.repository_id }, signal);
+      if (signal.aborted) return;
+      setPendingBaselineRun(run.id);
+      await refresh(selected, signal);
+    });
   }
 
   function register(event: FormEvent) {
@@ -148,7 +199,7 @@ export function Projects({ client }: { client: LuunaClient | null }) {
   const observation = registration?.observation;
 
   return <section className="panel projects-panel" aria-labelledby="projects-heading">
-    <div className="panel-heading"><h2 id="projects-heading">Projects</h2><span className="tag">M2a · read-only import</span></div>
+    <div className="panel-heading"><h2 id="projects-heading">Projects</h2><span className="tag">M2a import · M2b baseline</span></div>
     <p className="scope">Register an existing repository root. The runtime observes identity, base commit and dirty state without touching the checkout, proposes check recipes from its manifests, and records an immutable manifest revision only when you confirm it.</p>
     {error && <div className="error" role="alert">{error}<button className="text-button" type="button" onClick={() => setError("")}>Dismiss</button></div>}
 
@@ -180,7 +231,17 @@ export function Projects({ client }: { client: LuunaClient | null }) {
             <div><dt>Dirty state</dt><dd>{observation.dirty.staged} staged · {observation.dirty.unstaged} unstaged · {observation.dirty.untracked} untracked · {observation.dirty.conflicted} conflicted</dd></div>
             <div><dt>Confirmed manifest</dt><dd>{view.manifest ? <>revision {view.manifest.revision} · <code>{view.manifest.hash.slice(0, 23)}…</code> · base <code>{Object.values(view.manifest.base_commits)[0]?.slice(0, 12)}</code></> : "not yet confirmed"}</dd></div>
           </dl>
-          <div className="project-actions"><button type="button" disabled={busy} onClick={discover}>Discover proposed map</button><small>Discovery reads manifests and lockfiles; it never runs repository commands.</small></div>
+          <div className="project-actions">
+            <button type="button" disabled={busy} onClick={discover}>Discover proposed map</button>
+            <button type="button" disabled={busy || !view.manifest || baselineInFlight} onClick={runBaseline}>Run baseline</button>
+            <small>Discovery reads manifests and lockfiles; it never runs repository commands. A baseline runs the confirmed required recipes on a clean checkout and records exact evidence.</small>
+          </div>
+          {baselines.length > 0 && <ul className="baselines" aria-label="Recorded baselines">{baselines.map((baseline) => <li key={baseline.id}>
+            <span className={`state ${baseline.status === "passed" ? "completed" : baseline.status === "running" ? "running" : "failed"}`}>{baseline.status}</span>
+            <span>manifest r{baseline.manifest_revision} · commit <code>{baseline.identity.commit.slice(0, 12)}</code> · {baseline.results.length}/{baseline.required_checks.length} required results</span>
+            {baseline.reason && <small>{baseline.reason}</small>}
+            <small>{baseline.results.map((result) => `${result.recipe_id}: ${result.status}${result.exit_code === null || result.exit_code === undefined ? "" : ` (exit ${result.exit_code})`}`).join(" · ")}</small>
+          </li>)}</ul>}
           {discovery && <>
             {discovery.questions.length > 0 && <ul className="questions" aria-label="Open questions">{discovery.questions.map((question, index) => <li key={index}><strong>{question.topic}</strong> {question.detail}</li>)}</ul>}
             {discovery.manifest_problems.length > 0 && <p className="failure-note">Proposal needs edits before confirmation: {discovery.manifest_problems.join("; ")}</p>}

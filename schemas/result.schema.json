@@ -76,6 +76,34 @@
       "items": {
         "type": "string"
       }
+    },
+    "cwd": {
+      "type": "string"
+    },
+    "started_at": {
+      "type": "string",
+      "format": "date-time"
+    },
+    "finished_at": {
+      "type": "string",
+      "format": "date-time"
+    },
+    "reason": {
+      "type": "string"
+    },
+    "artifact_hashes": {
+      "type": "object",
+      "additionalProperties": {
+        "type": "string",
+        "pattern": "^sha256:[a-f0-9]{64}$"
+      }
+    },
+    "tests_detected": {
+      "type": [
+        "integer",
+        "null"
+      ],
+      "minimum": 0
     }
   },
   "allOf": [

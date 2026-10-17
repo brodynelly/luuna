@@ -54,11 +54,24 @@ require `Authorization: Bearer <token>`:
 - `GET /api/v1/projects/{id}/events?after=0`: durable project stream (`run_id` is
   `project:{id}`); `manifest.confirmed` carries the complete manifest for replay.
 
+- `POST /api/v1/projects/{id}/baselines`: `{ "repository_id": "app", "include_optional": false }`
+  starts a baseline run (202) that executes the confirmed required recipes for that
+  repository on a clean checkout at its exact HEAD. It is an ordinary run: follow it with
+  `/runs/{id}/events` or `/stream`, cancel it with `/runs/{id}/cancel`. A dirty checkout,
+  missing executable, incapable host, empty suite or container profile is recorded as
+  blocked; failures and deadlines are failed; nothing is ever promoted to passed.
+- `GET /api/v1/projects/{id}/baselines`: recorded baselines with their check results,
+  bound to manifest hash, commit, tree and environment fingerprint.
+- `GET /api/v1/runs/{id}/artifacts/{recipe}.{stdout|stderr}`: the private check log by
+  record identity (text, capped at 16 MiB).
+
 Repository inspection runs `git` with optional locks disabled and repository-controlled
 `core.fsmonitor`/hooks neutralised, so the developer's index and working tree stay
 byte-identical. Remote URLs are redacted before storage. Registering or confirming a
-project enables no write, command execution or plan transition; the storage guard that
-blocks `Implementing` without baseline evidence is unchanged (M2b).
+project enables no write or plan transition. Feature implementation can be entered only
+through the storage gate that checks the durable approval, the current manifest and a
+passed, matching baseline per repository in one transaction (see ADR 0007); the first
+writer that uses that gate is M2c.
 
 Only one runtime can own a data directory. Startup recovery marks abandoned
 active attempts interrupted after obtaining that exclusive ownership. A

@@ -1,6 +1,6 @@
 # Current Luuna architecture
 
-Date: 2026-10-16, updated 2026-10-17 for M2a. Status: authoritative foundation baseline; implementation evidence is required for each milestone.
+Date: 2026-10-16, updated 2026-10-17 for M2a and M2b. Status: authoritative foundation baseline; implementation evidence is required for each milestone.
 
 ## Purpose and precedence
 
@@ -45,6 +45,8 @@ Native execution uses host permissions. Stronger isolation requires an explicitl
 
 SQLite owns Luuna projects, immutable plan revisions, approvals, run/attempt lifecycle, sequenced events, check/review evidence, artifact references, and publication reconciliation. State mutation and emitted durable domain events must be committed consistently. Sensitive transcripts and provider data remain private artifacts with controlled access and retention.
 
+Baselines are runs: `POST /api/v1/projects/{id}/baselines` executes a repository's confirmed required recipes through the supervised executor and records `CheckResult` evidence bound to the manifest hash, exact commit and tree, and an environment fingerprint, with private hashed artifacts. `Implementing` is entered only through the transactional gate that re-checks the approval, the current manifest and a passed matching baseline per repository; see [ADR 0007](decisions/0007-baseline-executor.md).
+
 Projects are registered from existing repositories. The confirmed **project manifest** (`schemas/project.schema.json`, hashed with `luuna-json-v1`) is machine-independent and append-only by revision; the **machine registry** maps each repository ID to its local path and the identity observed at registration (redacted remote plus root commits). Discovery proposals and project-scoped events (`project.registered`, `repository.registered`, `discovery.proposed`, `manifest.confirmed`) are durable, and replaying the project stream reconstructs the confirmed map. Inspection never writes to a repository or executes its text; see [ADR 0006](decisions/0006-repository-import.md).
 
 Before the Missions adapter is integrated, a minimal SQLite ticket record may support the M0/M1 demo. It is explicitly temporary. After integration, Missions (Seeds-derived) owns ticket intent, acceptance criteria, dependencies, and source revisions; SQLite stores a revision-aware projection and Luuna execution state. There must never be two independently writable authorities for the same ticket fields. External edits invalidate stale planning assumptions and block scheduling until reconciliation. See [ADR 0003](decisions/0003-ticket-authority.md).
@@ -72,6 +74,7 @@ The initial executable implementation is a tool-free connectivity slice, not the
 | M0 | Locked build, schema fixtures, deterministic approval/transition rejection, durable state checks | Folder creation or documentation checks alone |
 | M1 | Real pinned Pi/provider session, streamed API events, persistence, cancellation, error handling and restart evidence | Scripted worker or fixture-only protocol tests |
 | M2a | Real and synthetic imports with byte-identical checkouts, rejected invalid/mismatched repositories, proposed (not executed) recipes, confirmed manifest replay after restart | A proposed manifest, a stored recipe, or any claim that a baseline ran |
+| M2b | Genuine passing and failing baselines with commit/tree/environment-bound results and hashed artifacts; missing executable, empty suite, dirty checkout, deadline, cancellation and restart recorded as blocked/failed/cancelled/interrupted; stale baseline cannot enter implementation | A writer, a worktree, or any run that modifies a repository |
 | Desktop integration | Real service connection, run actions, streamed state and reconnection | Frontend build or decorative simulation alone |
 | Full v1 | Original requirements/acceptance matrix including browser/TUI parity and supported platform evidence | Single-repository Linux demo |
 

@@ -201,7 +201,7 @@ fn exact_approval_is_durable_but_feature_writes_remain_blocked_until_m2() {
             json!({}),
         )
         .unwrap_err();
-    assert!(error.to_string().contains("baseline_not_implemented"));
+    assert!(error.to_string().contains("baseline evidence required"));
     assert_eq!(
         store.get_run(&run.id).unwrap().unwrap().state,
         RunState::Approved

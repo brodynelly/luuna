@@ -203,7 +203,7 @@ export function App() {
         <aside className="panel history" aria-labelledby="history-heading">
           <div className="panel-heading"><h2 id="history-heading">Session history</h2><button className="text-button" disabled={!client} onClick={() => setRefresh((value) => value + 1)}>Refresh</button></div>
           {runs.length ? <ul>{runs.map((run) => <li key={run.id}><button className={`run-card ${selected === run.id ? "selected" : ""}`} onClick={() => setSelected(run.id)} aria-pressed={selected === run.id}>
-            <span className="run-prompt">{typeof run.metadata.prompt === "string" ? run.metadata.prompt : run.id}</span>
+            <span className="run-prompt">{run.metadata.kind === "baseline" ? `Baseline · ${String(run.metadata.repository_id ?? "")} · manifest r${String(run.metadata.manifest_revision ?? "?")}` : typeof run.metadata.prompt === "string" ? run.metadata.prompt : run.id}</span>
             <span className="run-meta"><span className={`state ${run.state}`}>{run.state}</span><time dateTime={run.created_at}>{date(run.created_at)}</time></span>
           </button></li>)}</ul> : <p className="empty">{client ? "No sessions yet. Start one to create a durable run record." : "Connect to see sessions saved by your runtime."}</p>}
         </aside>
@@ -237,6 +237,6 @@ export function App() {
         </div>
       </div>
     </main>
-    <footer>Luuna · Local-first engineering workbench<span>M0 / M1 foundation · M2a import</span></footer>
+    <footer>Luuna · Local-first engineering workbench<span>M0 / M1 foundation · M2a import · M2b baseline</span></footer>
   </div>;
 }

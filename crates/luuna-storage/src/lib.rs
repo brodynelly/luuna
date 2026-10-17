@@ -7,6 +7,7 @@ use serde_json::Value;
 use std::{fs, path::Path, time::Duration};
 use thiserror::Error;
 
+mod baselines;
 mod projects;
 pub use projects::*;
 
@@ -83,6 +84,7 @@ impl Store {
         )?;
         connection.execute_batch(MIGRATION_1)?;
         connection.execute_batch(MIGRATION_2)?;
+        connection.execute_batch(MIGRATION_3)?;
         Ok(Self { connection })
     }
 
@@ -162,7 +164,7 @@ impl Store {
         }
         if next == RunState::Implementing {
             authorize_run(&tx, run_id)?;
-            return Err(StorageError::Invalid("baseline_not_implemented: feature execution requires recorded baseline evidence (M2)".into()));
+            return Err(StorageError::Invalid("baseline evidence required: enter implementation through begin_implementation, which checks the approval, current manifest and passed baselines transactionally".into()));
         }
         transition(&tx, run_id, expected_revision, next, event_type, payload)?;
         tx.commit()?;
@@ -226,6 +228,7 @@ impl Store {
                 serde_json::json!({"reason":"runtime restarted before attempt settled"}),
             )?;
         }
+        baselines::interrupt_running_baselines(&tx)?;
         tx.commit()?;
         Ok(active.len())
     }
@@ -360,7 +363,7 @@ impl Store {
     }
 }
 
-fn get_run(connection: &Connection, id: &str) -> Result<Option<RunRecord>> {
+pub(crate) fn get_run(connection: &Connection, id: &str) -> Result<Option<RunRecord>> {
     let row = connection.query_row("SELECT id,project_id,state,revision,metadata,created_at,updated_at FROM runs WHERE id=?1", [id],
         |r| Ok((r.get::<_, String>(0)?,r.get::<_, String>(1)?,r.get::<_, String>(2)?,r.get::<_, u64>(3)?,
             r.get::<_, String>(4)?,r.get::<_, String>(5)?,r.get::<_, String>(6)?))).optional()?;
@@ -380,7 +383,7 @@ fn get_run(connection: &Connection, id: &str) -> Result<Option<RunRecord>> {
     .transpose()
 }
 
-fn transition(
+pub(crate) fn transition(
     tx: &Transaction<'_>,
     id: &str,
     expected: u64,
@@ -457,7 +460,7 @@ fn latest_plan(tx: &Transaction<'_>, id: &str) -> Result<PlanRevision> {
     Ok(serde_json::from_str(&payload)?)
 }
 
-fn authorize_run(tx: &Transaction<'_>, run_id: &str) -> Result<()> {
+pub(crate) fn authorize_run(tx: &Transaction<'_>, run_id: &str) -> Result<()> {
     let payload: String = tx.query_row("SELECT a.payload FROM runs r JOIN approvals a ON r.approval_id=a.id AND r.plan_id=a.plan_id AND r.plan_revision=a.plan_revision WHERE r.id=?1", [run_id], |r| r.get(0))
         .optional()?.ok_or_else(|| StorageError::Invalid("implementation requires a durably stored approval".into()))?;
     let approval: Approval = serde_json::from_str(&payload)?;
@@ -490,10 +493,10 @@ fn append_envelope(
     })
 }
 
-fn now() -> String {
+pub(crate) fn now() -> String {
     Utc::now().to_rfc3339_opts(SecondsFormat::Millis, true)
 }
-fn state_json(state: RunState) -> Result<String> {
+pub(crate) fn state_json(state: RunState) -> Result<String> {
     Ok(serde_json::to_string(&state)?)
 }
 
@@ -531,5 +534,16 @@ CREATE TABLE IF NOT EXISTS discoveries(id TEXT PRIMARY KEY, project_id TEXT NOT 
 CREATE TABLE IF NOT EXISTS project_events(project_id TEXT NOT NULL REFERENCES projects(id), sequence INTEGER NOT NULL CHECK(sequence>0),
  event_id TEXT NOT NULL UNIQUE, envelope TEXT NOT NULL, PRIMARY KEY(project_id,sequence));
 INSERT OR IGNORE INTO schema_migrations(version) VALUES (2);
+COMMIT;
+";
+
+const MIGRATION_3: &str = "
+BEGIN IMMEDIATE;
+CREATE TABLE IF NOT EXISTS baselines(id TEXT PRIMARY KEY, project_id TEXT NOT NULL REFERENCES projects(id), repository_id TEXT NOT NULL,
+ run_id TEXT NOT NULL REFERENCES runs(id), status TEXT NOT NULL, payload TEXT NOT NULL, started_at TEXT NOT NULL, finished_at TEXT);
+CREATE TABLE IF NOT EXISTS check_results(id TEXT PRIMARY KEY, baseline_id TEXT NOT NULL REFERENCES baselines(id), recipe_id TEXT NOT NULL, payload TEXT NOT NULL);
+CREATE TRIGGER IF NOT EXISTS immutable_check_results_update BEFORE UPDATE ON check_results BEGIN SELECT RAISE(ABORT,'immutable check result'); END;
+CREATE TRIGGER IF NOT EXISTS immutable_check_results_delete BEFORE DELETE ON check_results BEGIN SELECT RAISE(ABORT,'immutable check result'); END;
+INSERT OR IGNORE INTO schema_migrations(version) VALUES (3);
 COMMIT;
 ";

@@ -14,6 +14,7 @@ use axum::{
 use fs2::FileExt;
 use luuna_domain::RunState;
 use luuna_engine_pi::{PiConfig, PiProcess, PI_VERSION};
+use luuna_executor::Executor;
 use luuna_git::GitInspector;
 use luuna_storage::{RunRecord, Store};
 use serde::Deserialize;
@@ -47,10 +48,13 @@ pub struct AppState {
     active: Arc<Mutex<HashMap<String, watch::Sender<bool>>>>,
     config: Arc<RuntimeConfig>,
     git: Arc<GitInspector>,
+    executor: Arc<Executor>,
     _owner_lock: Arc<std::fs::File>,
 }
 
+mod baselines;
 mod projects;
+pub use baselines::{ArtifactId, StartBaseline};
 pub use projects::{ConfirmManifest, ProjectView, RegisterProject, RegisterRepository};
 
 impl AppState {
@@ -91,6 +95,7 @@ impl AppState {
             active: Arc::new(Mutex::new(HashMap::new())),
             config: Arc::new(config),
             git: Arc::new(git),
+            executor: Arc::new(Executor::default()),
             _owner_lock: Arc::new(owner_lock),
         })
     }
@@ -167,6 +172,14 @@ pub fn router(state: AppState) -> Router {
         .route(
             "/api/v1/projects/{id}/events",
             get(projects::project_events),
+        )
+        .route(
+            "/api/v1/projects/{id}/baselines",
+            get(baselines::list_baselines).post(baselines::start_baseline),
+        )
+        .route(
+            "/api/v1/runs/{id}/artifacts/{artifact_id}",
+            get(baselines::artifact),
         )
         .route_layer(middleware::from_fn_with_state(state.clone(), authenticate));
     let cors = CorsLayer::new()

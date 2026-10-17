@@ -213,6 +213,18 @@ impl GitInspector {
             .collect())
     }
 
+    /// Exact tree identity of a commit in a repository root; read-only.
+    pub async fn commit_tree(&self, root: &Path, commit: &str) -> Result<String, GitError> {
+        let spec = format!("{commit}^{{tree}}");
+        self.optional(root, &["rev-parse", "--verify", "--quiet", &spec], &[])
+            .await?
+            .filter(|t| t.len() == 40 || t.len() == 64)
+            .ok_or_else(|| GitError::Command {
+                command: "rev-parse".into(),
+                detail: format!("commit {commit} has no tree"),
+            })
+    }
+
     pub async fn version(&self) -> Result<String, GitError> {
         let output = self.git(None, &["--version"], &[]).await?;
         if output.status != Some(0) {
