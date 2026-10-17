@@ -159,7 +159,7 @@ try {
 } catch (error) {
   record("harness", false, `unexpected harness failure: ${error instanceof Error ? error.stack ?? error.message : String(error)}`);
 } finally {
-  if (runtime && runtime.exitCode === null && runtime.signalCode === null) runtime.kill("SIGKILL");
+  await stopRuntime(runtime);
 }
 
 evidence.finished_at = new Date().toISOString();
@@ -187,6 +187,20 @@ function ticket(title, intent, acceptance_criteria, paths, maxAttempts) {
   return { title, intent, acceptance_criteria, paths, budgets: { max_attempts: maxAttempts, timeout_seconds: runTimeoutSeconds, cost_usd_micros: 300_000 } };
 }
 
+/**
+ * Orderly shutdown first (so the runtime can stop its own process groups),
+ * then an awaited hard kill; the scan below must not race a dying child.
+ */
+async function stopRuntime(child) {
+  if (!child || child.exitCode !== null || child.signalCode !== null) return;
+  child.kill(process.platform === "win32" ? undefined : "SIGTERM");
+  const orderly = await waitForExit(child, 15_000);
+  if (!orderly.exited) {
+    child.kill("SIGKILL");
+    await waitForExit(child, 10_000);
+  }
+}
+
 async function startRuntime(label) {
   const env = { ...process.env };
   delete env.LUUNA_PI_PROVIDER;
@@ -202,9 +216,12 @@ async function startRuntime(label) {
   const log = path.join(out, `runtime-${label}.log`);
   const child = spawn(runtimeBinary, [], { env, stdio: ["ignore", "ignore", "pipe"] });
   let stderr = "";
+  let spawnError = null;
+  child.on("error", (error) => { spawnError = error; });
   child.stderr.on("data", (chunk) => { stderr += chunk; writeFileSync(log, stderr, { mode: 0o600 }); });
   const deadline = Date.now() + 30_000;
   while (Date.now() < deadline) {
+    if (spawnError) throw new Error(`runtime could not be spawned (${spawnError.code ?? spawnError.message}): ${runtimeBinary}`);
     if (child.exitCode !== null) throw new Error(`runtime exited early (${child.exitCode}): ${stderr.trim()}`);
     try {
       const response = await fetch(`${base}/api/v1/health`, { signal: AbortSignal.timeout(5_000) });
