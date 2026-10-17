@@ -600,6 +600,23 @@ async fn pipeline(
         .ok_or("candidate missing")?
         .results;
     let checks = crate::writer::model_check_view(&checks);
+    let usage = state
+        .store
+        .lock()
+        .map_err(|e| e.to_string())?
+        .workflow_usage(id)
+        .map_err(|e| e.to_string())?;
+    let remaining = plan
+        .budgets
+        .timeout_seconds
+        .saturating_sub(usage.elapsed_seconds);
+    if remaining == 0 {
+        return Err("budget exceeded before review".into());
+    }
+    // One deadline, taken before any reviewer preparation, bounds the guard
+    // installation, the reviewer's startup (spawn and version probe) and its
+    // session together, so none of them runs past the approved time.
+    let deadline = tokio::time::Instant::now() + Duration::from_secs(remaining);
     let session = format!("review-{}", uuid::Uuid::new_v4());
     let directory = state.config.data_dir.join("reviews").join(&session);
     let guard = install_scope_guard(&directory).map_err(|e| e.to_string())?;
@@ -626,22 +643,6 @@ async fn pipeline(
             environment: vec![("LUUNA_SCOPE_JSON".into(), scope.to_string())],
         }),
     };
-    let usage = state
-        .store
-        .lock()
-        .map_err(|e| e.to_string())?
-        .workflow_usage(id)
-        .map_err(|e| e.to_string())?;
-    let remaining = plan
-        .budgets
-        .timeout_seconds
-        .saturating_sub(usage.elapsed_seconds);
-    if remaining == 0 {
-        return Err("budget exceeded before review".into());
-    }
-    // One deadline bounds the reviewer's startup (spawn and version probe)
-    // and its session together, so startup cannot run past the approved time.
-    let deadline = tokio::time::Instant::now() + Duration::from_secs(remaining);
     let mut process = tokio::select! {
         biased;
         _ = cancel.changed() => return Err("cancelled during reviewer startup".into()),

@@ -383,7 +383,9 @@ evidence.stray_processes = strays;
 const checkoutAfter = checkoutState();
 try { checkoutAfter.build_identity = buildIdentity(); } catch (error) { checkoutAfter.build_identity = `unavailable: ${error.message}`; }
 evidence.checkout_after_run = checkoutAfter;
-record("the Luuna checkout was still the recorded revision, clean, with the same build inputs once every process of the run had stopped", checkoutAfter.git_revision === evidence.environment?.git_revision && checkoutAfter.git_dirty === false && checkoutAfter.build_identity === evidence.environment?.expected_build_identity, `revision ${checkoutAfter.git_revision}, ${checkoutAfter.git_dirty === false ? "clean" : checkoutAfter.git_dirty === null ? "status unknown" : `modified: ${checkoutAfter.git_dirty_paths}`}, build inputs ${checkoutAfter.build_identity === evidence.environment?.expected_build_identity ? "unchanged" : "changed"}`);
+const sameMetadata = checkoutAfter.git_metadata_digest.startsWith("sha256:") && checkoutAfter.git_metadata_digest === evidence.environment?.git_metadata_digest;
+const sameIgnored = checkoutAfter.ignored_digest.startsWith("sha256:") && checkoutAfter.ignored_digest === evidence.environment?.ignored_digest;
+record("the Luuna checkout was still the recorded revision, clean, with the same build inputs, Git metadata and ignored files once every process of the run had stopped", checkoutAfter.git_revision === evidence.environment?.git_revision && checkoutAfter.git_dirty === false && checkoutAfter.build_identity === evidence.environment?.expected_build_identity && sameMetadata && sameIgnored, `revision ${checkoutAfter.git_revision}, ${checkoutAfter.git_dirty === false ? "clean" : checkoutAfter.git_dirty === null ? "status unknown" : `modified: ${checkoutAfter.git_dirty_paths}`}, build inputs ${checkoutAfter.build_identity === evidence.environment?.expected_build_identity ? "unchanged" : "changed"}, Git metadata (config, HEAD, refs, hooks, info) ${sameMetadata ? "unchanged" : "changed or unreadable"}, ignored files outside target/node_modules/dist ${sameIgnored ? `unchanged (${checkoutAfter.ignored_files})` : "changed or unreadable"}`);
 record("no process of the run outlived it before the leak scan (Linux child subreaper; survivors killed)", strays.contained || process.platform !== "linux", strays.contained ? `${strays.killed} surviving process(es) killed and reaped` : process.platform === "linux" ? `not contained: ${strays.reason}` : `unavailable on ${process.platform}: descendants that detach from the runtime are not tracked`);
 evidence.leak_scan = scanForCredentialValues();
 // Held handles are required where they exist (Linux); elsewhere the weaker fallback is recorded, not hidden.
@@ -458,10 +460,13 @@ async function stopRuntime(child) {
 }
 
 async function startRuntime(label, { credentials = true } = {}) {
-  const env = { ...process.env };
+  // The credential-free verification start gets only what a runtime needs to start and answer
+  // /health, built from an allowlist: no provider key, no other token, password or
+  // credential-bearing URL from the harness's environment reaches an unverified binary.
+  const minimal = new Set(["PATH", "HOME", "USER", "LOGNAME", "LANG", "LC_ALL", "TMPDIR", "TERM", "SystemRoot", "SYSTEMROOT", "windir", "PATHEXT", "USERPROFILE", "TEMP", "TMP", "ComSpec"]);
+  const env = credentials ? { ...process.env } : Object.fromEntries(Object.entries(process.env).filter(([name]) => minimal.has(name)));
   delete env.LUUNA_PI_PROVIDER;
   delete env.LUUNA_PI_MODEL;
-  if (!credentials) for (const name of CREDENTIAL_NAMES) { delete env[name]; delete env[`LUUNA_PI_${name}`]; }
   Object.assign(env, {
     LUUNA_API_TOKEN: token,
     LUUNA_DATA_DIR: dataDir,
@@ -1080,7 +1085,47 @@ function checkoutState() {
     state.git_dirty = status.length > 0 || hidden.length > 0;
     if (state.git_dirty) state.git_dirty_paths = [...status.split("\n").filter(Boolean).map((line) => line.replace(/^\s*\S{1,2}\s+/, "")), ...hidden].slice(0, 10).join(", ");
   } catch { state.git_dirty = null; }
+  // What status does not show: the repository's own metadata (config, which can change what
+  // status reports; hooks, which run on the developer's next Git command; refs) and ignored files
+  // outside the build and dependency output directories (an `.env`, say). Object storage, the
+  // index and logs are left out: Git itself rewrites them.
+  try {
+    const gitDir = git(repository, "rev-parse", "--absolute-git-dir");
+    state.git_metadata_digest = pathsDigest(gitDir, ["config", "HEAD", "packed-refs", "info", "hooks", "refs"]);
+  } catch (error) { state.git_metadata_digest = `unavailable: ${error.message}`; }
+  try {
+    // `--directory` lists an ignored directory as one entry (hashed recursively below), which keeps
+    // the listing small; the build and dependency output directories are left out.
+    const ignored = git(repository, "ls-files", "--others", "--ignored", "--exclude-standard", "--directory", "-z").split("\0").filter(Boolean).map((rel) => rel.replace(/\/$/, "")).filter((rel) => !/(^|\/)(target|node_modules|dist)(\/|$)/.test(rel));
+    state.ignored_digest = pathsDigest(repository, ignored);
+    state.ignored_files = ignored.length;
+  } catch (error) { state.ignored_digest = `unavailable: ${error.message}`; }
   return state;
+}
+
+/** SHA-256 over the given relative paths under `root` (each file, or every file under a directory), bounded like the Pi tree digest. */
+function pathsDigest(root, rels) {
+  const LIMITS = { entries: 20_000, bytes: 256 * 1024 * 1024, depth: 32 };
+  const entries = [];
+  let visited = 0;
+  let bytes = 0;
+  const visit = (rel, depth) => {
+    if (++visited > LIMITS.entries) throw new Error(`more than ${LIMITS.entries} entries`);
+    if (depth > LIMITS.depth) throw new Error(`nests deeper than ${LIMITS.depth} levels`);
+    const full = path.join(root, rel);
+    let stat;
+    try { stat = lstatSync(full); } catch { entries.push(`${rel}\0absent`); return; }
+    if (stat.isSymbolicLink()) entries.push(`${rel}\0link\0${readlinkSync(full)}`);
+    else if (stat.isDirectory()) for (const name of readdirSync(full)) visit(`${rel}/${name}`, depth + 1);
+    else if (stat.isFile()) {
+      bytes += stat.size;
+      if (bytes > LIMITS.bytes) throw new Error(`more than ${LIMITS.bytes} bytes`);
+      entries.push(`${rel}\0${createHash("sha256").update(readFileSync(full)).digest("hex")}`);
+    } else entries.push(`${rel}\0special`);
+  };
+  for (const rel of rels) visit(rel, 0);
+  entries.sort();
+  return `sha256:${createHash("sha256").update(entries.join("\n")).digest("hex")}`;
 }
 
 function environment() {
