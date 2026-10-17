@@ -16,7 +16,7 @@
 // supported names (or their LUUNA_PI_ aliases) to the isolated Pi children. The
 // report records credential names only and is scanned for leaked values.
 import { spawn, spawnSync, execFileSync } from "node:child_process";
-import { mkdirSync, mkdtempSync, rmSync, writeFileSync, writeSync, rmdirSync, readdirSync, readFileSync, opendirSync, statSync, lstatSync, readlinkSync, realpathSync, existsSync, openSync, readSync, closeSync, unlinkSync, fstatSync, fchmodSync, ftruncateSync, constants as fsConstants } from "node:fs";
+import { mkdirSync, mkdtempSync, rmSync, writeFileSync, writeSync, rmdirSync, readdirSync, readFileSync, opendirSync, statSync, lstatSync, readlinkSync, realpathSync, existsSync, accessSync, openSync, readSync, closeSync, unlinkSync, fstatSync, fchmodSync, ftruncateSync, constants as fsConstants } from "node:fs";
 import { randomBytes, createHash } from "node:crypto";
 import { tmpdir, platform, release, arch, devNull } from "node:os";
 import path from "node:path";
@@ -189,6 +189,37 @@ function credentialFreeEnv() {
 }
 
 /**
+ * The environment for host tools the harness runs before Pi provenance is established (rustup,
+ * the Python version probe): an allowlist of what locating and running them needs, so no provider
+ * key, other token, password or credential-bearing URL reaches an executable nothing has verified.
+ */
+function toolEnv() {
+  const keep = new Set(["PATH", "HOME", "USER", "LOGNAME", "LANG", "LC_ALL", "TMPDIR", "TERM", "RUSTUP_HOME", "CARGO_HOME", "SystemRoot", "SYSTEMROOT", "windir", "PATHEXT", "USERPROFILE", "TEMP", "TMP", "ComSpec"]);
+  return Object.fromEntries(Object.entries(process.env).filter(([name]) => keep.has(name)));
+}
+
+/**
+ * Resolves a command name the way a shell's PATH lookup would, without running anything: a name
+ * with a directory part is taken as given; otherwise the first regular, executable file in a PATH
+ * directory (with each PATHEXT extension on Windows) is returned, or null.
+ */
+function resolveOnPath(name) {
+  if (name.includes("/") || name.includes(path.sep)) return name;
+  const extensions = process.platform === "win32" ? ["", ...(process.env.PATHEXT ?? ".COM;.EXE;.BAT;.CMD").split(";").filter(Boolean)] : [""];
+  for (const dir of (process.env.PATH ?? "").split(path.delimiter).filter(Boolean)) {
+    for (const extension of extensions) {
+      const candidate = path.join(dir, name + extension);
+      try {
+        if (!statSync(candidate).isFile()) continue;
+        if (process.platform !== "win32") accessSync(candidate, fsConstants.X_OK);
+        return candidate;
+      } catch { /* not this one */ }
+    }
+  }
+  return null;
+}
+
+/**
  * Builds the runtime from this checkout with a fixed invocation: `cargo build --locked -p
  * luuna-runtime`, no command-line `--config`, its own target directory, and only the environment a
  * build needs to locate the toolchain, the Cargo home and the network. Nothing else the harness
@@ -210,7 +241,7 @@ function buildRuntime() {
   const pinned = pinnedToolchain();
   if (pinned === null) throw new Error("rust-toolchain.toml pins no exact release; the runtime is not built");
   const locate = (tool) => {
-    try { return realpathSync(execFileSync("rustup", ["which", tool, "--toolchain", pinned], { encoding: "utf8", stdio: ["ignore", "pipe", "ignore"], timeout: 30_000 }).trim()); } catch (error) { throw new Error(`rustup could not locate ${tool} for the pinned toolchain ${pinned}: ${error.code ?? error.message}`); }
+    try { return realpathSync(execFileSync("rustup", ["which", tool, "--toolchain", pinned], { encoding: "utf8", env: toolEnv(), stdio: ["ignore", "pipe", "ignore"], timeout: 30_000 }).trim()); } catch (error) { throw new Error(`rustup could not locate ${tool} for the pinned toolchain ${pinned}: ${error.code ?? error.message}`); }
   };
   const cargo = locate("cargo");
   // Cargo run directly would compile with whatever `rustc` PATH resolves, and a rustup proxy picks
@@ -402,7 +433,8 @@ evidence.developer_checkout_after_run = fixtureAfter;
 record("the developer checkout was still untouched once every process of the run had stopped", fixtureAfter.head !== undefined && fixtureAfter.head === developerHead && fixtureAfter.tracked === "" && JSON.stringify(fixtureAfter.untracked) === JSON.stringify(untrackedAfterBaseline ?? []), fixtureAfter.error ? `unreadable: ${fixtureAfter.error}` : `head=${String(fixtureAfter.head).slice(0, 12)} tracked_changes=${JSON.stringify(fixtureAfter.tracked)} untracked=${JSON.stringify(fixtureAfter.untracked)}`);
 const sameMetadata = checkoutAfter.git_metadata_digest.startsWith("sha256:") && checkoutAfter.git_metadata_digest === evidence.environment?.git_metadata_digest;
 const sameIgnored = checkoutAfter.ignored_digest.startsWith("sha256:") && checkoutAfter.ignored_digest === evidence.environment?.ignored_digest;
-record("the Luuna checkout was still the recorded revision, clean, with the same build inputs, Git metadata and ignored files once every process of the run had stopped", checkoutAfter.git_revision === evidence.environment?.git_revision && checkoutAfter.git_dirty === false && checkoutAfter.build_identity === evidence.environment?.expected_build_identity && sameMetadata && sameIgnored, `revision ${checkoutAfter.git_revision}, ${checkoutAfter.git_dirty === false ? "clean" : checkoutAfter.git_dirty === null ? "status unknown" : `modified: ${checkoutAfter.git_dirty_paths}`}, build inputs ${checkoutAfter.build_identity === evidence.environment?.expected_build_identity ? "unchanged" : "changed"}, Git metadata (config, HEAD, refs, hooks, info) ${sameMetadata ? "unchanged" : "changed or unreadable"}, ignored files outside target/node_modules/dist ${sameIgnored ? `unchanged (${checkoutAfter.ignored_files})` : "changed or unreadable"}`);
+const sameObjects = checkoutAfter.git_objects_digest.startsWith("sha256:") && checkoutAfter.git_objects_digest === evidence.environment?.git_objects_digest;
+record("the Luuna checkout was still the recorded revision, clean, with the same build inputs, Git metadata, history and ignored files once every process of the run had stopped", checkoutAfter.git_revision === evidence.environment?.git_revision && checkoutAfter.git_dirty === false && checkoutAfter.build_identity === evidence.environment?.expected_build_identity && sameMetadata && sameObjects && sameIgnored, `revision ${checkoutAfter.git_revision}, ${checkoutAfter.git_dirty === false ? "clean" : checkoutAfter.git_dirty === null ? "status unknown" : `modified: ${checkoutAfter.git_dirty_paths}`}, build inputs ${checkoutAfter.build_identity === evidence.environment?.expected_build_identity ? "unchanged" : "changed"}, Git metadata (config, HEAD, refs, hooks, info, alternates) ${sameMetadata ? "unchanged" : "changed or unreadable"}, objects reachable from every ref ${sameObjects ? "unchanged and intact (fsck --full)" : "changed, corrupt or unreadable"}, ignored files outside target/node_modules/dist ${sameIgnored ? `unchanged (${checkoutAfter.ignored_files})` : "changed or unreadable"}`);
 record("no process of the run outlived it before the leak scan (Linux child subreaper; survivors killed)", strays.contained || process.platform !== "linux", strays.contained ? `${strays.killed} surviving process(es) killed and reaped` : process.platform === "linux" ? `not contained: ${strays.reason}` : `unavailable on ${process.platform}: descendants that detach from the runtime are not tracked`);
 evidence.leak_scan = scanForCredentialValues();
 // Held handles are required where they exist (Linux); elsewhere the weaker fallback is recorded, not hidden.
@@ -1134,8 +1166,15 @@ function checkoutState() {
   // index and logs are left out: Git itself rewrites them.
   try {
     const gitDir = git(repository, "rev-parse", "--absolute-git-dir");
-    state.git_metadata_digest = pathsDigest(gitDir, ["config", "HEAD", "packed-refs", "info", "hooks", "refs"]);
+    state.git_metadata_digest = pathsDigest(gitDir, ["config", "HEAD", "packed-refs", "info", "hooks", "refs", "objects/info", "shallow"]);
   } catch (error) { state.git_metadata_digest = `unavailable: ${error.message}`; }
+  // History itself: every object reachable from any ref (other branches and tags included, not
+  // only what the checkout shows) is listed, and a full fsck verifies each stored object's content
+  // against its id, so a corrupted, truncated or removed object changes the digest or fails it.
+  try {
+    git(repository, "fsck", "--full", "--no-dangling", "--no-progress");
+    state.git_objects_digest = `sha256:${createHash("sha256").update(git(repository, "rev-list", "--objects", "--all")).digest("hex")}`;
+  } catch (error) { state.git_objects_digest = `unavailable: ${error.message.split("\n")[0]}`; }
   try {
     // `--directory` lists an ignored directory as one entry (hashed recursively below), which keeps
     // the listing small; the build and dependency output directories are left out.
@@ -1174,7 +1213,7 @@ function pathsDigest(root, rels) {
 function environment() {
   const info = { platform: `${platform()} ${release()} ${arch()}`, node: process.version, pi_launcher: profile.pi, pi_launcher_args: profile.piArgs, provider: profile.provider, model: profile.model, required_check: profile.checks.map((check) => [check.executable, ...check.args.map((arg) => truncate(arg, 40))].join(" ")) };
   Object.assign(info, checkoutState());
-  try { info.python_version = execFileSync(python, ["--version"], { encoding: "utf8" }).trim(); } catch (error) { info.python_version = `unavailable: ${error.message}`; }
+  try { info.python_version = execFileSync(python, ["--version"], { encoding: "utf8", env: toolEnv(), timeout: 30_000, killSignal: "SIGKILL" }).trim(); } catch (error) { info.python_version = `unavailable: ${error.message}`; }
   if (mode === "real") {
     info.pi_provenance = piProvenance();
     // The launcher runs only once its provenance is verified, and without any provider credential.
@@ -1279,7 +1318,10 @@ function piProvenance() {
   const result = { verified: false };
   const sha = (file) => createHash("sha256").update(readFileSync(file)).digest("hex");
   try {
-    const launcher = existsSync(profile.pi) ? profile.pi : execFileSync("sh", ["-c", 'command -v "$1"', "sh", profile.pi], { encoding: "utf8" }).trim();
+    // Resolved without spawning anything: a shell or PATH shim must not run (let alone receive
+    // the harness's environment) before provenance is established.
+    const launcher = existsSync(profile.pi) ? profile.pi : resolveOnPath(profile.pi);
+    if (launcher === null) throw new Error(`${profile.pi} not found on PATH`);
     result.launcher = { path: realpathSync(launcher), sha256: sha(realpathSync(launcher)) };
     const entry = profile.piArgs.find((arg) => existsSync(arg) && statSync(arg).isFile()) ?? launcher;
     result.entrypoint = { path: realpathSync(entry), sha256: sha(realpathSync(entry)) };
@@ -1364,7 +1406,7 @@ function pinnedToolchain() {
 function pinnedRustcSha256(pinned) {
   if (pinned === null) return "unavailable: no pinned release";
   try {
-    const located = execFileSync("rustup", ["which", "rustc", "--toolchain", pinned], { encoding: "utf8", stdio: ["ignore", "pipe", "ignore"], timeout: 30_000 }).trim();
+    const located = execFileSync("rustup", ["which", "rustc", "--toolchain", pinned], { encoding: "utf8", env: toolEnv(), stdio: ["ignore", "pipe", "ignore"], timeout: 30_000 }).trim();
     return createHash("sha256").update(readFileSync(located)).digest("hex");
   } catch (error) { return `unavailable: ${error.code ?? "rustup could not locate the pinned rustc"}`; }
 }
