@@ -925,7 +925,7 @@ fn fit_encoded(tail: &str, truncated: bool, suffix: &str, budget: usize) -> Opti
         .collect();
     let (mut low, mut high) = (0usize, boundaries.len() - 1);
     while low < high {
-        let mid = low.div_ceil(2) + high / 2;
+        let mid = low + (high - low) / 2;
         let candidate = compose(&tail[boundaries[mid]..], true);
         if encoded_len(&candidate) <= budget {
             high = mid;
@@ -1107,7 +1107,9 @@ fn open_without_following(path: &FsPath) -> Option<std::fs::File> {
     #[cfg(unix)]
     {
         use std::os::unix::fs::OpenOptionsExt;
-        options.custom_flags(libc::O_NOFOLLOW);
+        // Non-blocking so a FIFO swapped into the path cannot stall the open
+        // before the handle's metadata rejects it as a non-regular file.
+        options.custom_flags(libc::O_NOFOLLOW | libc::O_NONBLOCK);
     }
     #[cfg(windows)]
     {
@@ -1782,6 +1784,34 @@ mod redaction_tests {
         let text = output["c1-g1-check0"].as_str().unwrap();
         assert!(!text.contains("secretvalue"), "{text:.120}");
         assert!(text.starts_with('…'));
+    }
+
+    #[test]
+    fn fitting_terminates_and_fits_for_every_budget() {
+        let tail: String = (0..700)
+            .map(|i| if i % 7 == 0 { 'é' } else { 'x' })
+            .collect();
+        let whole = encoded_len(&tail);
+        for budget in 0..=whole + 8 {
+            if let Some(text) = fit_encoded(&tail, false, "", budget) {
+                assert!(encoded_len(&text) <= budget, "budget {budget}");
+                assert!(text.len() >= 64);
+            }
+        }
+        assert_eq!(fit_encoded(&tail, false, "", whole), Some(tail.clone()));
+    }
+
+    #[test]
+    fn a_fifo_in_the_artifact_path_is_rejected_without_blocking() {
+        #[cfg(unix)]
+        {
+            let dir = tempfile::tempdir().unwrap();
+            let fifo = dir.path().join("c1-g1-check0.log");
+            let c_path = std::ffi::CString::new(fifo.to_str().unwrap()).unwrap();
+            assert_eq!(unsafe { libc::mkfifo(c_path.as_ptr(), 0o600) }, 0);
+            let mut budget = REPAIR_READ_BUDGET_BYTES;
+            assert!(read_verified_tail(&fifo, "sha256:0", &mut budget, &[]).is_none());
+        }
     }
 
     #[test]

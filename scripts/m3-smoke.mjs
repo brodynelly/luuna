@@ -16,7 +16,7 @@
 // supported names (or their LUUNA_PI_ aliases) to the isolated Pi children. The
 // report records credential names only and is scanned for leaked values.
 import { spawn, execFileSync } from "node:child_process";
-import { mkdirSync, writeFileSync, readdirSync, statSync, existsSync, openSync, readSync, closeSync, rmSync, chmodSync } from "node:fs";
+import { mkdirSync, writeFileSync, readdirSync, statSync, lstatSync, readlinkSync, existsSync, openSync, readSync, closeSync, rmSync, chmodSync, unlinkSync, constants as fsConstants } from "node:fs";
 import { randomBytes } from "node:crypto";
 import { tmpdir, platform, release, arch, devNull } from "node:os";
 import path from "node:path";
@@ -728,6 +728,7 @@ function scanForCredentialValues() {
   const values = configuredValues();
   const files = [];
   const unreadable = [];
+  const metadataHits = [];
   // A directory that cannot be listed hides files from the scan, so it counts as a scan failure.
   const walk = (dir) => {
     let entries;
@@ -736,12 +737,19 @@ function scanForCredentialValues() {
       const full = path.join(dir, entry.name);
       // Every file under the owned output tree is scanned, the fixture checkout and
       // Git metadata included: a native check could echo a value anywhere in it.
-      if (entry.isDirectory()) walk(full); else if (entry.isFile()) files.push(full);
+      // Entry names and symbolic-link targets are metadata that can carry a value too.
+      const relative = path.relative(out, full);
+      if (values.some((value) => relative.includes(value))) metadataHits.push(relative);
+      if (entry.isSymbolicLink()) {
+        let target;
+        try { target = readlinkSync(full); } catch { unreadable.push(relative); continue; }
+        if (values.some((value) => target.includes(value))) metadataHits.push(relative);
+      } else if (entry.isDirectory()) walk(full); else if (entry.isFile()) files.push(full);
     }
   };
   walk(out);
-  let leaks = 0;
-  const leaking = [];
+  let leaks = metadataHits.length;
+  const leaking = [...metadataHits];
   const reportText = JSON.stringify(evidence) + markdown({ ...evidence, verdict: "" });
   for (const value of values) if (reportText.includes(value)) { leaks += 1; leaking.push("report"); }
   for (const file of files) {
@@ -759,25 +767,36 @@ function quarantineLeaks(scan) {
   if (targets.length === 0) return { removed: [], failed: [] };
   const removed = [];
   const failed = [];
+  // Presence is judged without following links: a dangling symlink is still an entry to remove.
+  const present = (target) => { try { lstatSync(target); return true; } catch { return false; } };
   for (const entry of new Set([...targets, "data"])) {
     const target = path.resolve(out, entry);
     if (!target.startsWith(out + path.sep)) { failed.push(`${entry} (outside the output directory)`); continue; }
     let error = null;
-    for (let attempt = 0; attempt < 5 && existsSync(target); attempt += 1) {
+    for (let attempt = 0; attempt < 5 && present(target); attempt += 1) {
       try {
         if (attempt > 0) {
           // A file a lingering process still holds, or one with stripped permissions: make it
-          // writable, blank its contents first so the value is gone even if unlinking fails, then retry.
-          const stat = statSync(target);
-          chmodSync(target, stat.isDirectory() ? 0o700 : 0o600);
-          if (stat.isFile()) writeFileSync(target, "");
+          // writable and blank its contents so the value is gone even if unlinking fails, then
+          // retry. Nothing here follows a link: a path swapped for a symlink is unlinked as a
+          // link, a hard-linked file is never blanked, and blanking opens with O_NOFOLLOW.
+          const stat = lstatSync(target);
+          if (stat.isSymbolicLink()) {
+            unlinkSync(target);
+          } else if (stat.isDirectory()) {
+            chmodSync(target, 0o700);
+          } else if (stat.isFile() && stat.nlink === 1) {
+            chmodSync(target, 0o600);
+            const flags = fsConstants.O_WRONLY | fsConstants.O_TRUNC | (fsConstants.O_NOFOLLOW ?? 0);
+            closeSync(openSync(target, flags));
+          }
           Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 200 * attempt);
         }
         rmSync(target, { recursive: true, force: true, maxRetries: 3, retryDelay: 100 });
         error = null;
       } catch (caught) { error = caught; }
     }
-    if (existsSync(target)) failed.push(`${entry}${error ? ` (${error.message})` : ""}`); else removed.push(entry);
+    if (present(target)) failed.push(`${entry}${error ? ` (${error.message})` : ""}`); else removed.push(entry);
   }
   return { removed, failed };
 }
@@ -814,8 +833,9 @@ function note(scenarioName, text) {
   console.log(redactConfiguredValues(`NOTE  ${scenarioName}: ${text}`));
 }
 
+/** Redacts before cutting so a configured value straddling the cut never survives as a fragment. */
 function truncate(value, length = 200) {
-  const text = String(value ?? "");
+  const text = redactConfiguredValues(String(value ?? ""));
   return text.length > length ? `${text.slice(0, length)}…` : text;
 }
 
