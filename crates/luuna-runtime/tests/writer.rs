@@ -1293,11 +1293,19 @@ async fn cancelling_candidate_review_preserves_candidate_checks_and_consumed_att
 
 #[tokio::test]
 async fn a_writer_lost_mid_turn_reserves_the_unreported_spend() {
+    // Lost after the prompt was acknowledged, and lost before it was: the
+    // spend is uncertain from the moment the prompt is sent.
+    for scenario in ["writer_crash", "writer_crash_before_ack"] {
+        writer_lost_reserves(scenario).await;
+    }
+}
+
+async fn writer_lost_reserves(scenario: &str) {
     let harness = Harness::new();
     let repo = tempfile::tempdir().unwrap();
     ready(&harness, repo.path()).await;
     let (id, _) = harness
-        .approved(repo.path(), "writer_crash", json!({"max_attempts": 2}))
+        .approved(repo.path(), scenario, json!({"max_attempts": 2}))
         .await;
     assert_eq!(harness.implement(&id).await.0, StatusCode::ACCEPTED);
     let settled = harness.settled(&id).await;

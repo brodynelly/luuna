@@ -106,6 +106,10 @@ def run_reviewer(request_id, kind, message):
 
 def run_writer(request_id, kind, scenario, prompt):
     """Synthetic writer behaviour inside the cwd the runtime assigned."""
+    if scenario == "writer_crash_before_ack":
+        # The prompt was sent and may have started provider work, but Pi exits
+        # before acknowledging it.
+        sys.exit(9)
     send({"type": "fixture_args", "tools": flag("--tools"), "extensions": [
         sys.argv[i + 1] for i, a in enumerate(sys.argv) if a in ("-e", "--extension")],
         "scope": json.loads(os.environ.get("LUUNA_SCOPE_JSON", "null")),

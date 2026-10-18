@@ -456,16 +456,19 @@ async fn pipeline(
 ) -> Result<(), String> {
     let hash = &evidence.candidate.hash;
     let started = Instant::now();
-    let mut charged_seconds = 0;
-    let mut charge = |cost: u64| -> Result<(), String> {
+    // Pipeline seconds already in durable usage, whether charged here or by a
+    // storage call that charges its stage itself.
+    let charged = std::sync::atomic::AtomicU64::new(0);
+    let charge = |cost: u64| -> Result<(), String> {
         let seconds = crate::writer::charged_seconds(started.elapsed());
+        let already = charged.load(std::sync::atomic::Ordering::Relaxed);
         let usage = state
             .store
             .lock()
             .map_err(|e| e.to_string())?
-            .charge_candidate_usage(id, hash, seconds.saturating_sub(charged_seconds), cost)
+            .charge_candidate_usage(id, hash, seconds.saturating_sub(already), cost)
             .map_err(|e| e.to_string())?;
-        charged_seconds = seconds;
+        charged.store(seconds.max(already), std::sync::atomic::Ordering::Relaxed);
         plan.budgets.check(usage).map_err(|e| e.to_string())
     };
     // Every exit from the pipeline is charged: a check, guard installation or
@@ -594,6 +597,13 @@ async fn pipeline(
         .map_err(|e| e.to_string())?
         .finish_candidate_validation(id, run.revision, hash)
         .map_err(|e| e.to_string())?;
+    // That call charged the validation stage's live time, which began before
+    // this pipeline did, so every pipeline second so far is already durable:
+    // the reviewer's charges start from here and do not count it again.
+    charged.store(
+        crate::writer::charged_seconds(started.elapsed()),
+        std::sync::atomic::Ordering::Relaxed,
+    );
     if run.status != luuna_domain::CandidateStatus::Reviewing {
         return Ok(());
     }
@@ -672,9 +682,9 @@ async fn pipeline(
         let _ = process.stop().await;
         return Err("cannot persist reviewer startup".into());
     }
-    // Whether accepted model work may have spent more than Pi reported: true
-    // from the prompt's acceptance until a record that settles or ends the
-    // turn. A transport loss, a Pi exit, the deadline or cancellation in that
+    // Whether model work may have spent more than Pi reported: true from the
+    // moment the prompt is sent until an explicit rejection or a record that
+    // settles or ends the turn. A transport loss, a Pi exit, the deadline or cancellation in that
     // window leaves the provider's spend unknown.
     let in_flight = std::sync::atomic::AtomicBool::new(false);
     let operation = async {
@@ -689,6 +699,9 @@ async fn pipeline(
         {
             return Err("reviewer startup handshake rejected".to_owned());
         }
+        // Spend is uncertain from the moment the prompt is sent: Pi may start
+        // billable work before its acknowledgement is read or persisted.
+        in_flight.store(true, std::sync::atomic::Ordering::Relaxed);
         process
             .command("prompt-1", "prompt", json!({"message":prompt}))
             .await
@@ -707,10 +720,10 @@ async fn pipeline(
             cost = total;
             if record.kind == "response" && record.raw["id"] == "prompt-1" {
                 if record.raw["success"] != true || record.raw["data"]["disposition"] == "handled" {
+                    in_flight.store(false, std::sync::atomic::Ordering::Relaxed);
                     return Err("reviewer prompt rejected or handled without model work".into());
                 }
                 accepted = true;
-                in_flight.store(true, std::sync::atomic::Ordering::Relaxed);
             }
             if let Some(error) = record.model_error() {
                 in_flight.store(false, std::sync::atomic::Ordering::Relaxed);

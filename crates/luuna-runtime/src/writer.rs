@@ -2048,10 +2048,10 @@ async fn writer_worker(state: AppState, job: WriterJob, mut cancel: watch::Recei
     };
     let mut writer_cost = 0u64;
     let mut session_usage = luuna_engine_pi::SessionUsage::default();
-    // Whether accepted model work may have spent more than Pi reported: set
-    // when the prompt is accepted, cleared when the run settles. An exit in
-    // between (a lost transport, a Pi exit, the deadline, cancellation)
-    // leaves the provider's spend unknown.
+    // Whether model work may have spent more than Pi reported: set when the
+    // prompt is sent, cleared by an explicit rejection or when the run
+    // settles. An exit in between (a lost transport, a Pi exit, the deadline,
+    // cancellation) leaves the provider's spend unknown.
     let in_flight = std::sync::atomic::AtomicBool::new(false);
     let operation = async {
         process
@@ -2068,6 +2068,9 @@ async fn writer_worker(state: AppState, job: WriterJob, mut cancel: watch::Recei
         {
             return Err("Pi startup handshake rejected".to_owned());
         }
+        // Spend is uncertain from the moment the prompt is sent: Pi may start
+        // billable work before its acknowledgement is read or persisted.
+        in_flight.store(true, std::sync::atomic::Ordering::Relaxed);
         process
             .command(
                 "prompt-1",
@@ -2101,16 +2104,17 @@ async fn writer_worker(state: AppState, job: WriterJob, mut cancel: watch::Recei
             }
             if record.kind == "response" && record.raw["id"] == "prompt-1" {
                 if record.raw["success"] != true {
+                    in_flight.store(false, std::sync::atomic::Ordering::Relaxed);
                     return Err(record.raw["error"]
                         .as_str()
                         .unwrap_or("prompt rejected")
                         .to_owned());
                 }
                 if record.raw["data"]["disposition"] == "handled" {
+                    in_flight.store(false, std::sync::atomic::Ordering::Relaxed);
                     return Err("prompt was handled without starting model work".to_owned());
                 }
                 accepted = true;
-                in_flight.store(true, std::sync::atomic::Ordering::Relaxed);
             }
             if record.kind == "extension_ui_request" {
                 in_flight.store(false, std::sync::atomic::Ordering::Relaxed);
