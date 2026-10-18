@@ -1292,6 +1292,33 @@ async fn cancelling_candidate_review_preserves_candidate_checks_and_consumed_att
 }
 
 #[tokio::test]
+async fn a_writer_lost_mid_turn_reserves_the_unreported_spend() {
+    let harness = Harness::new();
+    let repo = tempfile::tempdir().unwrap();
+    ready(&harness, repo.path()).await;
+    let (id, _) = harness
+        .approved(repo.path(), "writer_crash", json!({"max_attempts": 2}))
+        .await;
+    assert_eq!(harness.implement(&id).await.0, StatusCode::ACCEPTED);
+    let settled = harness.settled(&id).await;
+    assert_eq!(settled["state"], "failed", "{settled}");
+    let events = harness.events(&id).await;
+    let reason = events.iter().find(|e| e["type"] == "run.failed").unwrap()["payload"]["reason"]
+        .as_str()
+        .unwrap()
+        .to_owned();
+    assert!(
+        reason.contains("remaining approved cost budget is reserved"),
+        "{reason}"
+    );
+    let store = luuna_storage::Store::open(harness.root.join("luuna.sqlite3")).unwrap();
+    assert_eq!(
+        store.workflow_usage(&id).unwrap().cost_usd_micros,
+        1_000_000
+    );
+}
+
+#[tokio::test]
 async fn a_reviewer_lost_mid_turn_reserves_the_unreported_spend() {
     let harness = Harness::new();
     let repo = tempfile::tempdir().unwrap();

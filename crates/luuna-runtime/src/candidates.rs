@@ -801,9 +801,12 @@ async fn pipeline(
     Ok(())
     }
     .await;
-    // Every terminal path is charged, a validation that ends with failed or
-    // blocked checks (which returns Ok) included: the final verification and
-    // persistence after the last charge spent approved time too.
-    let _ = charge(0);
+    // An error exit is charged here. A pipeline that returns Ok ended in
+    // `finish_candidate_validation` (failed or blocked checks) or
+    // `finish_candidate_review`, which charge the stage's own elapsed time in
+    // their transaction and pause a review that would end past the budget.
+    if outcome.is_err() {
+        let _ = charge(0);
+    }
     outcome
 }

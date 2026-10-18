@@ -114,6 +114,10 @@ def run_writer(request_id, kind, scenario, prompt):
           "success": True, "data": {"disposition": "started"}})
     send({"type": "agent_start"})
     cost = 0.0005
+    if scenario == "writer_crash":
+        # Accepted model work that never reports its usage: the process exits
+        # mid-turn, as a lost transport or a crashed Pi would.
+        sys.exit(9)
     if scenario == "slow":
         time.sleep(60)
     elif scenario == "write_in_scope" or scenario.startswith("review_"):

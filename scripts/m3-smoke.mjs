@@ -1220,11 +1220,15 @@ function checkoutState() {
     state.git_metadata_digest = pathsDigest(gitDir, ["config", "HEAD", "packed-refs", "info", "hooks", "refs", "logs", "objects/info", "shallow"]);
   } catch (error) { state.git_metadata_digest = `unavailable: ${error.message}`; }
   // History itself: every object reachable from any ref (other branches and tags included, not
-  // only what the checkout shows) is listed, and a full fsck verifies each stored object's content
-  // against its id, so a corrupted, truncated or removed object changes the digest or fails it.
+  // only what the checkout shows) and every stored object is listed, and a full fsck verifies each
+  // stored object's content against its id, so a corrupted, truncated, removed or added object
+  // changes the digest or fails it.
   try {
     git(repository, "fsck", "--full", "--no-dangling", "--no-progress");
-    state.git_objects_digest = `sha256:${createHash("sha256").update(git(repository, "rev-list", "--objects", "--all")).digest("hex")}`;
+    // Plus the full object inventory, unreachable and loose objects included: a check that only
+    // writes an object (`git hash-object -w`) changes neither the refs nor what they reach.
+    const inventory = git(repository, "cat-file", "--batch-all-objects", "--batch-check=%(objectname) %(objecttype) %(objectsize)", "--unordered");
+    state.git_objects_digest = `sha256:${createHash("sha256").update(git(repository, "rev-list", "--objects", "--all")).update("\0").update(inventory.split("\n").sort().join("\n")).digest("hex")}`;
   } catch (error) { state.git_objects_digest = `unavailable: ${error.message.split("\n")[0]}`; }
   try {
     // `--directory` lists an ignored directory as one entry (hashed recursively below), which keeps

@@ -231,6 +231,10 @@ impl Store {
             return invalid("candidate validation is not active");
         }
         let plan = current_plan(&tx, run_id)?;
+        // The validation's own elapsed time is charged in this transaction, so
+        // whatever ran after the worker's last charge is not lost.
+        retain_live_elapsed(&mut evidence);
+        save_candidate(&tx, &evidence)?;
         let required: Vec<_> = plan.required_checks.iter().filter(|c| c.required).collect();
         let statuses: Vec<_> = required
             .iter()
@@ -319,8 +323,31 @@ impl Store {
         if run.state != RunState::Reviewing || evidence.status != CandidateStatus::Reviewing {
             return invalid("candidate review is not active");
         }
-        current_plan(&tx, run_id)?;
+        let plan = current_plan(&tx, run_id)?;
         review.validate_for(&evidence.candidate, &evidence.implementer_session)?;
+        // The review's elapsed time is charged in this transaction, and a
+        // review that would end past the approved budget is not recorded: the
+        // workflow pauses for re-planning instead.
+        retain_live_elapsed(&mut evidence);
+        save_candidate(&tx, &evidence)?;
+        let usage = workflow_usage(&tx, run_id)?;
+        if let Err(error) = plan.budgets.check(usage) {
+            evidence.status = CandidateStatus::Paused;
+            evidence.reason = Some(error.to_string());
+            evidence.finished_at = Some(now());
+            evidence.stage_started_at = None;
+            save_candidate(&tx, &evidence)?;
+            transition(
+                &tx,
+                run_id,
+                expected_revision,
+                RunState::Paused,
+                "candidate.budget_exhausted",
+                json!({"candidate_hash":hash,"reason":error.to_string(),"usage":usage}),
+            )?;
+            tx.commit()?;
+            return Ok(evidence);
+        }
         let implemented: bool = tx.query_row(
             "SELECT EXISTS(SELECT 1 FROM attempts WHERE id=?1 AND run_id=?2)",
             params![review.reviewer_session, run_id],
@@ -802,6 +829,25 @@ pub(crate) fn interrupt_candidates(tx: &Transaction<'_>) -> Result<()> {
         )?;
     }
     Ok(())
+}
+
+/// Raises the candidate's elapsed time to at least what its current stage has
+/// actually taken (whole seconds, rounded up), as restart recovery does.
+fn retain_live_elapsed(evidence: &mut CandidateEvidence) {
+    let Some(started) = evidence
+        .stage_started_at
+        .as_deref()
+        .and_then(|started| chrono::DateTime::parse_from_rfc3339(started).ok())
+    else {
+        return;
+    };
+    let millis = (chrono::Utc::now() - started.with_timezone(&chrono::Utc))
+        .num_milliseconds()
+        .max(0) as u64;
+    let live = evidence
+        .stage_start_elapsed_seconds
+        .saturating_add(millis.div_ceil(1000));
+    evidence.elapsed_seconds = evidence.elapsed_seconds.max(live);
 }
 
 fn require_headroom(plan: &PlanRevision, usage: BudgetUsage) -> Result<()> {

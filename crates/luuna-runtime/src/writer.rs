@@ -2048,6 +2048,11 @@ async fn writer_worker(state: AppState, job: WriterJob, mut cancel: watch::Recei
     };
     let mut writer_cost = 0u64;
     let mut session_usage = luuna_engine_pi::SessionUsage::default();
+    // Whether accepted model work may have spent more than Pi reported: set
+    // when the prompt is accepted, cleared when the run settles. An exit in
+    // between (a lost transport, a Pi exit, the deadline, cancellation)
+    // leaves the provider's spend unknown.
+    let in_flight = std::sync::atomic::AtomicBool::new(false);
     let operation = async {
         process
             .command("state-1", "get_state", json!({}))
@@ -2105,8 +2110,10 @@ async fn writer_worker(state: AppState, job: WriterJob, mut cancel: watch::Recei
                     return Err("prompt was handled without starting model work".to_owned());
                 }
                 accepted = true;
+                in_flight.store(true, std::sync::atomic::Ordering::Relaxed);
             }
             if record.kind == "extension_ui_request" {
+                in_flight.store(false, std::sync::atomic::Ordering::Relaxed);
                 return Err("writer requested interactive input; refused".to_owned());
             }
             if record.kind == "message_end" && record.raw["message"]["role"] == "assistant" {
@@ -2118,6 +2125,7 @@ async fn writer_worker(state: AppState, job: WriterJob, mut cancel: watch::Recei
                 }
             }
             if record.kind == "agent_settled" {
+                in_flight.store(false, std::sync::atomic::Ordering::Relaxed);
                 if !accepted {
                     return Err("model settled before prompt acknowledgement".to_owned());
                 }
@@ -2139,6 +2147,23 @@ async fn writer_worker(state: AppState, job: WriterJob, mut cancel: watch::Recei
     };
     // The child is stopped and reaped before any verdict is persisted.
     let stopped = process.stop().await;
+    // Unreported spend is reserved as restart recovery and the reviewer
+    // reserve it: the attempt is charged the rest of the approved cost budget,
+    // so no repair can spend what the provider may already have billed.
+    let unreported = !matches!(outcome, Outcome::Settled)
+        && in_flight.load(std::sync::atomic::Ordering::Relaxed);
+    if unreported {
+        writer_cost = writer_cost.max(
+            budgets
+                .cost_usd_micros
+                .saturating_sub(previous_usage.cost_usd_micros),
+        );
+    }
+    let reserve_note = if unreported {
+        "; Pi stopped before reporting its final usage, so the remaining approved cost budget is reserved"
+    } else {
+        ""
+    };
     let usage_now = |started: std::time::Instant| json!({"elapsed_seconds": charged_seconds(started.elapsed()).saturating_add(preparation_seconds), "cost_usd_micros": writer_cost, "attempt": job.attempt.number});
     let usage_json = usage_now(started);
     if let Err(error) = stopped {
@@ -2147,7 +2172,7 @@ async fn writer_worker(state: AppState, job: WriterJob, mut cancel: watch::Recei
             AttemptState::Failed,
             RunState::Failed,
             Some((&lease_id, LeaseState::Released, None)),
-            &format!("process cleanup failed: {error}"),
+            &format!("process cleanup failed: {error}{reserve_note}"),
             usage_json,
         );
         return;
@@ -2158,7 +2183,7 @@ async fn writer_worker(state: AppState, job: WriterJob, mut cancel: watch::Recei
             AttemptState::Cancelled,
             RunState::Cancelled,
             Some((&lease_id, LeaseState::Released, None)),
-            "cancelled before candidate judgement; worktree preserved",
+            &format!("cancelled before candidate judgement; worktree preserved{reserve_note}"),
             usage_json,
         );
         return;
@@ -2170,7 +2195,7 @@ async fn writer_worker(state: AppState, job: WriterJob, mut cancel: watch::Recei
                 AttemptState::Cancelled,
                 RunState::Cancelled,
                 Some((&lease_id, LeaseState::Released, None)),
-                "abort requested; Pi reaped, worktree preserved",
+                &format!("abort requested; Pi reaped, worktree preserved{reserve_note}"),
                 usage_json,
             );
             return;
@@ -2182,7 +2207,7 @@ async fn writer_worker(state: AppState, job: WriterJob, mut cancel: watch::Recei
                 RunState::Failed,
                 Some((&lease_id, LeaseState::Released, None)),
                 &format!(
-                    "budget exceeded: timeout_seconds {} elapsed; worktree preserved",
+                    "budget exceeded: timeout_seconds {} elapsed; worktree preserved{reserve_note}",
                     budgets.timeout_seconds
                 ),
                 usage_json,
@@ -2195,7 +2220,7 @@ async fn writer_worker(state: AppState, job: WriterJob, mut cancel: watch::Recei
                 AttemptState::Failed,
                 RunState::Failed,
                 Some((&lease_id, LeaseState::Released, None)),
-                &format!("{reason}; worktree preserved"),
+                &format!("{reason}; worktree preserved{reserve_note}"),
                 usage_json,
             );
             return;
