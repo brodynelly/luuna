@@ -448,7 +448,7 @@ record("the developer checkout was still untouched once every process of the run
 const sameMetadata = checkoutAfter.git_metadata_digest.startsWith("sha256:") && checkoutAfter.git_metadata_digest === evidence.environment?.git_metadata_digest;
 const sameIgnored = checkoutAfter.ignored_digest.startsWith("sha256:") && checkoutAfter.ignored_digest === evidence.environment?.ignored_digest;
 const sameObjects = checkoutAfter.git_objects_digest.startsWith("sha256:") && checkoutAfter.git_objects_digest === evidence.environment?.git_objects_digest;
-record("the Luuna checkout was still the recorded revision, clean, with the same build inputs, Git metadata, history and ignored files once every process of the run had stopped", checkoutAfter.git_revision === evidence.environment?.git_revision && checkoutAfter.git_dirty === false && checkoutAfter.build_identity === evidence.environment?.expected_build_identity && sameMetadata && sameObjects && sameIgnored, `revision ${checkoutAfter.git_revision}, ${checkoutAfter.git_dirty === false ? "clean" : checkoutAfter.git_dirty === null ? "status unknown" : `modified: ${checkoutAfter.git_dirty_paths}`}, build inputs ${checkoutAfter.build_identity === evidence.environment?.expected_build_identity ? "unchanged" : "changed"}, Git metadata (config, HEAD, refs, reflogs, hooks, info, alternates) ${sameMetadata ? "unchanged" : "changed or unreadable"}, objects reachable from every ref ${sameObjects ? "unchanged and intact (fsck --full)" : "changed, corrupt or unreadable"}, ignored files outside target/node_modules/dist ${sameIgnored ? `unchanged (${checkoutAfter.ignored_files})` : "changed or unreadable"}`);
+record("the Luuna checkout was still the recorded revision, clean, with the same build inputs, Git metadata, history and ignored files once every process of the run had stopped", checkoutAfter.git_revision === evidence.environment?.git_revision && checkoutAfter.git_dirty === false && checkoutAfter.build_identity === evidence.environment?.expected_build_identity && sameMetadata && sameObjects && sameIgnored, `revision ${checkoutAfter.git_revision}, ${checkoutAfter.git_dirty === false ? "clean" : checkoutAfter.git_dirty === null ? "status unknown" : `modified: ${checkoutAfter.git_dirty_paths}`}, build inputs ${checkoutAfter.build_identity === evidence.environment?.expected_build_identity ? "unchanged" : "changed"}, Git metadata (config, HEAD, refs, reflogs, hooks, info, alternates, index) ${sameMetadata ? "unchanged" : "changed or unreadable"}, objects reachable from every ref ${sameObjects ? "unchanged and intact (fsck --full)" : "changed, corrupt or unreadable"}, ignored files outside target/node_modules/dist ${sameIgnored ? `unchanged (${checkoutAfter.ignored_files})` : "changed or unreadable"}`);
 // Containment is required on every platform: without a subreaper (macOS, Windows) a detached
 // descendant of a check could keep writing under the output tree after the scan, so the check
 // fails there and the scan below is marked untrusted rather than accepted.
@@ -648,7 +648,9 @@ function git(cwd, ...args) {
   // Built from the host-tool allowlist: no credential of any kind (a provider key, a GitHub
   // token, a password, an authenticated proxy URL) reaches Git or anything it could execute.
   const env = toolEnv();
-  Object.assign(env, { GIT_CONFIG_NOSYSTEM: "1", GIT_CONFIG_GLOBAL: devNull, GIT_TEMPLATE_DIR: noHooks, GIT_AUTHOR_NAME: "Fixture", GIT_AUTHOR_EMAIL: "fixture@example.invalid", GIT_COMMITTER_NAME: "Fixture", GIT_COMMITTER_EMAIL: "fixture@example.invalid" });
+  // GIT_OPTIONAL_LOCKS=0: `git status` does not refresh and rewrite the index, so the harness's
+  // own commands leave the index bytes it snapshots unchanged.
+  Object.assign(env, { GIT_OPTIONAL_LOCKS: "0", GIT_CONFIG_NOSYSTEM: "1", GIT_CONFIG_GLOBAL: devNull, GIT_TEMPLATE_DIR: noHooks, GIT_AUTHOR_NAME: "Fixture", GIT_AUTHOR_EMAIL: "fixture@example.invalid", GIT_COMMITTER_NAME: "Fixture", GIT_COMMITTER_EMAIL: "fixture@example.invalid" });
   const config = ["-c", `core.hooksPath=${noHooks}`, "-c", "core.fsmonitor=false", "-c", "commit.gpgsign=false"];
   try {
     return execFileSync("git", ["-C", cwd, ...config, ...args], { encoding: "utf8", env, timeout: GIT_TIMEOUT_MS, killSignal: "SIGKILL", maxBuffer: 64 * 1024 * 1024 }).trim();
@@ -1217,7 +1219,10 @@ function checkoutState() {
   // index and logs are left out: Git itself rewrites them.
   try {
     const gitDir = git(repository, "rev-parse", "--absolute-git-dir");
-    state.git_metadata_digest = pathsDigest(gitDir, ["config", "HEAD", "packed-refs", "info", "hooks", "refs", "logs", "objects/info", "shallow"]);
+    // The index too (with any split-index files): resolve-undo, cache-tree and stat data a check
+    // could rewrite while status and the index flags stay the same.
+    const sharedIndexes = readdirSync(gitDir).filter((name) => name.startsWith("sharedindex."));
+    state.git_metadata_digest = pathsDigest(gitDir, ["config", "HEAD", "packed-refs", "info", "hooks", "refs", "logs", "objects/info", "shallow", "index", ...sharedIndexes]);
   } catch (error) { state.git_metadata_digest = `unavailable: ${error.message}`; }
   // History itself: every object reachable from any ref (other branches and tags included, not
   // only what the checkout shows) and every stored object is listed, and a full fsck verifies each
@@ -1517,7 +1522,8 @@ function buildIdentity() {
  * The credential parts of every URL userinfo, raw and percent-decoded, as the runtime's repair
  * feedback treats them: `user:password` and `password`, and a credential-length user name whether
  * alone, with an empty password or beside a password (`http://access-token@proxy`); short names
- * such as `git@` are not.
+ * such as `git@` are not. From the query and fragment, the credential-length value of every
+ * parameter whose name is credential-shaped (`?access_key=…`, `#token=…`, `&sig=…`).
  */
 function urlCredentials(text) {
   const found = [];
@@ -1533,7 +1539,25 @@ function urlCredentials(text) {
       if (decoded !== form) found.push(decoded);
     }
   }
+  for (const match of String(text).matchAll(/:\/\/[^\s"'?#]*([?#][^\s"']*)/g)) {
+    for (const pair of match[1].slice(1).split(/[&;#?]/)) {
+      const at = pair.indexOf("=");
+      if (at < 0) continue;
+      const value = pair.slice(at + 1);
+      if (value.length < 8 || !credentialParameter(pair.slice(0, at))) continue;
+      found.push(value);
+      const decoded = percentDecode(value);
+      if (decoded !== value) found.push(decoded);
+    }
+  }
   return found;
+}
+
+/** The executor's credential-shaped variable names, applied to a URL parameter name, plus `key`, `sig` and `signature`. */
+function credentialParameter(name) {
+  const upper = percentDecode(name).toUpperCase().replaceAll("-", "_");
+  const markers = ["API_KEY", "APIKEY", "TOKEN", "SECRET", "PASSWORD", "PASSWD", "CREDENTIAL", "PRIVATE_KEY", "AUTH", "JWT", "PASSPHRASE", "BEARER", "COOKIE", "SESSION_KEY", "ACCESS_KEY"];
+  return upper.startsWith("LUUNA_") || upper.startsWith("GIT_") || markers.some((marker) => upper.includes(marker)) || upper.endsWith("_KEY") || upper.includes("_KEY_") || upper.endsWith("_KEYS") || upper === "KEY" || upper === "SIG" || upper.includes("SIGNATURE");
 }
 
 /** Decodes each valid `%XX` escape on its own and keeps any other byte, as the runtime's redactor does. */

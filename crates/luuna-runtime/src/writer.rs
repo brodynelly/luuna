@@ -1204,11 +1204,14 @@ fn inherited_url_credentials(
 /// it is at least this long; shorter names (`git@`) are ordinary user names.
 const MIN_USERNAME_CREDENTIAL: usize = 8;
 
-/// The credential parts of every URL userinfo in `text`: `user:password` and
-/// `password` when a password is present, and the user name whenever it is
-/// credential-length (alone, with an empty password, or beside a password,
-/// since a token can be the user part). Each is also returned
-/// percent-decoded, as a client would print it.
+/// The credential parts of every URL in `text`: from the userinfo,
+/// `user:password` and `password` when a password is present, and the user
+/// name whenever it is credential-length (alone, with an empty password, or
+/// beside a password, since a token can be the user part); from the query and
+/// fragment, the credential-length value of every parameter whose name is
+/// credential-shaped (`?access_key=…`, `#token=…`, `&sig=…`). Each is also
+/// returned percent-decoded, as a client would print it. A credential embedded
+/// in a URL path has no recognisable shape and is not found.
 fn url_credentials(text: &str) -> Vec<String> {
     let mut found = Vec::new();
     let mut rest = text;
@@ -1238,9 +1241,38 @@ fn url_credentials(text: &str) -> Vec<String> {
                 }
             }
         }
+        // The rest of the URL, up to the first character that ends it.
+        let tail = &authority[end..];
+        let url_end = tail
+            .find(|c: char| c.is_whitespace() || c == '"' || c == '\'')
+            .unwrap_or(tail.len());
+        if let Some(start) = tail[..url_end].find(['?', '#']) {
+            for pair in tail[start + 1..url_end].split(['&', ';', '#', '?']) {
+                let Some((name, value)) = pair.split_once('=') else {
+                    continue;
+                };
+                if value.len() >= MIN_USERNAME_CREDENTIAL && credential_parameter(name) {
+                    found.push(value.to_owned());
+                    let decoded = percent_decode(value);
+                    if decoded != value {
+                        found.push(decoded);
+                    }
+                }
+            }
+        }
         rest = &authority[end..];
     }
     found
+}
+
+/// Whether a URL query or fragment parameter name looks like it carries a
+/// credential: any name the executor treats as credential-shaped, plus the
+/// bare `key`, `sig` and `signature` names signed URLs use.
+fn credential_parameter(name: &str) -> bool {
+    let upper = percent_decode(name).to_ascii_uppercase().replace('-', "_");
+    luuna_executor::is_secret_or_reserved(&upper)
+        || matches!(upper.as_str(), "KEY" | "SIG")
+        || upper.contains("SIGNATURE")
 }
 
 const MAX_GUARD_WRITERS: usize = 4;
@@ -2870,6 +2902,30 @@ mod redaction_tests {
         // An ordinary short user name is not a credential.
         assert!(url_credentials("https://git@github.com/x").is_empty());
         assert!(!url_credentials("http://bob:hunter22@h").contains(&"bob".to_owned()));
+    }
+
+    #[test]
+    fn credential_query_and_fragment_parameters_are_known() {
+        let known = url_credentials(
+            "DATABASE_URL=https://db.example/app?sslmode=require&access_key=AKIAexample123 hook=https://h.example/x#token=frag-secret-value&page=12345678",
+        );
+        assert!(known.contains(&"AKIAexample123".to_owned()), "{known:?}");
+        assert!(known.contains(&"frag-secret-value".to_owned()), "{known:?}");
+        // Ordinary parameters and short values are not credentials.
+        assert!(
+            !known
+                .iter()
+                .any(|value| value == "require" || value == "12345678"),
+            "{known:?}"
+        );
+        let signed = url_credentials(
+            "https://s3.example/o?X-Amz-Signature=abcdef0123456789&sig=Zm9vYmFyYmF6",
+        );
+        assert!(
+            signed.contains(&"abcdef0123456789".to_owned()),
+            "{signed:?}"
+        );
+        assert!(signed.contains(&"Zm9vYmFyYmF6".to_owned()), "{signed:?}");
     }
 
     #[test]
