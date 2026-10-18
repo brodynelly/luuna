@@ -672,6 +672,11 @@ async fn pipeline(
         let _ = process.stop().await;
         return Err("cannot persist reviewer startup".into());
     }
+    // Whether accepted model work may have spent more than Pi reported: true
+    // from the prompt's acceptance until a record that settles or ends the
+    // turn. A transport loss, a Pi exit, the deadline or cancellation in that
+    // window leaves the provider's spend unknown.
+    let in_flight = std::sync::atomic::AtomicBool::new(false);
     let operation = async {
         process
             .command("state-1", "get_state", json!({}))
@@ -705,11 +710,14 @@ async fn pipeline(
                     return Err("reviewer prompt rejected or handled without model work".into());
                 }
                 accepted = true;
+                in_flight.store(true, std::sync::atomic::Ordering::Relaxed);
             }
             if let Some(error) = record.model_error() {
+                in_flight.store(false, std::sync::atomic::Ordering::Relaxed);
                 return Err(error);
             }
             if record.kind == "extension_ui_request" {
+                in_flight.store(false, std::sync::atomic::Ordering::Relaxed);
                 return Err("reviewer requested unsupported interactive input".into());
             }
             if record.kind == "message_end" {
@@ -721,6 +729,7 @@ async fn pipeline(
                 }
             }
             if record.kind == "agent_settled" {
+                in_flight.store(false, std::sync::atomic::Ordering::Relaxed);
                 if !accepted || record.raw["aborted"] == true {
                     return Err("reviewer settled without accepted successful work".into());
                 }
@@ -733,6 +742,27 @@ async fn pipeline(
         .stop()
         .await
         .map_err(|e| format!("reviewer cleanup failed: {e}"));
+    // Unreported spend is reserved as restart recovery reserves it: the rest of
+    // the approved cost budget is charged, so no repair or re-validation can
+    // spend what the provider may already have billed.
+    if result.is_err() && in_flight.load(std::sync::atomic::Ordering::Relaxed) {
+        let usage = state
+            .store
+            .lock()
+            .map_err(|e| e.to_string())?
+            .workflow_usage(id)
+            .map_err(|e| e.to_string())?;
+        charge(
+            plan.budgets
+                .cost_usd_micros
+                .saturating_sub(usage.cost_usd_micros),
+        )?;
+        let reason = result.as_ref().err().cloned().unwrap_or_default();
+        stopped?;
+        return Err(format!(
+            "{reason}; reviewer stopped before reporting its final usage, so the remaining approved cost budget is reserved"
+        ));
+    }
     charge(0)?;
     stopped?;
     if *cancel.borrow() {
@@ -771,8 +801,9 @@ async fn pipeline(
     Ok(())
     }
     .await;
-    if outcome.is_err() {
-        let _ = charge(0);
-    }
+    // Every terminal path is charged, a validation that ends with failed or
+    // blocked checks (which returns Ok) included: the final verification and
+    // persistence after the last charge spent approved time too.
+    let _ = charge(0);
     outcome
 }

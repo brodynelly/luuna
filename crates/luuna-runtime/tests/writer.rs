@@ -1292,6 +1292,46 @@ async fn cancelling_candidate_review_preserves_candidate_checks_and_consumed_att
 }
 
 #[tokio::test]
+async fn a_reviewer_lost_mid_turn_reserves_the_unreported_spend() {
+    let harness = Harness::new();
+    let repo = tempfile::tempdir().unwrap();
+    ready(&harness, repo.path()).await;
+    let (id, _) = harness
+        .approved(repo.path(), "review_crash", json!({"max_attempts":1}))
+        .await;
+    assert_eq!(harness.implement(&id).await.0, StatusCode::ACCEPTED);
+    harness.settled(&id).await;
+    let initial = harness.candidate(&id).await;
+    let hash = &initial["evidence"]["candidate"]["hash"];
+    assert_eq!(
+        harness.candidate_action(&id, "validate", hash).await.0,
+        StatusCode::ACCEPTED
+    );
+    let failed = harness.candidate_settled(&id).await;
+    assert_eq!(failed["evidence"]["status"], "failed", "{failed}");
+    assert!(
+        failed["evidence"]["reason"]
+            .as_str()
+            .unwrap_or_default()
+            .contains("remaining approved cost budget is reserved"),
+        "{failed}"
+    );
+    let store = luuna_storage::Store::open(harness.root.join("luuna.sqlite3")).unwrap();
+    assert_eq!(
+        store.workflow_usage(&id).unwrap().cost_usd_micros,
+        1_000_000
+    );
+    // The reserved spend leaves no headroom: neither a repair nor another
+    // validation may spend what the provider may already have billed.
+    let (status, response) = harness.candidate_action(&id, "repair", hash).await;
+    assert_ne!(status, StatusCode::ACCEPTED, "{response}");
+    assert_ne!(
+        harness.candidate_action(&id, "validate", hash).await.0,
+        StatusCode::ACCEPTED
+    );
+}
+
+#[tokio::test]
 async fn restart_during_review_preserves_candidate_and_reserves_unknown_provider_spend() {
     let harness = Harness::new();
     let repo = tempfile::tempdir().unwrap();

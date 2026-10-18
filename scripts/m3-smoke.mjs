@@ -759,7 +759,7 @@ async function approvedCandidate(name) {
   };
   const view = await api("GET", `/runs/${summary.run_id}/candidate`);
   const candidate = view.body?.evidence?.candidate ?? null;
-  summary.candidate_r1 = candidate ? { revision: candidate.revision, hash: candidate.hash, commits: candidate.commits ?? candidate.commit ?? null, plan_hash: candidate.plan_hash } : null;
+  summary.candidate_r1 = candidate ? { revision: candidate.revision, hash: candidate.hash, commits: candidate.repository_commits ?? null, plan_hash: candidate.plan_hash } : null;
   record(`${name}: writer settled in validating with a frozen candidate bound to the approved plan`, settled.state === "validating" && candidate?.revision === 1 && candidate?.plan_hash === plan.hash && view.body?.evidence?.status === "pending", `state=${settled.state} revision=${candidate?.revision} status=${view.body?.evidence?.status}${summary.writer.failure_reason ? ` reason=${truncate(summary.writer.failure_reason, 160)}` : ""}`);
   if (settled.state !== "validating" || !candidate) throw new Error(`no candidate to validate: state ${settled.state}`);
   return { summary, plan, view: view.body };

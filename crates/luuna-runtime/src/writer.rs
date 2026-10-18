@@ -1880,12 +1880,19 @@ async fn writer_worker(state: AppState, job: WriterJob, mut cancel: watch::Recei
     }
     let lease_id = lease.id.clone();
     let root = PathBuf::from(&job.registration.local_path);
-    match tokio::time::timeout_at(
-        deadline,
-        state.git.add_detached_worktree(&root, &worktree, &base),
-    )
-    .await
-    {
+    // Worktree creation yields to cancellation as well as the deadline.
+    let created = tokio::select! {
+        biased;
+        _ = cancel.changed() => {
+            settle(&state, AttemptState::Cancelled, RunState::Cancelled, Some((&lease_id, LeaseState::Released, None)), "cancelled during worktree creation", spent(started));
+            return;
+        }
+        created = tokio::time::timeout_at(
+            deadline,
+            state.git.add_detached_worktree(&root, &worktree, &base),
+        ) => created,
+    };
+    match created {
         Ok(Ok(())) => {}
         Ok(Err(error)) => {
             settle(

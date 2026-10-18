@@ -75,6 +75,10 @@ def run_reviewer(request_id, kind, message):
               "event": "tool_call", "error": "synthetic scope guard failure"})
     if scenario == "review_hold":
         time.sleep(60)
+    if scenario == "review_crash":
+        # Accepted model work that never reports its usage: the process exits
+        # mid-turn, as a lost transport or a crashed Pi would.
+        sys.exit(9)
     review = {"schema_version": "0.1", "id": "review-fixture",
               "candidate_hash": payload.get("candidate_hash"),
               "reviewer_session": payload.get("reviewer_session"),
