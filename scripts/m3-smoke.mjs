@@ -370,6 +370,13 @@ let startingRuntime = null;
 const piTreeChangedAfter = [];
 
 try {
+  // Cargo runs the checkout's build scripts and whatever its config names, with host permissions
+  // and the network environment, so nothing is built until the checkout is the clean recorded
+  // revision and no Cargo config file declares an override.
+  const preBuild = checkoutState();
+  const preBuildOverrides = cargoConfigOverrides();
+  evidence.pre_build = { git_revision: preBuild.git_revision, git_dirty: preBuild.git_dirty, git_dirty_paths: preBuild.git_dirty_paths, cargo_config_overrides: preBuildOverrides };
+  if (preBuild.git_dirty !== false || preBuildOverrides.length > 0) throw new Error(`the checkout is not the clean recorded revision (${preBuild.git_dirty === null ? "status unknown" : preBuild.git_dirty ? `modified: ${preBuild.git_dirty_paths}` : "clean"}) or a Cargo config file declares an override (${preBuildOverrides.join(", ") || "none"}); nothing was built or run`);
   evidence.runtime_build = buildRuntime();
   evidence.subreaper = process.platform === "linux" ? { interpreter: process.env.LUUNA_M3_REAPER_PYTHON ?? "unknown", pid: process.ppid } : null;
   evidence.environment = environment();
@@ -1271,26 +1278,7 @@ function environment() {
   }
   info.provider_credentials_present = CREDENTIAL_NAMES.filter((name) => process.env[name] !== undefined || process.env[`LUUNA_PI_${name}`] !== undefined).map((name) => process.env[`LUUNA_PI_${name}`] !== undefined ? `LUUNA_PI_${name} (alias)` : name);
   try { info.runtime_binary_sha256 = createHash("sha256").update(readFileSync(runtimeBinary)).digest("hex"); } catch { info.runtime_binary_sha256 = "unknown"; }
-  // The Cargo config files Cargo reads for this workspace, checked now as well as by build.rs at
-  // build time: `paths`, `[patch]` and source `replace-with` substitute dependencies, `[profile]`
-  // changes compiled behavior, and `include` pulls in config that is not read here.
-  info.cargo_dependency_overrides = (() => {
-    const candidates = [];
-    for (let dir = repository; ; dir = path.dirname(dir)) {
-      candidates.push(path.join(dir, ".cargo", "config"), path.join(dir, ".cargo", "config.toml"));
-      if (path.dirname(dir) === dir) break;
-    }
-    const home = process.env.CARGO_HOME ?? (process.env.HOME ? path.join(process.env.HOME, ".cargo") : null);
-    if (home) candidates.push(path.join(home, "config"), path.join(home, "config.toml"));
-    return candidates.filter((file) => {
-      let text;
-      try { text = readFileSync(file, "utf8"); } catch { return false; }
-      // The same lexical, fail-closed rule as build.rs: any of these names as a whole key token
-      // anywhere (table header, dotted, inline or quoted key, or a mere mention), or any
-      // backslash, since an escape in a quoted key can spell any name.
-      return text.includes("\\") || /(?<![A-Za-z0-9_-])(paths|include|replace-with|patch|profile|rustc|linker|env)(?![A-Za-z0-9_-])/.test(text);
-    });
-  })();
+  info.cargo_dependency_overrides = cargoConfigOverrides();
   // Bind the binary to the recorded revision by content: the runtime reports the digest its
   // build script computed over every build input, which must equal the digest of the inputs in
   // this checkout, and those inputs must equal the recorded revision (no modified or untracked
@@ -1464,6 +1452,30 @@ function pinnedRustcSha256(pinned) {
 }
 
 /** The digest `crates/luuna-runtime/build.rs` embeds: SHA-256 over `path\0sha256(content)\n` for every build input, sorted by path. */
+/**
+ * The Cargo config files Cargo reads for this workspace that declare an override: `paths`,
+ * `[patch]` and source `replace-with` substitute dependencies, `[profile]` changes compiled
+ * behavior, `include` pulls in config that is not read here, and `rustc`, `linker` or `env` change
+ * what the build runs. Checked before the build as well as by build.rs at build time.
+ */
+function cargoConfigOverrides() {
+  const candidates = [];
+  for (let dir = repository; ; dir = path.dirname(dir)) {
+    candidates.push(path.join(dir, ".cargo", "config"), path.join(dir, ".cargo", "config.toml"));
+    if (path.dirname(dir) === dir) break;
+  }
+  const home = process.env.CARGO_HOME ?? (process.env.HOME ? path.join(process.env.HOME, ".cargo") : null);
+  if (home) candidates.push(path.join(home, "config"), path.join(home, "config.toml"));
+  return candidates.filter((file) => {
+    let text;
+    try { text = readFileSync(file, "utf8"); } catch { return false; }
+    // The same lexical, fail-closed rule as build.rs: any of these names as a whole key token
+    // anywhere (table header, dotted, inline or quoted key, or a mere mention), or any
+    // backslash, since an escape in a quoted key can spell any name.
+    return text.includes("\\") || /(?<![A-Za-z0-9_-])(paths|include|replace-with|patch|profile|rustc|linker|env)(?![A-Za-z0-9_-])/.test(text);
+  });
+}
+
 function buildIdentity() {
   // As in build.rs, a symlinked or special build input cannot be bound by content: the digest
   // is refused, so the identity check fails closed.

@@ -458,7 +458,7 @@ async fn pipeline(
     let started = Instant::now();
     let mut charged_seconds = 0;
     let mut charge = |cost: u64| -> Result<(), String> {
-        let seconds = started.elapsed().as_secs();
+        let seconds = crate::writer::charged_seconds(started.elapsed());
         let usage = state
             .store
             .lock()

@@ -800,9 +800,17 @@ async fn repair_feedback(
     );
     // Verify the final text: JSON escaping, clipping marks or the delimiters
     // must not reproduce a configured value either.
-    let spent = started.elapsed();
-    let charged = spent.as_secs() + u64::from(spent.subsec_nanos() > 0);
-    (Some(scrub_remaining(prompt, &secrets)), charged)
+    (
+        Some(scrub_remaining(prompt, &secrets)),
+        charged_seconds(started.elapsed()),
+    )
+}
+
+/// Elapsed time as charged against an approved budget: whole seconds, rounded
+/// up, so time below a second is never dropped from durable usage (and a
+/// deadline derived from that usage never grants it again).
+pub(crate) fn charged_seconds(elapsed: Duration) -> u64 {
+    elapsed.as_secs() + u64::from(elapsed.subsec_nanos() > 0)
 }
 
 /// Wall-clock bound on reading the quoted artifacts after the repair is claimed.
@@ -1159,7 +1167,28 @@ fn known_secrets(state: &AppState) -> Vec<String> {
     // judges it when deciding what checks inherit, so every inherited value is
     // considered; a value is read lossily too, keeping its valid credential text.
     secrets.extend(inherited_url_credentials(std::env::vars_os()));
+    // Checks do not inherit credential-shaped variables, but a check can still
+    // read one from elsewhere (a file, its own configuration); every such value
+    // of credential length is redacted as an exact value too.
+    secrets.extend(secret_shaped_values(std::env::vars_os()));
     secrets
+}
+
+/// The values of every credential-shaped variable checks are not given, of at
+/// least `MIN_USERNAME_CREDENTIAL` characters (shorter values such as `1`
+/// would redact ordinary output).
+fn secret_shaped_values(
+    vars: impl Iterator<Item = (std::ffi::OsString, std::ffi::OsString)>,
+) -> Vec<String> {
+    vars.filter(|(name, _)| {
+        let name = name.to_string_lossy();
+        luuna_executor::is_secret_or_reserved(&name)
+            && !name.to_ascii_uppercase().starts_with("LUUNA_")
+            && !name.to_ascii_uppercase().starts_with("GIT_")
+    })
+    .map(|(_, value)| value.to_string_lossy().into_owned())
+    .filter(|value| value.len() >= MIN_USERNAME_CREDENTIAL)
+    .collect()
 }
 
 /// The URL credentials of every variable a check inherits.
@@ -1797,7 +1826,7 @@ async fn writer_worker(state: AppState, job: WriterJob, mut cancel: watch::Recei
     // Every exit from here on charges the time it took, whatever the reason:
     // a startup step that fails slowly (a Git command at its own timeout, say)
     // spent approved time as surely as one that ran into the deadline.
-    let spent = |started: std::time::Instant| json!({"elapsed_seconds": started.elapsed().as_secs().saturating_add(preparation_seconds)});
+    let spent = |started: std::time::Instant| json!({"elapsed_seconds": charged_seconds(started.elapsed()).saturating_add(preparation_seconds)});
     let startup_exceeded = |started: std::time::Instant| {
         (
             format!(
@@ -2054,7 +2083,7 @@ async fn writer_worker(state: AppState, job: WriterJob, mut cancel: watch::Recei
             usage.elapsed_seconds = previous_usage
                 .elapsed_seconds
                 .saturating_add(preparation_seconds)
-                .saturating_add(started.elapsed().as_secs());
+                .saturating_add(charged_seconds(started.elapsed()));
             if let Err(error) = budgets.check(usage) {
                 return Err(error.to_string());
             }
@@ -2103,7 +2132,7 @@ async fn writer_worker(state: AppState, job: WriterJob, mut cancel: watch::Recei
     };
     // The child is stopped and reaped before any verdict is persisted.
     let stopped = process.stop().await;
-    let usage_now = |started: std::time::Instant| json!({"elapsed_seconds": started.elapsed().as_secs().saturating_add(preparation_seconds), "cost_usd_micros": writer_cost, "attempt": job.attempt.number});
+    let usage_now = |started: std::time::Instant| json!({"elapsed_seconds": charged_seconds(started.elapsed()).saturating_add(preparation_seconds), "cost_usd_micros": writer_cost, "attempt": job.attempt.number});
     let usage_json = usage_now(started);
     if let Err(error) = stopped {
         settle(
@@ -2769,6 +2798,22 @@ mod redaction_tests {
         assert!(
             view.contains("\"recipe_id\":\"check0\"") && view.contains("\"exit_code\":1"),
             "{view}"
+        );
+    }
+
+    #[test]
+    fn credential_shaped_values_are_known_but_short_or_reserved_ones_are_not() {
+        let vars = [
+            ("CI_JOB_JWT", "eyJhbGciOiJIUzI1NiJ9.payload.signature"),
+            ("STRIPE_KEY", "short"),
+            ("LUUNA_PI_COMMAND", "/usr/local/bin/pi-launcher"),
+            ("PATH", "/usr/bin:/bin:/usr/local/sbin"),
+        ]
+        .map(|(name, value)| (name.into(), value.into()));
+        let known = secret_shaped_values(vars.into_iter());
+        assert_eq!(
+            known,
+            vec!["eyJhbGciOiJIUzI1NiJ9.payload.signature".to_owned()]
         );
     }
 
