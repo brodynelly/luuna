@@ -1,0 +1,155 @@
+/*
+ * Components layer. The tone indirection below is the only place that maps a tone name to
+ * colours; every toned component reads --tone-fg, --tone-bg, --tone-border and --tone-mark,
+ * and only from an element that carries data-tone itself (custom properties inherit, so an
+ * untoned element must never read them).
+ */
+[data-tone="success"] { --tone-fg: var(--tone-success-fg); --tone-bg: var(--tone-success-bg); --tone-border: var(--tone-success-border); --tone-mark: var(--tone-success-mark); }
+[data-tone="active"] { --tone-fg: var(--tone-active-fg); --tone-bg: var(--tone-active-bg); --tone-border: var(--tone-active-border); --tone-mark: var(--tone-active-mark); }
+[data-tone="danger"] { --tone-fg: var(--tone-danger-fg); --tone-bg: var(--tone-danger-bg); --tone-border: var(--tone-danger-border); --tone-mark: var(--tone-danger-mark); }
+[data-tone="attention"] { --tone-fg: var(--tone-attention-fg); --tone-bg: var(--tone-attention-bg); --tone-border: var(--tone-attention-border); --tone-mark: var(--tone-attention-mark); }
+[data-tone="neutral"] { --tone-fg: var(--tone-neutral-fg); --tone-bg: var(--tone-neutral-bg); --tone-border: var(--tone-neutral-border); --tone-mark: var(--tone-neutral-mark); }
+[data-tone="interrupted"] { --tone-fg: var(--tone-interrupted-fg); --tone-bg: var(--tone-interrupted-bg); --tone-border: var(--tone-interrupted-border); --tone-mark: var(--tone-interrupted-mark); }
+
+/* Skip link: the first Tab stop, visible only while focused. */
+.skip-link {
+  position: absolute;
+  top: var(--space-2);
+  left: var(--space-4);
+  z-index: 100;
+  padding: var(--space-2) var(--space-3);
+  border-radius: var(--radius-md);
+  background: var(--color-accent);
+  color: var(--color-on-accent);
+  font-size: var(--text-sm);
+  font-weight: var(--weight-strong);
+  text-decoration: none;
+  transform: translateY(-300%);
+}
+.skip-link:focus { transform: none; }
+
+/* Typographic helpers. */
+.eyebrow { color: var(--color-accent); font-size: var(--text-2xs); font-weight: var(--weight-strong); letter-spacing: var(--tracking-wide); text-transform: uppercase; }
+.scope { max-width: var(--measure); margin: 0 0 var(--space-4); color: var(--color-text-muted); font-size: var(--text-xs); }
+
+/* Button variants. */
+button.primary { border-color: var(--color-accent); background: var(--color-accent); color: var(--color-on-accent); }
+button.primary:hover:not(:disabled) { border-color: var(--color-accent-hover); background: var(--color-accent-hover); }
+button.danger { min-height: var(--control-height-sm); padding: 0 var(--control-pad-x-sm); border-color: var(--tone-danger-border); background: var(--tone-danger-bg); color: var(--tone-danger-fg); font-size: var(--text-xs); }
+button.danger:hover:not(:disabled) { border-color: var(--tone-danger-mark); background: var(--tone-danger-bg); }
+button.text-button { min-height: var(--control-height-sm); padding: 0 var(--space-1); border-color: transparent; background: transparent; color: var(--color-accent); font-size: var(--text-xs); }
+button.text-button:hover:not(:disabled) { background: transparent; text-decoration: underline; }
+button.primary:disabled, button.danger:disabled, button.text-button:disabled { border-color: var(--color-border); background: var(--color-control); color: var(--color-text-disabled); }
+button.text-button:disabled { border-color: transparent; background: transparent; }
+
+/* Panel and subpanel. A panel is a section or aside labelled by its heading. */
+.panel { min-width: 0; padding: var(--panel-pad); border: var(--border-width) solid var(--color-border); border-radius: var(--radius-lg); background: var(--color-surface); box-shadow: var(--shadow-panel); }
+.panel-heading { display: flex; flex-wrap: wrap; align-items: center; gap: var(--space-2) var(--space-3); margin-bottom: var(--space-4); }
+.panel-heading > :is(h2, h3) { min-width: 0; margin-right: auto; }
+.subpanel { display: grid; grid-template-columns: minmax(0, 1fr); gap: var(--space-3); min-width: 0; padding-top: var(--space-4); border-top: var(--border-width) solid var(--color-border); }
+
+/* Status badge (.state): the runtime's value as text; data-tone adds colour and a shape. */
+.state {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-1-5);
+  max-width: 100%;
+  padding: 0 var(--space-1-5);
+  border: var(--border-width) solid var(--color-border);
+  border-radius: var(--radius-sm);
+  background: transparent;
+  color: var(--color-text-muted);
+  font-size: var(--text-2xs);
+  font-weight: var(--weight-medium);
+  line-height: var(--leading);
+  overflow-wrap: anywhere;
+}
+.state[data-tone] { border-color: var(--tone-border); background: var(--tone-bg); color: var(--tone-fg); }
+.state[data-tone]::before { content: ""; flex: none; width: var(--mark-size); height: var(--mark-size); border-radius: var(--radius-full); background: var(--tone-mark); }
+.state[data-tone="active"]::before { border: var(--mark-stroke) solid var(--tone-mark); background: transparent; }
+.state[data-tone="danger"]::before { border-radius: 0; transform: rotate(45deg) scale(0.85); }
+.state[data-tone="attention"]::before { border-radius: 0; clip-path: polygon(50% 0, 100% 100%, 0 100%); }
+.state[data-tone="neutral"]::before { height: var(--mark-stroke); }
+.state[data-tone="interrupted"]::before { border: var(--mark-stroke) dashed var(--tone-mark); background: transparent; }
+.tag { display: inline-flex; align-items: center; padding: var(--space-0-5) var(--space-1-5); border: var(--border-width) solid var(--color-border); border-radius: var(--radius-sm); color: var(--color-text-muted); font-size: var(--text-2xs); font-weight: var(--weight-medium); overflow-wrap: anywhere; }
+
+/* Facts: a definition list of exact, full identities. */
+.facts { display: grid; gap: var(--space-2); margin: 0; font-size: var(--text-xs); }
+.facts > div { display: grid; grid-template-columns: var(--facts-term) minmax(0, 1fr); gap: var(--space-3); }
+.facts dt { color: var(--color-text-muted); }
+.facts dd { min-width: 0; margin: 0; color: var(--color-text); font-variant-numeric: tabular-nums; overflow-wrap: anywhere; }
+
+/* Records: bordered rows in a list (baselines, recipes, tickets, checks, findings). */
+.record-list { display: grid; gap: var(--space-2); min-width: 0; margin: 0; padding: 0; list-style: none; }
+.record { display: grid; grid-template-columns: minmax(0, 1fr); gap: var(--space-1-5); min-width: 0; padding: var(--space-3); border: var(--border-width) solid var(--color-border); border-radius: var(--radius-md); background: var(--color-surface-raised); font-size: var(--text-xs); }
+.record .record { background: var(--color-surface); }
+.record > .state { justify-self: start; }
+.record[data-tone] { border-left: var(--rule-width) solid var(--tone-mark); }
+
+/* Action row: at most one .primary; a .danger sits at the end. */
+.actions { display: flex; flex-wrap: wrap; align-items: center; gap: var(--space-2); min-width: 0; }
+.actions > small { flex-basis: 100%; }
+.actions > button.danger { margin-left: auto; }
+
+/* Form anatomy. */
+.form-footer { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: var(--space-3) var(--space-4); margin-top: var(--space-1); }
+.form-footer > small { flex: 1 1 var(--hint-min); color: var(--color-text-muted); }
+.field-row { display: grid; grid-template-columns: repeat(auto-fit, minmax(min(100%, var(--field-min)), 1fr)); align-items: end; gap: var(--space-3); }
+.field-row > small { grid-column: 1 / -1; }
+
+/* Selectable card: a full-width toggle button in a list (runs, projects). */
+button.run-card { display: grid; justify-content: stretch; justify-items: start; gap: var(--space-2); width: 100%; min-height: 0; padding: var(--space-3) var(--space-2); border-color: transparent; background: transparent; color: var(--color-text); font-size: var(--text-xs); font-weight: var(--weight-regular); text-align: left; }
+button.run-card:hover:not(:disabled) { background: var(--color-surface-raised); }
+button.run-card.selected, button.run-card[aria-pressed="true"] { border-color: var(--color-selected-border); background: var(--color-selected); box-shadow: inset var(--rule-width) 0 0 var(--color-accent); }
+.run-prompt { display: -webkit-box; overflow: hidden; -webkit-box-orient: vertical; -webkit-line-clamp: 2; color: var(--color-text); overflow-wrap: anywhere; }
+.run-meta { display: flex; flex-wrap: wrap; align-items: center; gap: var(--space-1-5) var(--space-2); color: var(--color-text-subtle); font-size: var(--text-2xs); font-variant-numeric: tabular-nums; }
+
+/* Notes: a recorded reason in the tone of the state it explains, then the next step. */
+.failure-note { margin: 0; color: var(--tone-danger-fg); font-size: var(--text-xs); overflow-wrap: anywhere; }
+.failure-note[data-tone] { color: var(--tone-fg); }
+.recovery-note { display: block; margin: 0; padding-left: var(--space-2); border-left: var(--rule-width) solid var(--color-accent); color: var(--color-text); font-size: var(--text-xs); }
+.failure-note .recovery-note { margin-top: var(--space-1); }
+.callout { margin: 0; padding: var(--space-2) var(--space-3); border: var(--border-width) solid var(--color-border); border-left: var(--rule-width) solid var(--color-border-control); border-radius: var(--radius-md); background: var(--color-surface-raised); color: var(--color-text); font-size: var(--text-xs); overflow-wrap: anywhere; }
+.callout[data-tone] { border-color: var(--tone-border); border-left-color: var(--tone-mark); background: var(--tone-bg); color: var(--tone-fg); }
+
+/* Alert banner: a refused action or failed load; always dismissible. */
+.error { display: flex; align-items: center; justify-content: space-between; gap: var(--space-4); margin: 0 0 var(--space-4); padding: var(--space-2) var(--space-2) var(--space-2) var(--space-4); border: var(--border-width) solid var(--tone-danger-border); border-left: var(--rule-width) solid var(--tone-danger-mark); border-radius: var(--radius-md); background: var(--tone-danger-bg); color: var(--tone-danger-fg); font-size: var(--text-xs); overflow-wrap: anywhere; }
+.error button.text-button { flex: none; color: inherit; text-decoration: underline; }
+
+/* Disclosure: a CSS caret, never text, so it adds nothing to the accessible name. */
+summary { display: flex; align-items: baseline; gap: var(--space-2); padding: var(--space-1-5) var(--space-1); border-radius: var(--radius-sm); color: var(--color-text); font-size: var(--text-xs); list-style: none; cursor: pointer; overflow-wrap: anywhere; }
+summary::-webkit-details-marker { display: none; }
+summary::before { content: ""; flex: none; align-self: center; width: 0; height: 0; border-style: solid; border-width: var(--caret-size) 0 var(--caret-size) var(--caret-length); border-color: transparent transparent transparent currentColor; transition: transform var(--duration-fast) var(--ease); }
+details[open] > summary::before { transform: rotate(90deg); }
+summary:hover { background: var(--color-surface-raised); }
+details > :not(summary) { margin-top: var(--space-2); }
+
+/* Scroll regions: labelled, focusable, bounded. Only these may scroll. */
+ol.events, pre[aria-label] { max-height: var(--scroll-max); overflow: auto; overscroll-behavior: contain; border: var(--border-width) solid var(--color-border); border-radius: var(--radius-md); background: var(--color-surface-sunken); scrollbar-color: var(--color-border-control) transparent; }
+ol.events:focus-visible, pre[aria-label]:focus-visible { outline-offset: var(--focus-inset); }
+
+/* Event list. */
+ol.events { margin: 0; padding: 0; list-style: none; }
+ol.events > li { border-bottom: var(--border-width) solid var(--color-border); }
+ol.events > li:last-child { border-bottom: 0; }
+ol.events summary { padding: var(--space-2) var(--space-3); border-radius: 0; font-family: var(--font-mono); }
+ol.events summary:hover { background: var(--color-surface); }
+ol.events details > pre { margin: 0 var(--space-3) var(--space-3); border: var(--border-width) solid var(--color-border); background: var(--color-surface); }
+.event-number { min-width: var(--number-width); color: var(--color-text-subtle); font-variant-numeric: tabular-nums; text-align: right; }
+ol.events summary time { margin-left: auto; color: var(--color-text-subtle); font-family: var(--font-sans); font-size: var(--text-2xs); font-variant-numeric: tabular-nums; }
+
+/* Empty states. */
+.empty { margin: 0; padding: var(--space-3) var(--space-2); color: var(--color-text-muted); font-size: var(--text-xs); }
+.activity-empty { display: flex; flex-direction: column; align-items: center; justify-content: center; gap: var(--space-2); min-height: var(--empty-min); text-align: center; }
+.activity-empty > span { color: var(--color-border-control); font-size: var(--text-glyph); line-height: var(--leading-none); }
+.activity-empty > p { color: var(--color-text-muted); font-size: var(--text-sm); }
+
+@media (max-width: 680px) {
+  .facts > div { grid-template-columns: minmax(0, 1fr); gap: var(--space-0-5); }
+}
+
+@media (forced-colors: active) {
+  .state[data-tone]::before { forced-color-adjust: none; background: CanvasText; border-color: CanvasText; }
+  .state[data-tone="active"]::before, .state[data-tone="interrupted"]::before { background: transparent; }
+  button.run-card[aria-pressed="true"] { outline: var(--focus-width) solid Highlight; }
+}

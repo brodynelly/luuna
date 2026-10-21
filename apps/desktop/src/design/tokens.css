@@ -1,0 +1,212 @@
+/*
+ * Luuna design tokens: the only stylesheet that may contain literal colours, lengths or durations.
+ * Dark is the default look; the light block redefines every colour for prefers-color-scheme: light.
+ * Reference: docs/DESIGN-SYSTEM.md. Before changing anything here:
+ *   1. A new colour role is defined in both schemes and added to the contrast pairs in
+ *      design/design-system.test.ts (text 4.5:1, marks, borders and focus 3:1).
+ *   2. Green (the success tone) is earned: passed evidence and a live connection only.
+ *   3. Run npm test, npm run typecheck and npm run build with Node 24.19.0, then
+ *      node scripts/mvp-ui-smoke.mjs (contrast in both schemes, 760 px width), and report each.
+ */
+:root {
+  color-scheme: dark;
+
+  /* Surfaces: page, panel, record, inset, controls, selection and dividers. */
+  --color-bg: #101216;
+  --color-surface: #191d24;
+  --color-surface-raised: #20252e;
+  --color-surface-sunken: #0d1014;
+  --color-control: #262c36;
+  --color-control-hover: #353c47;
+  --color-selected: #262e40;
+  --color-selected-border: #435579;
+  --color-border: #303640;
+  --color-border-control: #6e788a;
+
+  /* Text. Disabled text is exempt from contrast (WCAG 1.4.3 inactive components). */
+  --color-text: #e9edf4;
+  --color-text-muted: #a7b0bf;
+  --color-text-subtle: #8f9aac;
+  --color-text-disabled: #7a8494;
+
+  /* Developer action and brand: the lavender of the icon. */
+  --color-accent: #b7c8fb;
+  --color-accent-hover: #d1dcff;
+  --color-on-accent: #101216;
+  --color-focus: #c3d1ff;
+
+  /* Outcome tones: text (fg), tint (bg), edge (border) and shape (mark). */
+  --tone-success-fg: #9ed9b9;
+  --tone-success-bg: #1b3a2e;
+  --tone-success-border: #2f5c48;
+  --tone-success-mark: #6fcf9d;
+  --tone-active-fg: #8fd8f2;
+  --tone-active-bg: #173845;
+  --tone-active-border: #275a6e;
+  --tone-active-mark: #5cc4e8;
+  --tone-danger-fg: #f4b9c3;
+  --tone-danger-bg: #472a32;
+  --tone-danger-border: #6b3c46;
+  --tone-danger-mark: #f08a9b;
+  --tone-attention-fg: #f0d9a8;
+  --tone-attention-bg: #3a2f19;
+  --tone-attention-border: #5a4a2e;
+  --tone-attention-mark: #e8c26a;
+  --tone-neutral-fg: #c8d1df;
+  --tone-neutral-bg: #2c323c;
+  --tone-neutral-border: #414a57;
+  --tone-neutral-mark: #8f9aac;
+  --tone-interrupted-fg: #e2c0f2;
+  --tone-interrupted-bg: #3a2742;
+  --tone-interrupted-border: #57406a;
+  --tone-interrupted-mark: #c99ae6;
+
+  /* Elevation: borders carry structure in the dark scheme. */
+  --shadow-panel: none;
+
+  /* Type. System fonts only: the Tauri CSP loads nothing from outside the bundle. */
+  --font-sans: system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
+  --font-mono: ui-monospace, "SFMono-Regular", "SF Mono", Menlo, Consolas, "Liberation Mono", monospace;
+  --text-2xs: 11px;
+  --text-xs: 12px;
+  --text-sm: 13px;
+  --text-md: 14px;
+  --text-lg: 16px;
+  --text-xl: clamp(26px, 3.2vw, 34px);
+  --text-wordmark: 22px;
+  --text-glyph: 34px;
+  --leading-none: 1;
+  --leading-tight: 1.25;
+  --leading: 1.5;
+  --leading-code: 1.55;
+  --leading-prose: 1.65;
+  --weight-regular: 400;
+  --weight-medium: 550;
+  --weight-strong: 650;
+  --tracking-tight: -0.025em;
+  --tracking-wide: 0.12em;
+
+  /* Space: a 4 px rhythm with two half steps. */
+  --space-0-5: 2px;
+  --space-1: 4px;
+  --space-1-5: 6px;
+  --space-2: 8px;
+  --space-3: 12px;
+  --space-4: 16px;
+  --space-5: 24px;
+  --space-6: 32px;
+  --space-7: 48px;
+
+  /* Shape. */
+  --radius-sm: 4px;
+  --radius-md: 7px;
+  --radius-lg: 11px;
+  --radius-full: 999px;
+  --border-width: 1px;
+  --rule-width: 3px;
+  --focus-width: 2px;
+  --focus-offset: 2px;
+  --focus-inset: -2px;
+  --mark-size: 8px;
+  --mark-stroke: 2px;
+  --caret-size: 4px;
+  --caret-length: 6px;
+
+  /* Controls and layout. */
+  --control-height: 34px;
+  --control-height-sm: 28px;
+  --control-pad-x: 14px;
+  --control-pad-x-sm: 10px;
+  --checkbox-size: 16px;
+  --app-min-width: 360px;
+  --layout-max: 1280px;
+  --gutter: 40px;
+  --section-gap: 24px;
+  --panel-pad: 22px;
+  --topbar-height: 64px;
+  --aside-width: 286px;
+  --rail-width: 300px;
+  --facts-term: 150px;
+  --field-min: 14rem;
+  --hint-min: 16rem;
+  --measure: 72ch;
+  --number-width: 3ch;
+  --scroll-max: 28rem;
+  --plan-max: 24rem;
+  --empty-min: 168px;
+
+  /* Motion: state changes only; evidence never pulses. */
+  --duration-fast: 120ms;
+  --ease: ease-out;
+}
+
+@media (prefers-color-scheme: light) {
+  :root {
+    color-scheme: light;
+    --color-bg: #f5f6f9;
+    --color-surface: #ffffff;
+    --color-surface-raised: #f0f2f6;
+    --color-surface-sunken: #eef1f5;
+    --color-control: #eef1f5;
+    --color-control-hover: #e2e6ee;
+    --color-selected: #e8ecf8;
+    --color-selected-border: #8c9bc4;
+    --color-border: #d3d9e2;
+    --color-border-control: #7d8697;
+    --color-text: #191d24;
+    --color-text-muted: #4a5363;
+    --color-text-subtle: #5c6576;
+    --color-text-disabled: #7d8697;
+    --color-accent: #3f5385;
+    --color-accent-hover: #34466f;
+    --color-on-accent: #ffffff;
+    --color-focus: #3f5385;
+    --tone-success-fg: #17603e;
+    --tone-success-bg: #e2f3e9;
+    --tone-success-border: #a6d6bb;
+    --tone-success-mark: #1f7a4f;
+    --tone-active-fg: #0b5c78;
+    --tone-active-bg: #e0f3fa;
+    --tone-active-border: #9fd3e6;
+    --tone-active-mark: #127a9e;
+    --tone-danger-fg: #a12538;
+    --tone-danger-bg: #fbe7ea;
+    --tone-danger-border: #e8b1ba;
+    --tone-danger-mark: #c02f46;
+    --tone-attention-fg: #7a5300;
+    --tone-attention-bg: #faf0d6;
+    --tone-attention-border: #e3cc8f;
+    --tone-attention-mark: #9a6a00;
+    --tone-neutral-fg: #465062;
+    --tone-neutral-bg: #eaedf2;
+    --tone-neutral-border: #c9d0db;
+    --tone-neutral-mark: #6b7486;
+    --tone-interrupted-fg: #74358a;
+    --tone-interrupted-bg: #f4e7f8;
+    --tone-interrupted-border: #d9b6e5;
+    --tone-interrupted-mark: #8b45a3;
+    --shadow-panel: 0 1px 2px rgba(25, 29, 36, 0.06), 0 1px 1px rgba(25, 29, 36, 0.04);
+  }
+}
+
+@media (max-width: 920px) {
+  :root {
+    --gutter: 24px;
+    --section-gap: 16px;
+    --panel-pad: 18px;
+    --aside-width: 220px;
+  }
+}
+
+@media (max-width: 680px) {
+  :root {
+    --gutter: 16px;
+    --topbar-height: 56px;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  :root {
+    --duration-fast: 0ms;
+  }
+}
