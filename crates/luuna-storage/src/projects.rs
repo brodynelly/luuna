@@ -3,10 +3,13 @@
 //!
 //! The manifest is machine-independent and hashed; local paths and observed
 //! commits live only in this private registry. Confirmation re-checks the
-//! registered identity and the expected revision inside one transaction.
-use crate::{append_envelope, now, Result, StorageError, Store};
+//! registered identity and the expected revision inside one transaction. A
+//! checkout is registered at most once, and only an explicit rebind changes
+//! where a registered repository lives or which identity it carries.
+use crate::{append_envelope, now, state_json, Result, StorageError, Store};
 use luuna_domain::{
-    valid_project_id, Discovery, EventEnvelope, ProjectManifest, RepositoryObservation,
+    remotes_equivalent, valid_project_id, Discovery, EventEnvelope, ProjectManifest,
+    RepositoryObservation, RunState,
 };
 use rusqlite::{params, Connection, OptionalExtension, Transaction, TransactionBehavior};
 use serde::{Deserialize, Serialize};
@@ -89,6 +92,15 @@ impl Store {
         if get_project(&tx, id)?.is_some() {
             return Err(StorageError::AlreadyExists(id.into()));
         }
+        for (_, observation) in repositories {
+            if let Some((project, repository)) = registration_at(&tx, &observation.local_path)? {
+                return Err(StorageError::Invalid(already_registered(
+                    &observation.local_path,
+                    &project,
+                    &repository,
+                )));
+            }
+        }
         tx.execute(
             "INSERT INTO projects(id,name,revision,manifest_hash,created_at,updated_at) VALUES (?1,?2,0,NULL,?3,?3)",
             params![id, name, now],
@@ -143,6 +155,112 @@ impl Store {
 
     pub fn repositories(&self, project_id: &str) -> Result<Vec<RepositoryRegistration>> {
         repositories(&self.connection, project_id)
+    }
+
+    /// The project and repository IDs registered at exactly this local path.
+    pub fn registration_at_path(&self, local_path: &str) -> Result<Option<(String, String)>> {
+        registration_at(&self.connection, local_path)
+    }
+
+    /// Runs of the project whose work may be executing in a registered checkout
+    /// (a queued or running baseline, an exploring or implementing workflow).
+    pub fn active_checkout_runs(&self, project_id: &str) -> Result<Vec<String>> {
+        let states = [
+            RunState::Queued,
+            RunState::Running,
+            RunState::Exploring,
+            RunState::Implementing,
+        ]
+        .into_iter()
+        .map(state_json)
+        .collect::<Result<Vec<_>>>()?;
+        let mut statement = self.connection.prepare(
+            "SELECT id FROM runs WHERE project_id=?1 AND state IN (?2,?3,?4,?5) ORDER BY created_at,id",
+        )?;
+        let rows = statement.query_map(
+            params![project_id, states[0], states[1], states[2], states[3]],
+            |row| row.get::<_, String>(0),
+        )?;
+        rows.map(|row| row.map_err(Into::into)).collect()
+    }
+
+    /// Explicitly re-point a registered repository at a checkout and identity
+    /// observed now. Nothing changes and `None` is returned when the path and
+    /// identity are already the registered ones; otherwise the registration is
+    /// replaced and a `repository.rebound` event records the old and new
+    /// bindings. The manifest is untouched: a confirmed manifest whose remote no
+    /// longer matches must be confirmed again (confirmation enforces the match),
+    /// and base commits, baselines and approvals stay bound to exact commits.
+    pub fn rebind_repository(
+        &mut self,
+        project_id: &str,
+        repository_id: &str,
+        observation: &RepositoryObservation,
+    ) -> Result<Option<EventEnvelope>> {
+        observation.validate()?;
+        let tx = self
+            .connection
+            .transaction_with_behavior(TransactionBehavior::Immediate)?;
+        get_project(&tx, project_id)?.ok_or_else(|| StorageError::NotFound(project_id.into()))?;
+        let previous = repositories(&tx, project_id)?
+            .into_iter()
+            .find(|r| r.repository_id == repository_id)
+            .ok_or_else(|| StorageError::NotFound(repository_id.into()))?;
+        if let Some((project, repository)) = registration_at(&tx, &observation.local_path)? {
+            if project != project_id || repository != repository_id {
+                return Err(StorageError::Invalid(already_registered(
+                    &observation.local_path,
+                    &project,
+                    &repository,
+                )));
+            }
+        }
+        if previous.local_path == observation.local_path
+            && previous.observation.identity == observation.identity
+        {
+            return Ok(None);
+        }
+        // Without a remote, a manifest carries an explicit local: identity.
+        let manifest_remote_matches = current_manifest(&tx, project_id)?.map(|manifest| {
+            manifest
+                .repositories
+                .iter()
+                .find(|r| r.id == repository_id)
+                .is_some_and(|r| match &observation.identity.remote {
+                    Some(remote) => remotes_equivalent(&r.remote, remote),
+                    None => r.remote.starts_with("local:"),
+                })
+        });
+        tx.execute(
+            "UPDATE repositories SET local_path=?1,observation=?2,registered_at=?3 WHERE project_id=?4 AND id=?5",
+            params![
+                observation.local_path,
+                serde_json::to_string(observation)?,
+                now(),
+                project_id,
+                repository_id
+            ],
+        )?;
+        let event = append_project_event(
+            &tx,
+            project_id,
+            "repository.rebound",
+            json!({
+                "repository_id": repository_id,
+                "old": {
+                    "local_path": previous.local_path,
+                    "identity": previous.observation.identity,
+                },
+                "new": {
+                    "local_path": observation.local_path,
+                    "identity": observation.identity,
+                },
+                "observation": observation,
+                "manifest_remote_matches": manifest_remote_matches,
+            }),
+        )?;
+        tx.commit()?;
+        Ok(Some(event))
     }
 
     /// Persist a proposal. It is evidence for the developer, not a confirmation.
@@ -209,6 +327,26 @@ impl Store {
         manifest: &ProjectManifest,
         observations: &BTreeMap<String, RepositoryObservation>,
     ) -> Result<ProjectRecord> {
+        self.confirm_manifest_with_remote_branches(
+            project_id,
+            expected_revision,
+            manifest,
+            observations,
+            &BTreeMap::new(),
+        )
+    }
+
+    /// [`Store::confirm_manifest`], where `remote_branches` additionally lists,
+    /// per repository, default-branch names observed as `origin/<name>`
+    /// remote-tracking branches (a fresh clone has only its HEAD branch locally).
+    pub fn confirm_manifest_with_remote_branches(
+        &mut self,
+        project_id: &str,
+        expected_revision: u64,
+        manifest: &ProjectManifest,
+        observations: &BTreeMap<String, RepositoryObservation>,
+        remote_branches: &BTreeMap<String, BTreeSet<String>>,
+    ) -> Result<ProjectRecord> {
         manifest.validate()?;
         if manifest.id != project_id {
             return Err(StorageError::Invalid(
@@ -262,7 +400,7 @@ impl Store {
                 .identity
                 .matches(&observed.identity)?;
             match &observed.identity.remote {
-                Some(remote) if &repository.remote != remote => {
+                Some(remote) if !remotes_equivalent(&repository.remote, remote) => {
                     return Err(StorageError::Invalid(format!(
                         "repository {} remote {} does not match the observed origin",
                         repository.id, repository.remote
@@ -276,9 +414,12 @@ impl Store {
                 }
                 _ => {}
             }
-            if !observed.has_branch(&repository.default_branch) {
+            let remote_tracking = remote_branches
+                .get(&repository.id)
+                .is_some_and(|names| names.contains(&repository.default_branch));
+            if !observed.has_branch(&repository.default_branch) && !remote_tracking {
                 return Err(StorageError::Invalid(format!(
-                    "default branch {} is not a local or origin branch of repository {}",
+                    "default branch {} is not the current branch, a local branch, origin's HEAD or an origin/<branch> remote-tracking branch of repository {}",
                     repository.default_branch, repository.id
                 )));
             }
@@ -375,16 +516,61 @@ impl Store {
         project_id: &str,
         cursor: u64,
     ) -> Result<Vec<EventEnvelope>> {
+        self.project_events_page(project_id, cursor, None)
+    }
+
+    /// Events after `cursor`, oldest first, at most `limit` of them. A cursor
+    /// beyond any SQLite sequence is past every event, so the page is empty.
+    pub fn project_events_page(
+        &self,
+        project_id: &str,
+        cursor: u64,
+        limit: Option<u64>,
+    ) -> Result<Vec<EventEnvelope>> {
         if self.get_project(project_id)?.is_none() {
             return Err(StorageError::NotFound(project_id.into()));
         }
+        let cursor = i64::try_from(cursor).unwrap_or(i64::MAX);
+        // SQLite treats a negative LIMIT as no limit.
+        let limit = limit.map_or(-1, |limit| i64::try_from(limit).unwrap_or(i64::MAX));
         let mut statement = self.connection.prepare(
-            "SELECT envelope FROM project_events WHERE project_id=?1 AND sequence>?2 ORDER BY sequence",
+            "SELECT envelope FROM project_events WHERE project_id=?1 AND sequence>?2 ORDER BY sequence LIMIT ?3",
         )?;
-        let rows =
-            statement.query_map(params![project_id, cursor], |row| row.get::<_, String>(0))?;
+        let rows = statement.query_map(params![project_id, cursor, limit], |row| {
+            row.get::<_, String>(0)
+        })?;
         rows.map(|row| Ok(serde_json::from_str(&row?)?)).collect()
     }
+}
+
+fn already_registered(local_path: &str, project_id: &str, repository_id: &str) -> String {
+    format!(
+        "checkout {local_path} is already registered as repository {repository_id} of project {project_id}; use that project, or rebind that repository to another checkout first"
+    )
+}
+
+fn registration_at(connection: &Connection, local_path: &str) -> Result<Option<(String, String)>> {
+    connection
+        .query_row(
+            "SELECT project_id,id FROM repositories WHERE local_path=?1 ORDER BY project_id,id LIMIT 1",
+            [local_path],
+            |r| Ok((r.get(0)?, r.get(1)?)),
+        )
+        .optional()
+        .map_err(Into::into)
+}
+
+fn current_manifest(connection: &Connection, project_id: &str) -> Result<Option<ProjectManifest>> {
+    let payload: Option<String> = connection
+        .query_row(
+            "SELECT m.payload FROM manifest_revisions m JOIN projects p ON p.id=m.project_id AND p.revision=m.revision WHERE p.id=?1",
+            [project_id],
+            |r| r.get(0),
+        )
+        .optional()?;
+    payload
+        .map(|value| serde_json::from_str(&value).map_err(Into::into))
+        .transpose()
 }
 
 pub(crate) fn get_project_in(connection: &Connection, id: &str) -> Result<Option<ProjectRecord>> {
@@ -466,4 +652,127 @@ pub(crate) fn append_project_event(
         ],
     )?;
     Ok(event)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use luuna_domain::{DirtyState, RepositoryIdentity};
+
+    fn observation(path: &str, remote: &str) -> RepositoryObservation {
+        RepositoryObservation {
+            local_path: path.into(),
+            identity: RepositoryIdentity {
+                remote: Some(remote.into()),
+                push_remote: None,
+                root_commits: vec!["1".repeat(40)],
+                shallow: false,
+            },
+            head_commit: "2".repeat(40),
+            branch: Some("main".into()),
+            remote_default_branch: None,
+            local_branches: vec!["main".into()],
+            dirty: DirtyState::default(),
+            git_version: "git version 2.43.0".into(),
+            observed_at: "2026-10-21T00:00:00.000Z".into(),
+        }
+    }
+
+    #[test]
+    fn a_checkout_has_one_registration_and_rebinds_are_explicit_and_evented() {
+        let mut store = Store::open(":memory:").unwrap();
+        let remote = "https://example.invalid/app.git";
+        store
+            .register_project(
+                "first",
+                "First",
+                &[("app".into(), observation("/srv/app", remote))],
+            )
+            .unwrap();
+        assert!(matches!(
+            store.register_project(
+                "second",
+                "Second",
+                &[("app".into(), observation("/srv/app", remote))]
+            ),
+            Err(StorageError::Invalid(detail)) if detail.contains("project first")
+        ));
+        assert!(store.get_project("second").unwrap().is_none());
+        store
+            .register_project(
+                "second",
+                "Second",
+                &[("api".into(), observation("/srv/api", remote))],
+            )
+            .unwrap();
+        assert_eq!(
+            store.registration_at_path("/srv/app").unwrap(),
+            Some(("first".into(), "app".into()))
+        );
+        // Unchanged path and identity: nothing is recorded.
+        assert!(store
+            .rebind_repository("first", "app", &observation("/srv/app", remote))
+            .unwrap()
+            .is_none());
+        assert!(matches!(
+            store.rebind_repository("first", "app", &observation("/srv/api", remote)),
+            Err(StorageError::Invalid(_))
+        ));
+        assert!(matches!(
+            store.rebind_repository("first", "web", &observation("/srv/web", remote)),
+            Err(StorageError::NotFound(_))
+        ));
+        let event = store
+            .rebind_repository(
+                "first",
+                "app",
+                &observation("/srv/moved", "git@example.invalid:app.git"),
+            )
+            .unwrap()
+            .expect("a changed binding is recorded");
+        assert_eq!(event.event_type, "repository.rebound");
+        assert_eq!(event.payload["old"]["local_path"], "/srv/app");
+        assert_eq!(event.payload["new"]["local_path"], "/srv/moved");
+        assert_eq!(
+            event.payload["new"]["identity"]["remote"],
+            "git@example.invalid:app.git"
+        );
+        let registration = &store.repositories("first").unwrap()[0];
+        assert_eq!(registration.local_path, "/srv/moved");
+        assert_eq!(store.registration_at_path("/srv/app").unwrap(), None);
+    }
+
+    #[test]
+    fn event_pages_are_bounded_and_active_checkout_runs_are_listed() {
+        let mut store = Store::open(":memory:").unwrap();
+        store
+            .register_project(
+                "fixture",
+                "Fixture",
+                &[(
+                    "app".into(),
+                    observation("/srv/app", "https://example.invalid/app.git"),
+                )],
+            )
+            .unwrap();
+        assert_eq!(store.project_events_after("fixture", 0).unwrap().len(), 2);
+        assert!(store
+            .project_events_page("fixture", u64::MAX, None)
+            .unwrap()
+            .is_empty());
+        let page = store.project_events_page("fixture", 0, Some(1)).unwrap();
+        assert_eq!(page.len(), 1);
+        assert_eq!(page[0].event_type, "project.registered");
+        assert!(store.active_checkout_runs("fixture").unwrap().is_empty());
+        store
+            .create_run("baseline-1", "fixture", json!({"kind":"baseline"}))
+            .unwrap();
+        store
+            .create_workflow_run("workflow-1", "fixture", json!({}))
+            .unwrap();
+        assert_eq!(
+            store.active_checkout_runs("fixture").unwrap(),
+            vec!["baseline-1".to_owned()]
+        );
+    }
 }

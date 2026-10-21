@@ -53,15 +53,25 @@ require `Authorization: Bearer <token>`:
   repositories, the current confirmed manifest and the latest discovery.
 - `POST /api/v1/projects`: `{ "id"?: "slug", "name": "...", "repositories": [{ "id": "app", "path": "/abs/root" }] }`
   inspects each repository root read-only (identity, HEAD, branch, dirty state) and registers it.
-  Non-repositories, nested paths, bare or unborn repositories are rejected with 422.
+  Non-repositories, nested paths, bare or unborn repositories are rejected with 422, as are a
+  repository inside `LUUNA_DATA_DIR` and one that contains it; a checkout already registered by
+  any project is rejected with 409. Git's own refusals (for example dubious ownership) are reported.
 - `POST /api/v1/projects/{id}/discover`: re-observes the registered repositories and records a
   proposed manifest with per-recipe evidence, confidence and open questions. It reads manifest
-  files only; it never runs a repository script.
+  files only; it never runs a repository script. Evidence from files with uncommitted changes is
+  only `inferred`.
 - `PUT /api/v1/projects/{id}/manifest`: `{ "expected_revision": n, "manifest": {...} }` confirms
-  revision `n+1` after re-checking identity, remote and default branch, and records the exact
-  HEAD commit per repository as the base. Stale revisions and changed identities return 409.
-- `GET /api/v1/projects/{id}/events?after=0`: durable project stream (`run_id` is
-  `project:{id}`); `manifest.confirmed` carries the complete manifest for replay.
+  revision `n+1` after re-checking identity, remote (by equivalence) and default branch (current,
+  local, origin's HEAD or an `origin/<name>` remote-tracking branch), and records the exact HEAD
+  commit per repository as the base. Stale revisions and changed identities return 409.
+- `POST /api/v1/projects/{id}/repositories/{repository_id}/rebind`: `{ "local_path"?: "/abs/root" }`
+  explicitly re-points a registered repository at the checkout now at that path (default: the
+  registered path), records `repository.rebound` with the old and new identity, and returns the
+  project. It is the recovery every identity-mismatch error names; it is refused (409) while a
+  run of the project is queued, running, exploring or implementing.
+- `GET /api/v1/projects/{id}/events?after=0&limit=100`: durable project stream (`run_id` is
+  `project:{id}`); `manifest.confirmed` carries the complete manifest for replay. `limit`
+  (1..=10000) is optional; a cursor above 9223372036854775807 is a 400.
 
 - `POST /api/v1/projects/{id}/baselines`: `{ "repository_id": "app", "include_optional": false }`
   starts a baseline run (202) that executes the confirmed required recipes for that

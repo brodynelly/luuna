@@ -301,6 +301,10 @@ pub fn router(state: AppState) -> Router {
         .route("/api/v1/projects/{id}", get(projects::get_project))
         .route("/api/v1/projects/{id}/discover", post(projects::discover))
         .route(
+            "/api/v1/projects/{id}/repositories/{repository_id}/rebind",
+            post(projects::rebind_repository),
+        )
+        .route(
             "/api/v1/projects/{id}/manifest",
             axum::routing::put(projects::confirm_manifest),
         )

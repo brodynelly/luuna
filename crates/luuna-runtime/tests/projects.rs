@@ -24,8 +24,10 @@ struct Harness {
 }
 impl Harness {
     fn new() -> Self {
-        let root =
-            std::env::temp_dir().join(format!("luuna-projects-test-{}", uuid::Uuid::new_v4()));
+        Self::at(std::env::temp_dir().join(format!("luuna-projects-test-{}", uuid::Uuid::new_v4())))
+    }
+    /// A runtime whose data directory is `root`.
+    fn at(root: PathBuf) -> Self {
         let state = AppState::open(configuration(root.clone())).unwrap();
         Self {
             app: router(state.clone()),
@@ -422,11 +424,19 @@ async fn invalid_mismatched_and_unauthenticated_imports_are_rejected() {
         .await;
     let proposed = discovery["proposed_manifest"].clone();
 
-    // A different history at the registered path (new root commit) is a mismatch,
-    // not a silent re-bind. An orphan branch avoids deleting read-only Git objects.
+    // A checked-out orphan branch (gh-pages style) adds a root commit; while a
+    // local branch still reaches the registered root it is the same repository.
     git(repo.path(), &["checkout", "-q", "--orphan", "replacement"]);
     git(repo.path(), &["add", "."]);
     git(repo.path(), &["commit", "-q", "-m", "replacement history"]);
+    let (status, body) = harness
+        .request("POST", "/api/v1/projects/fixture/discover", None, true)
+        .await;
+    assert_eq!(status, StatusCode::CREATED, "{body}");
+    // Once nothing local reaches the registered root, a different history sits at
+    // the registered path: a mismatch that names the explicit rebind, never a
+    // silent re-bind. An orphan branch avoids deleting read-only Git objects.
+    git(repo.path(), &["branch", "-q", "-D", "main"]);
     let (status, body) = harness
         .request(
             "PUT",
@@ -436,7 +446,13 @@ async fn invalid_mismatched_and_unauthenticated_imports_are_rejected() {
         )
         .await;
     assert_eq!(status, StatusCode::CONFLICT, "{body}");
-    assert!(body["error"].as_str().unwrap().contains("identity changed"));
+    let error = body["error"].as_str().unwrap();
+    assert!(error.contains("identity changed"), "{error}");
+    assert!(
+        error.contains("POST /api/v1/projects/fixture/repositories/app/rebind"),
+        "{error}"
+    );
+    assert!(!error.contains("re-register"), "{error}");
     assert_eq!(
         harness
             .request("POST", "/api/v1/projects/fixture/discover", None, true)
@@ -597,4 +613,443 @@ async fn real_repository_import_leaves_index_and_status_untouched() {
         "import must not rewrite the Git index"
     );
     assert_eq!(git(&checkout, &["rev-parse", "HEAD"]), head_before);
+}
+
+fn events(value: &Value) -> Vec<Value> {
+    value.as_array().cloned().unwrap_or_default()
+}
+
+#[tokio::test]
+async fn an_explicit_rebind_recovers_a_changed_remote_or_a_moved_checkout() {
+    let harness = Harness::new();
+    let parent = tempfile::tempdir().unwrap();
+    let repo = parent.path().join("checkout");
+    fs::create_dir(&repo).unwrap();
+    synthetic_repository(&repo);
+    git(&repo, &["commit", "-q", "-am", "commit developer work"]);
+    let (status, view) = harness
+        .request(
+            "POST",
+            "/api/v1/projects",
+            Some(register_body("fixture", &repo)),
+            true,
+        )
+        .await;
+    assert_eq!(status, StatusCode::CREATED, "{view}");
+
+    // History that gains a root (a subtree-style merge of unrelated history) and
+    // an equivalent spelling of the same remote are still the registered repository.
+    git(&repo, &["checkout", "-q", "--orphan", "vendor"]);
+    git(&repo, &["rm", "-q", "-r", "--cached", "."]);
+    fs::write(repo.join("vendored.txt"), "vendored\n").unwrap();
+    git(&repo, &["add", "vendored.txt"]);
+    git(&repo, &["commit", "-q", "-m", "vendor"]);
+    git(&repo, &["checkout", "-q", "-f", "main"]);
+    git(
+        &repo,
+        &[
+            "merge",
+            "-q",
+            "--allow-unrelated-histories",
+            "-m",
+            "merge vendor",
+            "vendor",
+        ],
+    );
+    git(&repo, &["branch", "-q", "-D", "vendor"]);
+    git(
+        &repo,
+        &[
+            "remote",
+            "set-url",
+            "origin",
+            "https://EXAMPLE.invalid/fixture/",
+        ],
+    );
+    let (status, body) = harness
+        .request("POST", "/api/v1/projects/fixture/discover", None, true)
+        .await;
+    assert_eq!(status, StatusCode::CREATED, "{body}");
+
+    // A different transport is a changed identity; the error names the recovery.
+    git(
+        &repo,
+        &[
+            "remote",
+            "set-url",
+            "origin",
+            "git@example.invalid:fixture.git",
+        ],
+    );
+    let (status, body) = harness
+        .request("POST", "/api/v1/projects/fixture/discover", None, true)
+        .await;
+    assert_eq!(status, StatusCode::CONFLICT, "{body}");
+    assert!(
+        body["error"].as_str().unwrap().contains(
+            "rebind the repository with POST /api/v1/projects/fixture/repositories/app/rebind"
+        ),
+        "{body}"
+    );
+
+    let rebind = "/api/v1/projects/fixture/repositories/app/rebind";
+    assert_eq!(
+        harness
+            .request("POST", rebind, Some(json!({})), false)
+            .await
+            .0,
+        StatusCode::UNAUTHORIZED
+    );
+    assert_eq!(
+        harness
+            .request(
+                "POST",
+                "/api/v1/projects/fixture/repositories/api/rebind",
+                Some(json!({})),
+                true
+            )
+            .await
+            .0,
+        StatusCode::NOT_FOUND
+    );
+    assert_eq!(
+        harness
+            .request(
+                "POST",
+                rebind,
+                Some(json!({"local_path":"relative/checkout"})),
+                true
+            )
+            .await
+            .0,
+        StatusCode::BAD_REQUEST
+    );
+
+    // While a run may be executing in the checkout, the binding is not changed.
+    {
+        let mut store = luuna_storage::Store::open(harness.root.join("luuna.sqlite3")).unwrap();
+        store
+            .create_run("busy-baseline", "fixture", json!({"kind":"baseline"}))
+            .unwrap();
+    }
+    let (status, body) = harness.request("POST", rebind, Some(json!({})), true).await;
+    assert_eq!(status, StatusCode::CONFLICT, "{body}");
+    assert!(
+        body["error"].as_str().unwrap().contains("busy-baseline"),
+        "{body}"
+    );
+    {
+        let mut store = luuna_storage::Store::open(harness.root.join("luuna.sqlite3")).unwrap();
+        store
+            .transition_run(
+                "busy-baseline",
+                1,
+                luuna_domain::RunState::Cancelled,
+                "run.cancelled",
+                json!({}),
+            )
+            .unwrap();
+    }
+
+    let (status, view) = harness.request("POST", rebind, Some(json!({})), true).await;
+    assert_eq!(status, StatusCode::OK, "{view}");
+    assert_eq!(
+        view["repositories"][0]["observation"]["identity"]["remote"],
+        "git@example.invalid:fixture.git"
+    );
+    let (_, stream) = harness
+        .request("GET", "/api/v1/projects/fixture/events", None, true)
+        .await;
+    let stream = events(&stream);
+    let rebound = stream.last().unwrap();
+    assert_eq!(rebound["type"], "repository.rebound");
+    assert_eq!(rebound["payload"]["repository_id"], "app");
+    assert_eq!(
+        rebound["payload"]["old"]["identity"]["remote"],
+        "https://example.invalid/fixture.git"
+    );
+    assert_eq!(
+        rebound["payload"]["new"]["identity"]["remote"],
+        "git@example.invalid:fixture.git"
+    );
+    assert!(rebound["payload"]["manifest_remote_matches"].is_null());
+    let (status, discovery) = harness
+        .request("POST", "/api/v1/projects/fixture/discover", None, true)
+        .await;
+    assert_eq!(status, StatusCode::CREATED, "{discovery}");
+    assert_eq!(
+        discovery["proposed_manifest"]["repositories"][0]["remote"],
+        "git@example.invalid:fixture.git"
+    );
+    // Rebinding an unchanged checkout records nothing new.
+    let count = stream.len();
+    let (status, _) = harness.request("POST", rebind, Some(json!({})), true).await;
+    assert_eq!(status, StatusCode::OK);
+    let (_, after) = harness
+        .request("GET", "/api/v1/projects/fixture/events", None, true)
+        .await;
+    assert_eq!(events(&after).len(), count + 1, "only discovery was added");
+
+    // A moved checkout cannot be inspected until it is rebound to its new path.
+    let moved = parent.path().join("moved");
+    fs::rename(&repo, &moved).unwrap();
+    let (status, body) = harness
+        .request("POST", "/api/v1/projects/fixture/discover", None, true)
+        .await;
+    assert_eq!(status, StatusCode::UNPROCESSABLE_ENTITY, "{body}");
+    assert!(body["error"].as_str().unwrap().contains(rebind), "{body}");
+    let (status, view) = harness
+        .request(
+            "POST",
+            rebind,
+            Some(json!({"local_path": moved.to_string_lossy()})),
+            true,
+        )
+        .await;
+    assert_eq!(status, StatusCode::OK, "{view}");
+    let canonical = fs::canonicalize(&moved).unwrap();
+    assert_eq!(
+        view["repositories"][0]["local_path"],
+        canonical.to_string_lossy().as_ref()
+    );
+    let (_, stream) = harness
+        .request("GET", "/api/v1/projects/fixture/events", None, true)
+        .await;
+    let rebound = events(&stream).last().cloned().unwrap();
+    assert_eq!(rebound["type"], "repository.rebound");
+    assert!(rebound["payload"]["old"]["local_path"]
+        .as_str()
+        .unwrap()
+        .ends_with("checkout"));
+    assert_eq!(
+        harness
+            .request("POST", "/api/v1/projects/fixture/discover", None, true)
+            .await
+            .0,
+        StatusCode::CREATED
+    );
+
+    // Another project's checkout cannot be taken over by a rebind.
+    let other = tempfile::tempdir().unwrap();
+    synthetic_repository(other.path());
+    let (status, _) = harness
+        .request(
+            "POST",
+            "/api/v1/projects",
+            Some(register_body("other", other.path())),
+            true,
+        )
+        .await;
+    assert_eq!(status, StatusCode::CREATED);
+    let (status, body) = harness
+        .request(
+            "POST",
+            rebind,
+            Some(json!({"local_path": other.path().to_string_lossy()})),
+            true,
+        )
+        .await;
+    assert_eq!(status, StatusCode::CONFLICT, "{body}");
+    assert!(
+        body["error"]
+            .as_str()
+            .unwrap()
+            .contains("already registered as repository app of project other"),
+        "{body}"
+    );
+}
+
+#[tokio::test]
+async fn a_checkout_is_registered_once_and_never_overlaps_the_data_directory() {
+    let harness = Harness::new();
+    let repo = tempfile::tempdir().unwrap();
+    synthetic_repository(repo.path());
+    let (status, _) = harness
+        .request(
+            "POST",
+            "/api/v1/projects",
+            Some(register_body("fixture", repo.path())),
+            true,
+        )
+        .await;
+    assert_eq!(status, StatusCode::CREATED);
+    let (status, body) = harness
+        .request(
+            "POST",
+            "/api/v1/projects",
+            Some(register_body("copy", &repo.path().join("."))),
+            true,
+        )
+        .await;
+    assert_eq!(status, StatusCode::CONFLICT, "{body}");
+    assert!(
+        body["error"]
+            .as_str()
+            .unwrap()
+            .contains("already registered as repository app of project fixture"),
+        "{body}"
+    );
+    assert_eq!(
+        harness
+            .request("GET", "/api/v1/projects/copy", None, true)
+            .await
+            .0,
+        StatusCode::NOT_FOUND
+    );
+
+    // A repository inside the data directory, such as a Luuna-owned worktree.
+    let inside = harness.root.join("worktrees").join("app");
+    fs::create_dir_all(&inside).unwrap();
+    synthetic_repository(&inside);
+    let (status, body) = harness
+        .request(
+            "POST",
+            "/api/v1/projects",
+            Some(register_body("owned", &inside)),
+            true,
+        )
+        .await;
+    assert_eq!(status, StatusCode::UNPROCESSABLE_ENTITY, "{body}");
+    assert!(
+        body["error"].as_str().unwrap().contains("LUUNA_DATA_DIR"),
+        "{body}"
+    );
+
+    // A data directory inside the repository: the runtime was started there.
+    let enclosing = tempfile::tempdir().unwrap();
+    synthetic_repository(enclosing.path());
+    let nested = Harness::at(enclosing.path().join(".luuna"));
+    let (status, body) = nested
+        .request(
+            "POST",
+            "/api/v1/projects",
+            Some(register_body("enclosing", enclosing.path())),
+            true,
+        )
+        .await;
+    assert_eq!(status, StatusCode::UNPROCESSABLE_ENTITY, "{body}");
+    let error = body["error"].as_str().unwrap();
+    assert!(
+        error.contains("LUUNA_DATA_DIR") && error.contains("inside this checkout"),
+        "{error}"
+    );
+}
+
+#[tokio::test]
+async fn project_event_pages_are_bounded_and_huge_cursors_are_client_errors() {
+    let harness = Harness::new();
+    let repo = tempfile::tempdir().unwrap();
+    synthetic_repository(repo.path());
+    harness
+        .request(
+            "POST",
+            "/api/v1/projects",
+            Some(register_body("fixture", repo.path())),
+            true,
+        )
+        .await;
+    let page = |query: &'static str| {
+        let harness = &harness;
+        async move {
+            harness
+                .request(
+                    "GET",
+                    &format!("/api/v1/projects/fixture/events{query}"),
+                    None,
+                    true,
+                )
+                .await
+        }
+    };
+    let (status, body) = page("?after=18446744073709551615").await;
+    assert_eq!(status, StatusCode::BAD_REQUEST, "{body}");
+    assert!(body["error"].as_str().unwrap().contains("after"), "{body}");
+    let (status, body) = page("?after=9223372036854775807").await;
+    assert_eq!((status, body), (StatusCode::OK, json!([])));
+    let (status, body) = page("?limit=1").await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(events(&body).len(), 1);
+    assert_eq!(body[0]["type"], "project.registered");
+    let (status, body) = page("?after=1&limit=1").await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(body[0]["type"], "repository.registered");
+    assert_eq!(body[0]["sequence"], 2);
+    for invalid in ["?limit=0", "?limit=10001"] {
+        let (status, body) = page(invalid).await;
+        assert_eq!(status, StatusCode::BAD_REQUEST, "{invalid}: {body}");
+    }
+    let (status, body) = page("").await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(events(&body).len(), 2);
+}
+
+#[tokio::test]
+async fn a_default_branch_present_only_on_origin_can_be_confirmed() {
+    let harness = Harness::new();
+    let repo = tempfile::tempdir().unwrap();
+    synthetic_repository(repo.path());
+    git(
+        repo.path(),
+        &["commit", "-q", "-am", "commit developer work"],
+    );
+    // A fresh clone: origin's branches are remote-tracking refs only.
+    git(
+        repo.path(),
+        &["update-ref", "refs/remotes/origin/main", "HEAD"],
+    );
+    git(
+        repo.path(),
+        &["update-ref", "refs/remotes/origin/develop", "HEAD"],
+    );
+    git(
+        repo.path(),
+        &[
+            "symbolic-ref",
+            "refs/remotes/origin/HEAD",
+            "refs/remotes/origin/main",
+        ],
+    );
+    harness
+        .request(
+            "POST",
+            "/api/v1/projects",
+            Some(register_body("fixture", repo.path())),
+            true,
+        )
+        .await;
+    let (_, discovery) = harness
+        .request("POST", "/api/v1/projects/fixture/discover", None, true)
+        .await;
+    let mut manifest = discovery["proposed_manifest"].clone();
+    manifest["repositories"][0]["default_branch"] = json!("release");
+    let (status, body) = harness
+        .request(
+            "PUT",
+            "/api/v1/projects/fixture/manifest",
+            Some(json!({"expected_revision":0,"manifest":manifest})),
+            true,
+        )
+        .await;
+    assert_eq!(status, StatusCode::UNPROCESSABLE_ENTITY, "{body}");
+    assert!(
+        body["error"]
+            .as_str()
+            .unwrap()
+            .contains("origin/<branch> remote-tracking branch"),
+        "{body}"
+    );
+    manifest["repositories"][0]["default_branch"] = json!("develop");
+    let (status, body) = harness
+        .request(
+            "PUT",
+            "/api/v1/projects/fixture/manifest",
+            Some(json!({"expected_revision":0,"manifest":manifest})),
+            true,
+        )
+        .await;
+    assert_eq!(status, StatusCode::OK, "{body}");
+    assert_eq!(
+        body["manifest"]["manifest"]["repositories"][0]["default_branch"],
+        "develop"
+    );
 }

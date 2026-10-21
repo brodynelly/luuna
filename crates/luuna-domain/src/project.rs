@@ -291,6 +291,63 @@ pub fn is_filesystem_remote(value: &str) -> bool {
         || !value.contains(':')
 }
 
+/// The comparison key of a remote identity. Spellings that name the same
+/// repository agree: scp-like `user@host:path` and `ssh://user@host/path` (also
+/// `git+ssh`/`ssh+git`), `http` and `https`, any user name, a default port, host
+/// case, and a trailing `/` or `.git`. A different transport family (HTTPS versus
+/// SSH), host, port or path is a different remote; `local:` identities and other
+/// forms compare exactly.
+pub fn remote_identity_key(remote: &str) -> String {
+    let (family, authority, path) = if let Some((scheme, rest)) = remote.split_once("://") {
+        let family = match scheme.to_ascii_lowercase().as_str() {
+            "ssh" | "git+ssh" | "ssh+git" => "ssh".to_owned(),
+            "http" | "https" => "https".to_owned(),
+            other => other.to_owned(),
+        };
+        let (authority, path) = rest.split_once('/').unwrap_or((rest, ""));
+        (family, authority, path)
+    } else {
+        // scp-like syntax: a colon before any slash, and not a `local:` identity.
+        match remote.split_once(':') {
+            Some((authority, path))
+                if !authority.is_empty()
+                    && !authority.contains('/')
+                    && !authority.eq_ignore_ascii_case("local") =>
+            {
+                ("ssh".to_owned(), authority, path)
+            }
+            _ => return remote.to_owned(),
+        }
+    };
+    let host = authority.rsplit('@').next().unwrap_or(authority);
+    let host = match host.rsplit_once(':') {
+        Some((name, port))
+            if !port.is_empty()
+                && port.bytes().all(|b| b.is_ascii_digit())
+                && matches!(
+                    (family.as_str(), port),
+                    ("ssh", "22") | ("https", "443" | "80") | ("git", "9418")
+                ) =>
+        {
+            name
+        }
+        _ => host,
+    };
+    let mut path = path.trim_start_matches('/').trim_end_matches('/');
+    if let Some(stripped) = path.strip_suffix(".git") {
+        path = stripped.trim_end_matches('/');
+    }
+    format!("{family}://{}/{path}", host.to_ascii_lowercase())
+}
+
+/// Whether two remote identities name the same repository; see [`remote_identity_key`].
+pub fn remotes_equivalent(left: &str, right: &str) -> bool {
+    left == right || remote_identity_key(left) == remote_identity_key(right)
+}
+
+/// How an identity mismatch is resolved. The runtime substitutes the IDs.
+pub const IDENTITY_RECOVERY: &str = "restore the registered checkout, or, if the change is intended, rebind the repository with POST /api/v1/projects/{id}/repositories/{repository_id}/rebind";
+
 /// `scheme://user:secret@host` must never be recorded; redact before use.
 fn remote_has_userinfo(value: &str) -> bool {
     value
@@ -325,7 +382,9 @@ pub struct RepositoryIdentity {
     /// Redacted `origin` push URL when it differs from the fetch URL.
     #[serde(default)]
     pub push_remote: Option<String>,
-    /// Sorted parentless commits reachable from HEAD; empty for shallow clones.
+    /// Sorted parentless commits; empty for shallow clones. A registration records
+    /// those reachable from HEAD. A fresh observation compared with it records
+    /// those reachable from HEAD or any local branch, which must contain them.
     pub root_commits: Vec<String>,
     pub shallow: bool,
 }
@@ -358,38 +417,54 @@ impl RepositoryIdentity {
     }
 
     /// Registration binds to these facts; a different repository at the same
-    /// path, or a changed remote, must be re-registered rather than silently accepted.
+    /// path, or a changed remote, is never silently accepted. The developer
+    /// either restores the registered checkout or rebinds the repository
+    /// explicitly. Equivalent remote spellings ([`remotes_equivalent`]) and roots
+    /// added to the history (an unrelated-history merge, a checked-out orphan
+    /// branch) are the same repository: every registered root must still be
+    /// observed, and an observation may add roots.
     pub fn matches(&self, observed: &Self) -> Result<(), DomainError> {
         self.validate()?;
         observed.validate()?;
+        let mismatch = |detail: String| {
+            DomainError::IdentityMismatch(format!("{detail}; {IDENTITY_RECOVERY}"))
+        };
         if let (Some(expected), Some(actual)) = (&self.remote, &observed.remote) {
-            if expected != actual {
-                return Err(DomainError::IdentityMismatch(format!(
+            if !remotes_equivalent(expected, actual) {
+                return Err(mismatch(format!(
                     "remote changed from {expected} to {actual}"
                 )));
             }
         }
-        if !self.shallow && !observed.shallow && self.root_commits != observed.root_commits {
-            return Err(DomainError::IdentityMismatch(
-                "root commits differ; this is a different repository".into(),
+        if !self.shallow
+            && !observed.shallow
+            && !self
+                .root_commits
+                .iter()
+                .all(|root| observed.root_commits.contains(root))
+        {
+            return Err(mismatch(
+                "a registered root commit is not reachable from HEAD or any local branch; this is a different repository or rewritten history".into(),
             ));
         }
         if (self.shallow || observed.shallow)
             && (self.remote.is_none() || observed.remote.is_none())
         {
-            return Err(DomainError::IdentityMismatch(
+            return Err(mismatch(
                 "shallow clone identity requires a matching remote".into(),
             ));
         }
         if self.remote.is_some() != observed.remote.is_some() {
-            return Err(DomainError::IdentityMismatch(
-                "remote configuration was added or removed; re-register".into(),
+            return Err(mismatch(
+                "the origin remote was added or removed since registration".into(),
             ));
         }
-        if self.push_remote != observed.push_remote {
-            return Err(DomainError::IdentityMismatch(
-                "origin push URL changed; re-register before publication".into(),
-            ));
+        let push_matches = match (&self.push_remote, &observed.push_remote) {
+            (Some(expected), Some(actual)) => remotes_equivalent(expected, actual),
+            (expected, actual) => expected == actual,
+        };
+        if !push_matches {
+            return Err(mismatch("the origin push URL changed".into()));
         }
         Ok(())
     }
@@ -450,6 +525,8 @@ impl RepositoryObservation {
         Ok(())
     }
 
+    /// The current branch, origin's HEAD or a local branch. Confirmation also
+    /// accepts an `origin/<name>` remote-tracking branch observed separately.
     pub fn has_branch(&self, name: &str) -> bool {
         self.branch.as_deref() == Some(name)
             || self.remote_default_branch.as_deref() == Some(name)
@@ -635,5 +712,59 @@ mod tests {
         pushed.push_remote = Some("https://example.invalid/fork.git".into());
         assert!(registered.matches(&pushed).is_err());
         pushed.matches(&pushed).unwrap();
+    }
+
+    #[test]
+    fn added_roots_and_equivalent_remote_spellings_are_the_same_repository() {
+        let registered = identity(Some("git@Example.invalid:org/app.git"));
+        // An unrelated-history merge or a checked-out orphan branch adds roots.
+        let mut grown = registered.clone();
+        grown.root_commits = vec!["a".repeat(40), "b".repeat(40)];
+        registered.matches(&grown).unwrap();
+        // A registered root that is no longer reachable is a different repository.
+        assert!(grown.matches(&registered).is_err());
+        let mut disjoint = registered.clone();
+        disjoint.root_commits = vec!["b".repeat(40)];
+        let error = registered.matches(&disjoint).unwrap_err().to_string();
+        assert!(error.contains("different repository"), "{error}");
+        assert!(
+            error.contains("/repositories/{repository_id}/rebind")
+                && !error.contains("re-register"),
+            "{error}"
+        );
+        // Stored scheme URLs are already redacted of user information.
+        for equivalent in [
+            "ssh://example.invalid/org/app.git",
+            "ssh://example.invalid:22/org/app",
+            "git+ssh://EXAMPLE.invalid/org/app.git/",
+            "deploy@example.invalid:org/app",
+        ] {
+            let observed = identity(Some(equivalent));
+            registered.matches(&observed).unwrap();
+            observed.matches(&registered).unwrap();
+        }
+        for different in [
+            "https://example.invalid/org/app.git",
+            "git@example.invalid:org/other.git",
+            "ssh://example.invalid:2222/org/app.git",
+            "git@example.org:org/app.git",
+        ] {
+            let error = registered
+                .matches(&identity(Some(different)))
+                .unwrap_err()
+                .to_string();
+            assert!(error.contains("remote changed"), "{different}: {error}");
+        }
+        assert!(remotes_equivalent(
+            "http://example.invalid/org/app",
+            "https://example.invalid:443/org/app.git"
+        ));
+        assert!(!remotes_equivalent("local:app", "local:api"));
+        assert_eq!(remote_identity_key("local:app"), "local:app");
+        let mut pushed = identity(Some("https://example.invalid/org/app.git"));
+        pushed.push_remote = Some("git@example.invalid:org/app-push.git".into());
+        let mut respelled = pushed.clone();
+        respelled.push_remote = Some("ssh://example.invalid/org/app-push".into());
+        pushed.matches(&respelled).unwrap();
     }
 }
