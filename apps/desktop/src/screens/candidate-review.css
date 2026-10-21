@@ -1,50 +1,32 @@
 /* Screen: candidate-review. Layout and screen-specific presentation, tokens only (docs/DESIGN-SYSTEM.md). */
 /*
- * The candidate review sits inside a Workflows ticket card, which sits inside the Projects
- * detail column. Every rule starts at .candidate-review and descends by child combinators or
- * by a class unique to this screen, so nothing here reaches the ticket or project around it.
- * Order: heading and badge, full identities, actions, activity callout, reason and next step,
- * the diff, check evidence and logs, the independent review, then usage.
+ * The candidate review is a subpanel inside a Workflows ticket card, which sits inside the
+ * Projects detail column. Every rule starts at .candidate-review, so nothing here reaches the
+ * ticket or project around it. The subpanel grid spaces the sections (12 px); the components
+ * provide the reason and next step, the section disclosures, record headers, meta lines and
+ * empty states. Order: heading and badge, full identities, actions, activity callout, reason
+ * and next step, the diff, check evidence and logs, the independent review, then usage.
  */
-.candidate-review { align-content: start; }
 
 /* Heading: the revision and its badge on one baseline. */
 .candidate-review > .candidate-heading { display: flex; flex-wrap: wrap; align-items: baseline; gap: var(--space-1-5) var(--space-3); min-width: 0; }
 .candidate-review > .candidate-heading > strong { font-size: var(--text-sm); }
 
 /*
- * Facts: the 150 px term column of the component, except that a hash moves under its term when
- * the ticket card is too narrow to hold both, instead of wrapping in a sliver beside it.
+ * Facts (the candidate's and each check's): a value stays beside its 150 px term while it fits
+ * whole there; a hash that does not moves under its term instead of leaving a short tail.
  */
-.candidate-review > .facts > div,
-.candidate-review > .candidate-checks > .recipes > .check-record > .facts > div { display: flex; flex-wrap: wrap; align-items: baseline; gap: var(--space-0-5) var(--space-3); }
-.candidate-review > .facts > div > dt,
-.candidate-review > .candidate-checks > .recipes > .check-record > .facts > div > dt { flex: 0 0 var(--facts-term); }
-.candidate-review > .facts > div > dd,
-.candidate-review > .candidate-checks > .recipes > .check-record > .facts > div > dd { flex: 1 1 var(--field-min); min-width: 0; }
+.candidate-review .facts > div { display: flex; flex-wrap: wrap; align-items: baseline; gap: var(--space-0-5) var(--space-3); }
+.candidate-review .facts > div > dt { flex: 0 0 var(--facts-term); }
+.candidate-review .facts > div > dd { flex: 1 1 auto; min-width: 0; }
 
-/* Actions: the component row; the one primary validates, Cancel workflow sits at the end. */
-.candidate-review > .actions { padding-top: var(--space-1); }
-
-/* Reason, then next step: the reason carries a rule in its own tone, the next step follows tight. */
-.candidate-review > .failure-note[data-tone] { padding-left: var(--space-2); border-left: var(--rule-width) solid var(--tone-mark); }
-.candidate-review > .failure-note + .recovery-note { margin-top: calc(var(--space-2) * -1); }
-
-/* Disclosures: the diff and the check evidence read as the two evidence sections. */
-.candidate-review > .candidate-diff,
-.candidate-review > .candidate-checks { min-width: 0; }
-.candidate-review > .candidate-diff > summary,
-.candidate-review > .candidate-checks > summary { margin-inline: calc(var(--space-1) * -1); font-size: var(--text-sm); font-weight: var(--weight-medium); }
-.candidate-review > .candidate-diff > summary > code { color: var(--color-text-muted); font-size: var(--text-xs); font-weight: var(--weight-regular); }
-.candidate-review > .candidate-diff > .diff-meta { color: var(--color-text-muted); font-size: var(--text-xs); overflow-wrap: anywhere; }
-.candidate-review > .candidate-diff > .diff-meta > code { color: var(--color-text); }
-.candidate-review > .candidate-checks > .empty { padding-inline: 0; }
+/* Identities in a disclosure summary read as secondary to its title. */
+.candidate-review summary > code { color: var(--color-text-muted); font-size: var(--text-xs); font-weight: var(--weight-regular); }
+.candidate-review .raw-evidence > summary { color: var(--color-text-muted); }
 
 /* Check records: recipe id and badge, then the exact command, facts, reason, logs and JSON. */
-.candidate-review > .candidate-checks > .recipes > .check-record { grid-template-columns: auto minmax(0, 1fr); align-items: baseline; gap: var(--space-2); }
-.candidate-review > .candidate-checks > .recipes > .check-record > :not(strong):not(.state) { grid-column: 1 / -1; }
-.candidate-review > .candidate-checks > .recipes > .check-record > strong { color: var(--color-text); font-size: var(--text-sm); overflow-wrap: anywhere; }
-.candidate-review > .candidate-checks > .recipes > .check-record > .check-command {
+.candidate-review .check-results > .check-record > strong { font-size: var(--text-sm); overflow-wrap: anywhere; }
+.candidate-review .check-results > .check-record > .check-command {
   display: block;
   padding: var(--space-1-5) var(--space-2);
   border: var(--border-width) solid var(--color-border);
@@ -53,30 +35,17 @@
   color: var(--color-text);
   font-size: var(--text-xs);
 }
-.candidate-review > .candidate-checks > .recipes > .check-record > .actions:empty { display: none; }
-.candidate-review > .candidate-checks > .recipes > .check-record > details > summary { margin-inline: calc(var(--space-1) * -1); color: var(--color-text-muted); }
-.candidate-review > .candidate-checks > .check-log > summary > code { color: var(--color-text-muted); }
 
 /* Independent review: a leading rule in the verdict's tone (a plain divider before any verdict). */
 .candidate-review > .candidate-verdict { display: grid; grid-template-columns: minmax(0, 1fr); gap: var(--space-2); min-width: 0; padding: var(--space-1) 0 var(--space-1) var(--space-3); border-left: var(--rule-width) solid var(--color-border); }
 .candidate-review > .candidate-verdict[data-tone] { border-left-color: var(--tone-mark); }
-.candidate-review > .candidate-verdict > p { color: var(--color-text-muted); font-size: var(--text-xs); overflow-wrap: anywhere; }
-.candidate-review > .candidate-verdict > p > code { color: var(--color-text); }
-.candidate-review > .candidate-verdict > .verdict-line { color: var(--color-text); font-size: var(--text-sm); }
-.candidate-review > .candidate-verdict > .empty { padding: 0; }
-.candidate-review > .candidate-verdict > details > summary { margin-inline: calc(var(--space-1) * -1); color: var(--color-text-muted); }
+.candidate-review > .candidate-verdict > .verdict-line { font-size: var(--text-sm); }
 
 /* Findings: severity badge and exact location, the explanation, then its evidence. */
-.candidate-review > .candidate-verdict > .review-findings > .finding-record { grid-template-columns: auto minmax(0, 1fr); align-items: baseline; gap: var(--space-1-5) var(--space-2); }
-.candidate-review > .candidate-verdict > .review-findings > .finding-record > :not(code):not(.state) { grid-column: 1 / -1; }
-.candidate-review > .candidate-verdict > .review-findings > .finding-record > code { color: var(--color-text); }
-.candidate-review > .candidate-verdict > .review-findings > .finding-record > p { color: var(--color-text); font-size: var(--text-sm); overflow-wrap: anywhere; }
-.candidate-review > .candidate-verdict > .review-findings > .finding-record > .finding-evidence { display: grid; gap: var(--space-0-5); margin: 0; padding-left: var(--space-4); color: var(--color-text-muted); overflow-wrap: anywhere; }
+.candidate-review .review-findings > .finding-record > p { font-size: var(--text-sm); overflow-wrap: anywhere; }
+.candidate-review .review-findings > .finding-record > .finding-evidence { display: grid; gap: var(--space-0-5); margin: 0; padding-left: var(--space-4); color: var(--color-text-muted); overflow-wrap: anywhere; }
 
-/* Usage: quiet meta under the evidence. */
-.candidate-review > .candidate-usage { color: var(--color-text-muted); font-variant-numeric: tabular-nums; }
-
+/* The component's one-column facts at the narrowest width. */
 @media (max-width: 680px) {
-  .candidate-review > .facts > div,
-  .candidate-review > .candidate-checks > .recipes > .check-record > .facts > div { display: grid; }
+  .candidate-review .facts > div { display: grid; }
 }

@@ -220,7 +220,7 @@ export function Projects({ client, connectionEpoch = 0 }: { client: LuunaClient 
 
     <div className="projects-layout">
       <div className="projects-rail">
-        <form onSubmit={register} className="register-form">
+        <form onSubmit={register} className="register-form form-group">
           <fieldset disabled={!client || busy}>
             <label>Project name<input value={name} onChange={(event) => setName(event.target.value)} required placeholder="My product" /></label>
             <label>Project ID<input value={projectId} onChange={(event) => setProjectId(event.target.value)} placeholder="derived from the name" spellCheck={false} pattern="[a-z][a-z0-9\-]{0,63}" /></label>
@@ -239,7 +239,7 @@ export function Projects({ client, connectionEpoch = 0 }: { client: LuunaClient 
 
       <div className="project-detail">
         {view && registration && observation ? <>
-          <dl className="facts">
+          <dl className="facts project-facts">
             <div><dt>Repository</dt><dd><code>{registration.repository_id}</code> · {registration.local_path}</dd></div>
             <div><dt>Remote identity</dt><dd>{observation.identity.remote ?? "no portable origin"}{observation.identity.push_remote && ` · push ${observation.identity.push_remote}`}{observation.identity.shallow && " · shallow clone"}</dd></div>
             <div><dt>HEAD at registration</dt><dd><code>{observation.head_commit.slice(0, 12)}</code> on {observation.branch ?? "detached HEAD"}</dd></div>
@@ -251,19 +251,19 @@ export function Projects({ client, connectionEpoch = 0 }: { client: LuunaClient 
             <button type="button" disabled={busy || !view.manifest || baselineInFlight} onClick={runBaseline}>Run baseline</button>
             <small>Discovery reads manifests and lockfiles; it never runs repository commands. A baseline runs the confirmed required recipes on a clean checkout and records exact evidence.</small>
           </div>
-          {baselines.length > 0 && <ul className="baselines record-list" aria-label="Recorded baselines">{baselines.map((baseline) => <li key={baseline.id} className="record" data-tone={baselineTone[baseline.status]}>
+          {baselines.length > 0 && <ul className="baselines record-list" aria-label="Recorded baselines">{baselines.map((baseline) => <li key={baseline.id} className="record record-headed baseline-record" data-tone={baselineTone[baseline.status]}>
             <StatusBadge tone={baselineTone[baseline.status]}>{baseline.status}</StatusBadge>
-            <span className="baseline-summary">manifest r{baseline.manifest_revision} · commit <code>{baseline.identity.commit.slice(0, 12)}</code> · {baseline.results.length}/{baseline.required_checks.length} required results</span>
+            <span className="baseline-summary meta">manifest r{baseline.manifest_revision} · commit <code>{baseline.identity.commit.slice(0, 12)}</code> · {baseline.results.length}/{baseline.required_checks.length} required results</span>
             {baseline.reason && <small className="failure-note" data-tone={baselineTone[baseline.status]}>{baseline.reason}</small>}
-            <small className="baseline-results">{baseline.results.map((result) => `${result.recipe_id}: ${result.status}${result.exit_code === null || result.exit_code === undefined ? "" : ` (exit ${result.exit_code})`}`).join(" · ")}</small>
+            <small className="baseline-results meta">{baseline.results.map((result) => `${result.recipe_id}: ${result.status}${result.exit_code === null || result.exit_code === undefined ? "" : ` (exit ${result.exit_code})`}`).join(" · ")}</small>
           </li>)}</ul>}
           {discovery && <>
-            {discovery.questions.length > 0 && <ul className="questions callout" data-tone="attention" aria-label="Open questions">{discovery.questions.map((question, index) => <li key={index}><strong>{question.topic}</strong> {question.detail}</li>)}</ul>}
+            {discovery.questions.length > 0 && <ul className="project-questions questions callout" data-tone="attention" aria-label="Open questions">{discovery.questions.map((question, index) => <li key={index}><strong>{question.topic}</strong> {question.detail}</li>)}</ul>}
             {discovery.manifest_problems.length > 0 && <p className="failure-note manifest-problems" data-tone="attention">Proposal needs edits before confirmation: {discovery.manifest_problems.join("; ")}</p>}
-            <ul className="recipes record-list" aria-label="Proposed check recipes">{discovery.repositories.flatMap((repo) => repo.proposed_checks.map((proposed) => <li key={`${repo.repository_id}-${proposed.check.id}`} className="record">
+            <ul className="recipes record-list" aria-label="Proposed check recipes">{discovery.repositories.flatMap((repo) => repo.proposed_checks.map((proposed) => <li key={`${repo.repository_id}-${proposed.check.id}`} className="record recipe-record">
               <code className="recipe-command">{proposed.check.executable} {proposed.check.args.join(" ")}</code>
               <StatusBadge tone={confidenceTone[proposed.confidence]}>{proposed.check.required ? "required" : "optional"} · {proposed.confidence}</StatusBadge>
-              <small className="recipe-evidence">{proposed.evidence.join(" · ")}</small>
+              <small className="recipe-evidence meta">{proposed.evidence.join(" · ")}</small>
             </li>))}</ul>
             <form onSubmit={confirm} className="manifest-form">
               <fieldset disabled={busy}>
@@ -273,10 +273,10 @@ export function Projects({ client, connectionEpoch = 0 }: { client: LuunaClient 
             </form>
           </>}
           <Workflows client={client} projectId={view.project.id} repositoryId={registration.repository_id} manifestConfirmed={view.manifest !== null && view.manifest !== undefined} connectionEpoch={connectionEpoch} onChanged={() => { if (selected) void guarded("Refresh", (signal) => refresh(selected, signal)); }} />
-          <details className="project-events"><summary>Project event record ({events.length})</summary>
+          <details className="project-events section"><summary>Project event record ({events.length})</summary>
             <ol className="events" aria-label="Durable project events" tabIndex={0}>{events.map((event) => <li key={event.event_id}><details><summary><span className="event-number">{event.sequence}</span><span>{event.type}</span></summary><pre>{JSON.stringify(event.payload, null, 2)}</pre></details></li>)}</ol>
           </details>
-        </> : <p className="empty">{client ? "Register a repository or select a project." : "Connect to the runtime to import a repository."}</p>}
+        </> : <p className="empty empty-box">{client ? "Register a repository or select a project." : "Connect to the runtime to import a repository."}</p>}
       </div>
     </div>
   </section>;

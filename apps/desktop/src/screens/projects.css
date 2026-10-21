@@ -1,52 +1,44 @@
 /* Screen: projects. Layout and screen-specific presentation, tokens only (docs/DESIGN-SYSTEM.md). */
 /*
  * The Workflows subpanel and the candidate review are nested inside .project-detail, so every
- * rule below is scoped by a class unique to this screen or by a child combinator from it.
+ * rule below is scoped by a class unique to this screen. The panel grid spaces the heading,
+ * scope, alert and layout; components (form group, record-headed, meta, empty box, section
+ * disclosure, reason rule) come from components.css.
  */
 
-/* Layout: a rail (register form, project cards) beside the selected project's detail. */
+/* Layout: a rail (register form, project cards) beside the selected project's detail. Above
+   920 px the rail stays in view while a long ticket scrolls the detail column. */
 .projects-layout { display: grid; grid-template-columns: var(--rail-width) minmax(0, 1fr); align-items: start; gap: var(--space-5) var(--space-6); min-width: 0; }
-.projects-rail { display: grid; grid-template-columns: minmax(0, 1fr); align-content: start; gap: var(--space-5); min-width: 0; }
-
-/* Register form: a bordered group so the rail's one primary action reads as its own task. */
-.register-form { min-width: 0; padding: var(--space-4); border: var(--border-width) solid var(--color-border); border-radius: var(--radius-md); }
-.register-form > fieldset > .form-footer > button.primary { margin-left: auto; }
+.projects-rail { position: sticky; top: var(--space-5); display: grid; grid-template-columns: minmax(0, 1fr); align-content: start; gap: var(--space-4); min-width: 0; }
 
 /* Project cards: name first, then the manifest chip and the exact project id. */
 .project-list { display: grid; grid-template-columns: minmax(0, 1fr); gap: var(--space-1); min-width: 0; margin: 0; padding: 0; list-style: none; }
 .project-list > li { min-width: 0; }
 .project-list > li > .run-card { padding: var(--space-2) var(--space-3); }
-.project-list > li > .run-card > .run-prompt { font-size: var(--text-sm); font-weight: var(--weight-medium); }
+.project-list .run-prompt { font-size: var(--text-sm); font-weight: var(--weight-medium); }
 
 /* Detail column: facts, actions, baselines, discovery, workflows, then the event record. */
 .project-detail { display: grid; grid-template-columns: minmax(0, 1fr); align-content: start; gap: var(--space-4); min-width: 0; }
-.project-detail > .facts { padding-bottom: var(--space-4); border-bottom: var(--border-width) solid var(--color-border); }
-.project-detail > .project-actions > small { max-width: var(--measure); }
+.project-facts { padding-bottom: var(--space-4); border-bottom: var(--border-width) solid var(--color-border); }
+.project-actions > small { max-width: var(--measure); }
 
-/* Baselines: the badge leads; the summary, reason and per-recipe results align beside it. */
-.project-detail > .baselines > .record { grid-template-columns: auto minmax(0, 1fr); align-items: baseline; gap: var(--space-1) var(--space-3); }
-.project-detail > .baselines > .record > :not(.state) { grid-column: 2; }
-.project-detail > .baselines > .record > .baseline-summary { color: var(--color-text); font-variant-numeric: tabular-nums; }
-.project-detail > .baselines > .record > .baseline-results { font-family: var(--font-mono); font-variant-numeric: tabular-nums; overflow-wrap: anywhere; }
+/* Baselines: per-recipe results are machine output, so they keep the monospace face. */
+.baseline-results { font-family: var(--font-mono); }
 
-/* Discovery: open questions, problems that block confirmation, then the proposed recipes. */
-.project-detail > .questions { display: grid; gap: var(--space-1-5); padding-left: var(--space-6); }
-.project-detail > .manifest-problems[data-tone] { padding-left: var(--space-2); border-left: var(--rule-width) solid var(--tone-mark); }
-.project-detail > .recipes > .record { grid-template-columns: minmax(0, 1fr) auto; align-items: baseline; gap: var(--space-1-5) var(--space-3); }
-.project-detail > .recipes > .record > .state { justify-self: end; }
-.project-detail > .recipes > .record > .recipe-command { color: var(--color-text); font-size: var(--text-xs); }
-.project-detail > .recipes > .record > .recipe-evidence { grid-column: 1 / -1; }
-.project-detail > .manifest-form { min-width: 0; }
+/* Discovery: open questions keep their bullets; a recipe's chip sits at the end of its command. */
+.project-questions { display: grid; gap: var(--space-1-5); padding-left: var(--space-6); }
+.recipe-record { grid-template-columns: minmax(0, 1fr) auto; align-items: baseline; gap: var(--space-1-5) var(--space-3); }
+.recipe-record > .state { justify-self: end; }
+.recipe-record > .recipe-evidence { grid-column: 1 / -1; }
+.recipe-command { color: var(--color-text); font-size: var(--text-xs); }
+.manifest-form { min-width: 0; }
 
-/* Event record: ruled off from the Workflows subpanel above it. */
-.project-detail > .project-events { min-width: 0; padding-top: var(--space-3); border-top: var(--border-width) solid var(--color-border); }
-.project-detail > .project-events > summary { padding-left: 0; font-weight: var(--weight-medium); }
-
-/* Nothing selected yet. */
-.project-detail > .empty { padding: var(--space-6) var(--space-4); border: var(--border-width) dashed var(--color-border); border-radius: var(--radius-md); text-align: center; }
+/* Event record: ruled off from the Workflows subpanel above it, on the subpanel's rhythm. */
+.project-events { min-width: 0; padding-top: var(--space-4); border-top: var(--border-width) solid var(--color-border); }
 
 @media (max-width: 920px) {
   .projects-layout { grid-template-columns: minmax(0, 1fr); gap: var(--space-5); }
+  .projects-rail { position: static; }
   .register-form > fieldset { grid-template-columns: repeat(auto-fit, minmax(min(100%, var(--field-min)), 1fr)); align-items: end; }
   .register-form > fieldset > .form-footer { grid-column: 1 / -1; }
   .project-list { grid-template-columns: repeat(auto-fill, minmax(min(100%, var(--field-min)), 1fr)); }
@@ -54,7 +46,6 @@
 
 @media (max-width: 680px) {
   .register-form > fieldset, .project-list { grid-template-columns: minmax(0, 1fr); }
-  .project-detail > .baselines > .record, .project-detail > .recipes > .record { grid-template-columns: minmax(0, 1fr); }
-  .project-detail > .baselines > .record > :not(.state), .project-detail > .recipes > .record > .recipe-evidence { grid-column: auto; }
-  .project-detail > .recipes > .record > .state { justify-self: start; }
+  .recipe-record { grid-template-columns: minmax(0, 1fr); }
+  .recipe-record > .state { justify-self: start; }
 }

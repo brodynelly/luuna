@@ -43,11 +43,11 @@ export function CandidateReview({ run, view, diff, log, busy, onValidate, onRepa
     {evidence.reason && <p className="failure-note" data-tone={candidateTone[evidence.status]}>{evidence.reason}</p>}
     {evidence.reason && !canRevalidate(run, view) && !view.active && nextStep(evidence.reason) && <p className="recovery-note">{nextStep(evidence.reason)}</p>}
     {canRevalidate(run, view) && <p className="recovery-note">Required checks passed in validation generation {evidence.validation_generation} but no review verdict was recorded. Re-validation starts a fresh generation for this same candidate revision under the existing approval and budgets: the checks run again and a fresh reviewer session is started. No writer attempt is spent.</p>}
-    {boundDiff && <details open className="candidate-diff"><summary>Diff for <code>{boundDiff.candidate_hash}</code></summary><p className="diff-meta">{boundDiff.repository_id} · base <code>{boundDiff.base_commit}</code> · candidate commit <code>{boundDiff.commit}</code></p><pre aria-label="Candidate diff" tabIndex={0}>{boundDiff.diff || "No changes."}</pre></details>}
-    <details className="candidate-checks" open={evidence.results.length > 0}>
+    {boundDiff && <details open className="candidate-diff section"><summary>Diff for <code>{boundDiff.candidate_hash}</code></summary><p className="diff-meta meta">{boundDiff.repository_id} · base <code>{boundDiff.base_commit}</code> · candidate commit <code>{boundDiff.commit}</code></p><pre aria-label="Candidate diff" tabIndex={0}>{boundDiff.diff || "No changes."}</pre></details>}
+    <details className="candidate-checks section" open={evidence.results.length > 0}>
       <summary>Check evidence · {evidence.results.length} recorded result(s)</summary>
       {evidence.results.length === 0 && <p className="empty">No check results recorded for this candidate.</p>}
-      <ul className="recipes record-list" aria-label="Candidate check results">{evidence.results.map((result) => <li key={result.id} className="record check-record" data-tone={checkTone[result.status]}>
+      <ul className="check-results recipes record-list" aria-label="Candidate check results">{evidence.results.map((result) => <li key={result.id} className="record record-headed check-record" data-tone={checkTone[result.status]}>
         <strong>{result.recipe_id}</strong><StatusBadge tone={checkTone[result.status]}>{result.status}</StatusBadge>
         <code className="check-command">{result.command.join(" ")}</code>
         <dl className="facts">
@@ -58,25 +58,25 @@ export function CandidateReview({ run, view, diff, log, busy, onValidate, onRepa
           {result.tests_detected !== undefined && <div><dt>Tests detected</dt><dd>{result.tests_detected}</dd></div>}
         </dl>
         {result.reason && <p className="failure-note" data-tone={checkTone[result.status]}>{result.reason}</p>}
-        <div className="ticket-actions actions">{result.artifact_refs.filter((id) => /^[A-Za-z0-9._-]+\.(stdout|stderr)$/.test(id) && !id.includes("..")).map((id) => <button type="button" key={id} disabled={busy} onClick={() => onArtifact(id)}>View {id.endsWith(".stdout") ? "stdout" : "stderr"}</button>)}</div>
-        <details><summary>Complete check and artifact evidence</summary><pre>{JSON.stringify(result, null, 2)}</pre></details>
+        <div className="check-actions ticket-actions actions">{result.artifact_refs.filter((id) => /^[A-Za-z0-9._-]+\.(stdout|stderr)$/.test(id) && !id.includes("..")).map((id) => <button type="button" key={id} disabled={busy} onClick={() => onArtifact(id)}>View {id.endsWith(".stdout") ? "stdout" : "stderr"}</button>)}</div>
+        <details className="raw-evidence"><summary>Complete check and artifact evidence</summary><pre>{JSON.stringify(result, null, 2)}</pre></details>
       </li>)}</ul>
       {boundLog && <details open className="check-log"><summary>Check log · <code>{boundLog.artifactId}</code></summary><pre aria-label="Check log" tabIndex={0}>{boundLog.text || "Empty log."}</pre></details>}
     </details>
     <div className="candidate-verdict" data-tone={review ? verdictTone[review.verdict] : undefined}>
       <h4>Independent review</h4>
       {review ? <>
-        <p className="verdict-line">Verdict: <StatusBadge tone={verdictTone[review.verdict]}>{review.verdict.replace(/_/g, " ")}</StatusBadge></p>
-        <p>Candidate: <code>{review.candidate_hash}</code></p>
-        <p>Reviewer session: <code>{review.reviewer_session}</code></p>
-        {review.findings.length > 0 ? <ul className="review-findings record-list" aria-label="Review findings">{review.findings.map((finding, index) => <li key={index} className="record finding-record" data-tone={severityTone[finding.severity]}>
+        <p className="verdict-line">Verdict: <strong><StatusBadge tone={verdictTone[review.verdict]}>{review.verdict.replace(/_/g, " ")}</StatusBadge></strong></p>
+        <p className="meta">Candidate: <code>{review.candidate_hash}</code></p>
+        <p className="meta">Reviewer session: <code>{review.reviewer_session}</code></p>
+        {review.findings.length > 0 ? <ul className="review-findings record-list" aria-label="Review findings">{review.findings.map((finding, index) => <li key={index} className="record record-headed finding-record" data-tone={severityTone[finding.severity]}>
           <StatusBadge tone={severityTone[finding.severity]}>{finding.severity}</StatusBadge> <code>{finding.path}:{finding.line}</code>
           <p>{finding.explanation}</p>
           <ul className="finding-evidence" aria-label="Finding evidence">{finding.evidence.map((item, itemIndex) => <li key={itemIndex}>{item}</li>)}</ul>
         </li>)}</ul> : <p className="empty">No findings recorded.</p>}
-        <details><summary>Complete structured review</summary><pre>{JSON.stringify(review, null, 2)}</pre></details>
+        <details className="raw-evidence"><summary>Complete structured review</summary><pre>{JSON.stringify(review, null, 2)}</pre></details>
       </> : <p className="empty">No independent review recorded for this candidate.</p>}
     </div>
-    <small className="candidate-usage">Runtime usage recorded for this candidate: {evidence.elapsed_seconds}s · ${(evidence.cost_usd_micros / 1_000_000).toFixed(4)}. Repairs keep the existing plan approval and produce a new candidate; earlier evidence remains bound to its original hash.</small>
+    <small className="candidate-usage meta">Runtime usage recorded for this candidate: {evidence.elapsed_seconds}s · ${(evidence.cost_usd_micros / 1_000_000).toFixed(4)}. Repairs keep the existing plan approval and produce a new candidate; earlier evidence remains bound to its original hash.</small>
   </section>;
 }

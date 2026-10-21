@@ -209,7 +209,7 @@ export function Workflows({ client, projectId, repositoryId, manifestConfirmed, 
     <div className="panel-heading"><h3 id="workflows-heading">Tickets, plans and candidates</h3><button type="button" className="text-button" disabled={!client || busy} onClick={() => setTick((value) => value + 1)}>Refresh workflows</button></div>
     <p className="scope">A ticket is a temporary local record until Missions is integrated. Approve the complete immutable plan, then run the scoped writer in its managed worktree. Validate the resulting candidate with the approved checks and an independent reviewer; the runtime binds every result to its exact candidate hash.</p>
     {(error || loadError) && <div className="error" role="alert">{error || loadError}<button className="text-button" type="button" onClick={() => { setError(""); setLoadError(""); }}>Dismiss</button></div>}
-    <form onSubmit={createTicket} className="ticket-form">
+    <form onSubmit={createTicket} className="ticket-form form-group">
       <fieldset disabled={!client || busy || !manifestConfirmed}>
         <label>Ticket title<input value={title} onChange={(event) => setTitle(event.target.value)} required maxLength={200} placeholder="Implement the greeting" /></label>
         <label>Intent<textarea value={intent} onChange={(event) => setIntent(event.target.value)} required rows={3} placeholder="What should change and why" /></label>
@@ -217,24 +217,26 @@ export function Workflows({ client, projectId, repositoryId, manifestConfirmed, 
         <div className="form-footer"><small>{manifestConfirmed ? "Tickets are scoped to this project's registered repository." : "Confirm a manifest before creating tickets."}</small><button className="primary" disabled={!title.trim() || !intent.trim() || !criteria.trim()}>Create ticket</button></div>
       </fieldset>
     </form>
-    <div className="plan-controls">
-      <label>Writer paths (comma separated)<input value={paths} onChange={(event) => setPaths(event.target.value)} spellCheck={false} /></label>
-      <label className="checkbox"><input type="checkbox" checked={write} onChange={(event) => setWrite(event.target.checked)} /> allow writes</label>
-      <label>Approver<input value={approver} onChange={(event) => setApprover(event.target.value)} /></label>
+    <div className="tray run-settings">
+      <div className="plan-controls field-row">
+        <label>Writer paths (comma separated)<input value={paths} onChange={(event) => setPaths(event.target.value)} spellCheck={false} /></label>
+        <label className="checkbox"><input type="checkbox" checked={write} onChange={(event) => setWrite(event.target.checked)} /> allow writes</label>
+        <label>Approver<input value={approver} onChange={(event) => setApprover(event.target.value)} /></label>
+      </div>
+      <div className="model-fields workflow-models field-row">
+        <label>Workflow provider<input value={provider} onChange={(event) => setProvider(event.target.value)} placeholder="Runtime default" spellCheck={false} maxLength={128} /></label>
+        <label>Workflow model<input value={model} onChange={(event) => setModel(event.target.value)} placeholder="Runtime default" spellCheck={false} maxLength={256} /></label>
+        <small>Applies to the next writer, validation/reviewer or repair action. Every independent review uses a fresh session.</small>
+      </div>
+      <label className="workflow-auto-repair"><input type="checkbox" checked={autoRepair} onChange={(event) => setAutoRepair(event.target.checked)} /> Repair automatically within approved budgets</label>
     </div>
-    <div className="model-fields workflow-models field-row">
-      <label>Workflow provider<input value={provider} onChange={(event) => setProvider(event.target.value)} placeholder="Runtime default" spellCheck={false} maxLength={128} /></label>
-      <label>Workflow model<input value={model} onChange={(event) => setModel(event.target.value)} placeholder="Runtime default" spellCheck={false} maxLength={256} /></label>
-      <small>Applies to the next writer, validation/reviewer or repair action. Every independent review uses a fresh session.</small>
-    </div>
-    <label className="workflow-auto-repair"><input type="checkbox" checked={autoRepair} onChange={(event) => setAutoRepair(event.target.checked)} /> Repair automatically within approved budgets</label>
     {tickets.length > 0 && <ul className="tickets record-list" aria-label="Tickets">{tickets.map((ticket) => {
       const revisions = plans[ticket.id] ?? [];
       const latest = revisions[revisions.length - 1];
       const run = latest ? runFor(latest) : undefined;
       const runLeases = run ? leases[run.id] ?? [] : [];
       const candidate = run ? candidates[run.id] : undefined;
-      return <li key={ticket.id} className="record" data-tone={run ? runTone[run.state] : undefined}>
+      return <li key={ticket.id} className="record ticket-card">
         <div className="ticket-head"><strong>{ticket.title}</strong><StatusBadge>ticket r{ticket.revision} · {ticket.source.replace(/_/g, " ")}</StatusBadge></div>
         <small className="ticket-intent">{ticket.intent}</small>
         <div className="ticket-actions actions">
@@ -243,9 +245,9 @@ export function Workflows({ client, projectId, repositoryId, manifestConfirmed, 
           {run && <StatusBadge tone={runTone[run.state]}>{run.state.replace(/_/g, " ")}</StatusBadge>}
         </div>
         {latest && <PlanReview key={latest.hash} plan={latest} canApprove={run?.state === "plan_ready"} busy={busy} onApprove={() => approve(latest)} />}
-        {latest && <small className="plan-meta">plan {latest.id} r{latest.revision} · base <code>{Object.values(latest.base_commits)[0]?.slice(0, 12)}</code> · paths {latest.tasks[0]?.paths.join(", ")} · budget {latest.budgets.max_attempts} attempt(s), {latest.budgets.timeout_seconds}s</small>}
+        {latest && <small className="plan-meta meta">plan <code>{latest.id}</code> r{latest.revision} · base <code>{Object.values(latest.base_commits)[0]?.slice(0, 12)}</code> · paths {latest.tasks[0]?.paths.join(", ")} · budget {latest.budgets.max_attempts} attempt(s), {latest.budgets.timeout_seconds}s</small>}
         {run && ["failed", "cancelled", "interrupted", "testing_blocked", "paused"].includes(run.state) && reasons[run.id] && <small className="failure-note" data-tone={runTone[run.state]}>{reasons[run.id]}{nextStep(reasons[run.id]) && <> <span className="recovery-note">{nextStep(reasons[run.id])}</span></>}</small>}
-        {runLeases.map((lease) => <small key={lease.id} className="worktree-line">worktree <code>{lease.path}</code> · {lease.state}{lease.candidate_commit && <> · candidate <code>{lease.candidate_commit.slice(0, 12)}</code></>}{lease.reason && ` · ${lease.reason}`}</small>)}
+        {runLeases.map((lease) => <small key={lease.id} className="worktree-line meta">worktree <code>{lease.path}</code> · {lease.state}{lease.candidate_commit && <> · candidate <code>{lease.candidate_commit.slice(0, 12)}</code></>}{lease.reason && ` · ${lease.reason}`}</small>)}
         {run && candidate && <CandidateReview run={run} view={candidate} diff={diffs[run.id]} log={logs[run.id]} busy={busy} onValidate={() => validate(run, candidate)} onRepair={() => repair(run, candidate)} onCancel={() => cancel(run)} onDiff={() => inspectDiff(run)} onArtifact={(id) => inspectArtifact(run, candidate, id)} />}
       </li>;
     })}</ul>}
@@ -255,7 +257,7 @@ export function Workflows({ client, projectId, repositoryId, manifestConfirmed, 
 export function PlanReview({ plan, canApprove, busy, onApprove }: { plan: PlanRevision; canApprove: boolean; busy: boolean; onApprove: () => void }) {
   const [reviewed, setReviewed] = useState(false);
   return <div className="plan-review">
-    <p>Immutable plan hash: <code className="plan-hash">{plan.hash}</code></p>
+    <p className="meta">Immutable plan hash: <code className="plan-hash">{plan.hash}</code></p>
     <pre className="plan-document" aria-label="Complete immutable plan" tabIndex={0}>{JSON.stringify(plan, null, 2)}</pre>
     {canApprove && <>
       <label className="plan-acknowledgment"><input type="checkbox" checked={reviewed} onChange={(event) => setReviewed(event.target.checked)} /> I reviewed this complete plan and hash.</label>

@@ -1,8 +1,9 @@
 /* Screen: app. Layout and screen-specific presentation, tokens only (docs/DESIGN-SYSTEM.md). */
 
 /*
- * Every selector starts at .app with child combinators so nothing reaches into Projects,
- * Workflows or the candidate review, which reuse classes such as .model-fields and .events.
+ * Every selector is scoped by a class unique to the shell (.app, .topbar, .connection-panel,
+ * .workspace, .history, .event-panel, ...), so nothing reaches into Projects, Workflows or the
+ * candidate review. Panels space their children with the components' gap model.
  * Bars span the window; their content lines up with main's centred column.
  */
 .app > .topbar,
@@ -11,7 +12,7 @@
 }
 
 /* Topbar: a normal (non-sticky) bar. Wordmark, stage, then the connection status at the end. */
-.app > .topbar {
+.topbar {
   display: flex;
   flex-wrap: wrap;
   align-items: center;
@@ -21,7 +22,7 @@
   border-bottom: var(--border-width) solid var(--color-border);
   background: var(--color-surface);
 }
-.app > .topbar > .wordmark {
+.topbar > .wordmark {
   display: inline-flex;
   align-items: center;
   gap: var(--space-2);
@@ -33,15 +34,20 @@
   line-height: var(--leading-none);
   text-decoration: none;
 }
-.app > .topbar > .wordmark > span { color: var(--color-accent); }
-.app > .topbar > .stage {
+/* The brand mark: a lavender disc whose left half is cut from the bar's own surface, ringed so
+   the disc keeps its outline in both schemes. */
+.wordmark-mark { flex: none; width: var(--space-5); height: var(--space-5); overflow: visible; }
+.wordmark-mark > circle { fill: var(--color-accent); }
+.wordmark-mark > path { fill: var(--color-surface); stroke: var(--color-accent); stroke-width: var(--focus-width); vector-effect: non-scaling-stroke; }
+.topbar > .stage {
   padding-left: var(--space-5);
   border-left: var(--border-width) solid var(--color-border);
   color: var(--color-text-muted);
   font-size: var(--text-xs);
   line-height: var(--leading-tight);
 }
-.app > .topbar > .connection {
+/* Connection status: a pill in the connection's tone, led by the shared tone mark. */
+.topbar > .connection {
   display: inline-flex;
   align-items: center;
   gap: var(--space-2);
@@ -55,15 +61,7 @@
   font-weight: var(--weight-medium);
   line-height: var(--leading-tight);
 }
-.app > .topbar > .connection[data-tone] { border-color: var(--tone-border); background: var(--tone-bg); color: var(--tone-fg); }
-.app > .topbar > .connection > i {
-  flex: none;
-  width: var(--mark-size);
-  height: var(--mark-size);
-  border-radius: var(--radius-full);
-  background: var(--color-text-subtle);
-}
-.app > .topbar > .connection > i[data-tone] { background: var(--tone-mark); }
+.topbar > .connection[data-tone] { border-color: var(--tone-border); background: var(--tone-bg); color: var(--tone-fg); }
 
 /* Main: one centred column; every top-level block is spaced by the section gap alone. */
 .app > main {
@@ -74,34 +72,23 @@
   margin: 0 auto;
   padding: var(--space-7) var(--gutter);
 }
-.app > main > .error { margin: 0; }
 
-.app > main > .intro {
+.intro {
   display: grid;
   gap: var(--space-2);
   max-width: var(--measure);
   padding-bottom: var(--space-2);
 }
-.app > main > .intro > p:last-child {
+.intro > p:last-child {
   color: var(--color-text-muted);
   font-size: var(--text-md);
   line-height: var(--leading-prose);
 }
 
 /* Runtime connection: heading and summary, Disconnect at the end; the form takes its own row. */
-.app > main > .connection-panel {
-  display: grid;
-  grid-template-columns: minmax(0, 1fr) auto;
-  align-items: center;
-  gap: var(--space-4) var(--space-5);
-}
-.app > main > .connection-panel > div:first-child { display: grid; gap: var(--space-1); min-width: 0; }
-.app > main > .connection-panel > div:first-child > p {
-  color: var(--color-text-muted);
-  font-size: var(--text-xs);
-  overflow-wrap: anywhere;
-}
-.app > main > .connection-panel > .connection-form {
+.connection-panel { grid-template-columns: minmax(0, 1fr) auto; align-items: center; column-gap: var(--space-5); }
+.connection-summary { display: grid; gap: var(--space-2); min-width: 0; }
+.connection-form {
   display: grid;
   grid-column: 1 / -1;
   grid-template-columns: minmax(0, 1fr) minmax(0, 1fr) auto;
@@ -110,45 +97,37 @@
   padding-top: var(--space-4);
   border-top: var(--border-width) solid var(--color-border);
 }
-.app > main > .connection-panel > .connection-form > small { grid-column: 1 / -1; }
-/* The native shell's "Connect automatically" follows the hint on its own row. */
-.app > main > .connection-panel > .connection-form > small ~ button { grid-column: 1 / -1; justify-self: start; }
-.app > main > .connection-panel > .outage { grid-column: 1 / -1; }
+.connection-form > small { grid-column: 1 / -1; }
+/* The native shell's "Connect automatically" follows the hint on its own row, left-aligned. */
+.connection-form > small ~ button { grid-column: 1 / -1; justify-self: start; }
+.connection-panel > .outage { grid-column: 1 / -1; }
 
-/* Workspace: session history beside the main column; one column, in DOM order, at 680 px. */
-.app > main > .workspace {
+/* Workspace: session history beside the main column; one column, in DOM order, at 920 px. */
+.workspace {
   display: grid;
   grid-template-columns: var(--aside-width) minmax(0, 1fr);
   align-items: start;
   gap: var(--section-gap);
 }
-.app > main > .workspace > .history { padding-inline: var(--space-3); }
-.app > main > .workspace > .history > .panel-heading { margin-bottom: var(--space-3); padding-inline: var(--space-2); }
-.app > main > .workspace > .history > ul {
+/* The history rail is tight so its cards line up with the heading's text. */
+.history { padding-inline: var(--space-3); }
+.history > :is(.panel-heading, .empty) { padding-inline: var(--space-2); }
+.history-list {
   display: grid;
   gap: var(--space-1);
   margin: 0;
   padding: 0;
   list-style: none;
 }
-.app > main > .workspace > .main-column {
+.main-column {
   display: grid;
   grid-template-columns: minmax(0, 1fr);
   gap: var(--section-gap);
   min-width: 0;
 }
 
-/* Start a Pi session: the field row and footer come from the components layer. */
-.app > main > .workspace > .main-column > .start-panel > .scope { margin-top: calc(var(--space-1) * -1); }
-
 /* Session events: heading and badge, the run bar, reason, response, then the event record. */
-.app > main > .workspace > .main-column > .event-panel {
-  display: grid;
-  grid-template-columns: minmax(0, 1fr);
-  gap: var(--space-4);
-}
-.app > main > .workspace > .main-column > .event-panel > .panel-heading { margin-bottom: 0; }
-.app > main > .workspace > .main-column > .event-panel > .run-detail {
+.run-detail {
   display: flex;
   flex-wrap: wrap;
   align-items: center;
@@ -158,29 +137,16 @@
   border: var(--border-width) solid var(--color-border);
   border-radius: var(--radius-md);
   background: var(--color-surface-raised);
-  color: var(--color-text-muted);
-  font-size: var(--text-xs);
 }
-.app > main > .workspace > .main-column > .event-panel > .run-detail > code { min-width: 0; color: var(--color-text); font-size: var(--text-xs); }
-.app > main > .workspace > .main-column > .event-panel > .run-detail > span { min-width: 0; overflow-wrap: anywhere; }
-.app > main > .workspace > .main-column > .event-panel > .run-detail > button.danger { margin-left: auto; }
-.app > main > .workspace > .main-column > .event-panel > .failure-note[data-tone] {
-  padding-left: var(--space-2);
-  border-left: var(--rule-width) solid var(--tone-mark);
-}
-.app > main > .workspace > .main-column > .event-panel > .assistant-output { display: grid; gap: var(--space-2); min-width: 0; }
-.app > main > .workspace > .main-column > .event-panel > .assistant-output > pre {
+.run-detail > :is(code, span) { min-width: 0; }
+.run-detail > button.danger { margin-left: auto; }
+.assistant-output { display: grid; gap: var(--space-2); min-width: 0; }
+.assistant-output > pre {
   padding: var(--space-4);
   border: var(--border-width) solid var(--color-border);
   font-family: var(--font-sans);
   font-size: var(--text-sm);
   line-height: var(--leading-prose);
-}
-.app > main > .workspace > .main-column > .event-panel > .empty { padding-inline: 0; }
-.app > main > .workspace > .main-column > .event-panel > .event-caption { color: var(--color-text-muted); font-size: var(--text-xs); }
-.app > main > .workspace > .main-column > .event-panel > .activity-empty {
-  border: var(--border-width) dashed var(--color-border);
-  border-radius: var(--radius-md);
 }
 
 /* Footer: quiet meta text under a hairline. */
@@ -195,19 +161,26 @@
   font-size: var(--text-2xs);
 }
 
+/* At 920 px the workspace stacks like the Projects rail and the history becomes a card grid. */
 @media (max-width: 920px) {
   .app > main { padding-block: var(--space-6); }
+  .workspace { grid-template-columns: minmax(0, 1fr); }
+  .history { padding-inline: var(--panel-pad); }
+  .history > :is(.panel-heading, .empty) { padding-inline: 0; }
+  .history-list { grid-template-columns: repeat(auto-fill, minmax(min(100%, var(--field-min)), 1fr)); gap: var(--space-2); }
+  .history-list > li { display: grid; min-width: 0; }
+  .history-list > li > button.run-card:not([aria-pressed="true"]) { border-color: var(--color-border); }
 }
 
 @media (max-width: 680px) {
-  .app > .topbar { column-gap: var(--space-3); }
-  .app > .topbar > .stage { padding-left: var(--space-3); }
+  .topbar { column-gap: var(--space-3); }
+  .topbar > .stage { padding-left: var(--space-3); }
   .app > main { padding-block: var(--space-5) var(--space-6); }
-  .app > main > .connection-panel > .connection-form { grid-template-columns: minmax(0, 1fr); }
-  .app > main > .connection-panel > .connection-form > button { justify-self: start; }
-  .app > main > .workspace { grid-template-columns: minmax(0, 1fr); }
+  .connection-form { grid-template-columns: minmax(0, 1fr); }
+  .connection-form > button { justify-self: start; }
 }
 
 @media (forced-colors: active) {
-  .app > .topbar > .connection > i { forced-color-adjust: none; background: CanvasText; }
+  .wordmark-mark > circle { fill: CanvasText; }
+  .wordmark-mark > path { fill: Canvas; stroke: CanvasText; }
 }
