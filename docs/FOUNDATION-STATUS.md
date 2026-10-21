@@ -359,3 +359,52 @@ The cloud-doable part of the roadmap's MVP gate is closed on Linux with this cha
 ## Independent component extraction (October 21, 2026)
 
 Missions, Atlas and Beacon now have independent public repositories with passing full component CI, preserved maintained history and unchanged source trees, frozen locks and MIT licenses. Luuna consumes exact-commit Git submodules at the existing paths and has explicit setup, pin rejection and real CLI JSON smoke checks. Registry packages remain unpublished; Luuna remains private. See [the extraction evidence](COMPONENT-EXTRACTION.md) and [ADR 0012](decisions/0012-independent-component-repositories.md) for exact pins, check results and remaining M6 runtime integration obligations. Native-platform work already in progress was kept outside the extraction change.
+
+## M3 genuine-provider re-run on the MVP code, October 21, 2026
+
+The handoff owed one real-provider `m3-smoke` run on the code that gained the re-validation gate, the reviewer prompt's generation field and the shutdown interruption. It ran on clean `main` at `fd42d59` (PR #7 merged) and passed.
+
+| Run | Writer/reviewer model | Checks | Outcome |
+| --- | --- | --- | --- |
+| real 61 | `openai/gpt-4.1` through OpenRouter, pinned Pi 1.3.0 (provenance verified: the installed tree is byte-identical to a fresh `npm ci` of `tools/pi/package-lock.json`) | **61/61** | feature `reviewed`/`passed` at generation 1 with a fresh reviewer session distinct from the writer, and refused in-place re-validation; repair: the unmentioned policy check failed r1 before any review, re-validation was refused, manual repair produced r2 whose fresh checks and fresh review reached `reviewed`, and r1's hash was refused; blocking: `changes_required`, one bounded automatic repair, `paused` at `max_attempts: 2`; cancel during the in-flight review kept identity and passed checks with no review; hard-kill restart during review marked the candidate `interrupted`, reserved the unreported spend against the approved cost budget and refused re-validation on budget, with the reviewer child exiting and earlier evidence identical byte for byte; developer checkout untouched; orderly `SIGTERM` shutdown; 249 files scanned against 2 configured values with zero leaks; 2 min 48 s end to end |
+
+Environment: Linux x86_64 cloud container, Rust 1.90.0, Node 24.19.0, npm 11.9.0, Python 3.13.16, Git 2.43.0, `LUUNA_PI_OPENROUTER_API_KEY` present as an alias (name verified, value never printed). The command was `node scripts/m3-smoke.mjs --mode real --provider openrouter --model openai/gpt-4.1 --pi <the harness's node> --pi-args-json '["<private install>/@earendil-works/pi-coding-agent/dist/cli.js"]'`. The report and durable state stayed outside Git.
+
+The same session reran the recorded baseline on that commit before any change: `cargo fmt --all -- --check`, `cargo clippy --locked --workspace --all-targets -- -D warnings`, `cargo test --locked --workspace` (181 passed), `npm test` (20 schema checks, 5 scope-guard tests, 13 desktop tests, 22 client tests), `npm run typecheck`, `npm run build`, `node scripts/check-hygiene.mjs`, `git diff --check`, `node scripts/m3-smoke.mjs --mode fixture` (68/68, synthetic) and `node scripts/mvp-ui-smoke.mjs` (46/46, synthetic).
+
+**M3 status.** The genuine-provider exit holds on the current code. M3 as a whole still needs native-host acceptance. Windows has since recorded native fixture evidence in [WINDOWS-VERIFICATION.md](WINDOWS-VERIFICATION.md): the native workflow passed 46/46 and native shutdown passed 48/48 in the bundled WebView2 app. That report itself keeps strict clean-revision Windows M3 acceptance, installed service supervision and signed installation open. No macOS evidence exists. This cloud container cannot produce either, and nothing in this section is native-host evidence. The reviewer-contract violations recorded for smaller models were not exercised by this run.
+
+## Desktop design system, October 21, 2026
+
+The desktop client now follows one token-based design system ([DESIGN-SYSTEM.md](DESIGN-SYSTEM.md), [ADR 0013](decisions/0013-desktop-design-system.md)). It is presentation only: the runtime still decides every state, permission, reason and next step, and no render or enable condition, handler, visible text, label, aria value, heading level or smoke-read DOM order changed.
+
+**Delivered.** The pieces:
+
+- **Tokens.** `apps/desktop/src/design/tokens.css` defines the dark default and a full light scheme under `prefers-color-scheme`. Layered base and component sheets plus one token-only sheet per screen are bundled from `'self'` (Tauri CSP unchanged).
+- **Tones and the badge.** Six outcome tones are carried by colour, a shape mark and the unchanged runtime text. Exhaustive `Record` maps from the api-client unions live in `design/tone.ts`, so a new runtime state fails the type check until it has a tone. Only passed evidence and a live connection are green: a completed demo session used to be painted green and is now neutral. Interruption and outages use their own tone, never danger. `StatusBadge` is the one chip.
+- **Shared components.** Panel and subpanel spacing, tray, meta line, form group, field row, headed records, the reason and next-step pair, section disclosures, bounded scroll regions and empty states.
+- **Accessibility.** WCAG AA in both schemes. The narrow layout keeps visual order equal to DOM order, and forced colours keep marks and selection.
+- **Process.** Three independent proposals were scored by two judges, and four screen agents each applied the system to one screen. Two review rounds followed: dark, light and 760 px screenshots, a behaviour-preservation audit and a design-system code review. They found and fixed a base specificity bug (disabled inputs looked enabled), fields inheriting the label's weight, textareas ignoring `rows`, an empty field-row column, light surfaces that did not separate, stacked tone rules and hashes breaking with orphaned tails at 760 px. They also caught a vacuous enforcement design: Vitest returns `""` for `?raw` CSS, so the test reads stylesheets with `node:fs` and fails on an empty sheet.
+
+**Enforcement.** `design/design-system.test.ts`, part of `npm test`, checks:
+
+- token-only stylesheets: no colour, length or duration literals, no `opacity` or `!important`, approved media queries only;
+- every `var()` resolves, and both schemes define the same colour roles;
+- WCAG ratios for every semantic text, mark, border and focus pair in both schemes;
+- no selector named after a runtime state, and tone variables read only under `[data-tone]`;
+- shallow screen selectors, registered component files, heading levels, no inline styles, badges through `StatusBadge`, and dismissible alerts;
+- the tone taxonomy itself.
+
+`scripts/mvp-ui-smoke.mjs` gains a presentation audit on the reviewed walkthrough page, the recovery page and the offline page. It checks WCAG AA contrast of every visible text run, placeholders included, against its composited background in the dark and the light scheme, after colour transitions settle. It also checks that the client follows the system scheme and that nothing scrolls horizontally at the 760 px window minimum. Against the old dark-only stylesheet these checks failed: two text runs were at 4.15:1 and there was no light scheme.
+
+**Commands and results on Linux (Rust 1.90.0, Node 24.19.0, npm 11.9.0, Python 3.13.16, Git 2.43.0, Chromium 141 via playwright-core 1.56.1):**
+
+- `cargo fmt --all -- --check` and `cargo clippy --locked --workspace --all-targets -- -D warnings` passed, and `cargo test --locked --workspace` passed 184 tests on the merged head. No Rust changed afterwards.
+- `npm test` passed 20 schema checks, 5 scope-guard tests (one Windows-only test skipped), 8 component-pin tests, 212 desktop tests and 22 client tests.
+- `npm run typecheck`, `npm run build`, `node scripts/check-hygiene.mjs` and `git diff --check` passed.
+- `node scripts/m3-smoke.mjs --mode fixture` passed 68/68 on the merged head (synthetic).
+- `node scripts/mvp-ui-smoke.mjs` passed 57/57: the 46 existing checks plus 11 presentation checks (synthetic). An earlier run measured colours mid-transition after a scheme switch; the audit now waits for transitions to settle.
+
+The component submodule smoke was not run: this session can reach only the Luuna repository.
+
+**Not established.** No native rendering of the new styles was checked: WebKitGTK, WebView2 or macOS WebKit, and Windows high-contrast mode. Main's Windows native smoke predates this change. Screenshots were reviewed from headless Chromium only. GitHub Actions refused every job of this branch and of `main` before a runner started (account billing), so CI gives no evidence here.

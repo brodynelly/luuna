@@ -10,7 +10,7 @@ Platform of every recorded result: Linux cloud container (Rust 1.90.0, Node 24.1
 | --- | --- | --- | --- |
 | R01 | Local Mac/Windows operation | **Omitted from the MVP demonstration.** The runtime, client and Tauri shell build; no native launch, service supervision or installer has run on a Mac or Windows host. | Open gap recorded in every status section since M1 |
 | R02 | Browser/TUI parity | Browser client only; no TUI exists. | Desktop smoke (`scripts/mvp-ui-smoke.mjs`); M6 roadmap item |
-| R03 | Pi with selected models | Met on Linux with OpenRouter (`openai/gpt-4o-mini`, `gpt-4.1`, `gpt-4.1-mini`); provider/model are runtime settings or per-action client fields; the credential never enters the client. | Status report M1 and M3 genuine-provider sections (sixty real runs) |
+| R03 | Pi with selected models | Met on Linux with OpenRouter (`openai/gpt-4o-mini`, `gpt-4.1`, `gpt-4.1-mini`); provider/model are runtime settings or per-action client fields; the credential never enters the client. | Status report M1 and M3 genuine-provider sections (sixty real runs, plus real run 61 on the MVP code, 61/61) |
 | R04 | Import and creation | Import met (read-only inspection, discovery proposal, confirmed manifest revisions); scaffolding new projects is M5 and omitted. | M2a closure; walkthrough steps 2 and 3 |
 | R05 | Multiple repositories | Omitted; the contract accepts relationships but one repository is scheduled. | M4 roadmap item |
 | R06 | Coordination roles | Omitted beyond one writer and one independent reviewer per workflow. | M4 roadmap item |
@@ -46,5 +46,6 @@ Import a repository, confirm its checks, prove a baseline, write a ticket, appro
 
 - Deterministic tests: `cargo test --locked --workspace` (Rust domain, storage, executor, Git, discovery, engine and runtime suites with the synthetic Pi fixture and real host commands), `npm test` (schema, scope guard, client, desktop).
 - Lifecycle harnesses, synthetic: `node scripts/m1-smoke.mjs --mode fixture`, `node scripts/m3-smoke.mjs --mode fixture`, `node scripts/mvp-ui-smoke.mjs`.
+- Client presentation: `apps/desktop/src/design/design-system.test.ts` under `npm test` (token-only stylesheets, contrast of every semantic pair in both schemes, tone taxonomy, screen structure) and the desktop smoke's presentation audit (rendered contrast in the dark and light schemes, no horizontal scroll at 760 px). See [DESIGN-SYSTEM.md](DESIGN-SYSTEM.md).
 - Genuine provider: `node scripts/m1-smoke.mjs --mode real …` and `node scripts/m3-smoke.mjs --mode real …` with a configured credential; results are tabulated in the status report and never inferred from fixtures.
 - Native hosts: none yet.

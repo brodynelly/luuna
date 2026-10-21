@@ -8,7 +8,7 @@ Tokens reach the view through local IPC and stay in memory. Closing the window
 leaves the service running. See [ADR 0011](decisions/0011-windows-native-bootstrap.md)
 for the command boundary, reconciliation and checkout-based distribution limits.
 
-Date: 2026-10-16, updated 2026-10-17 for M2a, M2b, M2c and the M3 implementation, and 2026-10-21 for re-validation after a review that left no verdict, shutdown interruption and the client hardening of the MVP gate. Status: authoritative foundation baseline; implementation evidence is required for each milestone.
+Date: 2026-10-16, updated 2026-10-17 for M2a, M2b, M2c and the M3 implementation, and 2026-10-21 for re-validation after a review that left no verdict, shutdown interruption, the client hardening of the MVP gate and the desktop design system. Status: authoritative foundation baseline; implementation evidence is required for each milestone.
 
 ## Purpose and precedence
 
@@ -38,6 +38,8 @@ Tauri/React client ── authenticated HTTP + resumable SSE ── Rust runtime
 ```
 
 Desktop-first is a sequencing decision. Browser/TUI capability parity, multiple related repositories, scoped memory, and Mac/Windows support remain full-v1 obligations. They are not exit criteria for the first single-repository foundation demo. No hosted service, mandatory NAS, GPU, automatic merge, custom agent loop, or full IDE replacement is required.
+
+The desktop client's presentation follows one token-based design system ([ADR 0013](decisions/0013-desktop-design-system.md), [DESIGN-SYSTEM.md](DESIGN-SYSTEM.md)): six outcome tones mapped from the API unions, where only passed evidence is green and interruption is never failure, both colour schemes and WCAG AA enforced by tests. It changes how runtime state is shown, never what the runtime decides.
 
 The workspace should add crates when they contain a real contract or implementation: domain, storage, runtime/API, engine/Pi, Git, executor, validation, and external adapters. Shared frontend packages are created when an actual shared consumer needs them. Empty placeholders do not establish implementation progress.
 

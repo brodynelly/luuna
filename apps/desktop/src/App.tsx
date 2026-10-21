@@ -6,6 +6,8 @@ import { canCancel } from "./workflow-state";
 import { Projects } from "./Projects";
 import { actionFailure, describeFailure } from "./failures";
 import { ensureLocalRuntime, nativeDesktop } from "./native-runtime";
+import { StatusBadge } from "./design/StatusBadge";
+import { connectionTone, runTone } from "./design/tone";
 
 const message = describeFailure;
 
@@ -53,6 +55,7 @@ export function App() {
   const active = runs.find((run) => run.id === selected);
   const selectedWorkflow = active?.metadata.kind === "workflow";
   const output = assistantText(events);
+  const connectionState = client ? reachable ? "connected" : "reconnecting" : "offline";
 
   useEffect(() => () => operation.current?.abort(), []);
 
@@ -234,9 +237,9 @@ export function App() {
   return <div className="app">
     <a className="skip-link" href="#main">Skip to main content</a>
     <header className="topbar">
-      <a className="wordmark" href="#main" aria-label="Luuna home"><span aria-hidden="true">◒</span> luuna</a>
+      <a className="wordmark" href="#main" aria-label="Luuna home"><svg className="wordmark-mark" viewBox="0 0 292 292" aria-hidden="true" focusable="false"><circle cx="146" cy="146" r="146" /><path d="M146 0a146 146 0 0 0 0 292z" /></svg> luuna</a>
       <span className="stage">Development foundation</span>
-      <span className={`connection ${client && reachable ? "online" : ""}`} role="status" aria-live="polite"><i aria-hidden="true" />{client ? reachable ? "Local runtime connected" : "Reconnecting to runtime" : "Local runtime offline"}</span>
+      <span className="connection" data-tone={connectionTone[connectionState]} role="status" aria-live="polite"><i className="tone-mark" aria-hidden="true" data-tone={connectionTone[connectionState]} />{client ? reachable ? "Local runtime connected" : "Reconnecting to runtime" : "Local runtime offline"}</span>
     </header>
 
     <main id="main" tabIndex={-1}>
@@ -245,7 +248,7 @@ export function App() {
       {error && <div className="error" role="alert">{error}<button className="text-button" onClick={() => setError("")}>Dismiss</button></div>}
 
       <section className="panel connection-panel" aria-labelledby="runtime-heading">
-        <div><h2 id="runtime-heading">Runtime connection</h2><p>{client ? `${client.baseUrl} · Required Pi version ${health?.pi_version ?? "unknown"}` : native ? "Luuna starts your local runtime and connects automatically. Closing the app leaves your runtime running." : "Start the Rust service separately, then enter its local address and token."}</p></div>
+        <div className="connection-summary"><h2 id="runtime-heading">Runtime connection</h2><p className="meta">{client ? `${client.baseUrl} · Required Pi version ${health?.pi_version ?? "unknown"}` : native ? "Luuna starts your local runtime and connects automatically. Closing the app leaves your runtime running." : "Start the Rust service separately, then enter its local address and token."}</p></div>
         {client ? <button onClick={disconnect}>Disconnect</button> : <form onSubmit={(event) => void connect(event)} className="connection-form">
           <label>Service URL<input type="url" value={url} onChange={(event) => setUrl(event.target.value)} required spellCheck={false} /></label>
           <label>Service token<input type="password" value={token} onChange={(event) => setToken(event.target.value)} autoComplete="off" required placeholder="Session token" /></label>
@@ -253,7 +256,7 @@ export function App() {
           <small>The token stays in memory and is cleared when you disconnect or reload.</small>
           {native && <button type="button" disabled={busy} onClick={() => setNativeStartup((value) => value + 1)}>{busy ? "Starting local runtime…" : "Connect automatically"}</button>}
         </form>}
-        {client && outage && <p className="outage" role="status">{outage} Runs, candidates and worktrees are durable in the runtime; nothing is lost while this panel waits.</p>}
+        {client && outage && <p className="outage callout" data-tone="interrupted" role="status">{outage} Runs, candidates and worktrees are durable in the runtime; nothing is lost while this panel waits.</p>}
       </section>
 
       <Projects client={client} connectionEpoch={connectionEpoch} />
@@ -261,19 +264,19 @@ export function App() {
       <div className="workspace">
         <aside className="panel history" aria-labelledby="history-heading">
           <div className="panel-heading"><h2 id="history-heading">Session history</h2><button className="text-button" disabled={!client} onClick={() => setRefresh((value) => value + 1)}>Refresh</button></div>
-          {runs.length ? <ul>{runs.map((run) => <li key={run.id}><button className={`run-card ${selected === run.id ? "selected" : ""}`} onClick={() => setSelected(run.id)} aria-pressed={selected === run.id}>
+          {runs.length ? <ul className="history-list">{runs.map((run) => <li key={run.id}><button className={`run-card ${selected === run.id ? "selected" : ""}`} onClick={() => setSelected(run.id)} aria-pressed={selected === run.id}>
             <span className="run-prompt">{run.metadata.kind === "baseline" ? `Baseline · ${String(run.metadata.repository_id ?? "")} · manifest r${String(run.metadata.manifest_revision ?? "?")}` : run.metadata.kind === "workflow" ? `Workflow · ${String(run.metadata.plan_id ?? "")} r${String(run.metadata.plan_revision ?? "?")}` : typeof run.metadata.prompt === "string" ? run.metadata.prompt : run.id}</span>
-            <span className="run-meta"><span className={`state ${run.state}`}>{run.state}</span><time dateTime={run.created_at}>{date(run.created_at)}</time></span>
+            <span className="run-meta"><StatusBadge tone={runTone[run.state]}>{run.state}</StatusBadge><time dateTime={run.created_at}>{date(run.created_at)}</time></span>
           </button></li>)}</ul> : <p className="empty">{client ? "No sessions yet. Start one to create a durable run record." : "Connect to see sessions saved by your runtime."}</p>}
         </aside>
 
         <div className="main-column">
-          <section className="panel" aria-labelledby="new-run-heading">
+          <section className="panel start-panel" aria-labelledby="new-run-heading">
             <div className="panel-heading"><h2 id="new-run-heading">Start a Pi session</h2><span className="tag">Isolated demo</span></div>
             <p className="scope">This session runs Pi without repository tools. Use the project workflow above for approved edits, candidate checks and independent review.</p>
             <form onSubmit={(event) => void start(event)}>
               <fieldset disabled={!client || busy}>
-                <div className="model-fields"><label>Provider<input value={provider} onChange={(event) => setProvider(event.target.value)} placeholder="Runtime default" spellCheck={false} /></label><label>Model<input value={model} onChange={(event) => setModel(event.target.value)} placeholder="Runtime default" spellCheck={false} /></label></div>
+                <div className="model-fields field-row"><label>Provider<input value={provider} onChange={(event) => setProvider(event.target.value)} placeholder="Runtime default" spellCheck={false} /></label><label>Model<input value={model} onChange={(event) => setModel(event.target.value)} placeholder="Runtime default" spellCheck={false} /></label></div>
                 <label>Prompt<textarea value={prompt} onChange={(event) => setPrompt(event.target.value)} placeholder="Describe a question for this session…" rows={4} maxLength={32000} required /></label>
                 <div className="form-footer"><small>Uses the runtime’s configured model credentials.</small><button className="primary" disabled={!prompt.trim()}>Start session <span aria-hidden="true">↗</span></button></div>
               </fieldset>
@@ -281,17 +284,17 @@ export function App() {
           </section>
 
           <section className="panel event-panel" aria-labelledby="events-heading">
-            <div className="panel-heading"><h2 id="events-heading">{active ? "Session events" : "Live activity"}</h2>{active && <span className={`state ${active.state}`}>{active.state}</span>}</div>
+            <div className="panel-heading"><h2 id="events-heading">{active ? "Session events" : "Live activity"}</h2>{active && <StatusBadge tone={runTone[active.state]}>{active.state}</StatusBadge>}</div>
             {active ? <>
-              <div className="run-detail"><code>{active.id}</code><span role="status">{live}</span>{canCancel(active.state, candidateActive) && <button className="danger" disabled={busy} onClick={() => void cancel()}>Cancel session</button>}</div>
-              {active.state === "failed" && <p className="failure-note">This session failed. Open the final events below for the runtime’s recorded reason.</p>}
+              <div className="run-detail meta"><code>{active.id}</code><span role="status">{live}</span>{canCancel(active.state, candidateActive) && <button className="danger" disabled={busy} onClick={() => void cancel()}>Cancel session</button>}</div>
+              {active.state === "failed" && <p className="failure-note" data-tone="danger">This session failed. Open the final events below for the runtime’s recorded reason.</p>}
               {output && <div className="assistant-output"><h3>Pi response</h3><pre aria-live="polite">{output}</pre></div>}
               <ol className="events" aria-label="Durable session events" tabIndex={0}>{events.map((event) => <li key={event.event_id}>
                 <details open={event.type.includes("error") || event.type === "run.failed"}><summary><span className="event-number">{event.sequence}</span><span>{event.type}</span><time dateTime={event.timestamp}>{new Date(event.timestamp).toLocaleTimeString()}</time></summary><pre>{JSON.stringify(event.payload, null, 2)}</pre></details>
               </li>)}</ol>
               {!events.length && <p className="empty">Waiting for the runtime’s event record…</p>}
-              <p className="event-caption">Events replay from the last received sequence after a connection interruption. A completed session is not a validation result.</p>
-            </> : <div className="activity-empty"><span aria-hidden="true">◌</span><p>Select a session or start a new one.</p><small>Live output and persisted event history appear here.</small></div>}
+              <p className="event-caption meta">Events replay from the last received sequence after a connection interruption. A completed session is not a validation result.</p>
+            </> : <div className="activity-empty empty-box"><span aria-hidden="true">◌</span><p>Select a session or start a new one.</p><small>Live output and persisted event history appear here.</small></div>}
           </section>
         </div>
       </div>

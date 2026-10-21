@@ -1,0 +1,31 @@
+/* Screen: workflows. Layout and screen-specific presentation, tokens only (docs/DESIGN-SYSTEM.md). */
+/*
+ * The candidate review sits inside a ticket card and reuses .ticket-actions, .failure-note and
+ * .facts, so every rule here is scoped by a class unique to this screen. The subpanel grid spaces
+ * the heading, scope, alert, ticket form, run settings and tickets; the form group, tray, field
+ * row, meta line and reason/next-step rules come from components.css.
+ */
+
+/* Run settings: writer paths, writes and approver share a wrapping field row in the tray. */
+.plan-controls > label:first-child { flex-grow: 2; }
+.plan-controls > .checkbox { flex: none; min-height: var(--control-height); }
+.workflow-models > small { max-width: var(--measure); }
+
+/* Ticket cards: title and descriptor, intent, actions with the run badge, then the evidence. */
+.tickets { gap: var(--space-5); }
+.ticket-card { gap: var(--space-2); padding: var(--space-3) var(--space-4); }
+.ticket-head { display: flex; flex-wrap: wrap; align-items: baseline; justify-content: space-between; gap: var(--space-1) var(--space-3); min-width: 0; }
+.ticket-head > strong { min-width: 0; color: var(--color-text); font-size: var(--text-md); line-height: var(--leading-tight); overflow-wrap: anywhere; }
+.ticket-head > .state { flex: none; }
+.ticket-intent { max-width: var(--measure); color: var(--color-text-muted); line-height: var(--leading); overflow-wrap: anywhere; }
+.ticket-card > .ticket-actions > .state { margin-left: auto; }
+
+/* Plan review: the full hash, the complete plan in a bounded region, then the acknowledgment. */
+.plan-review { display: grid; grid-template-columns: minmax(0, 1fr); gap: var(--space-2); min-width: 0; padding-top: var(--space-3); border-top: var(--border-width) solid var(--color-border); }
+.plan-review > pre[aria-label] { max-height: var(--plan-max); min-width: 0; }
+.plan-review > button { justify-self: start; }
+
+@media (max-width: 680px) {
+  .ticket-card { padding: var(--space-3); }
+  .ticket-card > .ticket-actions > .state { margin-left: 0; }
+}
