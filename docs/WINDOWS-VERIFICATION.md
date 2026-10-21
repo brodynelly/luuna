@@ -3,7 +3,19 @@
 Date: October 21, 2026. This is Windows evidence, separate from the historical
 Linux reports and the original documentation validation report.
 
-## Latest result: component integration and final development upgrade
+## Latest result: merged design system and component workflows
+
+The component work was combined with current `main` and its desktop design
+system in [PR 10](https://github.com/brodynelly/luuna/pull/10). The rebuilt
+native frontend passed 27 component and 55 lifecycle/presentation checks,
+including both colour schemes. Browser checks passed 23 component and 57
+lifecycle/presentation assertions, including 760 px layout. Pinned Node 24.19.0
+checks exposed and verified a Windows verbatim-path/junction scope-guard fix.
+The final runtime passed 185 Rust tests with 10 explicit ignores, formatting
+and Clippy, and was restored with existing state and credentials. See
+[the complete accounting and artifact identities](MAIN-INTEGRATION-2026-10-21.md).
+
+## Earlier result: component integration and final development upgrade
 
 The final component-enabled runtime was installed and started on October 21,
 2026 after the user chose unsigned development and switched Smart App Control

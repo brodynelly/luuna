@@ -69,6 +69,7 @@ test("Windows canonical scope and ordinary Pi cwd refer to the same worktree", {
     const reviewer = { ...scope, root: scopeRoot, operations: ["read"] };
     assert.equal(decide("read", { path: "src/main.py" }, cwd, reviewer), null);
     assert.match(decide("read", { path: "escape/secret.txt" }, cwd, reviewer), /outside the leased worktree/);
+    assert.match(decide("read", { path: toNamespacedPath(join(root, "escape", "missing", "secret.txt")) }, cwd, reviewer), /outside the leased worktree/);
     assert.match(decide("write", { path: "src/main.py" }, cwd, reviewer), /needs the write operation/);
   }
 });

@@ -1,5 +1,7 @@
 # Ground-zero foundation status
 
+Current main-integration verification (October 21, 2026): all 46 initially local changed/new files were preserved and combined with PR 9's design system in [PR 10](https://github.com/brodynelly/luuna/pull/10). Final Windows checks passed 185 Rust tests (10 explicit ignores), pinned Node/npm tests, typecheck/build, 27 native and 23 browser component assertions, and 55 native/57 browser lifecycle/presentation assertions. The subsequent Node 24 Windows scope-guard fix has final Rust and pinned guard-test evidence; the UI reports retain their earlier exact runtime identity. See [local accounting, failures and verification limits](MAIN-INTEGRATION-2026-10-21.md). Hosted Actions jobs could not start because of the account billing/spending limit.
+
 The historical entries below retain their original scope and evidence. The current component runtime slice is recorded in [Runtime component workflows](#runtime-component-workflows-october-21-2026); extraction is covered separately by ADR 0012 and its evidence report.
 
 Date: October 16, 2026, updated October 17, 2026 with the M1, M2a and M2b closure evidence below and October 21, 2026 with the re-validation gate, shutdown interruption and the desktop smoke. This records checks performed in the Linux cloud checkout, separately from the historical documentation validation report. No remote commit, package publication, signed installer, or GitHub CI result is implied.

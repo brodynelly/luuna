@@ -25,7 +25,10 @@ export function realize(target) {
   }
   let base;
   try {
-    base = realpathSync(existing);
+    // Node 24's JS realpath implementation can reject Windows verbatim paths
+    // before following junctions. The native implementation resolves both
+    // spellings (and DOS short names) before the scope comparison below.
+    base = process.platform === "win32" ? realpathSync.native(existing) : realpathSync(existing);
   } catch {
     base = existing;
   }
