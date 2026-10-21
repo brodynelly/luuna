@@ -76,7 +76,8 @@ print("hold check finished")
 function createFixture(name, withHold) {
   const dir = path.join(out, "fixtures", name);
   mkdirSync(dir, { recursive: true });
-  const files = { "README.md": `# ${name} fixture\n`, "pyproject.toml": `[project]\nname = "${name}"\n`, "src/__init__.py": "", "src/main.py": "print('fixture')\n", "test_main.py": UNIT_TEST };
+  // Python's bytecode cache is ignored so a baseline on the developer checkout leaves it clean.
+  const files = { ".gitignore": "__pycache__/\n", "README.md": `# ${name} fixture\n`, "pyproject.toml": `[project]\nname = "${name}"\n`, "src/__init__.py": "", "src/main.py": "print('fixture')\n", "test_main.py": UNIT_TEST };
   if (withHold) files["checks/hold.py"] = HOLD_CHECK;
   for (const [relative, content] of Object.entries(files)) {
     mkdirSync(path.dirname(path.join(dir, relative)), { recursive: true });
@@ -190,6 +191,13 @@ async function waitRunState(title, states, timeoutMs) {
 }
 async function waitCandidateState(title, states, timeoutMs) {
   return waitFor(async () => { const state = await candidateStateOf(title); return states.includes(state) ? state : null; }, timeoutMs, 400);
+}
+const SETTLED = ["reviewed", "failed", "paused", "cancelled", "interrupted", "testing blocked"];
+/** After an action restarts work on a settled candidate, wait until the panel shows it has left `previous`, then until it settles again. */
+async function waitCandidateAfter(title, previous, timeoutMs) {
+  const moved = await waitFor(async () => { const state = await candidateStateOf(title); return state && state !== previous ? state : null; }, 30_000, 300);
+  if (!moved) return null;
+  return waitCandidateState(title, SETTLED, timeoutMs);
 }
 async function connected() { return (await page.locator(".connection").innerText()).trim(); }
 async function waitConnection(text, timeoutMs) { return waitFor(async () => ((await connected()).includes(text) ? text : null), timeoutMs, 300); }
@@ -341,16 +349,16 @@ async function walkthrough() {
   // status is asserted when observed and otherwise the fast settlement is.
   const active = await waitFor(async () => ((await item.locator('[role="status"]').count()) ? await item.locator('[role="status"]').first().innerText() : (await candidateStateOf(title)) !== "pending" ? "settled before the panel polled" : null), 20_000);
   record("walkthrough: active validation reports what the runtime is doing with cancellation available, or settles within a poll", Boolean(active), active ?? "no status");
-  const failed = await waitCandidateState(title, ["failed", "reviewed", "paused", "cancelled", "interrupted", "testing blocked"], 120_000);
+  const failed = await waitCandidateState(title, SETTLED, 120_000);
   const reason = (await item.locator(".candidate-review .failure-note").first().innerText().catch(() => "")).trim();
   const tests = (await item.locator(".candidate-checks").innerText()).includes("Tests detected");
   record("walkthrough: the invalid synthetic review fails the candidate without a verdict and the passed unittest check shows its detected test count", failed === "failed" && /invalid structured reviewer response/.test(reason) && tests, `candidate ${failed}; ${reason.slice(0, 80)}; tests detected shown: ${tests}`);
   const revalidate = item.getByRole("button", { name: "Re-validate and review" });
-  record("walkthrough: the runtime offers re-validation in place with the reason and no writer attempt", (await revalidate.count()) === 1 && (await item.locator(".candidate-review p.recovery-note").innerText()).includes("No writer attempt is spent") && (await item.getByRole("button", { name: "Repair candidate" }).count()) === 0, "Re-validate and review shown; Repair candidate hidden at max_attempts 1");
+  record("walkthrough: the runtime offers re-validation in place with the reason and no writer attempt (repair stays available under the default two-attempt budget)", (await revalidate.count()) === 1 && (await item.locator(".candidate-review p.recovery-note").innerText()).includes("No writer attempt is spent") && (await item.getByRole("button", { name: "Repair candidate" }).count()) === 1, "Re-validate and review and Repair candidate shown");
   await screenshot("03-invalid-review");
   await revalidate.focus();
   await page.keyboard.press("Enter");
-  const reviewed = await waitCandidateState(title, ["reviewed", "failed", "paused", "cancelled", "interrupted"], 120_000);
+  const reviewed = await waitCandidateAfter(title, "failed", 120_000);
   const verdict = (await item.locator(".candidate-verdict").innerText()).replace(/\s+/g, " ");
   const generationNote = (await item.locator(".candidate-checks").evaluate((element) => element.textContent ?? "")).includes("c1-g2-");
   record("walkthrough: re-validation reaches reviewed with a passed verdict on the same candidate, as generation 2", reviewed === "reviewed" && /Verdict: passed/.test(verdict) && generationNote && (await runStateOf(title)) === "reviewed", `candidate ${reviewed}; ${verdict.slice(0, 60)}`);
@@ -394,7 +402,7 @@ async function recovery() {
   record("recovery A: after restart the client reconnects by itself and shows the run and candidate as interrupted with the recorded reason and next step", Boolean(back) && interruptedA === "interrupted" && candidateA === "interrupted" && /interrupt|restart/i.test(reasonA) && /Validate again/.test(reasonA), reasonA.slice(0, 120));
   record("recovery A: the outage note clears once the runtime answers", (await page.locator(".outage").count()) === 0);
   await itemA.getByRole("button", { name: "Validate and review" }).click();
-  const reviewedA = await waitCandidateState(first, ["reviewed", "failed", "paused", "cancelled", "interrupted"], 120_000);
+  const reviewedA = await waitCandidateAfter(first, "interrupted", 120_000);
   record("recovery A: validating again runs a fresh generation of the same candidate and reaches reviewed", reviewedA === "reviewed" && (await itemA.locator(".candidate-checks").evaluate((element) => element.textContent ?? "")).includes("c1-g2-"), `candidate ${reviewedA}`);
   await screenshot("06-recovered");
 
@@ -416,7 +424,7 @@ async function recovery() {
   const reasonB = (await itemB.locator("small.failure-note").first().innerText().catch(() => "")).trim();
   record("recovery B: explicit shutdown recorded interruption (resumable), not cancellation, with the shutdown reason shown", interruptedB === "interrupted" && candidateB === "interrupted" && /interrupted by runtime shutdown/.test(reasonB), `run ${interruptedB}, candidate ${candidateB}; ${reasonB.slice(0, 100)}`);
   await itemB.getByRole("button", { name: "Validate and review" }).click();
-  const reviewedB = await waitCandidateState(second, ["reviewed", "failed", "paused", "cancelled", "interrupted"], 120_000);
+  const reviewedB = await waitCandidateAfter(second, "interrupted", 120_000);
   record("recovery B: the interrupted candidate resumes with a fresh generation and reaches reviewed", reviewedB === "reviewed", `candidate ${reviewedB}`);
 
   // C. Hard kill while the reviewer is in flight → reserved spend → re-validation refused with guidance.
