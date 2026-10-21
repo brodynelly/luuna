@@ -8,9 +8,13 @@ use std::{fs, path::Path, time::Duration};
 use thiserror::Error;
 
 mod baselines;
+mod components;
+mod missions;
 mod projects;
 mod validation;
 mod writer;
+pub use components::*;
+pub use missions::MissionsBinding;
 pub use projects::*;
 pub use writer::AttemptRecord;
 
@@ -90,7 +94,10 @@ impl Store {
         connection.execute_batch(MIGRATION_3)?;
         connection.execute_batch(MIGRATION_4)?;
         connection.execute_batch(MIGRATION_5)?;
-        Ok(Self { connection })
+        connection.execute_batch(MIGRATION_6)?;
+        let store = Self { connection };
+        store.initialize_component_state()?;
+        Ok(store)
     }
 
     /// A run is one owned Pi attempt in M1. Metadata is descriptive, never authority.
@@ -597,5 +604,17 @@ CREATE TABLE IF NOT EXISTS candidate_reviews(id TEXT PRIMARY KEY, candidate_hash
 CREATE TRIGGER IF NOT EXISTS immutable_candidate_reviews_update BEFORE UPDATE ON candidate_reviews BEGIN SELECT RAISE(ABORT,'immutable candidate review'); END;
 CREATE TRIGGER IF NOT EXISTS immutable_candidate_reviews_delete BEFORE DELETE ON candidate_reviews BEGIN SELECT RAISE(ABORT,'immutable candidate review'); END;
 INSERT OR IGNORE INTO schema_migrations(version) VALUES (5);
+COMMIT;
+";
+
+const MIGRATION_6: &str = "
+BEGIN IMMEDIATE;
+CREATE TABLE IF NOT EXISTS ticket_sources(
+ ticket_id TEXT PRIMARY KEY REFERENCES tickets(id), project_id TEXT NOT NULL REFERENCES projects(id),
+ source_id TEXT, source_revision TEXT, original_payload TEXT NOT NULL,
+ UNIQUE(project_id,source_id));
+CREATE TABLE IF NOT EXISTS ticket_delivery_attempts(
+ ticket_id TEXT PRIMARY KEY REFERENCES ticket_sources(ticket_id));
+INSERT OR IGNORE INTO schema_migrations(version) VALUES (6);
 COMMIT;
 ";

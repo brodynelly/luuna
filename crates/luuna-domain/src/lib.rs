@@ -183,6 +183,43 @@ pub struct PlanRevision {
     pub tasks: Vec<PlanTask>,
     pub required_checks: Vec<CheckRecipe>,
     pub budgets: Budgets,
+    /// Explicit, hash-bound component references. Absence preserves old plan hashes.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub component_context: Option<ComponentContext>,
+    pub hash: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct ComponentContext {
+    pub memory: Vec<MemoryReference>,
+    pub prompt: Option<ApprovedPrompt>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct MemoryReference {
+    pub id: String,
+    pub scope: String,
+    pub hash: String,
+    pub content: String,
+    pub provenance: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct ApprovedPrompt {
+    pub name: String,
+    pub version: u64,
+    pub hash: String,
+    pub body: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct PromptReference {
+    pub name: String,
+    pub version: u64,
     pub hash: String,
 }
 
@@ -216,6 +253,29 @@ impl PlanRevision {
     }
 
     fn validate_payload(&self) -> Result<(), DomainError> {
+        if let Some(context) = &self.component_context {
+            let mut ids = std::collections::BTreeSet::new();
+            if context.memory.len() > 16
+                || context.memory.iter().any(|memory| {
+                    memory.id.is_empty()
+                        || !ids.insert(memory.id.clone())
+                        || !is_hash(&memory.hash)
+                        || memory.content.trim().is_empty()
+                        || memory.provenance.trim().is_empty()
+                        || memory.provenance.len() > 1000
+                        || !matches!(memory.scope.as_str(), "project" | "process" | "user")
+                })
+                || context.prompt.as_ref().is_some_and(|prompt| {
+                    prompt.name.is_empty()
+                        || prompt.version == 0
+                        || !is_hash(&prompt.hash)
+                        || prompt.body.trim().is_empty()
+                })
+                || serde_json::to_vec(context)?.len() > 16_000
+            {
+                return invalid("invalid or duplicated approved component resources");
+            }
+        }
         if self.schema_version != SCHEMA_VERSION || self.canonicalization != CANONICALIZATION {
             return invalid("unsupported schema or canonicalization version");
         }
@@ -562,7 +622,8 @@ pub(crate) fn is_hash(value: &str) -> bool {
                 .all(|b| b.is_ascii_digit() || (b'a'..=b'f').contains(&b))
     })
 }
-pub(crate) fn hash_value(value: &serde_json::Value) -> Result<String, DomainError> {
+/// Canonical luuna-json-v1 content identity, shared by runtime resource bindings.
+pub fn hash_value(value: &serde_json::Value) -> Result<String, DomainError> {
     fn sorted(value: &serde_json::Value) -> serde_json::Value {
         match value {
             serde_json::Value::Object(map) => {
@@ -584,6 +645,47 @@ mod tests {
     fn plan() -> PlanRevision {
         serde_json::from_str(include_str!("../../../fixtures/domain/plan.valid.json")).unwrap()
     }
+    #[test]
+    fn approved_component_bytes_are_part_of_the_plan_hash() {
+        let mut plan = plan();
+        plan.component_context = Some(ComponentContext {
+            memory: vec![MemoryReference {
+                id: "mem-1".into(),
+                scope: "project".into(),
+                hash: format!("sha256:{}", "1".repeat(64)),
+                content: "Selected content".into(),
+                provenance: "Explicit fixture".into(),
+            }],
+            prompt: Some(ApprovedPrompt {
+                name: "guidance".into(),
+                version: 1,
+                hash: format!("sha256:{}", "2".repeat(64)),
+                body: "Selected guidance".into(),
+            }),
+        });
+        let sealed = plan.seal().unwrap();
+        let mut changed = sealed.clone();
+        changed.component_context.as_mut().unwrap().memory[0]
+            .content
+            .push('!');
+        assert_ne!(
+            sealed.computed_hash().unwrap(),
+            changed.computed_hash().unwrap()
+        );
+        assert!(changed.validate().is_err());
+        let mut changed = sealed.clone();
+        changed
+            .component_context
+            .as_mut()
+            .unwrap()
+            .prompt
+            .as_mut()
+            .unwrap()
+            .body
+            .push('!');
+        assert!(changed.validate().is_err());
+    }
+
     fn approval(plan: &PlanRevision) -> Approval {
         Approval {
             schema_version: SCHEMA_VERSION.into(),

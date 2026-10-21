@@ -473,6 +473,107 @@ async fn an_approved_writer_changes_only_its_worktree_and_records_a_candidate() 
 }
 
 #[tokio::test]
+#[ignore = "requires pinned Bun and real component checkouts; synthetic Pi only; run with --ignored"]
+async fn component_source_edits_during_writer_and_reviewer_cannot_accept_stale_work() {
+    let fixture_root = tempfile::tempdir().unwrap();
+    let release_writer = fixture_root.path().join("release-writer");
+    let release_reviewer = fixture_root.path().join("release-reviewer");
+    let fixture = include_str!("../../../fixtures/pi-rpc/mock_pi.py");
+    // Hold genuine owned synthetic worker processes after their source checks,
+    // without changing production CLI sources or the shared protocol fixture.
+    let fixture = fixture.replace(
+        "    message = {\"role\": \"assistant\", \"stopReason\": \"stop\", \"usage\": usage(cost),",
+        &format!("    if scenario == 'write_in_scope':\n        while not os.path.exists({}):\n            time.sleep(0.025)\n    message = {{\"role\": \"assistant\", \"stopReason\": \"stop\", \"usage\": usage(cost),", serde_json::to_string(&release_writer.to_string_lossy()).unwrap()),
+    ).replace(
+        "    review = {\"schema_version\": \"0.1\", \"id\": \"review-fixture\",",
+        &format!("    if scenario == 'review_source_drift':\n        while not os.path.exists({}):\n            time.sleep(0.025)\n    review = {{\"schema_version\": \"0.1\", \"id\": \"review-fixture\",", serde_json::to_string(&release_reviewer.to_string_lossy()).unwrap()),
+    );
+    let script = fixture_root.path().join("held_pi.py");
+    fs::write(&script, fixture).unwrap();
+    let harness = Harness::with_pi(script);
+    let repo = tempfile::tempdir().unwrap();
+    ready(&harness, repo.path()).await;
+    let before = snapshot(repo.path());
+    let components = luuna_components::Components::discover()
+        .expect("explicit test requires pinned component toolchain");
+    let (status, enabled) = harness
+        .request("POST", "/api/v1/projects/fixture/components", None)
+        .await;
+    assert_eq!(status, StatusCode::OK, "{enabled}");
+    for (scenario, release, reviewing) in [
+        ("write_in_scope", &release_writer, false),
+        ("review_source_drift", &release_reviewer, true),
+    ] {
+        let (run_id, plan) = harness
+            .approved(repo.path(), scenario, json!({"timeout_seconds":120}))
+            .await;
+        let (status, body) = harness.implement(&run_id).await;
+        assert_eq!(status, StatusCode::ACCEPTED, "{body}");
+        if reviewing {
+            assert_eq!(harness.settled(&run_id).await["state"], "validating");
+            let candidate = harness.candidate(&run_id).await;
+            let (status, body) = harness
+                .candidate_action(
+                    &run_id,
+                    "validate",
+                    &candidate["evidence"]["candidate"]["hash"],
+                )
+                .await;
+            assert_eq!(status, StatusCode::ACCEPTED, "{body}");
+            harness.wait_for_event(&run_id, "review.started").await;
+        } else {
+            harness
+                .wait_for_event(&run_id, "pi.tool_execution_end")
+                .await;
+        }
+        let (status, source) = harness
+            .request(
+                "GET",
+                &format!(
+                    "/api/v1/tickets/{}/source",
+                    plan["ticket_id"].as_str().unwrap()
+                ),
+                None,
+            )
+            .await;
+        assert_eq!(status, StatusCode::OK, "{source}");
+        components
+            .call(
+                "missions",
+                &PathBuf::from(source["workspace"].as_str().unwrap()),
+                &[
+                    "update".into(),
+                    source["source_id"].as_str().unwrap().into(),
+                    "--title=Changed externally during the active worker".into(),
+                ],
+            )
+            .await
+            .unwrap();
+        fs::write(release, "continue").unwrap();
+        if reviewing {
+            let stopped = harness.candidate_settled(&run_id).await;
+            assert_eq!(stopped["evidence"]["status"], "failed", "{stopped}");
+            assert!(stopped["evidence"]["review"].is_null(), "{stopped}");
+        } else {
+            assert_eq!(harness.settled(&run_id).await["state"], "failed");
+            assert!(harness.candidate(&run_id).await["evidence"].is_null());
+            let (_, attempts) = harness
+                .request("GET", &format!("/api/v1/runs/{run_id}/attempts"), None)
+                .await;
+            assert_eq!(attempts[0]["state"], "failed", "{attempts}");
+        }
+        let events = harness.events(&run_id).await;
+        assert!(
+            !events
+                .iter()
+                .any(|event| event["type"] == "candidate.reviewed"),
+            "{events:?}"
+        );
+        assert_eq!(snapshot(repo.path()), before);
+    }
+}
+
+#[tokio::test]
 async fn stale_or_missing_approval_base_recipe_baseline_and_repository_are_refused() {
     let harness = Harness::new();
     let repo = tempfile::tempdir().unwrap();

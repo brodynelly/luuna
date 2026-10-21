@@ -216,6 +216,7 @@ pub async fn validate(
             .execution;
         (run, evidence, plan, execution)
     };
+    crate::integrations::verify_plan_sources(&state, &plan).await?;
     let provider = request
         .provider
         .or_else(|| state.config.provider.clone())
@@ -426,9 +427,13 @@ pub async fn validate(
             current_worktree = path;
             current_diff = next_diff;
         }
-        if let Ok(mut active) = worker.active.lock() {
+        // Shutdown observes this map, so release AppState/data-directory
+        // ownership before publishing worker completion to its waiter.
+        let active_runs = worker.active.clone();
+        drop(worker);
+        if let Ok(mut active) = active_runs.lock() {
             active.remove(&id);
-        }
+        };
     });
     Ok((StatusCode::ACCEPTED, Json(started)))
 }
@@ -450,6 +455,37 @@ fn settle_failure(state: &AppState, id: &str, evidence: &CandidateEvidence, reas
                 next,
                 &reason,
             );
+        }
+    }
+}
+
+/// Fresh source reads are part of the approved stage, including their elapsed
+/// time. A slow or unavailable component must not extend a model/check budget.
+async fn verify_sources_within_budget(
+    state: &AppState,
+    run_id: &str,
+    plan: &PlanRevision,
+    cancel: &mut watch::Receiver<bool>,
+) -> Result<Option<Value>, String> {
+    let usage = state
+        .store
+        .lock()
+        .map_err(|e| e.to_string())?
+        .workflow_usage(run_id)
+        .map_err(|e| e.to_string())?;
+    let remaining = plan
+        .budgets
+        .timeout_seconds
+        .saturating_sub(usage.elapsed_seconds);
+    if remaining == 0 {
+        return Err("budget exceeded before component source verification".into());
+    }
+    tokio::select! {
+        biased;
+        _ = cancel.changed() => Err("cancelled during component source verification".into()),
+        result = tokio::time::timeout(Duration::from_secs(remaining),crate::integrations::verify_plan_sources(state,plan)) => {
+            result.map_err(|_| "budget exceeded during component source verification".to_owned())?
+                .map_err(|error| error.1)
         }
     }
 }
@@ -595,6 +631,8 @@ async fn pipeline(
         }
     }
     verify(state, evidence, repo, worktree).await?;
+    charge(0)?;
+    verify_sources_within_budget(state,id,plan,&mut cancel).await?;
     if *cancel.borrow() {
         return Err("cancelled before validation verdict".into());
     }
@@ -665,9 +703,11 @@ async fn pipeline(
         .get_ticket(&plan.ticket_id)
         .map_err(|e| e.to_string())?
         .ok_or("ticket missing")?;
+    charge(0)?;
+    let component_resources = verify_sources_within_budget(state,id,plan,&mut cancel).await?;
     // The generation tells a reviewer that an earlier reviewer of this exact
     // candidate left no verdict; it never carries that reviewer's output.
-    let prompt = json!({"assignment":"Luuna independent reviewer", "candidate_hash":hash,"reviewer_session":session,"validation_generation":evidence.validation_generation,"requirements":{"title":ticket.title,"intent":ticket.intent,"tasks":plan.tasks},"checks":checks,"diff":diff}).to_string();
+    let prompt = json!({"assignment":"Luuna independent reviewer", "candidate_hash":hash,"reviewer_session":session,"validation_generation":evidence.validation_generation,"requirements":{"title":ticket.title,"intent":ticket.intent,"tasks":plan.tasks},"approved_component_resources":component_resources,"checks":checks,"diff":diff}).to_string();
     let config = PiConfig {
         program: state.config.pi_program.clone(),
         launcher_args: state.config.pi_launcher_args.clone(),
@@ -808,6 +848,8 @@ async fn pipeline(
         .validate_for(&evidence.candidate, &evidence.implementer_session)
         .map_err(|e| e.to_string())?;
     verify(state, evidence, repo, worktree).await?;
+    charge(0)?;
+    verify_sources_within_budget(state,id,plan,&mut cancel).await?;
     // The final identity check is charged too: a review whose verification
     // pushed it past the approved budget is not recorded as accepted work.
     charge(0)?;

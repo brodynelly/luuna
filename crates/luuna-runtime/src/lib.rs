@@ -49,15 +49,31 @@ pub struct AppState {
     config: Arc<RuntimeConfig>,
     git: Arc<GitInspector>,
     executor: Arc<Executor>,
+    components: Option<Arc<luuna_components::Components>>,
+    component_locks: Arc<tokio::sync::Mutex<()>>,
     /// Set by explicit shutdown before owned work is signalled to stop.
     shutting_down: Arc<std::sync::atomic::AtomicBool>,
     shutdown_requested: Arc<Notify>,
     admission: Arc<RwLock<()>>,
-    _owner_lock: Arc<std::fs::File>,
+    _owner_lock: Arc<RuntimeOwnership>,
+}
+
+/// The final logical runtime owner releases its lock explicitly. On Unix a
+/// concurrent fork may briefly inherit the open file description before exec
+/// closes its CLOEXEC descriptor; merely closing our file could otherwise
+/// retain the lock until that unrelated child completes exec.
+struct RuntimeOwnership(std::fs::File);
+
+impl Drop for RuntimeOwnership {
+    fn drop(&mut self) {
+        let _ = FileExt::unlock(&self.0);
+    }
 }
 
 mod baselines;
 mod candidates;
+mod integrations;
+mod missions;
 mod projects;
 mod writer;
 pub use baselines::{ArtifactId, StartBaseline};
@@ -66,6 +82,14 @@ pub use writer::{
     ApprovePlan, BudgetRequest, CreatePlan, CreateTicket, Implement, PlanApproved, PlanOpened,
     PlanTaskRequest,
 };
+
+fn discovered_components() -> Option<Arc<luuna_components::Components>> {
+    static COMPONENTS: std::sync::OnceLock<Option<Arc<luuna_components::Components>>> =
+        std::sync::OnceLock::new();
+    COMPONENTS
+        .get_or_init(|| luuna_components::Components::discover().ok().map(Arc::new))
+        .clone()
+}
 
 impl AppState {
     pub fn open(config: RuntimeConfig) -> Result<Self, Box<dyn std::error::Error>> {
@@ -94,6 +118,8 @@ impl AppState {
         owner_lock
             .try_lock_exclusive()
             .map_err(|_| "another Luuna runtime already owns this data directory")?;
+        // Own the acquired lease before fallible state initialization too.
+        let owner_lock = RuntimeOwnership(owner_lock);
         let mut store = Store::open(config.data_dir.join("luuna.sqlite3"))?;
         store.interrupt_active_runs()?;
         let git = GitInspector {
@@ -106,11 +132,19 @@ impl AppState {
             config: Arc::new(config),
             git: Arc::new(git),
             executor: Arc::new(Executor::default()),
+            components: discovered_components(),
+            component_locks: Arc::new(tokio::sync::Mutex::new(())),
             shutting_down: Arc::new(std::sync::atomic::AtomicBool::new(false)),
             shutdown_requested: Arc::new(Notify::new()),
             admission: Arc::new(RwLock::new(())),
             _owner_lock: Arc::new(owner_lock),
         })
+    }
+
+    /// Override the component toolchain in isolated adapter tests.
+    pub fn with_components(mut self, components: luuna_components::Components) -> Self {
+        self.components = Some(Arc::new(components));
+        self
     }
 
     pub fn cancel_active(&self) {
@@ -211,6 +245,31 @@ impl AppState {
 
 pub fn router(state: AppState) -> Router {
     let protected = Router::new()
+        .route(
+            "/api/v1/projects/{id}/components",
+            get(integrations::status).post(integrations::enable),
+        )
+        .route(
+            "/api/v1/projects/{id}/memory",
+            get(integrations::list_memory).post(integrations::create_memory),
+        )
+        .route(
+            "/api/v1/projects/{id}/memory/{memory_id}",
+            axum::routing::delete(integrations::delete_memory),
+        )
+        .route(
+            "/api/v1/projects/{id}/prompts",
+            get(integrations::list_prompts).post(integrations::create_prompt),
+        )
+        .route(
+            "/api/v1/projects/{id}/prompts/{name}/render",
+            get(integrations::render_prompt),
+        )
+        .route("/api/v1/tickets/{id}/source", get(writer::ticket_source))
+        .route(
+            "/api/v1/tickets/{id}/reconcile",
+            post(writer::reconcile_ticket),
+        )
         .route("/api/v1/shutdown", post(request_shutdown))
         .route("/api/v1/runs", get(list_runs).post(start_run))
         .route("/api/v1/runs/{id}", get(get_run))
@@ -270,6 +329,7 @@ pub fn router(state: AppState) -> Router {
             axum::http::Method::GET,
             axum::http::Method::POST,
             axum::http::Method::PUT,
+            axum::http::Method::DELETE,
         ])
         .allow_headers([
             header::AUTHORIZATION,
@@ -447,9 +507,13 @@ async fn start_run(
             rx,
         )
         .await;
-        if let Ok(mut active) = worker_state.active.lock() {
+        // An empty active map must mean worker ownership of the data directory
+        // is released, so shutdown/reopen cannot race the task's final drop.
+        let active_runs = worker_state.active.clone();
+        drop(worker_state);
+        if let Ok(mut active) = active_runs.lock() {
             active.remove(&id);
-        }
+        };
     });
     Ok((StatusCode::ACCEPTED, Json(run)))
 }
@@ -717,4 +781,54 @@ async fn run_worker(
         ),
     };
     let _ = state.finish(&id, terminal, payload);
+}
+
+#[cfg(test)]
+mod integrations_tests;
+
+#[cfg(test)]
+mod ownership_tests {
+    use super::*;
+
+    fn config(root: &std::path::Path) -> RuntimeConfig {
+        RuntimeConfig {
+            data_dir: root.into(),
+            pi_program: "node".into(),
+            git_program: "git".into(),
+            pi_launcher_args: vec![],
+            provider: None,
+            model: None,
+            token: "synthetic-ownership-token-at-least-32-bytes".into(),
+            max_run_seconds: 10,
+        }
+    }
+
+    #[test]
+    fn runtime_ownership_is_retained_until_the_last_state_clone_drops() {
+        let root = tempfile::tempdir().unwrap();
+        let settings = config(root.path());
+        let state = AppState::open(settings.clone()).unwrap();
+        let active_owner = state.clone();
+        drop(state);
+        assert!(AppState::open(settings.clone()).is_err());
+        drop(active_owner);
+        assert!(AppState::open(settings).is_ok());
+    }
+
+    #[test]
+    #[cfg(unix)]
+    fn runtime_final_drop_unlocks_even_when_a_fork_style_duplicate_stays_open() {
+        let root = tempfile::tempdir().unwrap();
+        let settings = config(root.path());
+        let state = AppState::open(settings.clone()).unwrap();
+        // dup/fork descriptors share the same open file description/flock.
+        // Keep one alive deterministically instead of racing fork and exec.
+        let inherited = state._owner_lock.0.try_clone().unwrap();
+        assert!(AppState::open(settings.clone()).is_err());
+        drop(state);
+        let replacement = AppState::open(settings)
+            .expect("a stale inherited descriptor must not extend logical runtime ownership");
+        drop(inherited);
+        drop(replacement);
+    }
 }

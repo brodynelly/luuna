@@ -164,3 +164,31 @@ footer { margin: 0 auto; max-width: 1280px; padding: 20px 42px 30px; border-top:
 .state.validating, .state.reviewing { background: #293d5d; color: #b4ceff; }
 .state.testing_blocked, .state.paused, .state.blocked, .state.blocking { background: #482c33; color: #edb0bb; }
 @media (max-width: 720px) { .plan-controls { grid-template-columns: 1fr; } }
+
+/* Runtime-backed project components share the existing workflow panel tokens. */
+.project-components { border-top: 1px solid #303640; margin: 20px 0; padding-top: 16px; min-width: 0; }
+.project-components h3 { margin: 0; font-size: 15px; }
+.project-components h4 { margin: 0 0 12px; font-size: 13px; }
+.project-components > [role="status"] { margin-bottom: 12px; color: #abb8d5; font-size: 12px; }
+.component-location { margin: 12px 0; }
+.component-location code, .component-location small { display: block; overflow-wrap: anywhere; margin: 6px; }
+.component-columns { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 20px; margin-top: 18px; }
+.component-columns section { min-width: 0; }
+.project-components fieldset { display: grid; gap: 10px; }
+.project-components input[type="checkbox"] { width: auto; margin: 0; flex: 0 0 auto; }
+.project-components .checkbox, .component-selection { display: flex; gap: 8px; align-items: center; font-size: 12px; }
+.project-components .checkbox { margin-bottom: 12px; }
+.project-components select { width: 100%; margin-top: 6px; border: 1px solid #3a414e; border-radius: 6px; background: #11151b; color: #eef1f8; padding: 9px 11px; font: inherit; }
+.project-components select:focus-visible { outline: 2px solid #c3d1ff; outline-offset: 3px; }
+.component-search { display: flex; flex-wrap: wrap; align-items: end; gap: 8px; margin-bottom: 14px; }
+.component-search label { flex: 1 1 140px; }
+.component-records { list-style: none; margin: 14px 0; padding: 0; display: grid; gap: 10px; }
+.component-records li { display: grid; gap: 8px; padding: 12px; border: 1px solid #303640; border-radius: 7px; min-width: 0; }
+.component-records p { white-space: pre-wrap; overflow-wrap: anywhere; font-size: 12px; }
+.component-records small, .component-record-meta code { overflow-wrap: anywhere; }
+.component-record-meta { display: flex; gap: 12px; align-items: center; justify-content: space-between; font-size: 10px; }
+.prompt-preview { display: grid; gap: 10px; padding-top: 12px; border-top: 1px solid #303640; }
+.prompt-preview pre { margin: 0; max-height: 300px; overflow-y: auto; }
+.prompt-preview small { overflow-wrap: anywhere; }
+.component-context { border-top: 1px solid #303640; padding-top: 12px; }
+@media (max-width: 1050px) { .component-columns { grid-template-columns: 1fr; } }

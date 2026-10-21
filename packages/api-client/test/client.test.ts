@@ -2,6 +2,64 @@ import { describe, expect, it, vi } from "vitest";
 import { ApiError, LuunaClient, assistantText, awaitsValidation, checkResults, confirmedManifest, isTerminal, loopbackUrl, mergeEvents } from "../src/index";
 import type { EventEnvelope, ProjectManifest } from "../src/index";
 
+describe("project component authority and resources", () => {
+  it("keeps component routes authenticated, project scoped and source reconciliation revision guarded", async () => {
+    const fetcher = vi.fn<typeof fetch>().mockImplementation(() => Promise.resolve(new Response("{}")));
+    const client = new LuunaClient("http://localhost:4242", "private-token", fetcher);
+    const signal = new AbortController().signal;
+    await client.components("project/one", signal);
+    await client.enableComponents("project/one", signal);
+    await client.ticketSource("ticket/one", signal);
+    await client.reconcileTicket("ticket/one", 7, signal);
+    expect(fetcher.mock.calls.map(([url, init]) => [String(url), init?.method ?? "GET", init?.body])).toEqual([
+      ["http://localhost:4242/api/v1/projects/project%2Fone/components", "GET", undefined],
+      ["http://localhost:4242/api/v1/projects/project%2Fone/components", "POST", undefined],
+      ["http://localhost:4242/api/v1/tickets/ticket%2Fone/source", "GET", undefined],
+      ["http://localhost:4242/api/v1/tickets/ticket%2Fone/reconcile", "POST", JSON.stringify({ expected_revision: 7 })],
+    ]);
+    for (const [, init] of fetcher.mock.calls) {
+      expect(new Headers(init?.headers).get("Authorization")).toBe("Bearer private-token");
+      expect(init?.signal).toBe(signal);
+      expect(init?.redirect).toBe("error");
+    }
+    expect(() => client.reconcileTicket("t", 0)).toThrow("Invalid ticket revision");
+  });
+
+  it("does not retrieve user memory by default and names explicit consent, provenance and deletion identity", async () => {
+    const fetcher = vi.fn<typeof fetch>().mockImplementation(() => Promise.resolve(new Response("[]")));
+    const client = new LuunaClient("http://localhost:4242", "t", fetcher);
+    await client.listMemory("p");
+    await client.listMemory("p", { query: "scope / evidence", includeUser: true });
+    const record = { idempotency_key: "repeat-delivery", scope: "project" as const, content: "Source-backed knowledge", provenance: "Run 12" };
+    await client.createMemory("p", record);
+    await client.deleteMemory("p", "memory/1", "sha256:exact-content");
+    const calls = fetcher.mock.calls;
+    expect(calls[0][0]).toBe("http://localhost:4242/api/v1/projects/p/memory");
+    expect(calls[1][0]).toBe("http://localhost:4242/api/v1/projects/p/memory?q=scope%20%2F%20evidence&include_user=true");
+    expect(calls[2][1]?.body).toBe(JSON.stringify(record));
+    expect(calls[3][0]).toBe("http://localhost:4242/api/v1/projects/p/memory/memory%2F1?expected_hash=sha256%3Aexact-content");
+    expect(calls[3][1]?.method).toBe("DELETE");
+    expect(() => client.deleteMemory("p", "m", "")).toThrow("exact content hash");
+  });
+
+  it("sends exact prompt versions and explicit context references without granting approval", async () => {
+    const fetcher = vi.fn<typeof fetch>().mockImplementation(() => Promise.resolve(new Response("{}")));
+    const client = new LuunaClient("http://localhost:4242", "t", fetcher);
+    await client.listPrompts("p");
+    const prompt = { idempotency_key: "same-prompt-write", name: "writer/scope", body: "Stay in scope", expected_version: 2 };
+    await client.createPrompt("p", prompt);
+    await client.renderPrompt("p", "writer/scope", 3);
+    const request = { task: { repository_id: "app", paths: ["src"], operations: ["read" as const] }, component_context: { memory_ids: ["selected-memory"], prompt: { name: "writer/scope", version: 3, hash: "sha256:exact-prompt" } } };
+    await client.createPlan("ticket", request);
+    expect(fetcher.mock.calls[0][0]).toBe("http://localhost:4242/api/v1/projects/p/prompts");
+    expect(fetcher.mock.calls[1][1]?.body).toBe(JSON.stringify(prompt));
+    expect(fetcher.mock.calls[2][0]).toBe("http://localhost:4242/api/v1/projects/p/prompts/writer%2Fscope/render?version=3");
+    expect(fetcher.mock.calls[3][1]?.body).toBe(JSON.stringify(request));
+    expect(fetcher.mock.calls.every(([url]) => !String(url).includes("/approvals"))).toBe(true);
+    expect(() => client.renderPrompt("p", "scope", 0)).toThrow("Invalid prompt version");
+  });
+});
+
 describe("local runtime connection", () => {
   it("accepts loopback origins and rejects remote, credential, path and query URLs", () => {
     expect(loopbackUrl("http://127.0.0.1:4242/")).toBe("http://127.0.0.1:4242");

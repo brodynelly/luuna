@@ -223,8 +223,8 @@ export interface StartBaselineRequest {
   include_optional?: boolean;
 }
 
-/** Temporary local ticket (ADR 0003); Missions becomes authoritative in M6. */
-export type TicketSource = "luuna_sqlite_temporary";
+/** Legacy local records migrate to the authoritative Missions projection. */
+export type TicketSource = "luuna_sqlite_temporary" | "missions";
 
 export interface Ticket {
   schema_version: string;
@@ -240,6 +240,14 @@ export interface Ticket {
   updated_at: string;
 }
 
+export interface TicketSourceStatus {
+  source?: TicketSource;
+  source_id: string | null;
+  source_revision: string | null;
+  reconciliation_required: boolean;
+  workspace: string | null;
+}
+
 export interface CreateTicketRequest {
   /** Repeating a delivery with the same key returns the same ticket. */
   idempotency_key: string;
@@ -247,6 +255,62 @@ export interface CreateTicketRequest {
   intent: string;
   acceptance_criteria: string[];
   repository_ids: string[];
+}
+
+export interface ComponentStatus {
+  enabled: boolean;
+  workspace_path?: string;
+  reason?: string;
+}
+
+export type MemoryScope = "project" | "process" | "user";
+
+export interface MemoryRecord {
+  id: string;
+  scope: MemoryScope;
+  content: string;
+  provenance: string;
+  hash: string;
+  created_at?: string;
+}
+
+export interface CreateMemoryRequest {
+  idempotency_key: string;
+  scope: MemoryScope;
+  content: string;
+  provenance: string;
+}
+
+export interface PromptRecord {
+  name: string;
+  version: number;
+  hash?: string;
+}
+
+export interface RenderedPrompt {
+  name: string;
+  version: number;
+  hash: string;
+  body: string;
+}
+
+export interface CreatePromptRequest {
+  idempotency_key: string;
+  name: string;
+  body: string;
+  expected_version?: number;
+}
+
+/** Explicit selection only: nothing is attached from personal stores automatically. */
+export interface ComponentContext {
+  memory_ids: string[];
+  prompt?: { name: string; version: number; hash: string } | null;
+}
+
+/** Exact runtime-resolved resource content covered by the immutable plan hash. */
+export interface ComponentContextSnapshot {
+  memory: Array<{ id: string; scope: MemoryScope; hash: string; content: string; provenance: string }>;
+  prompt?: { name: string; version: number; hash: string; body: string } | null;
 }
 
 export type Operation = "read" | "write" | "shell" | "network" | "publish";
@@ -297,12 +361,14 @@ export interface PlanRevision {
   required_checks: CheckRecipe[];
   budgets: Budgets;
   hash: string;
+  component_context?: ComponentContextSnapshot;
 }
 
 export interface CreatePlanRequest {
   task: { id?: string; repository_id: string; paths: string[]; operations: Operation[]; acceptance_criteria?: string[] };
   permissions?: Record<string, string[]>;
   budgets?: { max_attempts?: number; timeout_seconds?: number; cost_usd_micros?: number };
+  component_context?: ComponentContext;
 }
 
 export interface PlanOpened {
@@ -589,7 +655,7 @@ export class LuunaClient {
     return this.request(`/projects/${encodeURIComponent(id)}/baselines`, { method: "POST", body: JSON.stringify(request), signal });
   }
 
-  /** Creates the temporary local ticket through the canonical project-scoped route. */
+  /** Creates a ticket through the project's authoritative source. */
   createTicket(projectId: string, request: CreateTicketRequest, signal?: AbortSignal): Promise<Ticket> {
     if (!request.idempotency_key.trim()) throw new Error("An idempotency key is required.");
     return this.request(`/projects/${encodeURIComponent(projectId)}/tickets`, { method: "POST", body: JSON.stringify(request), signal });
@@ -601,6 +667,55 @@ export class LuunaClient {
 
   ticket(id: string, signal?: AbortSignal): Promise<Ticket> {
     return this.request(`/tickets/${encodeURIComponent(id)}`, { signal });
+  }
+
+  reconcileTicket(id: string, expectedRevision: number, signal?: AbortSignal): Promise<Ticket> {
+    if (!Number.isSafeInteger(expectedRevision) || expectedRevision < 1) throw new Error("Invalid ticket revision.");
+    return this.request(`/tickets/${encodeURIComponent(id)}/reconcile`, {
+      method: "POST", body: JSON.stringify({ expected_revision: expectedRevision }), signal,
+    });
+  }
+
+  ticketSource(id: string, signal?: AbortSignal): Promise<TicketSourceStatus> {
+    return this.request(`/tickets/${encodeURIComponent(id)}/source`, { signal });
+  }
+
+  components(projectId: string, signal?: AbortSignal): Promise<ComponentStatus> {
+    return this.request(`/projects/${encodeURIComponent(projectId)}/components`, { signal });
+  }
+
+  enableComponents(projectId: string, signal?: AbortSignal): Promise<ComponentStatus> {
+    return this.request(`/projects/${encodeURIComponent(projectId)}/components`, { method: "POST", signal });
+  }
+
+  listMemory(projectId: string, options: { query?: string; includeUser?: boolean } = {}, signal?: AbortSignal): Promise<MemoryRecord[]> {
+    const parameters = [options.query ? `q=${encodeURIComponent(options.query)}` : "", options.includeUser ? "include_user=true" : ""].filter(Boolean);
+    const search = parameters.length ? `?${parameters.join("&")}` : "";
+    return this.request(`/projects/${encodeURIComponent(projectId)}/memory${search}`, { signal });
+  }
+
+  createMemory(projectId: string, request: CreateMemoryRequest, signal?: AbortSignal): Promise<MemoryRecord> {
+    if (!request.idempotency_key.trim()) throw new Error("An idempotency key is required.");
+    return this.request(`/projects/${encodeURIComponent(projectId)}/memory`, { method: "POST", body: JSON.stringify(request), signal });
+  }
+
+  deleteMemory(projectId: string, id: string, expectedHash: string, signal?: AbortSignal): Promise<{ deleted: boolean }> {
+    if (!expectedHash.startsWith("sha256:")) throw new Error("Delete memory by its exact content hash.");
+    return this.request(`/projects/${encodeURIComponent(projectId)}/memory/${encodeURIComponent(id)}?expected_hash=${encodeURIComponent(expectedHash)}`, { method: "DELETE", signal });
+  }
+
+  listPrompts(projectId: string, signal?: AbortSignal): Promise<PromptRecord[]> {
+    return this.request(`/projects/${encodeURIComponent(projectId)}/prompts`, { signal });
+  }
+
+  createPrompt(projectId: string, request: CreatePromptRequest, signal?: AbortSignal): Promise<RenderedPrompt> {
+    if (!request.idempotency_key.trim()) throw new Error("An idempotency key is required.");
+    return this.request(`/projects/${encodeURIComponent(projectId)}/prompts`, { method: "POST", body: JSON.stringify(request), signal });
+  }
+
+  renderPrompt(projectId: string, name: string, version: number, signal?: AbortSignal): Promise<RenderedPrompt> {
+    if (!Number.isSafeInteger(version) || version < 1) throw new Error("Invalid prompt version.");
+    return this.request(`/projects/${encodeURIComponent(projectId)}/prompts/${encodeURIComponent(name)}/render?version=${version}`, { signal });
   }
 
   listPlans(ticketId: string, signal?: AbortSignal): Promise<PlanRevision[]> {

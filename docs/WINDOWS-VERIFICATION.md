@@ -3,7 +3,25 @@
 Date: October 21, 2026. This is Windows evidence, separate from the historical
 Linux reports and the original documentation validation report.
 
-## Latest result: automatic native startup and connection
+## Latest result: component integration and final development upgrade
+
+The final component-enabled runtime was installed and started on October 21,
+2026 after the user chose unsigned development and switched Smart App Control
+Off in Windows Security. Existing saved history, token, data directory and
+encrypted provider bytes were preserved. The normal desktop is connected.
+
+The final runtime SHA-256 is
+`99d9521784bc373237ef4d65b3bdd6189f3290faf557fad2946705f39d890256`;
+the bundled desktop SHA-256 is
+`21ddca8c75b1bb709bcd2886b6362e809b6d8aa6cc048447f94df74ce2591f4f`.
+Actual native WebView2 checks passed **27/27 component workflows**, **46/46
+lifecycle/recovery checks** and **17/17 automatic startup checks**. Component
+CLIs and Git/unittest checks were real; Pi writer/reviewer fixture sessions were
+synthetic. See the [final evidence](FOUNDATION-STATUS.md#final-windows-native-verification-and-completed-development-upgrade)
+and [component workflow guide](COMPONENT-WORKFLOWS.md). No new genuine-provider
+component workflow or signed installer is claimed.
+
+## Earlier result: automatic native startup and connection
 
 Before remote publication, the final Windows tree passed `cargo test --locked
 --workspace` (**174 tests**), root Rust formatting and Clippy with warnings denied,

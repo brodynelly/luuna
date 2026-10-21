@@ -56,11 +56,28 @@ def usage(cost):
             "cost": {"input": cost / 2, "output": cost / 2, "cacheRead": 0, "cacheWrite": 0, "total": cost}}
 
 
+def verify_component_context(resources, visible_text):
+    """Assert only the smoke's explicit, approved resources reach a session."""
+    assert len(resources["memory"]) == 1, "Unexpected memory attachment"
+    memory = resources["memory"][0]
+    assert memory["scope"] == "project"
+    assert memory["content"] == "Prefer exact candidate checks."
+    assert memory["provenance"] == "Synthetic m6 smoke fixture"
+    assert resources["prompt"]["name"] == "writer-guidance"
+    assert resources["prompt"]["version"] == 2
+    assert resources["prompt"]["body"] == "## guidance\nUse the exact approved task scope and minimal edits.\n"
+    assert "Private user fixture" not in visible_text, "Unselected private memory reached Pi"
+    send({"type": "fixture_component_context", "selected_memory": True,
+          "selected_prompt": True, "unselected_private_memory_absent": True})
+
+
 def run_reviewer(request_id, kind, message):
     """Independent read-only fixture. This never calls run_writer, even when
     the ticket contains its original writer scenario marker."""
     payload = json.loads(message)
     markers = re.findall(r"fixture:([a-z_]+)", json.dumps(payload.get("requirements", {})))
+    if "component_context" in markers:
+        verify_component_context(payload["approved_component_resources"], message + (flag("--system-prompt") or ""))
     scenario = next((name for name in markers if name.startswith("review_")), "review_pass")
     if scenario == "review_malformed_once":
         # Malformed output for the candidate's first validation generation and
@@ -111,6 +128,10 @@ def run_reviewer(request_id, kind, message):
 
 def run_writer(request_id, kind, scenario, prompt):
     """Synthetic writer behaviour inside the cwd the runtime assigned."""
+    if scenario == "component_context":
+        system = flag("--system-prompt") or ""
+        resources = json.loads(system.split("<<<APPROVED_COMPONENT_RESOURCES>>>\n", 1)[1].split("\n<<<END_APPROVED_COMPONENT_RESOURCES>>>", 1)[0])
+        verify_component_context(resources, system + prompt)
     if scenario == "writer_crash_before_ack":
         # The prompt was sent and may have started provider work, but Pi exits
         # before acknowledging it.
@@ -129,7 +150,7 @@ def run_writer(request_id, kind, scenario, prompt):
         sys.exit(9)
     if scenario == "slow":
         time.sleep(60)
-    elif scenario == "write_in_scope" or scenario.startswith("review_"):
+    elif scenario in ("write_in_scope", "component_context") or scenario.startswith("review_"):
         repairing = "Repair feedback:" in prompt or "Repair feedback:" in (flag("--system-prompt") or "")
         write_file("src/main.py", "print('revised by the synthetic repair writer')\n" if repairing else "print('implemented by the synthetic writer')\n")
     elif scenario in ("repair_in_scope", "repair_hold"):

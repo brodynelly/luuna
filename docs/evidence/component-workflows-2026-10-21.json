@@ -1,0 +1,107 @@
+{
+  "complete": true,
+  "platform": "win32",
+  "runtime_sha256": "3bd522c0fc98b6f05fb3f99c0764f2a8395e17d70d581ef6a1c68194fc3a4bea",
+  "runtime_exit": {
+    "code": 0,
+    "signal": null
+  },
+  "provider_evidence": false,
+  "component_evidence": "real pinned CLI processes",
+  "transport": "test-only same-origin Vite proxy to authenticated runtime",
+  "checks": [
+    {
+      "name": "app authenticates to the isolated loopback runtime through the test proxy",
+      "ok": true
+    },
+    {
+      "name": "app creates a legacy ticket before explicit component activation",
+      "ok": true
+    },
+    {
+      "name": "activation migrates existing ticket identity and revision to genuine Missions",
+      "ok": true
+    },
+    {
+      "name": "app creates process-scoped Atlas memory with displayed provenance",
+      "ok": true
+    },
+    {
+      "name": "memory retry preserves its idempotency key and exact payload after a committed response is lost",
+      "ok": true
+    },
+    {
+      "name": "uncertain memory delivery creates one actual Atlas record",
+      "ok": true
+    },
+    {
+      "name": "app writes and hash-deletes actual Atlas memory",
+      "ok": true
+    },
+    {
+      "name": "app retrieves matching Atlas knowledge with displayed provenance",
+      "ok": true
+    },
+    {
+      "name": "turning off private user memory removes it from the view and pending plan",
+      "ok": true
+    },
+    {
+      "name": "project memory API omits user scope without explicit opt-in",
+      "ok": true
+    },
+    {
+      "name": "second project neither imports project knowledge nor exposes user knowledge by default",
+      "ok": true
+    },
+    {
+      "name": "prompts retry preserves its idempotency key and exact payload after a committed response is lost",
+      "ok": true
+    },
+    {
+      "name": "app creates and updates a real versioned Beacon prompt with exact rendered hash",
+      "ok": true
+    },
+    {
+      "name": "a changed Beacon prompt clears UI selection and rejects an old prompt pin",
+      "ok": true
+    },
+    {
+      "name": "runtime refuses plan approval after its selected prompt source changes",
+      "ok": true
+    },
+    {
+      "name": "runtime refuses implementation after an approved memory source is deleted",
+      "ok": true
+    },
+    {
+      "name": "new Missions ticket plan seals exact selected Atlas content/provenance and Beacon body",
+      "ok": true
+    },
+    {
+      "name": "external Missions edit disables app planning and runtime rejects stale approved work",
+      "ok": true
+    },
+    {
+      "name": "app reconciliation preserves ticket identity and advances the source revision",
+      "ok": true
+    },
+    {
+      "name": "re-planning produces a new exact hash for the reconciled ticket revision",
+      "ok": true
+    },
+    {
+      "name": "synthetic writer asserts approved memory and prompt content with unselected private memory absent",
+      "ok": true
+    },
+    {
+      "name": "app runs real candidate checks and a fresh synthetic reviewer that asserts the same explicit component context",
+      "ok": true
+    },
+    {
+      "name": "browser reload restores authoritative Missions tickets without auto-attaching resources",
+      "ok": true
+    }
+  ],
+  "browser_version": "155.0.4283.60"
+}

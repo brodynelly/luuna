@@ -1,8 +1,9 @@
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import type { FormEvent } from "react";
-import type { CandidateDiff, CandidateView, LuunaClient, Operation, PlanRevision, RunRecord, Ticket, WorktreeLease } from "@luuna/api-client";
+import type { CandidateDiff, CandidateView, ComponentContext, LuunaClient, Operation, PlanRevision, RunRecord, Ticket, TicketSourceStatus, WorktreeLease } from "@luuna/api-client";
 import { workflowNeedsRefresh, workflowReason } from "./workflow-state";
 import { CandidateReview } from "./CandidateReview";
+import { retryIdentity } from "./ProjectComponents";
 import { actionFailure, describeFailure, nextStep } from "./failures";
 
 const message = describeFailure;
@@ -14,16 +15,20 @@ interface Props {
   manifestConfirmed: boolean;
   /** Incremented when the runtime answers again after an outage. */
   connectionEpoch?: number;
+  componentContext?: ComponentContext;
+  componentsEnabled?: boolean;
+  componentEpoch?: number;
   onChanged: () => void;
 }
 
 /**
- * A temporary local ticket, an exact plan approval and the candidate workflow.
+ * A source-revisioned ticket, an exact plan approval and the candidate workflow.
  * The runtime owns all execution, validation, review and repair decisions.
  */
-export function Workflows({ client, projectId, repositoryId, manifestConfirmed, connectionEpoch = 0, onChanged }: Props) {
+export function Workflows({ client, projectId, repositoryId, manifestConfirmed, connectionEpoch = 0, componentContext, componentsEnabled = false, componentEpoch = 0, onChanged }: Props) {
   const [reasons, setReasons] = useState<Record<string, string>>({});
   const [tickets, setTickets] = useState<Ticket[]>([]);
+  const [ticketSources, setTicketSources] = useState<Record<string, TicketSourceStatus>>({});
   const [plans, setPlans] = useState<Record<string, PlanRevision[]>>({});
   const [runs, setRuns] = useState<RunRecord[]>([]);
   const [leases, setLeases] = useState<Record<string, WorktreeLease[]>>({});
@@ -43,6 +48,7 @@ export function Workflows({ client, projectId, repositoryId, manifestConfirmed, 
   const [loadError, setLoadError] = useState("");
   const [busy, setBusy] = useState(false);
   const [tick, setTick] = useState(0);
+  const ticketDelivery = useRef<{ content: string; key: string } | null>(null);
 
   async function load(signal: AbortSignal): Promise<boolean> {
     if (!client) return false;
@@ -50,6 +56,7 @@ export function Workflows({ client, projectId, repositoryId, manifestConfirmed, 
     if (signal.aborted) return false;
     const workflowRuns = all.filter((run) => run.metadata.kind === "workflow" && run.project_id === projectId);
     const planLists = await Promise.all(list.map((ticket) => client.listPlans(ticket.id, signal)));
+    const sources = await Promise.all(list.map((ticket) => ticket.source === "missions" ? client.ticketSource(ticket.id, signal) : Promise.resolve(null)));
     if (signal.aborted) return false;
     const [leaseLists, eventLists, candidateViews] = await Promise.all([
       Promise.all(workflowRuns.map((run) => client.worktrees(run.id, signal))),
@@ -61,6 +68,7 @@ export function Workflows({ client, projectId, repositoryId, manifestConfirmed, 
       return [run.id, workflowReason(eventLists[index])];
     })));
     setTickets(list);
+    setTicketSources(Object.fromEntries(list.flatMap((ticket, index) => sources[index] ? [[ticket.id, sources[index]!]] : [])));
     setPlans(Object.fromEntries(list.map((ticket, index) => [ticket.id, planLists[index]])));
     setRuns(workflowRuns);
     setLeases(Object.fromEntries(workflowRuns.map((run, index) => [run.id, leaseLists[index]])));
@@ -70,6 +78,7 @@ export function Workflows({ client, projectId, repositoryId, manifestConfirmed, 
 
   useEffect(() => {
     setTickets([]);
+    setTicketSources({});
     setPlans({});
     setRuns([]);
     setLeases({});
@@ -80,6 +89,7 @@ export function Workflows({ client, projectId, repositoryId, manifestConfirmed, 
     setError("");
     setLoadError("");
     setAutoRepair(false);
+    ticketDelivery.current = null;
   }, [client, projectId]);
 
   useEffect(() => {
@@ -104,6 +114,8 @@ export function Workflows({ client, projectId, repositoryId, manifestConfirmed, 
     if (connectionEpoch > 0) setTick((value) => value + 1);
   }, [connectionEpoch]);
 
+  useEffect(() => { setTick((value) => value + 1); }, [componentEpoch]);
+
   async function guarded(label: string, action: () => Promise<void>) {
     setBusy(true);
     setError("");
@@ -122,18 +134,19 @@ export function Workflows({ client, projectId, repositoryId, manifestConfirmed, 
 
   function createTicket(event: FormEvent) {
     event.preventDefault();
+    const request = {
+      title: title.trim(), intent: intent.trim(),
+      acceptance_criteria: criteria.split("\n").map((line) => line.trim()).filter(Boolean), repository_ids: [repositoryId],
+    };
+    ticketDelivery.current = retryIdentity(ticketDelivery.current, JSON.stringify(request));
+    const key = ticketDelivery.current.key;
     void guarded("Ticket creation", async () => {
       if (!client) return;
-      await client.createTicket(projectId, {
-        idempotency_key: crypto.randomUUID(),
-        title: title.trim(),
-        intent: intent.trim(),
-        acceptance_criteria: criteria.split("\n").map((line) => line.trim()).filter(Boolean),
-        repository_ids: [repositoryId],
-      });
+      await client.createTicket(projectId, { idempotency_key: key, ...request });
       setTitle("");
       setIntent("");
       setCriteria("");
+      ticketDelivery.current = null;
     });
   }
 
@@ -143,6 +156,7 @@ export function Workflows({ client, projectId, repositoryId, manifestConfirmed, 
       const operations: Operation[] = write ? ["read", "write"] : ["read"];
       await client.createPlan(ticket.id, {
         task: { repository_id: repositoryId, paths: paths.split(",").map((p) => p.trim()).filter(Boolean), operations },
+        ...(componentsEnabled && componentContext && (componentContext.memory_ids.length > 0 || componentContext.prompt) ? { component_context: componentContext } : {}),
       });
     });
   }
@@ -205,7 +219,7 @@ export function Workflows({ client, projectId, repositoryId, manifestConfirmed, 
 
   return <section className="workflows" aria-labelledby="workflows-heading">
     <div className="panel-heading"><h3 id="workflows-heading">Tickets, plans and candidates</h3><button type="button" className="text-button" disabled={!client || busy} onClick={() => setTick((value) => value + 1)}>Refresh workflows</button></div>
-    <p className="scope">A ticket is a temporary local record until Missions is integrated. Approve the complete immutable plan, then run the scoped writer in its managed worktree. Validate the resulting candidate with the approved checks and an independent reviewer; the runtime binds every result to its exact candidate hash.</p>
+    <p className="scope">{componentsEnabled ? "Tickets are authoritative in luuna-missions; reconcile external edits before re-planning." : "Tickets use legacy local storage until you enable project components above."} Approve the complete immutable plan, then run the scoped writer in its managed worktree. The runtime binds validation and independent review to the exact candidate hash.</p>
     {(error || loadError) && <div className="error" role="alert">{error || loadError}<button className="text-button" type="button" onClick={() => { setError(""); setLoadError(""); }}>Dismiss</button></div>}
     <form onSubmit={createTicket} className="ticket-form">
       <fieldset disabled={!client || busy || !manifestConfirmed}>
@@ -232,15 +246,18 @@ export function Workflows({ client, projectId, repositoryId, manifestConfirmed, 
       const run = latest ? runFor(latest) : undefined;
       const runLeases = run ? leases[run.id] ?? [] : [];
       const candidate = run ? candidates[run.id] : undefined;
+      const source = ticketSources[ticket.id];
       return <li key={ticket.id}>
         <div className="ticket-head"><strong>{ticket.title}</strong><span className="state">ticket r{ticket.revision} · {ticket.source.replace(/_/g, " ")}</span></div>
         <small>{ticket.intent}</small>
+        {source?.reconciliation_required && <p className="failure-note" role="status">This ticket changed outside Luuna. Reconcile its current source before creating another plan or starting work.</p>}
         <div className="ticket-actions">
-          <button type="button" disabled={busy || !client} onClick={() => plan(ticket)}>{latest ? `Plan r${latest.revision + 1}` : "Plan"}</button>
-          {latest && run && run.state === "approved" && <button type="button" className="primary" disabled={busy} onClick={() => implement(run)}>Implement</button>}
+          {ticket.source === "missions" && <button type="button" disabled={busy || !client} onClick={() => void guarded("Ticket reconciliation", async () => { await client!.reconcileTicket(ticket.id, ticket.revision); })}>Reconcile external changes</button>}
+          <button type="button" disabled={busy || !client || source?.reconciliation_required} onClick={() => plan(ticket)}>{latest ? `Plan r${latest.revision + 1}` : "Plan"}</button>
+          {latest && run && run.state === "approved" && <button type="button" className="primary" disabled={busy || source?.reconciliation_required} onClick={() => implement(run)}>Implement</button>}
           {run && <span className={`state ${run.state}`}>{run.state.replace(/_/g, " ")}</span>}
         </div>
-        {latest && <PlanReview key={latest.hash} plan={latest} canApprove={run?.state === "plan_ready"} busy={busy} onApprove={() => approve(latest)} />}
+        {latest && <PlanReview key={latest.hash} plan={latest} canApprove={run?.state === "plan_ready" && !source?.reconciliation_required} busy={busy} onApprove={() => approve(latest)} />}
         {latest && <small>plan {latest.id} r{latest.revision} · base <code>{Object.values(latest.base_commits)[0]?.slice(0, 12)}</code> · paths {latest.tasks[0]?.paths.join(", ")} · budget {latest.budgets.max_attempts} attempt(s), {latest.budgets.timeout_seconds}s</small>}
         {run && ["failed", "cancelled", "interrupted", "testing_blocked", "paused"].includes(run.state) && reasons[run.id] && <small className="failure-note">{reasons[run.id]}{nextStep(reasons[run.id]) && <> <span className="recovery-note">{nextStep(reasons[run.id])}</span></>}</small>}
         {runLeases.map((lease) => <small key={lease.id}>worktree <code>{lease.path}</code> · {lease.state}{lease.candidate_commit && <> · candidate <code>{lease.candidate_commit.slice(0, 12)}</code></>}{lease.reason && ` · ${lease.reason}`}</small>)}
