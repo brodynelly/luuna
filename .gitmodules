@@ -1,0 +1,9 @@
+[submodule "components/missions"]
+	path = components/missions
+	url = https://github.com/brodynelly/missions.git
+[submodule "components/atlas"]
+	path = components/atlas
+	url = https://github.com/brodynelly/atlas.git
+[submodule "components/beacon"]
+	path = components/beacon
+	url = https://github.com/brodynelly/beacon.git

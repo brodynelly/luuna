@@ -1,6 +1,6 @@
 {
-  "schemaVersion": 1,
-  "status": "private-maintained-forks",
+  "schemaVersion": 2,
+  "status": "public-repositories-pinned-submodules",
   "components": [
     {
       "brand": "Luuna Missions",
@@ -27,7 +27,10 @@
         "JSON output"
       ],
       "license": "MIT",
-      "published": false
+      "published": false,
+      "repository": "https://github.com/brodynelly/missions.git",
+      "commit": "b9166821144fd373328930f4a44856448e8de77b",
+      "licenseSha256": "9d36b754124311e7363b9f800e147f95b4dcaea008aa3565b70e15b8a7462f0a"
     },
     {
       "brand": "Luuna Atlas",
@@ -55,7 +58,10 @@
         "TypeScript library src/index.ts and src/api.ts"
       ],
       "license": "MIT",
-      "published": false
+      "published": false,
+      "repository": "https://github.com/brodynelly/atlas.git",
+      "commit": "18fc7e2c526d3f7a0ac4c2850573c21ca5964819",
+      "licenseSha256": "fe1956a36381a8ac9e13e229247eb1f05f951bb6a96153773025d03a0fd62519"
     },
     {
       "brand": "Luuna Beacon",
@@ -81,7 +87,10 @@
         "JSON output"
       ],
       "license": "MIT",
-      "published": false
+      "published": false,
+      "repository": "https://github.com/brodynelly/beacon.git",
+      "commit": "0330712a76fec338498d4b683a4d8ec9474f77d0",
+      "licenseSha256": "fe1956a36381a8ac9e13e229247eb1f05f951bb6a96153773025d03a0fd62519"
     }
   ],
   "runtime": {

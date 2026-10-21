@@ -6,7 +6,7 @@ You are continuing an executable foundation, not starting an empty repository. R
 
 - Tauri/React desktop first; one independent Rust runtime owns policy and persistent state. Browser/TUI capability parity remains required for full v1.
 - Pi RPC is the engine. Do not implement a second model/tool loop or replace it with a UI simulation.
-- Keep Luuna and **Missions, Atlas and Beacon in this monorepo now**. They are maintained CLI/API boundaries under `components/`, not a task to create hosted repositories. Preserve compatible formats, legacy aliases and upstream MIT notices. Product/new contributions are MIT.
+- **Missions, Atlas and Beacon have independent public repositories** under brodynelly, consumed as exact-commit Git submodules under `components/` (ADR 0011). Run `npm run components:setup` after cloning and `npm run test:components` to verify real CLI/JSON consumption. Keep manifest pins and gitlinks synchronized. Preserve compatible formats, legacy aliases and upstream MIT notices. Product/new contributions are MIT; runtime adapters remain M6 work.
 - Missions is authoritative for ticket intent/dependencies after integration. Before that, any SQLite ticket record is explicitly temporary; later SQLite ticket data is a revision-aware projection. Luuna owns execution state, plans, approvals and evidence.
 - The canonical create-ticket route is `POST /api/v1/projects/{id}/tickets`, implemented in M2c for the temporary local ticket with an idempotency key; do not add an ambiguous global create route.
 - Service lifetime is independent of client lifetime. A window close/disconnect is not cancellation. Packaged Mac/Windows supervision remains to be proved.
