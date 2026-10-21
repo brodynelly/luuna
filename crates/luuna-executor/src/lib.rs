@@ -150,7 +150,9 @@ fn now() -> String {
     Utc::now().to_rfc3339_opts(SecondsFormat::Millis, true)
 }
 
-fn sha256_hex(bytes: &[u8]) -> String {
+/// `sha256:` plus the lower-case hex SHA-256 of `bytes`, the digest form
+/// artifact identities and check results record.
+pub fn sha256_hex(bytes: &[u8]) -> String {
     format!("sha256:{:x}", Sha256::digest(bytes))
 }
 
@@ -170,9 +172,21 @@ pub fn is_secret_or_reserved(name: &str) -> bool {
             "CREDENTIAL",
             "PRIVATE_KEY",
             "AUTH",
+            "JWT",
+            "PASSPHRASE",
+            "BEARER",
+            "COOKIE",
+            "SESSION_KEY",
+            "ACCESS_KEY",
         ]
         .iter()
         .any(|marker| upper.contains(marker))
+        // A `_KEY` name (`STRIPE_KEY`, `SSH_KEY`, `AWS_ACCESS_KEY_ID`) is
+        // treated as a key whatever it is for; such names are rarely anything
+        // a check needs.
+        || upper.ends_with("_KEY")
+        || upper.contains("_KEY_")
+        || upper.ends_with("_KEYS")
 }
 
 /// Every process the executor starts, probes included, sees a cleared
@@ -932,6 +946,12 @@ mod tests {
             "AWS_SECRET_ACCESS_KEY",
             "DB_PASSWORD",
             "LUUNA_PI_COMMAND",
+            "CI_JOB_JWT",
+            "AWS_ACCESS_KEY_ID",
+            "STRIPE_KEY",
+            "SIGNING_KEYS",
+            "GPG_PASSPHRASE",
+            "SESSION_COOKIE",
         ] {
             assert!(is_secret_or_reserved(name), "{name}");
         }
@@ -942,6 +962,8 @@ mod tests {
             "RUSTUP_HOME",
             "NODE_ENV",
             "TMPDIR",
+            "KEYBOARD_LAYOUT",
+            "MONKEY_COUNT",
         ] {
             assert!(!is_secret_or_reserved(name), "{name}");
         }

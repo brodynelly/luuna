@@ -75,6 +75,10 @@ def run_reviewer(request_id, kind, message):
               "event": "tool_call", "error": "synthetic scope guard failure"})
     if scenario == "review_hold":
         time.sleep(60)
+    if scenario == "review_crash":
+        # Accepted model work that never reports its usage: the process exits
+        # mid-turn, as a lost transport or a crashed Pi would.
+        sys.exit(9)
     review = {"schema_version": "0.1", "id": "review-fixture",
               "candidate_hash": payload.get("candidate_hash"),
               "reviewer_session": payload.get("reviewer_session"),
@@ -102,6 +106,10 @@ def run_reviewer(request_id, kind, message):
 
 def run_writer(request_id, kind, scenario, prompt):
     """Synthetic writer behaviour inside the cwd the runtime assigned."""
+    if scenario == "writer_crash_before_ack":
+        # The prompt was sent and may have started provider work, but Pi exits
+        # before acknowledging it.
+        sys.exit(9)
     send({"type": "fixture_args", "tools": flag("--tools"), "extensions": [
         sys.argv[i + 1] for i, a in enumerate(sys.argv) if a in ("-e", "--extension")],
         "scope": json.loads(os.environ.get("LUUNA_SCOPE_JSON", "null")),
@@ -110,15 +118,22 @@ def run_writer(request_id, kind, scenario, prompt):
           "success": True, "data": {"disposition": "started"}})
     send({"type": "agent_start"})
     cost = 0.0005
+    if scenario == "writer_crash":
+        # Accepted model work that never reports its usage: the process exits
+        # mid-turn, as a lost transport or a crashed Pi would.
+        sys.exit(9)
     if scenario == "slow":
         time.sleep(60)
     elif scenario == "write_in_scope" or scenario.startswith("review_"):
         repairing = "Repair feedback:" in prompt or "Repair feedback:" in (flag("--system-prompt") or "")
         write_file("src/main.py", "print('revised by the synthetic repair writer')\n" if repairing else "print('implemented by the synthetic writer')\n")
     elif scenario in ("repair_in_scope", "repair_hold"):
-        repaired = "Repair feedback:" in prompt or "Repair feedback:" in (flag("--system-prompt") or "")
-        if scenario == "repair_hold" and repaired:
+        repairing = "Repair feedback:" in prompt or "Repair feedback:" in (flag("--system-prompt") or "")
+        if scenario == "repair_hold" and repairing:
             time.sleep(60)
+        # The synthetic repair writer only fixes what it can see: the runtime
+        # must quote the failing check output, not just an exit code.
+        repaired = repairing and "test result: FAILED" in prompt
         write_file("src/main.py", "print('repaired by the synthetic writer')\n" if repaired else "print('seeded regression')\n")
     elif scenario == "extension_error":
         send({"type": "extension_error", "extensionPath": "luuna-scope-guard.js",

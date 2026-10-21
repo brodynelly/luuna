@@ -81,7 +81,7 @@ Freeze exact candidate commit/tree identities; bind required checks and structur
 
 **Exit:** a seeded regression is blocked; a stale candidate/review cannot pass; repair exhaustion persists with artifacts; restart does not reset budgets or duplicate work; cancellation covers owned descendants when shell tools are enabled. Demonstrate a complete approved single-repo feature with real checks and independent review. Map to R09/R10.
 
-**Implementation status (October 17, 2026):** candidate command checks, fresh read-only Pi reviewer sessions, structured review bindings, bounded manual/opt-in automatic repair, aggregate budgets, restart recovery and desktop diff/evidence views are implemented and fixture-tested. Genuine-provider independent reviewer/repair acceptance and native-host proof remain open; M3 is not declared closed. See [ADR 0009](decisions/0009-candidate-validation-review.md) and the status report.
+**Implementation status (October 17, 2026):** candidate command checks, fresh read-only Pi reviewer sessions, structured review bindings, bounded manual/opt-in automatic repair, aggregate budgets, restart recovery and desktop diff/evidence views are implemented and fixture-tested. **The genuine-provider exit is closed on Linux** by `scripts/m3-smoke.mjs` through OpenRouter with pinned Pi 1.3.0: real writer, real required checks, fresh independent reviewer, seeded failure → repair r2 → fresh evidence, bounded automatic repair pausing at the attempt budget, cancellation and hard-kill recovery with spend reservation. Native Mac/Windows proof remains open, so M3 is not declared fully closed. See [ADR 0009](decisions/0009-candidate-validation-review.md) and the status report.
 
 ### MVP gate — Make the single-repository workflow usable
 

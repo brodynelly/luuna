@@ -160,6 +160,7 @@ fn passed_baseline(store: &mut Store, plan: &PlanRevision) {
                 reason: None,
                 artifact_hashes: BTreeMap::new(),
                 tests_detected: Some(5),
+                truncated_artifacts: Vec::new(),
             },
         )
         .unwrap();
@@ -555,6 +556,7 @@ fn candidate_check(candidate: &CandidateSet, status: CheckStatus) -> CheckResult
         reason: None,
         artifact_hashes: BTreeMap::new(),
         tests_detected: Some(5),
+        truncated_artifacts: Vec::new(),
     }
 }
 
@@ -669,6 +671,51 @@ fn candidate_gates_reject_stale_checks_forged_recipes_and_review_bypasses() {
 }
 
 #[test]
+fn a_review_that_would_end_past_the_budget_pauses_instead_of_being_recorded() {
+    let (mut store, plan, candidate) = candidate_fixture();
+    begin_validation(&mut store, &candidate);
+    let run = store.get_run("workflow-1").unwrap().unwrap();
+    store
+        .record_candidate_check(
+            &run.id,
+            &candidate.hash,
+            &candidate_check(&candidate, CheckStatus::Passed),
+        )
+        .unwrap();
+    // Validation leaves one approved second for the review.
+    let used = store.workflow_usage("workflow-1").unwrap().elapsed_seconds;
+    store
+        .charge_candidate_usage(
+            "workflow-1",
+            &candidate.hash,
+            plan.budgets.timeout_seconds - 1 - used,
+            0,
+        )
+        .unwrap();
+    finish_validation(&mut store, &candidate);
+    assert_eq!(
+        store.get_run("workflow-1").unwrap().unwrap().state,
+        RunState::Reviewing
+    );
+    // The review then takes longer than that second, and the worker has not
+    // charged it yet when the verdict is recorded.
+    std::thread::sleep(std::time::Duration::from_millis(1100));
+    let run = store.get_run("workflow-1").unwrap().unwrap();
+    let settled = store
+        .finish_candidate_review(&run.id, run.revision, &candidate.hash, &review(&candidate))
+        .unwrap();
+    assert_eq!(settled.status, CandidateStatus::Paused);
+    assert!(settled.review.is_none());
+    assert_eq!(
+        store.get_run("workflow-1").unwrap().unwrap().state,
+        RunState::Paused
+    );
+    assert!(
+        store.workflow_usage("workflow-1").unwrap().elapsed_seconds > plan.budgets.timeout_seconds
+    );
+}
+
+#[test]
 fn failed_missing_or_blocked_candidate_checks_never_reach_review() {
     for status in [Some(CheckStatus::Failed), Some(CheckStatus::Blocked), None] {
         let (mut store, _, candidate) = candidate_fixture();
@@ -725,7 +772,9 @@ fn repair_revisions_invalidate_checks_and_reviews_without_resetting_usage() {
     let usage = store
         .charge_candidate_usage(&run.id, &candidate.hash, 20, 200)
         .unwrap();
-    assert_eq!(usage.elapsed_seconds, 30);
+    // 10 s writer + 20 s charged + the validation and review stages, each
+    // finalized with at least its live time rounded up to a whole second.
+    assert_eq!(usage.elapsed_seconds, 32);
     assert_eq!(usage.cost_usd_micros, 300);
     let run = store.get_run(&run.id).unwrap().unwrap();
     let run = store
@@ -774,7 +823,8 @@ fn repair_revisions_invalidate_checks_and_reviews_without_resetting_usage() {
         .is_err());
     let usage = store.workflow_usage(&run.id).unwrap();
     assert_eq!(usage.attempts, 2);
-    assert_eq!(usage.elapsed_seconds, 34);
+    // 32 s from the first revision plus the 4 s repair attempt.
+    assert_eq!(usage.elapsed_seconds, 36);
     begin_validation(&mut store, &revised);
     finish_validation(&mut store, &revised);
     assert!(matches!(
@@ -815,9 +865,10 @@ fn restart_keeps_consumed_budgets_and_retries_with_fresh_evidence_generation() {
         .record_candidate_check("workflow-1", &candidate.hash, &fresh)
         .unwrap();
     finish_validation(&mut store, &candidate);
+    // The finalized validation stage charges its live time rounded up (1 s).
     assert_eq!(
         store.workflow_usage("workflow-1").unwrap().elapsed_seconds,
-        22
+        23
     );
     store.interrupt_active_runs().unwrap();
     assert_eq!(
@@ -877,7 +928,9 @@ fn changed_ticket_prevents_validation_and_review_and_exhaustion_is_durable() {
     let usage = store
         .charge_candidate_usage(&run.id, &candidate.hash, 500, 1_000_000)
         .unwrap();
-    assert_eq!(usage.elapsed_seconds, 510);
+    // 10 s writer + 500 s charged + the finalized validation stage's live
+    // time rounded up (1 s).
+    assert_eq!(usage.elapsed_seconds, 511);
     assert_eq!(
         store.get_run(&run.id).unwrap().unwrap().state,
         RunState::Paused

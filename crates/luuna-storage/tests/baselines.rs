@@ -172,6 +172,7 @@ fn result(id: &str, run_id: &str, identity: &BaselineIdentity, status: CheckStat
         reason: None,
         artifact_hashes: BTreeMap::new(),
         tests_detected: Some(5),
+        truncated_artifacts: Vec::new(),
     }
 }
 

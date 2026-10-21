@@ -16,6 +16,15 @@ export interface Health {
   status: string;
   pi_version: string;
   demo_only: boolean;
+  /** Content digest of the sources the runtime binary was built from. */
+  build_identity?: string;
+  /** Release and commit of the compiler that built the runtime binary. */
+  build_rustc?: string;
+  /** Any rustc wrapper Cargo ran the compiler through, or "none". */
+  build_rustc_sha256?: string;
+  build_rustc_wrapper?: string;
+  /** Profile, optimization and RUSTFLAGS the runtime binary was compiled with. */
+  build_flags?: string;
 }
 
 export interface RunRequest {
@@ -189,6 +198,8 @@ export interface CheckResult {
   reason?: string;
   artifact_hashes?: Record<string, string>;
   tests_detected?: number;
+  /** Artifact references whose stream reached the executor's size cap. */
+  truncated_artifacts?: string[];
 }
 
 /** A repository's required checks at an exact commit, tree, manifest and host. */

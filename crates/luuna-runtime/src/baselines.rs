@@ -500,6 +500,12 @@ async fn baseline_worker(state: AppState, job: BaselineJob, cancel: watch::Recei
             reason: execution.reason.clone(),
             artifact_hashes: artifact_hashes(&execution),
             tests_detected: execution.tests_detected,
+            truncated_artifacts: execution
+                .artifacts
+                .iter()
+                .filter(|a| a.truncated)
+                .map(|a| artifact_ref(&job.run_id, &recipe.id, &a.name))
+                .collect(),
         };
         let recorded = state
             .store
