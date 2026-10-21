@@ -356,6 +356,10 @@ The cloud-doable part of the roadmap's MVP gate is closed on Linux with this cha
 
 **Not established.** Native Mac/Windows launch, service supervision and installation (R01); a real-provider run on this code; the backup/migration recovery drill. A writer interrupted mid-session cannot resume under the same approval (its worktree is preserved; the next plan revision is required); that is recorded as an MVP limitation, not changed here.
 
+## Independent component extraction (October 21, 2026)
+
+Missions, Atlas and Beacon now have independent public repositories with passing full component CI, preserved maintained history and unchanged source trees, frozen locks and MIT licenses. Luuna consumes exact-commit Git submodules at the existing paths and has explicit setup, pin rejection and real CLI JSON smoke checks. Registry packages remain unpublished; Luuna remains private. See [the extraction evidence](COMPONENT-EXTRACTION.md) and [ADR 0012](decisions/0012-independent-component-repositories.md) for exact pins, check results and remaining M6 runtime integration obligations. Native-platform work already in progress was kept outside the extraction change.
+
 ## M3 genuine-provider re-run on the MVP code, October 21, 2026
 
 The handoff owed one real-provider `m3-smoke` run on the code that gained the re-validation gate, the reviewer prompt's generation field and the shutdown interruption. It ran on clean `main` at `fd42d59` (PR #7 merged) and passed.
@@ -368,4 +372,4 @@ Environment: Linux x86_64 cloud container, Rust 1.90.0, Node 24.19.0, npm 11.9.0
 
 The same session reran the recorded baseline on that commit before any change: `cargo fmt --all -- --check`, `cargo clippy --locked --workspace --all-targets -- -D warnings`, `cargo test --locked --workspace` (181 passed), `npm test` (20 schema checks, 5 scope-guard tests, 13 desktop tests, 22 client tests), `npm run typecheck`, `npm run build`, `node scripts/check-hygiene.mjs`, `git diff --check`, `node scripts/m3-smoke.mjs --mode fixture` (68/68, synthetic) and `node scripts/mvp-ui-smoke.mjs` (46/46, synthetic).
 
-**M3 status.** The genuine-provider exit holds on the current code. M3 as a whole still closes only with native Mac/Windows evidence (launch the Tauri shell against the service, connect, run the harnesses, stop and restart the service), which this container cannot produce. Nothing here is native-host evidence. The reviewer-contract violations recorded for smaller models were not exercised by this run.
+**M3 status.** The genuine-provider exit holds on the current code. M3 as a whole still needs native-host acceptance. Windows has since recorded native fixture evidence in [WINDOWS-VERIFICATION.md](WINDOWS-VERIFICATION.md): the native workflow passed 46/46 and native shutdown passed 48/48 in the bundled WebView2 app. That report itself keeps strict clean-revision Windows M3 acceptance, installed service supervision and signed installation open. No macOS evidence exists. This cloud container cannot produce either, and nothing in this section is native-host evidence. The reviewer-contract violations recorded for smaller models were not exercised by this run.

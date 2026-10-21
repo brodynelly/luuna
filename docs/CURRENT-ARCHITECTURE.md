@@ -1,5 +1,13 @@
 # Current Luuna architecture
 
+Windows native development startup invokes a fixed local bootstrap command,
+starts or authenticates/reuses the independent runtime and connects without
+manual token entry. DPAPI records live in `%USERPROFILE%\.luuna\credentials`;
+existing encrypted LocalAppData records migrate once without deleting them.
+Tokens reach the view through local IPC and stay in memory. Closing the window
+leaves the service running. See [ADR 0011](decisions/0011-windows-native-bootstrap.md)
+for the command boundary, reconciliation and checkout-based distribution limits.
+
 Date: 2026-10-16, updated 2026-10-17 for M2a, M2b, M2c and the M3 implementation, and 2026-10-21 for re-validation after a review that left no verdict, shutdown interruption, the client hardening of the MVP gate and the desktop design system. Status: authoritative foundation baseline; implementation evidence is required for each milestone.
 
 ## Purpose and precedence
@@ -31,7 +39,7 @@ Tauri/React client ── authenticated HTTP + resumable SSE ── Rust runtime
 
 Desktop-first is a sequencing decision. Browser/TUI capability parity, multiple related repositories, scoped memory, and Mac/Windows support remain full-v1 obligations. They are not exit criteria for the first single-repository foundation demo. No hosted service, mandatory NAS, GPU, automatic merge, custom agent loop, or full IDE replacement is required.
 
-The desktop client's presentation follows one token-based design system ([ADR 0010](decisions/0010-desktop-design-system.md), [DESIGN-SYSTEM.md](DESIGN-SYSTEM.md)): six outcome tones mapped from the API unions, where only passed evidence is green and interruption is never failure, both colour schemes and WCAG AA enforced by tests. It changes how runtime state is shown, never what the runtime decides.
+The desktop client's presentation follows one token-based design system ([ADR 0013](decisions/0013-desktop-design-system.md), [DESIGN-SYSTEM.md](DESIGN-SYSTEM.md)): six outcome tones mapped from the API unions, where only passed evidence is green and interruption is never failure, both colour schemes and WCAG AA enforced by tests. It changes how runtime state is shown, never what the runtime decides.
 
 The workspace should add crates when they contain a real contract or implementation: domain, storage, runtime/API, engine/Pi, Git, executor, validation, and external adapters. Shared frontend packages are created when an actual shared consumer needs them. Empty placeholders do not establish implementation progress.
 
@@ -59,7 +67,7 @@ Pi is the agent engine, not the scheduler or validation authority. The engine co
 
 Luuna maintains three branded CLI distributions: **Missions** (`@luuna/missions-cli`, Seeds-derived), **Atlas** (`@luuna/atlas-cli`, Mulch-derived), and **Beacon** (`@luuna/beacon-cli`, Canopy-derived). They live under `components/missions`, `components/atlas`, and `components/beacon` as separate package and integration boundaries. Preserve compatible underlying APIs/data formats, upstream copyright and MIT notices. Prefer adapters over rewrites or direct SQLite access to their records.
 
-The owner's explicit October 16, 2026 decision is to keep the application and all three components in `brodynelly/luuna` and defer separate repositories. Continue implementation in this monorepo; extraction is not a milestone prerequisite. No independent hosted repositories or published packages are claimed. Later extraction requires renewed scope, verified destination repositories, source/history provenance, preserved notices, CI/release ownership, and tested dependency consumption before deleting copies. See [ADR 0002](decisions/0002-supporting-components.md). Imported development metadata is not Luuna runtime data or permission to load stale instructions into agents.
+The owner resumed extraction on October 21, 2026 and explicitly authorized public component repositories. Missions, Atlas and Beacon now live in `brodynelly/luuna-missions`, `brodynelly/luuna-atlas` and `brodynelly/luuna-beacon`; Luuna stays private and consumes exact-commit Git submodules at the existing components paths. The manifest and gitlinks bind dependency identity; setup uses frozen Bun locks without lifecycle scripts, and consumer smoke checks exercise real CLI/JSON operations. Each destination owns its CI and source; registry packages remain private and unpublished. See [ADR 0012](decisions/0012-independent-component-repositories.md), superseding ADR 0002's hosted-extraction deferral. Full runtime ticket, memory and prompt adapters remain M6 obligations. Imported development metadata is not Luuna runtime data or permission to load stale instructions into agents.
 
 ## Candidate validation and review
 
@@ -74,6 +82,12 @@ All application routes use `/api/v1`. Implemented project routes are `POST /api/
 Bind the development service to loopback and authenticate protected API actions. A development launch may use an explicitly managed foreground process. The desktop reconnects to that service; closing a window or losing SSE does not decide run lifetime. Explicit shutdown stops or reconciles owned workers and persists interruption: since 2026-10-21 work stopped by Ctrl+C or SIGTERM is recorded `interrupted` (resumable after restart), never `cancelled`, and the client shows a lost runtime as an outage, reconnects by itself and reloads authoritative state when the runtime answers again. A Tauri child/sidecar alone does not prove independent lifetime. Platform-specific startup, supervision, token storage, and shutdown must be tested before distribution. See [ADR 0004](decisions/0004-service-lifecycle.md).
 
 ## Milestone evidence
+
+Windows orderly service stop is `POST /api/v1/shutdown`, authenticated with the
+existing bearer token. The runtime closes scheduling admission, drains admitted
+mutation handlers, interrupts owned work and exits cleanly; window closure is
+still only a client disconnect. Windows scripts reuse the DPAPI-encrypted token
+and data directory across restart. See [ADR 0010](decisions/0010-authenticated-service-shutdown.md).
 
 The initial executable implementation is a tool-free connectivity slice, not the approved implementation workflow. It exposes authenticated run creation/history, cursor event replay and SSE, and cancellation; the UI currently reconnects through replay polling. M2a adds read-only repository import, discovery proposals and confirmed manifest revisions; M2b adds supervised baselines with bound evidence; M2c adds temporary local tickets, immutable plan revisions, exact-hash approvals, Luuna-owned worktree leases and one scoped writer whose candidate waits in `validating`. M3 adds candidate-bound required checks, a fresh read-only reviewer, structured findings, optional bounded automatic repairs and conservative restart recovery; its genuine-provider exit is closed on Linux (see the status report) while native Mac/Windows lifecycle evidence remains open. Seeds/Missions reconciliation and publication remain subsequent capabilities.
 

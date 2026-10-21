@@ -29,6 +29,12 @@ export function realize(target) {
   } catch {
     base = existing;
   }
+  // Rust canonical paths use the Windows verbatim prefix; Pi's cwd may use
+  // the ordinary spelling. Compare the same real path in one namespace.
+  if (process.platform === "win32") {
+    if (base.startsWith("\\\\?\\UNC\\")) base = `\\\\${base.slice(8)}`;
+    else if (base.startsWith("\\\\?\\")) base = base.slice(4);
+  }
   return missing.length ? resolve(base, ...missing) : base;
 }
 

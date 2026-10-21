@@ -1,6 +1,6 @@
 # Luuna desktop design system
 
-Date: 2026-10-21. Status: current. This is the visual and interaction contract for the desktop client (`apps/desktop`). It is presentation only: the runtime decides every state, permission, reason and next step, and the client displays them. A design change may never change which control appears, when it is enabled, or what text the runtime's state produces.
+Date: 2026-10-21. Status: current; decision recorded in [ADR 0013](decisions/0013-desktop-design-system.md). This is the visual and interaction contract for the desktop client (`apps/desktop`). It is presentation only: the runtime decides every state, permission, reason and next step, and the client displays them. A design change may never change which control appears, when it is enabled, or what text the runtime's state produces.
 
 ## Principles
 

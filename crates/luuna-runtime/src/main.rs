@@ -48,7 +48,10 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let shutdown_state = state.clone();
     axum::serve(listener, router(state))
         .with_graceful_shutdown(async move {
-            termination_requested().await;
+            tokio::select! {
+                _ = termination_requested() => {},
+                _ = shutdown_state.wait_for_shutdown_request() => {},
+            }
             shutdown_state.shutdown().await;
         })
         .await?;

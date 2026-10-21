@@ -3,5 +3,5 @@
   "identifier": "main",
   "description": "Frontend uses the authenticated runtime API; no filesystem, shell or process plugin permissions.",
   "windows": ["main"],
-  "permissions": []
+  "permissions": ["allow-ensure-local-runtime"]
 }

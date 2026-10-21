@@ -230,8 +230,11 @@ async function exclusiveOwnership() {
 }
 
 async function gracefulShutdown() {
-  const signal = process.platform === "win32" ? "SIGINT" : "SIGTERM";
-  runtime.kill(signal);
+  const signal = process.platform === "win32" ? "authenticated API" : "SIGTERM";
+  if (process.platform === "win32") {
+    const stop = await api("POST", "/shutdown");
+    record("authenticated service shutdown accepted", stop.status === 202, `status ${stop.status}`);
+  } else runtime.kill(signal);
   const exit = await waitForExit(runtime, 15_000);
   record(`${signal} performs an orderly shutdown`, exit.exited && runtime.exitCode === 0, `exited=${exit.exited} code=${runtime.exitCode} after ${exit.elapsed}ms`);
   if (!exit.exited) runtime.kill("SIGKILL");

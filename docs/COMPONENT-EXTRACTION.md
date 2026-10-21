@@ -1,0 +1,59 @@
+# Independent component repository evidence
+
+October 21, 2026. Luuna source baseline: `fd42d59c5f608b9120d9cdc2e2354b66f945a5ed`. Decision: [ADR 0012](decisions/0012-independent-component-repositories.md).
+
+The owner explicitly authorized three public component repositories. Luuna remains private. This migration does not publish npm packages or change runtime ticket authority.
+
+| Component | Destination and immutable consumer pin | Independent full verification |
+| --- | --- | --- |
+| Missions | [brodynelly/luuna-missions](https://github.com/brodynelly/luuna-missions), `e1b5db171892de653e7462e630d64d4964d01422` | [CI passed](https://github.com/brodynelly/luuna-missions/actions/runs/39658081094) |
+| Atlas | [brodynelly/luuna-atlas](https://github.com/brodynelly/luuna-atlas), `76ad209daf404dd9a12aeaf46293e05e9f41e517` | [CI passed](https://github.com/brodynelly/luuna-atlas/actions/runs/39658097498) |
+| Beacon | [brodynelly/luuna-beacon](https://github.com/brodynelly/luuna-beacon), `072e482169e0d469c3744ec712222f8b310fa7da` | [CI passed](https://github.com/brodynelly/luuna-beacon/actions/runs/39658110584) |
+
+## Preservation and destination verification
+
+- Extracted component-scoped maintained history with `git subtree split` and checked the baseline Git tree against the original `HEAD:components/<name>` tree before changing standalone metadata. Both maintained commits are present in each destination. Earlier pre-branding import provenance remains in UPSTREAM.md and Luuna's retained history.
+- Compared Git object identities for each `src` tree, `bun.lock` and `LICENSE` against the source baseline: all identical. Runtime/data implementation, JSON formats, aliases, source versions and dependency graphs did not change.
+- Scanned every extracted commit for tracked authoring/session stores, real environment files and recognizable credential patterns before the authorized public push. Only the component history was pushed, with no original Luuna refs. This is a bounded repository hygiene check, not a universal secret-detection claim.
+- Verified the authenticated owner, destination visibility, push access and remote `main` SHA. Each destination is public and owned by brodynelly, who owns CI and release decisions. Registry packages remain private, self-upgrade remains disabled, and public consumption needs no release secret or deploy key.
+- Cloned actual GitHub destinations, installed frozen Bun dependencies without scripts and exercised their real source entrypoints through Luuna's consumer launcher. Conversion removes tracked source duplication only after this destination verification.
+
+## Commands and observed evidence
+
+Tooling: Bun 1.4.3. Windows local consumer checks used Node 26.10.0, allowed by the repository's Node minimum; GitHub Actions pins Node 24.19.0. Component verification runs on Linux with Bun 1.4.3 and Node 24.19.0 in each destination CI.
+
+| Check | Observed result |
+| --- | --- |
+| Independent destination CI: `bun install --frozen-lockfile --ignore-scripts`, `bun run verify` | All three passed; includes typecheck, instruction validation and complete inherited suites. Fresh local Linux destination clones also passed 1,053 Missions, 1,580 Atlas and 459 Beacon tests (3,092 total) |
+| Windows destination typecheck and instruction checks | Passed for all three repositories |
+| `node scripts/components.mjs setup` in the isolated Luuna consumer checkout | Passed; exact remote source pins, frozen installs, no change to root hooks |
+| `node scripts/components.mjs verify` | All three manifest/gitlink/checkout identities and CLI contracts passed |
+| `node scripts/components-smoke.mjs` on Windows | 12/12 genuine CLI operations passed: Missions init/create/show/list, Atlas init/add/record/search, Beacon init/create/render/list; only temporary test stores used |
+| `node --test scripts/components.test.mjs` on Windows | 5/5 passed, including missing checkout, changed pin, moved checkout, dirty tree, wrong URL, incompatible alias and missing dependencies |
+| Fresh recursive Linux Luuna clone, Node 24.19.0: `npm test` | Passed: 20 schema cases, 5 scope-guard tests, 5 component pin tests, 13 desktop tests and 22 API-client tests |
+| Fresh recursive Linux Luuna clone: setup and real consumer smoke | Frozen setup passed; 12/12 CLI operations passed |
+| `npm run test --workspaces --if-present` on Windows | 13 desktop and 22 API-client tests passed |
+| `npm run typecheck`, `npm run build` on Windows and fresh Linux clone | Passed |
+| `node scripts/check-hygiene.mjs`, `git diff --check` | Passed |
+| Root `npm test` on Windows from unchanged baseline guard source | Stopped at all five pre-existing scope-guard fixtures because Windows denied directory symlink creation with `EPERM`; this is not a passing full test run. Existing native-platform work is preserved separately, not imported into the extraction branch |
+
+Luuna's CI runs the consumer setup, verification and real CLI smoke on Linux, macOS and Windows. The private Luuna Actions runs on [PR #8](https://github.com/brodynelly/luuna/pull/8) were refused before jobs started: GitHub reported recent account payments failed or the spending limit needs to be increased. Billing settings were not changed. The three public component repositories' own CI passed. Linux and Windows consumer evidence above was run locally; macOS consumer CI remains unverified until the account prerequisite is resolved. Workflow configuration alone is not passing evidence.
+
+## Setup, updates and rollback
+
+Run `npm run components:setup` after a fresh Luuna clone. Plain `git clone --recurse-submodules` retrieves source but still needs frozen dependency installation. `npm run components:run -- luuna-missions -- --help` invokes the approved pinned source; atlas and beacon follow the same interface. The root npm workspace remains separate from these Bun packages.
+
+To update, review the component's own change and CI, fetch/check out its exact commit in the submodule, update the manifest commit, and commit both manifest and gitlink in the Luuna PR. Setup never uses a floating branch or silently overwrites local changes. Reverting the extraction commit restores Luuna's original tracked component trees; no original monorepo history is rewritten. Local source rollback copies remain outside tracking during migration.
+
+Full M6 runtime ticket reconciliation, scoped memory retrieval and explicit prompt resources remain planned. The migration preserves the existing CLI/library boundary and verifies real consumption; it does not claim those runtime adapters now exist. No provider or native desktop result is inferred from CLI tests.
+
+
+## PR review corrections, October 21, 2026
+
+Review found that setup performed checkout before detecting local edits, and that the developer launcher captured stdin/output and collapsed nonzero CLI statuses into its own error handling. Setup now validates all component identities, manifest completeness, gitlinks, URLs and initialized worktree cleanliness before any checkout/install. Regression tests cover dirty and uninitialized checkouts and missing/duplicate manifest entries. Clean prior pins can still be updated through the committed gitlinks.
+
+The developer CLI now inherits stdin/stdout/stderr, preserves the component exit status, and uses npm's INIT_CWD so `npm --prefix` operates on the calling project rather than Luuna's root. The bounded programmatic JSON helper remains separate. The real smoke additionally pipes an Atlas record through the launcher from a different package directory and checks a Missions JSON failure and exit code, raising the smoke to 14 operations. MIT and component README links now target the exact public repository revisions so they work on GitHub across submodule boundaries.
+
+The owner requested canonical luuna-* repository names during PR review. GitHub repository renames preserve repository identity and maintained history; all active submodule URLs, package repository/homepage/issue metadata, documentation and consumer pins use luuna-missions, luuna-atlas and luuna-beacon. The launcher accepts those full primary names and retains the short component selectors as compatibility aliases. Internal components paths and upstream data formats remain stable.
+
+Final review validation: the branded repository pins passed frozen setup and 14/14 real CLI operations on both Windows and Linux. All eight setup/pin regressions passed on Windows, and the final Linux npm test passed 20 schema cases, 5 scope-guard tests, 8 component-pin tests, 13 desktop tests and 22 API-client tests at 2cb556e. The earlier reviewed code also passed frontend typecheck/build. All three renamed public repositories passed their full independent CI at the exact final component commits linked above. Private Luuna Actions remains blocked before job startup by account payment/spending limits; no billing settings or branch policies were altered.

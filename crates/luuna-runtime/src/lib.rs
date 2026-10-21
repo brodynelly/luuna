@@ -26,7 +26,7 @@ use std::{
     sync::{Arc, Mutex},
     time::Duration,
 };
-use tokio::sync::watch;
+use tokio::sync::{watch, Notify, RwLock};
 use tower_http::cors::CorsLayer;
 
 #[derive(Clone)]
@@ -51,6 +51,8 @@ pub struct AppState {
     executor: Arc<Executor>,
     /// Set by explicit shutdown before owned work is signalled to stop.
     shutting_down: Arc<std::sync::atomic::AtomicBool>,
+    shutdown_requested: Arc<Notify>,
+    admission: Arc<RwLock<()>>,
     _owner_lock: Arc<std::fs::File>,
 }
 
@@ -105,6 +107,8 @@ impl AppState {
             git: Arc::new(git),
             executor: Arc::new(Executor::default()),
             shutting_down: Arc::new(std::sync::atomic::AtomicBool::new(false)),
+            shutdown_requested: Arc::new(Notify::new()),
+            admission: Arc::new(RwLock::new(())),
             _owner_lock: Arc::new(owner_lock),
         })
     }
@@ -151,9 +155,13 @@ impl AppState {
     }
 
     pub async fn shutdown(&self) {
-        self.shutting_down
-            .store(true, std::sync::atomic::Ordering::SeqCst);
-        self.cancel_active();
+        {
+            // Drain admitted scheduling requests before stopping their workers.
+            let _admission = self.admission.write().await;
+            self.shutting_down
+                .store(true, std::sync::atomic::Ordering::SeqCst);
+            self.cancel_active();
+        }
         let deadline = tokio::time::Instant::now() + Duration::from_secs(5);
         loop {
             let empty = self
@@ -166,6 +174,11 @@ impl AppState {
             }
             tokio::time::sleep(Duration::from_millis(25)).await;
         }
+    }
+
+    /// One main-process waiter; Notify retains an early request until it waits.
+    pub async fn wait_for_shutdown_request(&self) {
+        self.shutdown_requested.notified().await;
     }
 
     fn event(&self, id: &str, kind: &str, payload: Value) -> Result<(), ApiError> {
@@ -198,6 +211,7 @@ impl AppState {
 
 pub fn router(state: AppState) -> Router {
     let protected = Router::new()
+        .route("/api/v1/shutdown", post(request_shutdown))
         .route("/api/v1/runs", get(list_runs).post(start_run))
         .route("/api/v1/runs/{id}", get(get_run))
         .route("/api/v1/runs/{id}/events", get(events))
@@ -296,7 +310,31 @@ async fn authenticate(
         )
             .into_response();
     }
-    next.run(request).await
+    if request.method() != axum::http::Method::GET && request.uri().path() != "/api/v1/shutdown" {
+        let _admission = state.admission.read().await;
+        if state.shutting_down() {
+            return (
+                StatusCode::SERVICE_UNAVAILABLE,
+                Json(json!({"error":"runtime is shutting down; restart it before starting new work"})),
+            ).into_response();
+        }
+        next.run(request).await
+    } else {
+        next.run(request).await
+    }
+}
+
+/// Authenticated, idempotent service stop. Client disconnect is never shutdown.
+async fn request_shutdown(State(state): State<AppState>) -> (StatusCode, Json<Value>) {
+    let _admission = state.admission.write().await;
+    state
+        .shutting_down
+        .store(true, std::sync::atomic::Ordering::SeqCst);
+    state.shutdown_requested.notify_one();
+    (
+        StatusCode::ACCEPTED,
+        Json(json!({"status":"shutting_down"})),
+    )
 }
 
 #[derive(Debug)]
@@ -469,7 +507,7 @@ async fn stream(
                 let event = Event::default().id(after.to_string()).event("run_event").json_data(record);
                 match event { Ok(event) => yield Ok::<Event, Infallible>(event), Err(_) => break }
             }
-            if terminal { break; }
+            if terminal || state.shutting_down() { break; }
             tokio::time::sleep(Duration::from_millis(200)).await;
         }
     };

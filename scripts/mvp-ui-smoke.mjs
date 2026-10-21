@@ -15,7 +15,7 @@ import { existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node
 import { createServer } from "node:net";
 import { tmpdir } from "node:os";
 import path from "node:path";
-import { randomBytes } from "node:crypto";
+import { randomBytes, createHash } from "node:crypto";
 import { fileURLToPath } from "node:url";
 import { setTimeout as sleep } from "node:timers/promises";
 import { chromium } from "playwright-core";
@@ -23,6 +23,9 @@ import { chromium } from "playwright-core";
 const repository = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 const options = Object.fromEntries(process.argv.slice(2).map((arg, index, all) => arg.startsWith("--") ? [arg.slice(2), all[index + 1]?.startsWith("--") || all[index + 1] === undefined ? true : all[index + 1]] : []).filter((pair) => pair.length));
 const started = new Date();
+const nativeBinary = options.native ? path.resolve(options.native) : null;
+let nativeClient = null;
+let clientUrl = "http://127.0.0.1:1420/";
 const out = path.resolve(options.out ?? path.join(tmpdir(), `luuna-mvp-ui-smoke-${started.toISOString().replace(/[:.]/g, "-")}`));
 if (existsSync(out)) { console.error(`Refusing to reuse ${out}; pass a new --out directory.`); process.exit(2); }
 mkdirSync(out, { recursive: true });
@@ -123,7 +126,7 @@ const runtimePort = await freePort();
 // (127.0.0.1:1420), so the smoke serves the client there and refuses to run
 // when that port is taken instead of widening the allowlist.
 const uiPort = 1420;
-await new Promise((resolve, reject) => {
+if (!nativeBinary) await new Promise((resolve, reject) => {
   const probe = createServer();
   probe.once("error", () => reject(new Error(`port ${uiPort} is in use; stop the running client (npm run dev) before the smoke`)));
   probe.listen(uiPort, "127.0.0.1", () => probe.close(resolve));
@@ -147,7 +150,15 @@ async function stopRuntime(signal) {
   if (!runtime) return null;
   const child = runtime;
   runtime = null;
-  child.kill(signal);
+  if (process.platform === "win32" && signal !== "SIGKILL") {
+    try {
+      const response = await api("POST", "/shutdown");
+      if (response.status !== 202) throw new Error(`status ${response.status}`);
+    } catch (error) {
+      record("authenticated shutdown accepted before process cleanup", false, String(error));
+      child.kill("SIGKILL");
+    }
+  } else child.kill(signal);
   const exited = await Promise.race([runtimeExited, sleep(15_000).then(() => null)]);
   if (!exited) { child.kill("SIGKILL"); await runtimeExited; }
   return exited;
@@ -158,8 +169,8 @@ async function api(method, route, body) {
 }
 let vite = null;
 async function startVite() {
-  const bin = path.join(repository, "node_modules", ".bin", process.platform === "win32" ? "vite.cmd" : "vite");
-  vite = spawn(bin, ["--host", "127.0.0.1", "--port", String(uiPort), "--strictPort"], { cwd: path.join(repository, "apps", "desktop"), env: { ...toolEnv(), NODE_ENV: "development" }, stdio: ["ignore", "pipe", "pipe"] });
+  const bin = path.join(repository, "node_modules", "vite", "bin", "vite.js");
+  vite = spawn(process.execPath, [bin, "--host", "127.0.0.1", "--port", String(uiPort), "--strictPort"], { cwd: path.join(repository, "apps", "desktop"), env: { ...toolEnv(), NODE_ENV: "development" }, stdio: ["ignore", "pipe", "pipe"] });
   const viteLog = path.join(out, "vite.log");
   for (const stream of [vite.stdout, vite.stderr]) stream.on("data", (chunk) => writeFileSync(viteLog, chunk, { flag: "a" }));
   const ready = await waitFor(() => fetch(`http://127.0.0.1:${uiPort}/`).then((response) => response.ok).catch(() => false), 60_000);
@@ -204,19 +215,45 @@ async function waitConnection(text, timeoutMs) { return waitFor(async () => ((aw
 
 async function connectWithKeyboard(serviceToken) {
   // Keyboard only: Tab from the document start reaches the skip link, then the form.
-  await page.goto(`http://127.0.0.1:${uiPort}/`);
-  await page.locator("body").focus();
-  await page.keyboard.press("Tab");
-  const first = await page.evaluate(() => document.activeElement?.textContent?.trim() ?? "");
-  record("the first Tab stop is the skip link", first === "Skip to main content", `focused "${first}"`);
-  await page.keyboard.press("Enter");
-  const mainFocused = await page.evaluate(() => document.activeElement?.id ?? "");
-  record("the skip link moves keyboard focus to the main region", mainFocused === "main", `activeElement id "${mainFocused}"`);
+  await page.goto(clientUrl);
+  if (nativeBinary) {
+    // Let automatic startup settle, then explicitly switch this test view to
+    // the isolated fixture runtime. Production startup is covered separately.
+    await page.locator('.connection-panel button:has-text("Disconnect"), [role="alert"]').first().waitFor({ timeout: 90_000 });
+    const disconnect = page.getByRole("button", { name: "Disconnect", exact: true });
+    if (await disconnect.count()) await disconnect.click();
+    const dismiss = page.locator('[role="alert"] button:has-text("Dismiss")');
+    if (await dismiss.count()) await dismiss.click();
+  }
+  if (nativeBinary) {
+    // Host focus is not guaranteed through WebView2 CDP. Exercise the actual
+    // link and focus target; keyboard-only evidence belongs to the browser run.
+    const skip = page.getByRole("link", { name: "Skip to main content", exact: true });
+    await skip.focus();
+    await skip.click();
+    record("the native skip link moves focus to the main region", await page.evaluate(() => document.activeElement?.id === "main"));
+  } else {
+    await page.locator("body").focus();
+    await page.keyboard.press("Tab");
+    const first = await page.evaluate(() => document.activeElement?.textContent?.trim() ?? "");
+    record("the first Tab stop is the skip link", first === "Skip to main content", `focused "${first}"`);
+    await page.keyboard.press("Enter");
+    const mainFocused = await page.evaluate(() => document.activeElement?.id ?? "");
+    record("the skip link moves keyboard focus to the main region", mainFocused === "main", `activeElement id "${mainFocused}"`);
+  }
   await page.getByLabel("Service URL").focus();
-  await page.keyboard.press("ControlOrMeta+A");
-  await page.keyboard.type(base);
-  await page.keyboard.press("Tab");
-  await page.keyboard.type(serviceToken);
+  if (nativeBinary) {
+    // WebView2's CDP does not reliably deliver modifier/text sequences while
+    // the host window is in the background. Fill these fixture values through
+    // the DOM; keyboard-only form-entry evidence remains the browser run.
+    await page.getByLabel("Service URL").fill(base);
+    await page.getByLabel("Service token").fill(serviceToken);
+  } else {
+    await page.keyboard.press("ControlOrMeta+A");
+    await page.keyboard.type(base);
+    await page.keyboard.press("Tab");
+    await page.keyboard.type(serviceToken);
+  }
   await page.keyboard.press("Enter");
 }
 
@@ -227,7 +264,10 @@ async function registerProject(name, id, dir, expectFailure = false) {
   await page.getByLabel("Repository root path").fill(dir);
   await page.getByRole("button", { name: "Register repository" }).click();
   if (expectFailure) return null;
-  return waitFor(async () => { const dd = page.locator(".facts").first(); return (await dd.count()) && (await dd.innerText()).includes(dir) ? await dd.innerText() : null; }, 20_000);
+  // Store-packaged Windows hosts can virtualize the requested path. Match the
+  // observed Git identity rather than assuming the displayed path spelling.
+  const head = git(dir, "rev-parse", "HEAD");
+  return waitFor(async () => { const dd = page.locator(".facts").first(); const text = (await dd.count()) ? await dd.innerText() : ""; return text.includes(head.slice(0, 12)) ? text : null; }, 20_000);
 }
 
 async function confirmManifest(id, name, withHold) {
@@ -374,7 +414,9 @@ async function presentationAudit(label, { widths = false } = {}) {
     await screenshot(`${label.replace(/\W+/g, "-")}-${scheme}`);
   }
   record(`${label}: the client follows the system colour scheme`, schemes.dark.background !== schemes.light.background, `dark page background ${schemes.dark.background}, light page background ${schemes.light.background}`);
-  if (widths) {
+  // The native window keeps its own size; the minimum-width layout is checked on the browser surface.
+  if (widths && nativeBinary) note(`${label}: the 760 px width check runs on the browser surface only; the native window keeps its own size`);
+  if (widths && !nativeBinary) {
     await page.setViewportSize({ width: 760, height: 900 });
     for (const scheme of ["dark", "light"]) {
       await page.emulateMedia({ colorScheme: scheme });
@@ -400,7 +442,7 @@ async function walkthrough() {
   await page.keyboard.press("Enter");
   await connectWithKeyboard(token);
   const online = await waitConnection("Local runtime connected", 15_000);
-  record("the client connects with the service token entered by keyboard", Boolean(online), await connected());
+  record(`the client connects with the service token entered ${nativeBinary ? "through native form controls" : "by keyboard"}`, Boolean(online), await connected());
   const tokenCleared = await page.locator('input[type="password"]').count() === 0;
   record("the token field is gone after connecting; the token stays only in memory", tokenCleared);
   await screenshot("01-connected");
@@ -509,7 +551,7 @@ async function recovery() {
   await itemB.getByRole("button", { name: "Validate and review" }).click();
   record("recovery B: the hold check is running", Boolean(await waitFor(() => (existsSync(path.join(worktreeB, ".hold-started")) ? true : null), 60_000, 200)));
   const stopped = await stopRuntime("SIGTERM");
-  record("recovery B: SIGTERM shut the runtime down in an orderly way (exit before the 15 s bound)", stopped !== null && stopped.signal !== "SIGKILL", JSON.stringify(stopped));
+  record(`recovery B: ${process.platform === "win32" ? "authenticated API" : "SIGTERM"} shut the runtime down in an orderly way (exit before the 15 s bound)`, stopped !== null && stopped.code === 0, JSON.stringify(stopped));
   await waitConnection("Reconnecting to runtime", 20_000);
   await startRuntime("restart-after-shutdown");
   await waitConnection("Local runtime connected", 30_000);
@@ -523,7 +565,7 @@ async function recovery() {
 
   // C. Hard kill while the reviewer is in flight → reserved spend → re-validation refused with guidance.
   await page.locator('ul[aria-label="Registered projects"] button', { hasText: "Walkthrough" }).click();
-  await waitFor(async () => ((await page.locator(".facts").first().innerText()).includes(fixtures.walkthrough.dir) ? true : null), 20_000);
+  await waitFor(async () => ((await page.locator(".facts").first().innerText()).includes(fixtures.walkthrough.head.slice(0, 12)) ? true : null), 20_000);
   const third = "Hard kill during review";
   await createTicket(third, "Make src/main.py print the greeting.", ["fixture:write_in_scope", "fixture:review_hold", "main prints the greeting"]);
   record("recovery C: the writer settles in validating", (await planApproveImplement(third)).settled === "validating");
@@ -557,9 +599,22 @@ async function recovery() {
 let failure = null;
 try {
   await startRuntime("initial");
-  await startVite();
-  browser = await chromium.launch({ headless: true, ...(process.env.LUUNA_CHROMIUM && { executablePath: process.env.LUUNA_CHROMIUM }) });
-  page = await (await browser.newContext({ viewport: { width: 1280, height: 900 } })).newPage();
+  if (nativeBinary) {
+    const debugPort = await freePort();
+    nativeClient = spawn(nativeBinary, [], { cwd: repository, env: { ...toolEnv(), WEBVIEW2_ADDITIONAL_BROWSER_ARGUMENTS: `--remote-debugging-port=${debugPort}`, WEBVIEW2_USER_DATA_FOLDER: path.join(out, "webview2-profile") }, stdio: ["ignore", "ignore", "pipe"] });
+    nativeClient.stderr.on("data", (chunk) => writeFileSync(path.join(out, "native.log"), chunk, { flag: "a" }));
+    const endpoint = `http://127.0.0.1:${debugPort}`;
+    if (!await waitFor(() => fetch(`${endpoint}/json/version`).then(r => r.ok).catch(() => false), 30_000)) throw new Error("native WebView2 debugging endpoint did not become ready");
+    browser = await chromium.connectOverCDP(endpoint);
+    page = await waitFor(() => browser.contexts().flatMap(c => c.pages()).find(p => /^https?:\/\/tauri\.localhost\//.test(p.url())) ?? null, 30_000);
+    if (!page) throw new Error("the native embedded application page did not load");
+    clientUrl = page.url();
+    record("native Tauri executable loaded its bundled frontend in WebView2", true, `${nativeBinary}; sha256:${createHash("sha256").update(readFileSync(nativeBinary)).digest("hex")}; ${clientUrl}`);
+  } else {
+    await startVite();
+    browser = await chromium.launch({ headless: true, ...(process.env.LUUNA_CHROMIUM && { executablePath: process.env.LUUNA_CHROMIUM }) });
+    page = await (await browser.newContext({ viewport: { width: 1280, height: 900 } })).newPage();
+  }
   page.on("pageerror", (error) => note(`page error: ${error.message}`));
   page.on("console", (message) => { if (message.type() === "error") note(`console error: ${message.text().slice(0, 160)}`); });
   await walkthrough();
@@ -570,13 +625,19 @@ try {
   await screenshot("99-failure");
 } finally {
   try { await browser?.close(); } catch { /* ignore */ }
+  if (nativeClient) {
+    if (nativeClient.exitCode === null && nativeClient.signalCode === null) nativeClient.kill();
+    record("native client termination leaves the independent runtime answering", await fetch(`${base}/health`).then(r => r.ok).catch(() => false));
+  }
   if (vite) { vite.kill("SIGTERM"); await sleep(300); vite.kill("SIGKILL"); }
   const exit = await stopRuntime("SIGTERM");
-  if (runtime === null && exit !== null) record("final orderly shutdown exited the runtime", true, JSON.stringify(exit));
+  if (runtime === null && exit !== null) record("final shutdown exited the runtime (orderly only with exit code 0)", exit.code === 0, JSON.stringify(exit));
 }
 const passed = checks.every((check) => check.ok);
 const report = {
   mode: "fixture",
+  surface: nativeBinary ? "native Tauri WebView2" : "Chromium browser",
+  native_binary: nativeBinary,
   verdict: `SYNTHETIC client/lifecycle smoke ${passed ? "passed" : "FAILED"}: desktop client, runtime restart and shutdown evidence only, never provider evidence`,
   started_at: started.toISOString(),
   finished_at: new Date().toISOString(),

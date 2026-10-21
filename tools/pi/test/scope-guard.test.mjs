@@ -2,7 +2,7 @@
 import assert from "node:assert/strict";
 import { mkdtempSync, mkdirSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { join, toNamespacedPath } from "node:path";
 import { test } from "node:test";
 import { decide, realize } from "../../../crates/luuna-engine-pi/assets/luuna-scope-guard.js";
 
@@ -13,7 +13,7 @@ function fixture() {
   mkdirSync(join(base, "outside"), { recursive: true });
   writeFileSync(join(root, "src", "main.py"), "print('x')\n");
   writeFileSync(join(base, "outside", "secret.txt"), "nope\n");
-  symlinkSync(join(base, "outside"), join(root, "escape"));
+  symlinkSync(join(base, "outside"), join(root, "escape"), process.platform === "win32" ? "junction" : "dir");
   return { base, root, scope: { root, paths: ["src"], operations: ["read", "write"] } };
 }
 
@@ -60,4 +60,15 @@ test("independent reviewer can inspect candidate files but cannot mutate them", 
     assert.match(decide(tool, { path: "src/main.py" }, root, reviewer), /needs the write operation/);
   }
   assert.match(decide("bash", { command: "touch src/x" }, root, reviewer), /not part of the approved/);
+});
+
+test("Windows canonical scope and ordinary Pi cwd refer to the same worktree", { skip: process.platform !== "win32" }, () => {
+  const { root, scope } = fixture();
+  const canonical = toNamespacedPath(root);
+  for (const [scopeRoot, cwd] of [[canonical, root], [root, canonical]]) {
+    const reviewer = { ...scope, root: scopeRoot, operations: ["read"] };
+    assert.equal(decide("read", { path: "src/main.py" }, cwd, reviewer), null);
+    assert.match(decide("read", { path: "escape/secret.txt" }, cwd, reviewer), /outside the leased worktree/);
+    assert.match(decide("write", { path: "src/main.py" }, cwd, reviewer), /needs the write operation/);
+  }
 });
