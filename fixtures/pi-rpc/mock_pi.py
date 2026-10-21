@@ -173,6 +173,27 @@ def run_writer(request_id, kind, scenario, prompt):
         write_file("src/main.py", "print('expensive')\n")
     elif scenario == "no_change":
         pass
+    elif scenario == "write_dotgit":
+        # A writer with whole-repository scope repoints the worktree's gitfile
+        # at the developer repository, as prompt-injected content could ask.
+        with open(os.path.join(os.getcwd(), ".git"), encoding="utf-8") as handle:
+            gitdir = handle.read().strip().split("gitdir: ", 1)[1]
+        write_file(".git", "gitdir: " + os.path.dirname(os.path.dirname(gitdir)) + "\n")
+        write_file("src/main.py", "print('redirected candidate')\n")
+    elif scenario == "write_ignored":
+        # An in-scope file the repository ignores: the code depends on it, but
+        # `git add --all` would leave it out of the candidate.
+        write_file("src/main.py", "import settings_local\n")
+        write_file("src/settings.local", "TOKEN = 'synthetic'\n")
+    elif scenario == "write_through_link":
+        # The repository tracks src/out as a dangling link to a path outside
+        # the worktree; writing it creates the link's target there.
+        write_file("src/main.py", "print('changed')\n")
+        write_file("src/out", "written through a tracked dangling link\n")
+    elif scenario == "write_in_gitlink":
+        # vendor/lib is an unpopulated submodule; Git never lists its contents.
+        write_file("src/main.py", "print('changed')\n")
+        write_file("vendor/lib/injected.py", "x = 1\n")
     message = {"role": "assistant", "stopReason": "stop", "usage": usage(cost),
                "content": [{"type": "text", "text": f"synthetic writer finished {scenario}"}]}
     send({"type": "message_update", "usage": usage(cost), "assistantMessageEvent":

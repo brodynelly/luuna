@@ -347,6 +347,8 @@ pub async fn create_plan(
         .map_err(internal)?
         .ok_or_else(|| unprocessable("confirm a manifest before planning"))?;
     let task = &request.task;
+    luuna_domain::require_granted_operations(&task.operations)
+        .map_err(|e| unprocessable(e.to_string()))?;
     if !ticket.repository_ids.contains(&task.repository_id) {
         return Err(unprocessable(format!(
             "repository {} is not part of ticket {}",
@@ -415,7 +417,13 @@ pub async fn create_plan(
             role: "implementer".into(),
             depends_on: vec![],
             paths: task.paths.clone(),
-            operations: task.operations.clone(),
+            // One order, so equal requests seal equal hashes; duplicates are
+            // still refused by plan validation.
+            operations: {
+                let mut ops = task.operations.clone();
+                ops.sort();
+                ops
+            },
             acceptance_criteria,
             execution_profile: "native".into(),
         }],
@@ -1882,6 +1890,20 @@ fn writer_prompt(job: &WriterJob) -> String {
     )
 }
 
+/// Repository-relative paths for a rejection reason, bounded to ten.
+fn name_paths(paths: &[&str]) -> String {
+    let named = paths
+        .iter()
+        .take(10)
+        .copied()
+        .collect::<Vec<_>>()
+        .join(", ");
+    match paths.len().saturating_sub(10) {
+        0 => named,
+        more => format!("{named} and {more} more"),
+    }
+}
+
 enum Outcome {
     Settled,
     Failed(String),
@@ -1982,7 +2004,13 @@ async fn writer_worker(state: AppState, job: WriterJob, mut cancel: watch::Recei
             .saturating_sub(spent.unwrap_or(u64::MAX)),
     );
     let started = std::time::Instant::now();
-    let deadline = tokio::time::Instant::now() + remaining;
+    // Plan validation bounds the timeout; a deadline still never overflows.
+    let deadline = tokio::time::Instant::now()
+        .checked_add(remaining)
+        .unwrap_or_else(|| {
+            tokio::time::Instant::now()
+                + Duration::from_secs(luuna_domain::MAX_PLAN_TIMEOUT_SECONDS)
+        });
     // Every exit from here on charges the time it took, whatever the reason:
     // a startup step that fails slowly (a Git command at its own timeout, say)
     // spent approved time as surely as one that ran into the deadline.
@@ -2040,27 +2068,35 @@ async fn writer_worker(state: AppState, job: WriterJob, mut cancel: watch::Recei
     }
     let lease_id = lease.id.clone();
     let root = PathBuf::from(&job.registration.local_path);
-    // Worktree creation yields to cancellation as well as the deadline.
+    // Worktree creation yields to cancellation as well as the deadline. What
+    // Git cannot see there (outward link targets, gitlink directories) is
+    // recorded before the writer runs, so the judgement can compare it after.
     let created = tokio::select! {
         biased;
         _ = cancel.changed() => {
             settle(&state, state.stop_attempt_state(), state.stop_run_state(), Some((&lease_id, LeaseState::Released, None)), &state.stop_reason("cancelled during worktree creation"), spent(started));
             return;
         }
-        created = tokio::time::timeout_at(
-            deadline,
-            state.git.add_detached_worktree(&root, &worktree, &base),
-        ) => created,
+        created = tokio::time::timeout_at(deadline, async {
+            state
+                .git
+                .add_detached_worktree(&root, &worktree, &base)
+                .await
+                .map_err(|error| format!("cannot create worktree: {error}"))?;
+            state.git.unseen_state(&worktree).await.map_err(|error| {
+                format!("cannot record the worktree's links: {error}; worktree preserved")
+            })
+        }) => created,
     };
-    match created {
-        Ok(Ok(())) => {}
-        Ok(Err(error)) => {
+    let unseen = match created {
+        Ok(Ok(unseen)) => unseen,
+        Ok(Err(reason)) => {
             settle(
                 &state,
                 AttemptState::Failed,
                 RunState::Failed,
                 Some((&lease_id, LeaseState::Released, None)),
-                &format!("cannot create worktree: {error}"),
+                &reason,
                 spent(started),
             );
             return;
@@ -2077,7 +2113,7 @@ async fn writer_worker(state: AppState, job: WriterJob, mut cancel: watch::Recei
             );
             return;
         }
-    }
+    };
     let _ = state.event(
         &job.run_id,
         "worktree.created",
@@ -2410,6 +2446,15 @@ async fn writer_worker(state: AppState, job: WriterJob, mut cancel: watch::Recei
         extra: None,
     };
     let judge = async {
+        // The writer could reach the worktree's `.git` file: before any Git
+        // command trusts it, the worktree must still be bound to the registered
+        // repository, or Luuna's own commit could land in another one.
+        if let Err(error) = state.git.verify_worktree_binding(&root, &worktree).await {
+            return Err(reject(
+                format!("scope violation: the worktree's repository metadata changed during the session ({error}); no candidate recorded, worktree preserved for inspection"),
+                None,
+            ));
+        }
         // Judge what actually changed, as the repository reports it.
         let changes = state.git.changed_paths(&worktree).await.map_err(|error| {
             reject(
@@ -2432,6 +2477,44 @@ async fn writer_worker(state: AppState, job: WriterJob, mut cancel: watch::Recei
                     None,
                 )
             });
+        }
+        // Ignored files are never committed, yet the candidate's checks and
+        // review would run beside them in this worktree.
+        let ignored: Vec<&str> = changes
+            .iter()
+            .filter(|change| change.status == "!")
+            .map(|change| change.path.as_str())
+            .collect();
+        if !ignored.is_empty() {
+            return Err(Rejected {
+                extra: Some(json!(changes)),
+                ..reject(
+                    format!(
+                        "the writer left files that Git ignores ({}); they would be missing from the candidate commit but visible to its checks and review; no candidate recorded, worktree preserved for inspection",
+                        name_paths(&ignored)
+                    ),
+                    None,
+                )
+            });
+        }
+        // Writes Git never lists: through a tracked link leading outside the
+        // worktree (dangling ones included) or into a gitlink directory.
+        let unseen_now = state.git.unseen_state(&worktree).await.map_err(|error| {
+            reject(
+                format!("cannot inspect the worktree's links: {error}; worktree preserved"),
+                None,
+            )
+        })?;
+        let unseen_changes = unseen_now.changed_since(&unseen);
+        if !unseen_changes.is_empty() {
+            let paths: Vec<&str> = unseen_changes.iter().map(String::as_str).collect();
+            return Err(reject(
+                format!(
+                    "scope violation: the writer changed content Git cannot track through {} (a symbolic link leading outside the worktree or a submodule directory); no candidate recorded, worktree preserved for inspection",
+                    name_paths(&paths)
+                ),
+                None,
+            ));
         }
         if changes.is_empty() {
             return Err(reject(
@@ -2481,7 +2564,7 @@ async fn writer_worker(state: AppState, job: WriterJob, mut cancel: watch::Recei
         };
         let tree = state
             .git
-            .commit_tree(&worktree, &commit)
+            .candidate_tree(&worktree, &commit)
             .await
             .map_err(|error| {
                 reject(

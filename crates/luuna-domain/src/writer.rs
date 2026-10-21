@@ -8,9 +8,8 @@
 //! actually changed; a prompt promising to obey paths is never evidence.
 
 use crate::{
-    invalid, is_commit, path_within, unique, valid_relative_path, Budgets, CheckRecipe,
-    DomainError, ManifestCheck, Operation, Permissions, PlanTask, RepositoryManifest,
-    SCHEMA_VERSION,
+    invalid, is_commit, path_within, scope_path_problem, unique, Budgets, CheckRecipe, DomainError,
+    ManifestCheck, Operation, Permissions, PlanTask, RepositoryManifest, SCHEMA_VERSION,
 };
 use serde::{Deserialize, Serialize};
 
@@ -194,8 +193,12 @@ pub fn check_scope(
     };
     for change in changes {
         for path in std::iter::once(&change.path).chain(change.original_path.iter()) {
-            if !valid_relative_path(path) {
-                return violation(format!("changed path {path:?} is not a safe relative path"));
+            // A changed path is never the whole repository, and repository
+            // metadata is never task content, whatever the approved scope.
+            if let Some(problem) =
+                scope_path_problem(path).or((path == ".").then_some("is not a file"))
+            {
+                return violation(format!("changed path {path:?} {problem}"));
             }
             if !task.paths.iter().any(|prefix| path_within(path, prefix)) {
                 return violation(format!(
@@ -212,6 +215,24 @@ pub fn check_scope(
         }
     }
     Ok(())
+}
+
+/// Operations this runtime can actually grant a writer: Pi's file tools. The
+/// contract keeps `shell`, `network` and `publish` for later milestones, but a
+/// plan must not record authority that nothing enforces or implements.
+pub const GRANTED_OPERATIONS: [Operation; 2] = [Operation::Read, Operation::Write];
+
+pub fn require_granted_operations(operations: &[Operation]) -> Result<(), DomainError> {
+    match operations
+        .iter()
+        .find(|op| !GRANTED_OPERATIONS.contains(op))
+    {
+        Some(op) => Err(DomainError::Invalid(format!(
+            "operation {} is not granted by this runtime; a writer task may only read and write files",
+            format!("{op:?}").to_lowercase()
+        ))),
+        None => Ok(()),
+    }
 }
 
 /// Resources an attempt has consumed, measured by the runtime.
@@ -398,6 +419,50 @@ mod tests {
         let mut other_repo = task;
         other_repo.repository_id = "other".into();
         assert!(check_scope(&[change("src/main.rs")], &other_repo, &approved).is_err());
+    }
+
+    #[test]
+    fn repository_metadata_is_never_in_scope_even_for_the_whole_repository() {
+        let mut whole = task();
+        whole.paths = vec![".".into()];
+        let everything = permissions(&["."]);
+        check_scope(
+            &[change("src/main.rs"), change("README.md")],
+            &whole,
+            &everything,
+        )
+        .unwrap();
+        for metadata in [
+            ".git",
+            ".GIT/config",
+            "src/.git/HEAD",
+            "vendor/.git.",
+            "git~1/x",
+            ".",
+        ] {
+            assert!(
+                matches!(
+                    check_scope(&[change(metadata)], &whole, &everything),
+                    Err(DomainError::ScopeViolation(_))
+                ),
+                "{metadata}"
+            );
+        }
+    }
+
+    #[test]
+    fn only_operations_the_runtime_grants_may_be_planned() {
+        require_granted_operations(&[Operation::Read]).unwrap();
+        require_granted_operations(&[Operation::Write, Operation::Read]).unwrap();
+        for op in [Operation::Shell, Operation::Network, Operation::Publish] {
+            let error = require_granted_operations(&[Operation::Read, op.clone()])
+                .unwrap_err()
+                .to_string();
+            assert!(
+                error.contains(&format!("operation {}", format!("{op:?}").to_lowercase())),
+                "{error}"
+            );
+        }
     }
 
     #[test]
