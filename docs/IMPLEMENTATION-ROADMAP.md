@@ -91,6 +91,8 @@ Complete project import, baseline, plan approval, live execution, diff/evidence/
 
 **Exit:** another developer follows the documented setup and completes the representative fixture workflow without undocumented database edits or fake data. Publish a requirement/evidence report naming MVP omissions. A native package may be a development distribution; signed fresh-host installation remains M7 evidence.
 
+**Status (October 21, 2026): open; first recovery gap closed on Linux.** A candidate whose required checks passed but whose reviewer left no verdict can be re-validated in place as a fresh generation of the same revision under the same approval and budgets (ADR 0009, point 7; `revalidate_allowed` in the candidate view and desktop). The Python `unittest` summary is recognised by the test-count heuristic. Native-host smoke, reconnection/shutdown exercised through the client, keyboard access and the documented end-to-end fixture workflow remain.
+
 ### M4 — Multi-repository coordination
 
 **Depends on:** M3's reliable single-repository execution and candidate guards.

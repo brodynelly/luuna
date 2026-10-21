@@ -62,6 +62,11 @@ def run_reviewer(request_id, kind, message):
     payload = json.loads(message)
     markers = re.findall(r"fixture:([a-z_]+)", json.dumps(payload.get("requirements", {})))
     scenario = next((name for name in markers if name.startswith("review_")), "review_pass")
+    if scenario == "review_malformed_once":
+        # Malformed output for the candidate's first validation generation and
+        # a valid pass for every later one, so a fresh generation after an
+        # invalid review is exercised against one immutable ticket.
+        scenario = "review_malformed" if payload.get("validation_generation", 1) == 1 else "review_pass"
     send({"type": "fixture_args", "tools": flag("--tools"), "extensions": [
         sys.argv[i + 1] for i, arg in enumerate(sys.argv) if arg in ("-e", "--extension")],
         "scope": json.loads(os.environ.get("LUUNA_SCOPE_JSON", "null")),

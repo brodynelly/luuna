@@ -1,5 +1,5 @@
 import type { CandidateDiff, CandidateView, RunRecord } from "@luuna/api-client";
-import { canCancel, canValidate } from "./workflow-state";
+import { canCancel, canRevalidate, canValidate } from "./workflow-state";
 
 interface Props {
   run: RunRecord;
@@ -32,12 +32,13 @@ export function CandidateReview({ run, view, diff, log, busy, onValidate, onRepa
     </dl>
     <div className="ticket-actions">
       <button type="button" disabled={busy} onClick={onDiff}>Inspect candidate diff</button>
-      {canValidate(run, view) && <button type="button" className="primary" disabled={busy} onClick={onValidate}>Validate and review</button>}
+      {canValidate(run, view) && <button type="button" className="primary" disabled={busy} onClick={onValidate}>{canRevalidate(run, view) ? "Re-validate and review" : "Validate and review"}</button>}
       {view.repair_allowed && !view.active && <button type="button" disabled={busy} onClick={onRepair}>Repair candidate</button>}
       {canCancel(run.state, view.active) && <button type="button" className="danger" disabled={busy} onClick={onCancel}>Cancel workflow</button>}
     </div>
     {view.active && <p role="status">The runtime is {run.state === "implementing" ? "running the scoped writer repair" : evidence.status === "reviewing" ? "running the independent reviewer" : "executing the approved checks"}. Closing this view does not cancel the workflow.</p>}
     {evidence.reason && <p className="failure-note">{evidence.reason}</p>}
+    {canRevalidate(run, view) && <p className="recovery-note">Required checks passed in validation generation {evidence.validation_generation} but no review verdict was recorded. Re-validation starts a fresh generation for this same candidate revision under the existing approval and budgets: the checks run again and a fresh reviewer session is started. No writer attempt is spent.</p>}
     {boundDiff && <details open className="candidate-diff"><summary>Diff for <code>{boundDiff.candidate_hash}</code></summary><p>{boundDiff.repository_id} · base <code>{boundDiff.base_commit}</code> · candidate commit <code>{boundDiff.commit}</code></p><pre aria-label="Candidate diff">{boundDiff.diff || "No changes."}</pre></details>}
     <details className="candidate-checks" open={evidence.results.length > 0}>
       <summary>Check evidence · {evidence.results.length} recorded result(s)</summary>

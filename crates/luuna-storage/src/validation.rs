@@ -126,14 +126,18 @@ impl Store {
             .transaction_with_behavior(TransactionBehavior::Immediate)?;
         let run = require_run(&tx, run_id, expected_revision)?;
         let mut evidence = require_candidate(&tx, run_id, hash)?;
-        if !matches!(
-            (run.state, evidence.status),
-            (RunState::Validating, CandidateStatus::Pending)
-                | (RunState::Interrupted, CandidateStatus::Interrupted)
-        ) {
-            return invalid("candidate validation is already active or cannot be resumed");
-        }
         let plan = current_plan(&tx, run_id)?;
+        let revalidation = match (run.state, evidence.status) {
+            (RunState::Validating, CandidateStatus::Pending)
+            | (RunState::Interrupted, CandidateStatus::Interrupted) => false,
+            (RunState::Failed, CandidateStatus::Failed) => {
+                require_unreviewed_passed_checks(&plan, &evidence)?;
+                true
+            }
+            _ => {
+                return invalid("candidate validation is already active or cannot be resumed");
+            }
+        };
         require_headroom(&plan, workflow_usage(&tx, run_id)?)?;
         evidence.validation_generation += 1;
         evidence.results.clear();
@@ -144,22 +148,22 @@ impl Store {
         evidence.stage_started_at = Some(now());
         evidence.stage_start_elapsed_seconds = evidence.elapsed_seconds;
         save_candidate(&tx, &evidence)?;
-        if run.state == RunState::Interrupted {
+        let payload = json!({
+            "candidate_hash": hash,
+            "generation": evidence.validation_generation,
+            "revalidation": revalidation,
+        });
+        if run.state != RunState::Validating {
             transition(
                 &tx,
                 run_id,
                 expected_revision,
                 RunState::Validating,
                 "candidate.validation_started",
-                json!({"candidate_hash":hash,"generation":evidence.validation_generation}),
+                payload,
             )?;
         } else {
-            bump(
-                &tx,
-                &run,
-                "candidate.validation_started",
-                json!({"candidate_hash":hash,"generation":evidence.validation_generation}),
-            )?;
+            bump(&tx, &run, "candidate.validation_started", payload)?;
         }
         tx.commit()?;
         Ok(evidence)
@@ -493,6 +497,27 @@ impl Store {
 
     pub fn can_candidate_repair(&self, run_id: &str, hash: &str) -> Result<()> {
         repair_gate(&self.connection, run_id, hash).map(|_| ())
+    }
+
+    /// Whether a failed candidate may start a fresh validation generation in
+    /// place: its required checks passed in the current generation, no
+    /// reviewer verdict was recorded (the reviewer failed, produced invalid or
+    /// self-inconsistent output, or never reported), and the approved budgets
+    /// still have headroom. Spend reserved for an unreported reviewer turn
+    /// closes this gate exactly as it closes repair.
+    pub fn can_candidate_revalidate(&self, run_id: &str, hash: &str) -> Result<()> {
+        // A read-only transaction so the same approval, ticket and manifest
+        // binding checks as `begin_candidate_validation` apply; it is dropped
+        // without a commit.
+        let tx = self.connection.unchecked_transaction()?;
+        let run = get_run(&tx, run_id)?.ok_or_else(|| StorageError::NotFound(run_id.into()))?;
+        let evidence = require_candidate(&tx, run_id, hash)?;
+        if (run.state, evidence.status) != (RunState::Failed, CandidateStatus::Failed) {
+            return invalid("candidate is not a failed candidate awaiting a fresh validation");
+        }
+        let plan = current_plan(&tx, run_id)?;
+        require_unreviewed_passed_checks(&plan, &evidence)?;
+        require_headroom(&plan, workflow_usage(&tx, run_id)?)
     }
 
     /// Reuse the exact approved scope and durable budgets, never resetting them.
@@ -848,6 +873,37 @@ fn retain_live_elapsed(evidence: &mut CandidateEvidence) {
         .stage_start_elapsed_seconds
         .saturating_add(millis.div_ceil(1000));
     evidence.elapsed_seconds = evidence.elapsed_seconds.max(live);
+}
+
+/// A fresh generation without a new revision is only for a candidate whose
+/// every required recipe passed in the current generation and whose review
+/// never produced a verdict. Failed, blocked, missing or interrupted checks
+/// and any recorded verdict (passed or not) keep the existing paths: repair
+/// for a new revision, or nothing.
+fn require_unreviewed_passed_checks(
+    plan: &PlanRevision,
+    evidence: &CandidateEvidence,
+) -> Result<()> {
+    if evidence.review.is_some() {
+        return invalid("candidate already has a recorded review verdict");
+    }
+    let all_passed = plan
+        .required_checks
+        .iter()
+        .filter(|recipe| recipe.required)
+        .all(|recipe| {
+            evidence.results.iter().any(|result| {
+                result.recipe_id == recipe.id
+                    && result.repository_id == recipe.repository_id
+                    && result.status == CheckStatus::Passed
+            })
+        });
+    if !all_passed {
+        return invalid(
+            "fresh validation requires every required check to have passed in the current generation; repair the candidate instead",
+        );
+    }
+    Ok(())
 }
 
 fn require_headroom(plan: &PlanRevision, usage: BudgetUsage) -> Result<()> {

@@ -98,7 +98,10 @@ impl RunState {
                 | (Paused | Failed | TestingBlocked, Implementing)
                 | (Failed | TestingBlocked, Paused)
                 | (Failed, Cancelled)
-                | (Interrupted, Validating)
+                // Structural only: storage admits `Failed -> Validating` solely for a
+                // candidate whose required checks passed and whose reviewer left no
+                // verdict (a fresh generation, never a new revision or budget).
+                | (Interrupted | Failed, Validating)
         );
         if valid {
             Ok(to)
@@ -608,6 +611,20 @@ mod tests {
             RunState::Running.transition(RunState::Cancelled).unwrap(),
             RunState::Cancelled
         );
+        // A fresh validation generation may follow an interrupted or failed
+        // stage; paused, cancelled and reviewed candidates never re-enter it.
+        assert!(RunState::Failed.transition(RunState::Validating).is_ok());
+        assert!(RunState::Interrupted
+            .transition(RunState::Validating)
+            .is_ok());
+        for state in [
+            RunState::Paused,
+            RunState::Cancelled,
+            RunState::Reviewed,
+            RunState::TestingBlocked,
+        ] {
+            assert!(state.transition(RunState::Validating).is_err(), "{state:?}");
+        }
     }
     #[test]
     fn permissions_candidate_and_checks_are_hash_bound() {

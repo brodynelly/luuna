@@ -393,6 +393,12 @@ export interface CandidateView {
   active: boolean;
   /** The runtime's decision after checking state, repair and attempt budgets. */
   repair_allowed: boolean;
+  /**
+   * Whether a failed candidate may start a fresh validation generation in place: its required
+   * checks passed but no reviewer verdict was recorded, and the approved budgets still have
+   * headroom. Same revision, same approval, fresh checks and a fresh reviewer.
+   */
+  revalidate_allowed: boolean;
 }
 
 export interface CandidateDiff {

@@ -2,7 +2,7 @@ import { expect, test } from "vitest";
 import { renderToStaticMarkup } from "react-dom/server";
 import type { CandidateDiff, CandidateEvidence, CandidateView, RunRecord } from "@luuna/api-client";
 import { CandidateReview } from "./CandidateReview";
-import { canCancel, canValidate, workflowNeedsRefresh } from "./workflow-state";
+import { canCancel, canRevalidate, canValidate, workflowNeedsRefresh } from "./workflow-state";
 
 const hash = `sha256:${"a".repeat(64)}`;
 const commit = "b".repeat(40);
@@ -11,7 +11,7 @@ const evidence: CandidateEvidence = {
   run_id: "run-1", implementer_session: "writer-1", repository_trees: { app: "d".repeat(40) }, status: "pending", results: [], started_at: "2026-10-17T00:00:00Z", elapsed_seconds: 3, cost_usd_micros: 1000, validation_generation: 1,
 };
 const run: RunRecord = { id: "run-1", project_id: "project-1", revision: 3, state: "validating", metadata: { kind: "workflow" }, created_at: "2026-10-17T00:00:00Z", updated_at: "2026-10-17T00:00:00Z" };
-const view: CandidateView = { evidence, active: false, repair_allowed: false };
+const view: CandidateView = { evidence, active: false, repair_allowed: false, revalidate_allowed: false };
 const actions = { onValidate() {}, onRepair() {}, onCancel() {}, onDiff() {}, onArtifact() {} };
 const render = (next: CandidateView, nextRun = run, diff?: CandidateDiff) => renderToStaticMarkup(<CandidateReview run={nextRun} view={next} diff={diff} busy={false} {...actions} />);
 
@@ -32,6 +32,28 @@ test("candidate actions follow authoritative worker state and repair permission"
   expect(canValidate({ ...run, state: "reviewed" }, view)).toBe(false);
   expect(canValidate(run, { ...view, evidence: { ...evidence, status: "failed" } })).toBe(false);
   expect(canValidate({ ...run, state: "interrupted" }, { ...view, evidence: { ...evidence, status: "interrupted" } })).toBe(true);
+});
+
+test("a failed candidate offers re-validation only when the runtime allows it", () => {
+  const failedRun = { ...run, state: "failed" as const };
+  const failed = { ...view, evidence: { ...evidence, status: "failed" as const, reason: "invalid structured reviewer response: expected value at line 1" } };
+  expect(render(failed, failedRun)).not.toContain("Validate and review");
+  expect(render(failed, failedRun)).not.toContain("Re-validate and review");
+  expect(canValidate(failedRun, failed)).toBe(false);
+  const allowed = { ...failed, revalidate_allowed: true };
+  const html = render(allowed, failedRun);
+  expect(html).toContain("Re-validate and review");
+  expect(html).toContain("no review verdict was recorded");
+  expect(html).toContain("No writer attempt is spent");
+  expect(canValidate(failedRun, allowed)).toBe(true);
+  expect(canRevalidate(failedRun, allowed)).toBe(true);
+  // The runtime's permission is bound to its state: an active worker, another run state or
+  // another candidate status never shows the control.
+  expect(render({ ...allowed, active: true }, failedRun)).not.toContain("Re-validate and review");
+  expect(canRevalidate({ ...run, state: "paused" }, allowed)).toBe(false);
+  expect(canRevalidate(failedRun, { ...allowed, evidence: { ...evidence, status: "paused" } })).toBe(false);
+  expect(render({ ...view, revalidate_allowed: true })).toContain("Validate and review");
+  expect(render({ ...view, revalidate_allowed: true })).not.toContain("Re-validate and review");
 });
 
 test("complete candidate identity, executed check evidence and structured findings are inspectable", () => {
@@ -56,7 +78,7 @@ test("a replacement candidate never displays earlier diff, review or log as its 
 });
 
 test("an empty candidate record offers no validation or repair controls", () => {
-  expect(render({ evidence: null, active: false, repair_allowed: false })).toBe("");
+  expect(render({ evidence: null, active: false, repair_allowed: false, revalidate_allowed: false })).toBe("");
 });
 
 test("restarting validation hides logs from the previous validation generation", () => {

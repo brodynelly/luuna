@@ -1122,19 +1122,25 @@ async fn reviewer_startup_is_bounded_by_the_remaining_workflow_time() {
 
 #[tokio::test]
 async fn blocking_and_malformed_independent_reviews_never_pass() {
-    for (scenario, expected_state, reason) in [
+    // The last column: whether a fresh validation generation is offered. A
+    // recorded verdict (blocking) repairs instead; invalid and self-inconsistent
+    // output left no verdict after passed checks, so re-validation is open; a
+    // reviewer lost mid-turn reserved the remaining cost budget, which closes it.
+    for (scenario, expected_state, reason, revalidate) in [
         (
             "review_blocking",
             "paused",
             "independent review did not pass",
+            false,
         ),
         (
             "review_malformed",
             "failed",
             "invalid structured reviewer response",
+            true,
         ),
-        ("review_stale", "failed", "candidate"),
-        ("review_extension_error", "failed", "extension"),
+        ("review_stale", "failed", "candidate", true),
+        ("review_extension_error", "failed", "extension", false),
     ] {
         let harness = Harness::new();
         let repo = tempfile::tempdir().unwrap();
@@ -1178,7 +1184,134 @@ async fn blocking_and_malformed_independent_reviews_never_pass() {
             harness.candidate_action(&id, "repair", hash).await.0,
             StatusCode::ACCEPTED
         );
+        assert_eq!(result["revalidate_allowed"], revalidate, "{result}");
+        if !revalidate {
+            assert_ne!(
+                harness.candidate_action(&id, "validate", hash).await.0,
+                StatusCode::ACCEPTED,
+                "{scenario}"
+            );
+        }
     }
+}
+
+#[tokio::test]
+async fn an_invalid_review_after_passed_checks_gets_a_fresh_generation_in_place() {
+    let harness = Harness::new();
+    let repo = tempfile::tempdir().unwrap();
+    ready(&harness, repo.path()).await;
+    let before = snapshot(repo.path());
+    let (id, _) = harness
+        .approved(
+            repo.path(),
+            "review_malformed_once",
+            json!({"max_attempts":1}),
+        )
+        .await;
+    assert_eq!(harness.implement(&id).await.0, StatusCode::ACCEPTED);
+    harness.settled(&id).await;
+    let pending = harness.candidate(&id).await;
+    let hash = pending["evidence"]["candidate"]["hash"].clone();
+    assert_eq!(
+        pending["revalidate_allowed"], false,
+        "a pending candidate validates, it is not re-validated"
+    );
+    assert_eq!(
+        harness.candidate_action(&id, "validate", &hash).await.0,
+        StatusCode::ACCEPTED
+    );
+    let failed = harness.candidate_settled(&id).await;
+    assert_eq!(failed["evidence"]["status"], "failed", "{failed}");
+    assert_eq!(failed["evidence"]["validation_generation"], 1);
+    assert_eq!(failed["evidence"]["results"][0]["status"], "passed");
+    assert!(failed["evidence"]["review"].is_null());
+    assert!(failed["evidence"]["reason"]
+        .as_str()
+        .unwrap()
+        .contains("invalid structured reviewer response"));
+    assert_eq!(failed["repair_allowed"], false, "max_attempts is spent");
+    assert_eq!(failed["revalidate_allowed"], true, "{failed}");
+    let store = luuna_storage::Store::open(harness.root.join("luuna.sqlite3")).unwrap();
+    let usage_before = store.workflow_usage(&id).unwrap();
+    drop(store);
+
+    // The stale hash is still refused; the exact hash starts generation 2 of
+    // the same revision 1 without a writer attempt.
+    assert_ne!(
+        harness
+            .candidate_action(
+                &id,
+                "validate",
+                &json!(format!("sha256:{}", "0".repeat(64)))
+            )
+            .await
+            .0,
+        StatusCode::ACCEPTED
+    );
+    assert_eq!(
+        harness.candidate_action(&id, "validate", &hash).await.0,
+        StatusCode::ACCEPTED
+    );
+    assert_ne!(
+        harness.candidate_action(&id, "validate", &hash).await.0,
+        StatusCode::ACCEPTED,
+        "active work is not restarted"
+    );
+    let reviewed = harness.candidate_settled(&id).await;
+    assert_eq!(reviewed["evidence"]["status"], "reviewed", "{reviewed}");
+    assert_eq!(harness.run(&id).await["state"], "reviewed");
+    assert_eq!(
+        reviewed["evidence"]["candidate"],
+        failed["evidence"]["candidate"]
+    );
+    assert_eq!(reviewed["evidence"]["candidate"]["revision"], 1);
+    assert_eq!(reviewed["evidence"]["validation_generation"], 2);
+    assert_eq!(reviewed["evidence"]["results"][0]["status"], "passed");
+    assert!(reviewed["evidence"]["results"][0]["artifact_refs"][0]
+        .as_str()
+        .unwrap()
+        .starts_with("c1-g2-"));
+    assert_ne!(
+        reviewed["evidence"]["results"][0]["id"], failed["evidence"]["results"][0]["id"],
+        "generation 2 ran its own checks"
+    );
+    assert_eq!(reviewed["evidence"]["review"]["verdict"], "passed");
+    assert_eq!(reviewed["evidence"]["review"]["candidate_hash"], hash);
+    assert_eq!(reviewed["revalidate_allowed"], false);
+    assert_eq!(reviewed["repair_allowed"], false);
+    let events = harness.events(&id).await;
+    let started: Vec<_> = events
+        .iter()
+        .filter(|e| e["type"] == "candidate.validation_started")
+        .collect();
+    assert_eq!(started.len(), 2, "{events:?}");
+    assert_eq!(started[0]["payload"]["revalidation"], false);
+    assert_eq!(started[1]["payload"]["revalidation"], true);
+    assert_eq!(started[1]["payload"]["generation"], 2);
+    let reviewers: Vec<_> = events
+        .iter()
+        .filter(|e| e["type"] == "review.started")
+        .map(|e| e["payload"]["reviewer_session"].clone())
+        .collect();
+    assert_eq!(reviewers.len(), 2);
+    assert_ne!(
+        reviewers[0], reviewers[1],
+        "the second review is a fresh session"
+    );
+    assert_eq!(
+        reviewed["evidence"]["review"]["reviewer_session"],
+        reviewers[1]
+    );
+    let store = luuna_storage::Store::open(harness.root.join("luuna.sqlite3")).unwrap();
+    let usage = store.workflow_usage(&id).unwrap();
+    assert_eq!(store.attempts(&id).unwrap().len(), 1);
+    assert_eq!(usage.attempts, 1);
+    assert_eq!(usage.attempts, usage_before.attempts);
+    assert!(
+        usage.cost_usd_micros > usage_before.cost_usd_micros,
+        "the second reviewer's spend is charged to the same approved budget"
+    );
+    assert_eq!(snapshot(repo.path()), before);
 }
 
 #[tokio::test]

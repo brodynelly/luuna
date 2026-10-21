@@ -67,9 +67,23 @@ pub async fn candidate(
     } else {
         false
     };
-    Ok(Json(
-        json!({"evidence": evidence, "active": active, "repair_allowed": repair_allowed}),
-    ))
+    // A failed candidate whose required checks passed but whose reviewer left
+    // no verdict may start a fresh validation generation in place: the same
+    // revision, the same approved budgets, fresh checks and a fresh reviewer.
+    let revalidate_allowed = if let Some(ref evidence) = evidence {
+        !active
+            && store
+                .can_candidate_revalidate(&id, &evidence.candidate.hash)
+                .is_ok()
+    } else {
+        false
+    };
+    Ok(Json(json!({
+        "evidence": evidence,
+        "active": active,
+        "repair_allowed": repair_allowed,
+        "revalidate_allowed": revalidate_allowed,
+    })))
 }
 
 fn worktree_for(
@@ -651,7 +665,9 @@ async fn pipeline(
         .get_ticket(&plan.ticket_id)
         .map_err(|e| e.to_string())?
         .ok_or("ticket missing")?;
-    let prompt = json!({"assignment":"Luuna independent reviewer", "candidate_hash":hash,"reviewer_session":session,"requirements":{"title":ticket.title,"intent":ticket.intent,"tasks":plan.tasks},"checks":checks,"diff":diff}).to_string();
+    // The generation tells a reviewer that an earlier reviewer of this exact
+    // candidate left no verdict; it never carries that reviewer's output.
+    let prompt = json!({"assignment":"Luuna independent reviewer", "candidate_hash":hash,"reviewer_session":session,"validation_generation":evidence.validation_generation,"requirements":{"title":ticket.title,"intent":ticket.intent,"tasks":plan.tasks},"checks":checks,"diff":diff}).to_string();
     let config = PiConfig {
         program: state.config.pi_program.clone(),
         launcher_args: state.config.pi_launcher_args.clone(),
