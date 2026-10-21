@@ -4,7 +4,7 @@ import { execFileSync } from 'node:child_process';
 import { mkdtempSync, mkdirSync, writeFileSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { verifyComponent } from './components.mjs';
+import { manifest, preflightComponent, verifyComponent } from './components.mjs';
 
 function fixture(check) {
   const root = mkdtempSync(join(tmpdir(), 'luuna-component-pins-'));
@@ -50,4 +50,24 @@ test('rejects local edits and mismatched repository URLs', () => fixture(({ root
 test('rejects changed CLI contracts and missing dependencies', () => fixture(({ root, directory, component }) => {
   assert.throws(() => verifyComponent(root, component, true), /dependencies missing/);
   assert.throws(() => verifyComponent(root, { ...component, cli: { ...component.cli, primary: 'wrong-cli' } }), /incompatible package or CLI contract/);
+}));
+test('setup preflight refuses dirty source before changing checkout or configuration', () => fixture(({ root, directory, component, git }) => {
+  const headBefore = git(directory, 'rev-parse', 'HEAD');
+  writeFileSync(join(directory, 'package.json'), 'local source edit');
+  assert.throws(() => preflightComponent(root, component), /local changes; preserve them before setup/);
+  assert.equal(git(directory, 'rev-parse', 'HEAD'), headBefore);
+}));
+test('setup preflight rejects inconsistent pins even before a checkout is initialized', () => fixture(({ root, directory, component }) => {
+  rmSync(join(directory, '.git'), { recursive: true });
+  assert.doesNotThrow(() => preflightComponent(root, component));
+  assert.throws(() => preflightComponent(root, { ...component, commit: '0'.repeat(40) }), /gitlink and manifest pin differ/);
+}));
+test('manifest refuses missing or duplicated components instead of a partial success', () => fixture(({ root, component }) => {
+  const path = join(root, 'components/manifest.json');
+  const data = { schemaVersion: 2, runtime: { name: 'bun', version: '1.4.3' }, components: [] };
+  writeFileSync(path, JSON.stringify(data));
+  assert.throws(() => manifest(root), /exactly Missions, Atlas and Beacon/);
+  data.components = [component, component, component];
+  writeFileSync(path, JSON.stringify(data));
+  assert.throws(() => manifest(root), /exactly Missions, Atlas and Beacon/);
 }));

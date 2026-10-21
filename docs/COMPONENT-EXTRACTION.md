@@ -46,3 +46,10 @@ Run `npm run components:setup` after a fresh Luuna clone. Plain `git clone --rec
 To update, review the component's own change and CI, fetch/check out its exact commit in the submodule, update the manifest commit, and commit both manifest and gitlink in the Luuna PR. Setup never uses a floating branch or silently overwrites local changes. Reverting the extraction commit restores Luuna's original tracked component trees; no original monorepo history is rewritten. Local source rollback copies remain outside tracking during migration.
 
 Full M6 runtime ticket reconciliation, scoped memory retrieval and explicit prompt resources remain planned. The migration preserves the existing CLI/library boundary and verifies real consumption; it does not claim those runtime adapters now exist. No provider or native desktop result is inferred from CLI tests.
+
+
+## PR review corrections, October 21, 2026
+
+Review found that setup performed checkout before detecting local edits, and that the developer launcher captured stdin/output and collapsed nonzero CLI statuses into its own error handling. Setup now validates all component identities, manifest completeness, gitlinks, URLs and initialized worktree cleanliness before any checkout/install. Regression tests cover dirty and uninitialized checkouts and missing/duplicate manifest entries. Clean prior pins can still be updated through the committed gitlinks.
+
+The developer CLI now inherits stdin/stdout/stderr, preserves the component exit status, and uses npm's INIT_CWD so `npm --prefix` operates on the calling project rather than Luuna's root. The bounded programmatic JSON helper remains separate. The real smoke additionally pipes an Atlas record through the launcher from a different package directory and checks a Missions JSON failure and exit code, raising the smoke to 14 operations. MIT and component README links now target the exact public repository revisions so they work on GitHub across submodule boundaries.

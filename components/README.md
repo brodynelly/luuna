@@ -4,9 +4,9 @@ Luuna maintains three MIT-licensed distributions with space-themed identities. E
 
 | Component | Responsibility | Primary CLI | Short alias | Origin | Data format |
 | --- | --- | --- | --- | --- | --- |
-| [Missions](missions/README.md) | Tickets and structured plans | luuna-missions | lm | Seeds 0.6.0 | .seeds/ |
-| [Atlas](atlas/README.md) | Expertise and project memory | luuna-atlas | la | Mulch 0.11.0 | .mulch/ |
-| [Beacon](beacon/README.md) | Composable prompts and instructions | luuna-beacon | lb | Canopy 0.2.6 | .canopy/ |
+| [Missions](https://github.com/brodynelly/missions/blob/b9166821144fd373328930f4a44856448e8de77b/README.md) | Tickets and structured plans | luuna-missions | lm | Seeds 0.6.0 | .seeds/ |
+| [Atlas](https://github.com/brodynelly/atlas/blob/18fc7e2c526d3f7a0ac4c2850573c21ca5964819/README.md) | Expertise and project memory | luuna-atlas | la | Mulch 0.11.0 | .mulch/ |
+| [Beacon](https://github.com/brodynelly/beacon/blob/0330712a76fec338498d4b683a4d8ec9474f77d0/README.md) | Composable prompts and instructions | luuna-beacon | lb | Canopy 0.2.6 | .canopy/ |
 
 [manifest.json](manifest.json) records package names, versions, entrypoints, and compatible data paths for tooling. Packages are private and unpublished. Source now lives in the public repositories [Missions](https://github.com/brodynelly/missions), [Atlas](https://github.com/brodynelly/atlas), and [Beacon](https://github.com/brodynelly/beacon). These directories are exact-commit Git submodules. The manifest commit and Git gitlink must agree; see [ADR 0012](../docs/decisions/0012-independent-component-repositories.md).
 
@@ -14,7 +14,7 @@ The existing automation boundary is CLI execution with structured JSON output (c
 
 Luuna's runtime will translate domain operations into these interfaces through adapters. Persistent ticket, knowledge, and prompt integration is planned work; this rebrand does not claim that the components are wired into the Luuna runtime yet. The runtime must retain approval, validation, and publication policy ownership. Components must not write directly to Luuna's database or bypass those policies.
 
-Run `npm run components:setup` after cloning Luuna (or use `git clone --recurse-submodules`). Run `npm run components:verify` to check pins and `npm run test:components` for real isolated ticket, knowledge and prompt CLI operations. `npm run components:run -- missions -- --help` invokes a pinned CLI from your current project directory; use atlas or beacon for the other tools. This developer launcher is not a runtime adapter and grants no Luuna approval.
+Run `npm run components:setup` after cloning Luuna (or use `git clone --recurse-submodules`). Run `npm run components:verify` to check pins and `npm run test:components` for real isolated ticket, knowledge and prompt CLI operations. `npm run components:run -- missions -- --help` invokes a pinned CLI from your current project directory (including npm --prefix use via INIT_CWD), preserving stdin, stdout, stderr and the component exit status; use atlas or beacon for the other tools. This developer launcher is not a runtime adapter and grants no Luuna approval.
 
 Each component has its own frozen Bun lockfile and can be installed and tested from its directory. Install with `bun install --frozen-lockfile --ignore-scripts`, then run `bun run verify`. The root frontend npm workspace does not resolve or publish these Bun distributions. Primary and legacy executable names are package bin mappings; run the documented Bun source entrypoint when working directly from a checkout. Existing legacy integration snippets remain usable through compatibility aliases.
 

@@ -1,5 +1,5 @@
 import assert from 'node:assert/strict';
-import { execFileSync } from 'node:child_process';
+import { execFileSync, spawnSync } from 'node:child_process';
 import { mkdtempSync, mkdirSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -40,7 +40,23 @@ try {
   const rendered = json('beacon', ['render', 'migration-check']);
   assert.ok(JSON.stringify(rendered).includes('Preserve Luuna runtime approval policy'));
   json('beacon', ['list']);
-  console.log(`${checks}/12 real component CLI operations passed (${process.platform}).`);
+  const launcher = join(repositoryRoot, 'scripts/components.mjs');
+  const piped = spawnSync(process.execPath, [launcher, 'run', 'atlas', '--', 'record', 'extraction', '--stdin', '--json'], {
+    // npm runs scripts from the package root, keeping the caller in INIT_CWD.
+    cwd: repositoryRoot, env: { ...env, INIT_CWD: project },
+    input: JSON.stringify({ type: 'convention', content: 'CLI stdin reaches the extracted Atlas' }),
+    encoding: 'utf8', timeout: 30_000,
+  });
+  assert.equal(piped.status, 0, piped.stderr);
+  assert.equal(JSON.parse(piped.stdout).success, true);
+  checks++;
+  const invalid = spawnSync(process.execPath, [launcher, 'run', 'missions', '--', 'deliberately-unknown-command', '--json'], {
+    cwd: project, env, encoding: 'utf8', timeout: 30_000,
+  });
+  assert.equal(invalid.status, 1);
+  assert.equal(JSON.parse(invalid.stdout).success, false);
+  checks++;
+  console.log(`${checks}/14 real component CLI operations passed (${process.platform}).`);
 } finally {
   // Only the mkdtemp-owned fixture is removed, even when a CLI fails.
   rmSync(fixture, { recursive: true, force: true });
