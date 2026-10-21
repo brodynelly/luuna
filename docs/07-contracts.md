@@ -41,6 +41,7 @@ The approval endpoint checks both expected revision and hash in one transaction.
 | POST /api/v1/plans/{id}/approvals | Approve exact plan hash |
 | POST /api/v1/runs | Schedule an approved plan |
 | POST /api/v1/runs/{id}/cancel | Cancel owned execution |
+| POST /api/v1/shutdown | Authenticated orderly service stop; close scheduling admission and retain interrupted work (ADR 0010) |
 | POST /api/v1/runs/{id}/resume | Reconcile and resume eligible paused work |
 | GET /api/v1/runs/{id} | Current authoritative projection |
 | GET /api/v1/runs/{id}/events | Durable event stream with resume cursor |

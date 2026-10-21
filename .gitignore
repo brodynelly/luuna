@@ -3,6 +3,7 @@
 **/target/
 **/node_modules/
 **/dist/
+/apps/desktop/src-tauri/gen/
 **/coverage/
 **/test-results/
 **/junit.xml

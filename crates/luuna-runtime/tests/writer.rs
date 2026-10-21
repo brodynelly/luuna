@@ -248,7 +248,10 @@ impl Harness {
 impl Drop for Harness {
     fn drop(&mut self) {
         self.state.cancel_active();
-        let _ = fs::remove_dir_all(&self.root);
+        // A restart transfers ownership of this directory to the new harness.
+        if !self.root.as_os_str().is_empty() {
+            let _ = fs::remove_dir_all(&self.root);
+        }
     }
 }
 
@@ -1114,10 +1117,15 @@ async fn reviewer_startup_is_bounded_by_the_remaining_workflow_time() {
     );
     // The stalled startup spent the remaining approved time, and that time is
     // charged to the candidate, so a repair cannot reuse it.
-    assert!(
-        result["evidence"]["elapsed_seconds"].as_u64().unwrap_or(0) >= 8,
-        "{result}"
-    );
+    // Writer/startup time varies by host. Assert the aggregate budget gate,
+    // rather than assuming at least eight seconds remained for the reviewer.
+    assert_eq!(result["repair_allowed"], false, "{result}");
+    let (status, refused) = harness.candidate_action(&id, "repair", hash).await;
+    assert!(matches!(
+        status,
+        StatusCode::CONFLICT | StatusCode::UNPROCESSABLE_ENTITY
+    ));
+    assert!(refused.to_string().contains("budget"), "{refused}");
 }
 
 #[tokio::test]
@@ -1968,7 +1976,7 @@ async fn cancelling_an_automatic_repair_stops_its_writer_and_preserves_both_atte
 async fn explicit_shutdown_interrupts_candidate_checks_and_a_fresh_generation_resumes() {
     // ADR 0004: shutdown stops owned workers and records interruption. The
     // developer did not cancel this candidate, so it must stay resumable.
-    let harness = Harness::new();
+    let mut harness = Harness::new();
     let repo = tempfile::tempdir().unwrap();
     clean_repository(repo.path());
     register(&harness, repo.path()).await;
@@ -2016,7 +2024,35 @@ async fn explicit_shutdown_interrupts_candidate_checks_and_a_fresh_generation_re
         .iter()
         .any(|e| e["type"] == "candidate.stage_failed" && e["payload"]["state"] == "interrupted"));
     assert!(!events.iter().any(|e| e["type"] == "run.cancelled"));
-    // The durable state admits the same recovery as a hard restart.
+    // Shutdown closes admission permanently for this instance. Reopen durable
+    // state, as the service does after its process restarts.
+    assert_eq!(
+        harness.candidate_action(&id, "validate", hash).await.0,
+        StatusCode::SERVICE_UNAVAILABLE
+    );
+    let root = std::mem::take(&mut harness.root);
+    drop(harness);
+    let state = AppState::open(RuntimeConfig {
+        data_dir: root.clone(),
+        pi_program: python().into(),
+        pi_launcher_args: vec![PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+            .join("../../fixtures/pi-rpc/mock_pi.py")
+            .canonicalize()
+            .unwrap()
+            .to_string_lossy()
+            .into_owned()],
+        git_program: "git".into(),
+        provider: None,
+        model: None,
+        token: TOKEN.into(),
+        max_run_seconds: 10,
+    })
+    .unwrap();
+    let harness = Harness {
+        app: router(state.clone()),
+        state,
+        root,
+    };
     let (status, response) = harness.candidate_action(&id, "validate", hash).await;
     assert_eq!(status, StatusCode::ACCEPTED, "{response}");
     let passed = harness.candidate_settled(&id).await;

@@ -154,6 +154,89 @@ async fn health_public_run_data_authenticated_and_input_constrained() {
 }
 
 #[tokio::test]
+async fn shutdown_requires_authentication_is_idempotent_and_closes_admission() {
+    let harness = Harness::new();
+    assert_eq!(
+        harness
+            .request("POST", "/api/v1/shutdown", None, false)
+            .await
+            .0,
+        StatusCode::UNAUTHORIZED
+    );
+    assert!(tokio::time::timeout(
+        Duration::from_millis(25),
+        harness.state.wait_for_shutdown_request()
+    )
+    .await
+    .is_err());
+    let run = harness.start("slow").await;
+    for _ in 0..100 {
+        let (_, events) = harness
+            .request(
+                "GET",
+                &format!("/api/v1/runs/{}/events", run.id),
+                None,
+                true,
+            )
+            .await;
+        if events
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|e| e["type"] == "pi.agent_start")
+        {
+            break;
+        }
+        tokio::time::sleep(Duration::from_millis(25)).await;
+    }
+    for _ in 0..2 {
+        assert_eq!(
+            harness
+                .request("POST", "/api/v1/shutdown", None, true)
+                .await
+                .0,
+            StatusCode::ACCEPTED
+        );
+    }
+    tokio::time::timeout(
+        Duration::from_secs(1),
+        harness.state.wait_for_shutdown_request(),
+    )
+    .await
+    .unwrap();
+    assert_eq!(
+        harness
+            .request(
+                "POST",
+                "/api/v1/runs",
+                Some(json!({"prompt":"success"})),
+                true
+            )
+            .await
+            .0,
+        StatusCode::SERVICE_UNAVAILABLE
+    );
+    harness.state.shutdown().await;
+    assert_eq!(harness.terminal(&run.id).await.state, RunState::Interrupted);
+    let (_, events) = harness
+        .request(
+            "GET",
+            &format!("/api/v1/runs/{}/events", run.id),
+            None,
+            true,
+        )
+        .await;
+    assert!(events
+        .as_array()
+        .unwrap()
+        .iter()
+        .any(|e| e["type"] == "run.interrupted"
+            && e["payload"]["reason"]
+                .as_str()
+                .is_some_and(|s| s.contains("interrupted by runtime shutdown"))));
+}
+
+#[tokio::test]
 async fn persistence_replay_unknown_events_and_successful_completion() {
     let harness = Harness::new();
     let run = harness.start("success").await;
@@ -364,6 +447,43 @@ fn data_directory_ownership_precedes_recovery() {
     assert_eq!(
         storage.get_run(&run.id).unwrap().unwrap().state,
         RunState::Running
+    );
+}
+
+#[tokio::test]
+async fn idle_event_stream_closes_when_service_shutdown_is_requested() {
+    let harness = Harness::new();
+    let mut store = luuna_storage::Store::open(harness.root.join("luuna.sqlite3")).unwrap();
+    store.create_run("idle", "demo", json!({})).unwrap();
+    drop(store);
+    let request = Request::builder()
+        .uri("/api/v1/runs/idle/stream")
+        .header("Authorization", format!("Bearer {TOKEN}"))
+        .body(Body::empty())
+        .unwrap();
+    let response = harness.app.clone().oneshot(request).await.unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+    assert_eq!(
+        harness
+            .request("POST", "/api/v1/shutdown", None, true)
+            .await
+            .0,
+        StatusCode::ACCEPTED
+    );
+    let bytes = tokio::time::timeout(
+        Duration::from_secs(1),
+        to_bytes(response.into_body(), 1024 * 1024),
+    )
+    .await
+    .expect("idle SSE must not keep graceful HTTP shutdown open")
+    .unwrap();
+    assert!(String::from_utf8_lossy(&bytes).contains("run.created"));
+    assert_eq!(
+        harness
+            .request("GET", "/api/v1/runs/idle", None, true)
+            .await
+            .0,
+        StatusCode::OK
     );
 }
 

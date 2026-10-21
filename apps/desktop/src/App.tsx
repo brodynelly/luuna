@@ -5,6 +5,7 @@ import type { EventEnvelope, Health, RunRecord } from "@luuna/api-client";
 import { canCancel } from "./workflow-state";
 import { Projects } from "./Projects";
 import { actionFailure, describeFailure } from "./failures";
+import { ensureLocalRuntime, nativeDesktop } from "./native-runtime";
 
 const message = describeFailure;
 
@@ -45,6 +46,8 @@ export function App() {
   // recovery bumps the epoch so every panel reloads authoritative state.
   const [outage, setOutage] = useState("");
   const [connectionEpoch, setConnectionEpoch] = useState(0);
+  const [nativeStartup, setNativeStartup] = useState(0);
+  const native = nativeDesktop();
   const outageRef = useRef(false);
   const operation = useRef<AbortController | null>(null);
   const active = runs.find((run) => run.id === selected);
@@ -52,6 +55,37 @@ export function App() {
   const output = assistantText(events);
 
   useEffect(() => () => operation.current?.abort(), []);
+
+  useEffect(() => {
+    if (!native) return;
+    const controller = new AbortController();
+    operation.current = controller;
+    setBusy(true);
+    setError("");
+    setLive("Starting local runtime…");
+    void (async () => {
+      try {
+        const connection = await ensureLocalRuntime();
+        if (controller.signal.aborted) return;
+        const next = new LuunaClient(connection.url, connection.token);
+        const [status, saved] = await Promise.all([next.health(controller.signal), next.listRuns(controller.signal)]);
+        if (controller.signal.aborted) return;
+        setUrl(connection.url);
+        setHealth(status);
+        setRuns(saved);
+        setSelected(saved[0]?.id ?? null);
+        setClient(next);
+        setReachable(true);
+        setLive("Connected");
+        setToken("");
+      } catch (failure) {
+        if (!controller.signal.aborted) setError(actionFailure("Local startup", failure));
+      } finally {
+        if (!controller.signal.aborted) setBusy(false);
+      }
+    })();
+    return () => controller.abort();
+  }, [native, nativeStartup]);
 
   useEffect(() => {
     if (!client) return;
@@ -126,6 +160,7 @@ export function App() {
     try {
       const next = new LuunaClient(url, token.trim());
       const [status, saved] = await Promise.all([next.health(controller.signal), next.listRuns(controller.signal)]);
+      if (controller.signal.aborted) return;
       setHealth(status);
       setRuns(saved);
       setSelected(saved[0]?.id ?? null);
@@ -210,12 +245,13 @@ export function App() {
       {error && <div className="error" role="alert">{error}<button className="text-button" onClick={() => setError("")}>Dismiss</button></div>}
 
       <section className="panel connection-panel" aria-labelledby="runtime-heading">
-        <div><h2 id="runtime-heading">Runtime connection</h2><p>{client ? `${client.baseUrl} · Required Pi version ${health?.pi_version ?? "unknown"}` : "Start the Rust service separately, then enter its local address and token."}</p></div>
+        <div><h2 id="runtime-heading">Runtime connection</h2><p>{client ? `${client.baseUrl} · Required Pi version ${health?.pi_version ?? "unknown"}` : native ? "Luuna starts your local runtime and connects automatically. Closing the app leaves your runtime running." : "Start the Rust service separately, then enter its local address and token."}</p></div>
         {client ? <button onClick={disconnect}>Disconnect</button> : <form onSubmit={(event) => void connect(event)} className="connection-form">
           <label>Service URL<input type="url" value={url} onChange={(event) => setUrl(event.target.value)} required spellCheck={false} /></label>
           <label>Service token<input type="password" value={token} onChange={(event) => setToken(event.target.value)} autoComplete="off" required placeholder="Session token" /></label>
           <button className="primary" disabled={busy}>{busy ? "Connecting…" : "Connect"}</button>
           <small>The token stays in memory and is cleared when you disconnect or reload.</small>
+          {native && <button type="button" disabled={busy} onClick={() => setNativeStartup((value) => value + 1)}>{busy ? "Starting local runtime…" : "Connect automatically"}</button>}
         </form>}
         {client && outage && <p className="outage" role="status">{outage} Runs, candidates and worktrees are durable in the runtime; nothing is lost while this panel waits.</p>}
       </section>
