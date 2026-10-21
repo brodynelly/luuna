@@ -3,6 +3,8 @@ import type { FormEvent } from "react";
 import type { BaselineEvidence, Discovery, EventEnvelope, LuunaClient, ProjectRecord, ProjectView } from "@luuna/api-client";
 import { isTerminal, mergeEvents } from "@luuna/api-client";
 import { Workflows } from "./Workflows";
+import { StatusBadge } from "./design/StatusBadge";
+import { baselineTone, confidenceTone, manifestTone } from "./design/tone";
 import { actionFailure, describeFailure } from "./failures";
 
 const message = describeFailure;
@@ -217,7 +219,7 @@ export function Projects({ client, connectionEpoch = 0 }: { client: LuunaClient 
     {error && <div className="error" role="alert">{error}<button className="text-button" type="button" onClick={() => setError("")}>Dismiss</button></div>}
 
     <div className="projects-layout">
-      <div>
+      <div className="projects-rail">
         <form onSubmit={register} className="register-form">
           <fieldset disabled={!client || busy}>
             <label>Project name<input value={name} onChange={(event) => setName(event.target.value)} required placeholder="My product" /></label>
@@ -230,7 +232,7 @@ export function Projects({ client, connectionEpoch = 0 }: { client: LuunaClient 
         {projects.length > 0 && <ul className="project-list" aria-label="Registered projects">{projects.map((project) => <li key={project.id}>
           <button type="button" className={`run-card ${selected === project.id ? "selected" : ""}`} aria-pressed={selected === project.id} onClick={() => setSelected(project.id)}>
             <span className="run-prompt">{project.name}</span>
-            <span className="run-meta"><span className="state">{project.revision > 0 ? `manifest r${project.revision}` : "unconfirmed"}</span><code>{project.id}</code></span>
+            <span className="run-meta"><StatusBadge tone={manifestTone(project.revision)}>{project.revision > 0 ? `manifest r${project.revision}` : "unconfirmed"}</StatusBadge><code>{project.id}</code></span>
           </button>
         </li>)}</ul>}
       </div>
@@ -244,26 +246,26 @@ export function Projects({ client, connectionEpoch = 0 }: { client: LuunaClient 
             <div><dt>Dirty state</dt><dd>{observation.dirty.staged} staged · {observation.dirty.unstaged} unstaged · {observation.dirty.untracked} untracked · {observation.dirty.conflicted} conflicted</dd></div>
             <div><dt>Confirmed manifest</dt><dd>{view.manifest ? <>revision {view.manifest.revision} · <code>{view.manifest.hash.slice(0, 23)}…</code> · base <code>{Object.values(view.manifest.base_commits)[0]?.slice(0, 12)}</code></> : "not yet confirmed"}</dd></div>
           </dl>
-          <div className="project-actions">
+          <div className="project-actions actions">
             <button type="button" disabled={busy} onClick={discover}>Discover proposed map</button>
             <button type="button" disabled={busy || !view.manifest || baselineInFlight} onClick={runBaseline}>Run baseline</button>
             <small>Discovery reads manifests and lockfiles; it never runs repository commands. A baseline runs the confirmed required recipes on a clean checkout and records exact evidence.</small>
           </div>
-          {baselines.length > 0 && <ul className="baselines" aria-label="Recorded baselines">{baselines.map((baseline) => <li key={baseline.id}>
-            <span className={`state ${baseline.status === "passed" ? "completed" : baseline.status === "running" ? "running" : "failed"}`}>{baseline.status}</span>
-            <span>manifest r{baseline.manifest_revision} · commit <code>{baseline.identity.commit.slice(0, 12)}</code> · {baseline.results.length}/{baseline.required_checks.length} required results</span>
-            {baseline.reason && <small>{baseline.reason}</small>}
-            <small>{baseline.results.map((result) => `${result.recipe_id}: ${result.status}${result.exit_code === null || result.exit_code === undefined ? "" : ` (exit ${result.exit_code})`}`).join(" · ")}</small>
+          {baselines.length > 0 && <ul className="baselines record-list" aria-label="Recorded baselines">{baselines.map((baseline) => <li key={baseline.id} className="record" data-tone={baselineTone[baseline.status]}>
+            <StatusBadge tone={baselineTone[baseline.status]}>{baseline.status}</StatusBadge>
+            <span className="baseline-summary">manifest r{baseline.manifest_revision} · commit <code>{baseline.identity.commit.slice(0, 12)}</code> · {baseline.results.length}/{baseline.required_checks.length} required results</span>
+            {baseline.reason && <small className="failure-note" data-tone={baselineTone[baseline.status]}>{baseline.reason}</small>}
+            <small className="baseline-results">{baseline.results.map((result) => `${result.recipe_id}: ${result.status}${result.exit_code === null || result.exit_code === undefined ? "" : ` (exit ${result.exit_code})`}`).join(" · ")}</small>
           </li>)}</ul>}
           {discovery && <>
-            {discovery.questions.length > 0 && <ul className="questions" aria-label="Open questions">{discovery.questions.map((question, index) => <li key={index}><strong>{question.topic}</strong> {question.detail}</li>)}</ul>}
-            {discovery.manifest_problems.length > 0 && <p className="failure-note">Proposal needs edits before confirmation: {discovery.manifest_problems.join("; ")}</p>}
-            <ul className="recipes" aria-label="Proposed check recipes">{discovery.repositories.flatMap((repo) => repo.proposed_checks.map((proposed) => <li key={`${repo.repository_id}-${proposed.check.id}`}>
-              <code>{proposed.check.executable} {proposed.check.args.join(" ")}</code>
-              <span className="state">{proposed.check.required ? "required" : "optional"} · {proposed.confidence}</span>
-              <small>{proposed.evidence.join(" · ")}</small>
+            {discovery.questions.length > 0 && <ul className="questions callout" data-tone="attention" aria-label="Open questions">{discovery.questions.map((question, index) => <li key={index}><strong>{question.topic}</strong> {question.detail}</li>)}</ul>}
+            {discovery.manifest_problems.length > 0 && <p className="failure-note manifest-problems" data-tone="attention">Proposal needs edits before confirmation: {discovery.manifest_problems.join("; ")}</p>}
+            <ul className="recipes record-list" aria-label="Proposed check recipes">{discovery.repositories.flatMap((repo) => repo.proposed_checks.map((proposed) => <li key={`${repo.repository_id}-${proposed.check.id}`} className="record">
+              <code className="recipe-command">{proposed.check.executable} {proposed.check.args.join(" ")}</code>
+              <StatusBadge tone={confidenceTone[proposed.confidence]}>{proposed.check.required ? "required" : "optional"} · {proposed.confidence}</StatusBadge>
+              <small className="recipe-evidence">{proposed.evidence.join(" · ")}</small>
             </li>))}</ul>
-            <form onSubmit={confirm}>
+            <form onSubmit={confirm} className="manifest-form">
               <fieldset disabled={busy}>
                 <label>Manifest to confirm (revision {view.project.revision + 1})<textarea value={draft} onChange={(event) => setDraft(event.target.value)} rows={14} spellCheck={false} /></label>
                 <div className="form-footer"><small>Confirmation re-checks identity, remote and default branch against the live checkout and records the exact base commit.</small><button className="primary">Confirm manifest</button></div>

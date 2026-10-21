@@ -1,1 +1,86 @@
 /* Screen: workflows. Layout and screen-specific presentation, tokens only (docs/DESIGN-SYSTEM.md). */
+/*
+ * The candidate review sits inside a ticket card and reuses .ticket-actions, .failure-note and
+ * .facts, so every rule starts at .workflows and descends by child combinators only.
+ * Order: heading, scope, alert, the ticket form, the run settings tray, then the ticket cards.
+ */
+
+/* Subpanel rhythm: children carry their own top margin so the run settings read as one tray. */
+.workflows { row-gap: 0; }
+.workflows > * + * { margin-top: var(--space-4); }
+.workflows > .panel-heading { margin-bottom: 0; }
+.workflows > .scope { margin-bottom: 0; margin-top: var(--space-2); }
+.workflows > .error { margin-bottom: 0; }
+
+/* Ticket form: a bordered group, like the register form, so its one primary action is its own task. */
+.workflows > .ticket-form { min-width: 0; padding: var(--space-4); border: var(--border-width) solid var(--color-border); border-radius: var(--radius-md); }
+.workflows > .ticket-form > fieldset > .form-footer > button.primary { margin-left: auto; }
+
+/*
+ * Run settings: writer paths, writes, approver, provider and model, automatic repair. They apply
+ * to the next plan, writer, validation or repair of any ticket, so they share one raised tray.
+ */
+.workflows > .plan-controls,
+.workflows > .workflow-models,
+.workflows > .workflow-auto-repair {
+  min-width: 0;
+  padding: var(--space-3) var(--space-4) 0;
+  border: var(--border-width) solid var(--color-border);
+  border-block: 0;
+  background: var(--color-surface-raised);
+}
+.workflows > .plan-controls {
+  display: grid;
+  grid-template-columns: minmax(0, 2fr) auto minmax(0, 1fr);
+  align-items: end;
+  gap: var(--space-3) var(--space-4);
+  padding-top: var(--space-4);
+  border-top: var(--border-width) solid var(--color-border);
+  border-radius: var(--radius-md) var(--radius-md) 0 0;
+}
+.workflows > .plan-controls > .checkbox { min-height: var(--control-height); white-space: nowrap; }
+.workflows > .plan-controls + .workflow-models { margin-top: 0; }
+.workflows > .workflow-models { margin-bottom: 0; }
+.workflows > .workflow-models > small { max-width: var(--measure); color: var(--color-text-muted); }
+.workflows > .workflow-models + .workflow-auto-repair {
+  margin-top: 0;
+  padding-bottom: var(--space-4);
+  border-bottom: var(--border-width) solid var(--color-border);
+  border-radius: 0 0 var(--radius-md) var(--radius-md);
+}
+
+/* Ticket cards: title and descriptor, intent, actions with the run badge, then the evidence. */
+.workflows > .tickets { margin-top: var(--space-5); gap: var(--space-3); }
+.workflows > .tickets > .record { gap: var(--space-2); padding: var(--space-3) var(--space-4); }
+.workflows > .tickets > .record > .ticket-head { display: flex; flex-wrap: wrap; align-items: baseline; justify-content: space-between; gap: var(--space-1) var(--space-3); min-width: 0; }
+.workflows > .tickets > .record > .ticket-head > strong { min-width: 0; color: var(--color-text); font-size: var(--text-sm); line-height: var(--leading-tight); overflow-wrap: anywhere; }
+.workflows > .tickets > .record > .ticket-head > .state { flex: none; }
+.workflows > .tickets > .record > .ticket-intent { max-width: var(--measure); color: var(--color-text-muted); line-height: var(--leading); overflow-wrap: anywhere; }
+.workflows > .tickets > .record > .ticket-actions { margin-top: var(--space-1); }
+.workflows > .tickets > .record > .ticket-actions > .state { margin-left: auto; }
+
+/* Plan review: the full hash, the complete plan in a bounded region, then the acknowledgment. */
+.plan-review { display: grid; grid-template-columns: minmax(0, 1fr); gap: var(--space-2); min-width: 0; padding-top: var(--space-3); border-top: var(--border-width) solid var(--color-border); }
+.plan-review > p { min-width: 0; color: var(--color-text-muted); font-size: var(--text-xs); }
+.plan-review > p > .plan-hash { color: var(--color-text); }
+.plan-review > pre[aria-label="Complete immutable plan"] { max-height: var(--plan-max); min-width: 0; }
+.plan-review > .plan-acknowledgment { margin-top: var(--space-1); }
+.plan-review > button { justify-self: start; }
+
+/* Plan meta, the recorded reason and next step, and the managed worktree lines. */
+.workflows > .tickets > .record > .plan-meta,
+.workflows > .tickets > .record > .worktree-line { color: var(--color-text-muted); font-variant-numeric: tabular-nums; overflow-wrap: anywhere; }
+.workflows > .tickets > .record > .plan-meta > code,
+.workflows > .tickets > .record > .worktree-line > code { color: var(--color-text); }
+.workflows > .tickets > .record > .failure-note { display: block; margin-top: var(--space-1); padding: var(--space-0-5) 0 var(--space-0-5) var(--space-3); border-left: var(--rule-width) solid var(--color-border-control); }
+.workflows > .tickets > .record > .failure-note[data-tone] { border-left-color: var(--tone-mark); }
+.workflows > .tickets > .record > .failure-note > .recovery-note { margin-top: var(--space-1-5); }
+.workflows > .tickets > .record > .plan-meta + .worktree-line,
+.workflows > .tickets > .record > .failure-note + .worktree-line { margin-top: var(--space-1); }
+
+@media (max-width: 680px) {
+  .workflows > .plan-controls { grid-template-columns: minmax(0, 1fr); }
+  .workflows > .plan-controls > .checkbox { min-height: 0; white-space: normal; }
+  .workflows > .tickets > .record > .ticket-actions > .state { margin-left: 0; }
+  .workflows > .tickets > .record { padding: var(--space-3); }
+}
