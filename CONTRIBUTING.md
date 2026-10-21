@@ -41,13 +41,13 @@ Run inherited component suites one at a time, separately from builds. On this cl
 
 ## Run the connectivity demo
 
-This initial service permits tool-free model requests. It does not edit repositories, run approved implementation plans, expose ticket creation, or publish changes. Start the service separately from the desktop so that closing the client does not terminate it.
+The runtime serves the tool-free demo profile described here as well as repository import, baselines, approved writers, candidate checks and review; writers and checks run natively with your host permissions, and nothing publishes or merges changes. Start the service separately from the desktop so that closing the client does not terminate it.
 
 Install the pinned Pi package `@earendil-works/pi-coding-agent@1.3.0` in a private local tool location and make its executable available. See [Pi's official repository](https://github.com/earendil-works/pi) for provider configuration. Its package executable is `dist/bundle/cli.js`. Install ripgrep (`rg`) and fd (`fd`, or Debian's `fdfind`) on PATH as well: Luuna runs Pi offline, so Pi cannot download them, and writers and reviewers are not offered the `grep` or `find` tools without them. The service launches a fresh isolated tool-free session: it does not read the developer's ordinary Pi configuration, OAuth session, extensions, skills, or project instructions. Supply supported provider credentials securely through environment bindings. The cloud network policy must also allow the selected provider's HTTPS destination. Allow `api.anthropic.com` or `api.openai.com`, as appropriate, in environment settings before testing access.
 
 | Setting | Purpose and default |
 | --- | --- |
-| `LUUNA_API_TOKEN` | Required private bearer token, at least 32 bytes; provide the same token to the client |
+| `LUUNA_API_TOKEN` | Required private bearer token of at least 32 visible ASCII characters, with no spaces or line breaks; provide the same token to the client |
 | `LUUNA_PI_COMMAND` | Pi executable, default `pi`; may be an absolute path. On Windows an npm `pi.cmd` shim found through PATH and PATHEXT is started as `node.exe` with its `dist/bundle/cli.js`; other batch launchers are refused, so point this at `node.exe` and pass `cli.js` in `LUUNA_PI_ARGS_JSON` for any other layout |
 | `LUUNA_PI_ARGS_JSON` | Optional JSON array of launcher arguments, useful with a direct Node executable |
 | `LUUNA_PI_PROVIDER`, `LUUNA_PI_MODEL` | Explicit provider/model defaults; may also be selected per run in the client |

@@ -23,8 +23,6 @@ use std::{
 
 const MAX_REPOSITORIES: usize = 32;
 const MAX_PATH_BYTES: usize = 4096;
-/// Largest page `GET /api/v1/projects/{id}/events?limit=` returns.
-const MAX_EVENT_PAGE: u64 = 10_000;
 
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -65,14 +63,6 @@ pub struct ProjectView {
     pub repositories: Vec<RepositoryRegistration>,
     pub manifest: Option<ManifestRecord>,
     pub discovery: Option<Discovery>,
-}
-
-#[derive(Deserialize)]
-pub struct Cursor {
-    #[serde(default)]
-    after: u64,
-    /// At most this many events (1..=10000); every remaining event when omitted.
-    limit: Option<u64>,
 }
 
 fn bad_request(message: impl Into<String>) -> ApiError {
@@ -546,32 +536,18 @@ pub async fn confirm_manifest(
 pub async fn project_events(
     State(state): State<AppState>,
     Path(id): Path<String>,
-    Query(cursor): Query<Cursor>,
+    Query(page): Query<crate::EventPage>,
 ) -> Result<Json<Vec<EventEnvelope>>, ApiError> {
     if !valid_project_id(&id) {
         return Err(ApiError(StatusCode::NOT_FOUND, "project not found".into()));
     }
-    // Sequences are SQLite integers; a larger cursor is a client error, not a 500.
-    if i64::try_from(cursor.after).is_err() {
-        return Err(bad_request(format!(
-            "event cursor `after` must be at most {}",
-            i64::MAX
-        )));
-    }
-    if cursor
-        .limit
-        .is_some_and(|limit| limit == 0 || limit > MAX_EVENT_PAGE)
-    {
-        return Err(bad_request(format!(
-            "event `limit` must be between 1 and {MAX_EVENT_PAGE}"
-        )));
-    }
+    let (after, limit) = page.bounds()?;
     Ok(Json(
         state
             .store
             .lock()
             .map_err(internal)?
-            .project_events_page(&id, cursor.after, cursor.limit)
+            .project_events_page(&id, after, limit.map(|limit| limit as u64))
             .map_err(storage_error)?,
     ))
 }

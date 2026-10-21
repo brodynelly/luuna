@@ -15,7 +15,8 @@ export interface RunRecord {
 export interface Health {
   status: string;
   pi_version: string;
-  demo_only: boolean;
+  /** Approved writers and required checks run with the developer's host permissions. */
+  native_execution?: boolean;
   /** Content digest of the sources the runtime binary was built from. */
   build_identity?: string;
   /** Release and commit of the compiler that built the runtime binary. */

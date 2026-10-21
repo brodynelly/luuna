@@ -276,7 +276,7 @@ pub async fn validate(
     drop(active);
     let worker = state.clone();
     let started_copy = started.clone();
-    tokio::spawn(async move {
+    state.spawn_supervised(id.clone(), async move {
         let mut current = evidence;
         let mut current_worktree = worktree;
         let mut current_diff = diff;
@@ -427,13 +427,6 @@ pub async fn validate(
             current_worktree = path;
             current_diff = next_diff;
         }
-        // Shutdown observes this map, so release AppState/data-directory
-        // ownership before publishing worker completion to its waiter.
-        let active_runs = worker.active.clone();
-        drop(worker);
-        if let Ok(mut active) = active_runs.lock() {
-            active.remove(&id);
-        };
     });
     Ok((StatusCode::ACCEPTED, Json(started)))
 }
@@ -702,7 +695,7 @@ async fn pipeline(
     // One deadline, taken before any reviewer preparation, bounds the guard
     // installation, the reviewer's startup (spawn and version probe) and its
     // session together, so none of them runs past the approved time.
-    let deadline = tokio::time::Instant::now() + Duration::from_secs(remaining);
+    let deadline = crate::deadline_after(Duration::from_secs(remaining));
     let session = format!("review-{}", uuid::Uuid::new_v4());
     let directory = state.config.data_dir.join("reviews").join(&session);
     // Installation yields to cancellation as well as the deadline.

@@ -117,7 +117,7 @@ async function startRuntime(label) {
       const response = await fetch(`${base}/api/v1/health`);
       if (response.ok) {
         const health = await response.json();
-        record(`runtime ${label} start`, health.status === "ok" && health.demo_only === true, `health ${JSON.stringify(health)}`);
+        record(`runtime ${label} start`, health.status === "ok" && health.native_execution === true, `health ${JSON.stringify(health)}`);
         return child;
       }
     } catch { /* not yet listening */ }

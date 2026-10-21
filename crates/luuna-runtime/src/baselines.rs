@@ -173,7 +173,6 @@ pub async fn start_baseline(
         .map_err(internal)?;
     active.insert(run_id.clone(), tx);
     drop(active);
-    let worker_state = state.clone();
     let job = BaselineJob {
         run_id: run_id.clone(),
         project_id: id,
@@ -183,15 +182,7 @@ pub async fn start_baseline(
         recipes,
         required,
     };
-    tokio::spawn(async move {
-        baseline_worker(worker_state.clone(), job, rx).await;
-        // Release the data-directory owner before declaring this worker gone.
-        let active_runs = worker_state.active.clone();
-        drop(worker_state);
-        if let Ok(mut active) = active_runs.lock() {
-            active.remove(&run_id);
-        };
-    });
+    state.spawn_supervised(run_id, baseline_worker(state.clone(), job, rx));
     Ok((StatusCode::ACCEPTED, Json(run)))
 }
 

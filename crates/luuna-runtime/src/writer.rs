@@ -871,17 +871,11 @@ async fn schedule_writer(
     }
     let worker_state = state.clone();
     let run_id = run.id.clone();
-    tokio::spawn(async move {
+    state.spawn_supervised(run.id.clone(), async move {
         let mut job = job;
         (job.repair_feedback, job.preparation_seconds) =
             repair_feedback(&worker_state, &run_id, previous_evidence, &job.plan, &rx).await;
-        writer_worker(worker_state.clone(), job, rx).await;
-        // Release the data-directory owner before declaring this worker gone.
-        let active_runs = worker_state.active.clone();
-        drop(worker_state);
-        if let Ok(mut active) = active_runs.lock() {
-            active.remove(&run_id);
-        };
+        writer_worker(worker_state, job, rx).await;
     });
     Ok((StatusCode::ACCEPTED, Json(run)))
 }
@@ -1977,13 +1971,7 @@ async fn writer_worker(state: AppState, job: WriterJob, mut cancel: watch::Recei
             .saturating_sub(spent.unwrap_or(u64::MAX)),
     );
     let started = std::time::Instant::now();
-    // Plan validation bounds the timeout; a deadline still never overflows.
-    let deadline = tokio::time::Instant::now()
-        .checked_add(remaining)
-        .unwrap_or_else(|| {
-            tokio::time::Instant::now()
-                + Duration::from_secs(luuna_domain::MAX_PLAN_TIMEOUT_SECONDS)
-        });
+    let deadline = crate::deadline_after(remaining);
     // Every exit from here on charges the time it took, whatever the reason:
     // a startup step that fails slowly (a Git command at its own timeout, say)
     // spent approved time as surely as one that ran into the deadline.

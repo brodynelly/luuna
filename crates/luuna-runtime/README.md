@@ -8,16 +8,20 @@ variables locally; keep credentials out of repository files:
 
 | Variable | Purpose |
 | --- | --- |
-| `LUUNA_API_TOKEN` | Required random token, at least 32 bytes; frontend enters it locally |
+| `LUUNA_API_TOKEN` | Required random token of at least 32 visible ASCII characters, with no spaces or line breaks; frontend enters it locally |
 | `LUUNA_PI_COMMAND` | Pi executable, default `pi`; may be an absolute Node executable. On Windows a bare name is searched through PATH, executables first and then PATHEXT, and an npm `pi.cmd` shim is started as the Node executable and `dist/bundle/cli.js` it names; other `.cmd`/`.bat` launchers are refused |
 | `LUUNA_GIT_COMMAND` | Host `git` used for read-only repository inspection, default `git` |
 | `LUUNA_PI_ARGS_JSON` | Optional JSON array of launcher arguments, e.g. absolute `dist/cli.js` path |
 | `LUUNA_PI_PROVIDER` / `LUUNA_PI_MODEL` | Optional explicit defaults; UI can supply them per run |
 | `LUUNA_PI_<PROVIDER>_API_KEY` | Optional alias for any supported provider key (for example `LUUNA_PI_ANTHROPIC_API_KEY`, `LUUNA_PI_OPENAI_API_KEY`) for hosts that reserve the plain name; it becomes the child's standard variable, takes precedence over a direct key, and is never passed through under the alias name |
 | `HTTP_PROXY`, `HTTPS_PROXY`, `ALL_PROXY`, `NO_PROXY` | Preserved for provider routing, including lowercase variants and `NODE_USE_ENV_PROXY`; existing TLS trust variables remain enabled |
-| `LUUNA_DATA_DIR` | Private durable state directory, default `.luuna`; keep it short on Windows, where worktrees below it count toward the 260-character path limit |
+| `LUUNA_DATA_DIR` | Private durable state directory, default `.luuna`; on Unix it and its `worktrees` directory are made owner-only (0700) at startup, and a directory owned by another user is refused; keep it short on Windows, where worktrees below it count toward the 260-character path limit |
 | `LUUNA_PORT` | Loopback port, default `4242` |
 | `LUUNA_RUN_TIMEOUT_SECONDS` | Positive operation deadline, default `600`; version probe has a separate 15s deadline |
+
+A setting that cannot be used stops startup with a message naming the variable
+and the form it expects (for example `LUUNA_PORT must be a whole number from 0
+to 65535 (got "abc")`); the token's value is never printed.
 
 Run `cargo run -p luuna-runtime`. Supply the selected provider's API key through
 its standard environment variable, such as `ANTHROPIC_API_KEY` or
@@ -27,7 +31,9 @@ cloud platform authentication, user Pi profiles, and model settings files are
 not integrated. Missing provider credentials produce a persisted failed run.
 
 `GET /api/v1/health` is public. Its `pi_version` field reports the required
-supported version; the CLI is checked when starting a run. Its `build_identity`
+supported version; the CLI is checked when starting a run. `native_execution: true`
+states that approved writers and required checks run with the developer's host
+permissions (the tool-free demo is one run profile; scope guards are not a sandbox). Its `build_identity`
 field is the content digest of the sources the binary was built from, and
 `build_rustc` names the compiler release and commit that built it
 (`build_rustc_sha256` the SHA-256 of that compiler executable;
@@ -36,19 +42,37 @@ field is the content digest of the sources the binary was built from, and
 any profile, linker or C toolchain override variables, and how many Cargo config files declare
 an override). The route is unauthenticated, so it carries names and none/set status only, never
 flag values, wrapper paths or config file paths. All other endpoints
-require `Authorization: Bearer <token>`:
+require `Authorization: Bearer <token>` (the scheme name is case-insensitive).
+Every 4xx/5xx response body is `{"error": "<reason>"}`, including malformed JSON,
+unknown or mistyped fields, a missing content type, a body over 256 KiB, a bad
+query and unknown routes or methods. A 500 says only that a storage or process
+operation failed; the cause is written to the runtime's stderr with the request it
+failed, never with payloads or credentials.
 
 - `POST /api/v1/shutdown`: idempotently request an orderly service stop (202).
-  Already admitted scheduling requests drain; new mutations receive 503.
-  Owned work settles as interrupted, preserving its evidence, and main exits
-  cleanly. This is separate from cancellation and from closing a client window.
+  Already admitted scheduling requests drain (at most five seconds; a request
+  that never finishes its body cannot hold the stop open, and work it starts
+  later begins already signalled to stop); new mutations receive
+  503 `{"error":"runtime is shutting down"}`. Owned work settles as interrupted,
+  preserving its evidence, every event stream ends, and main exits cleanly once
+  connections drain (exit status 1 if a connection is still open ten seconds
+  after owned work settled). This is separate from cancellation and from closing
+  a client window.
 
-- `GET /api/v1/runs`: persisted run records.
+- `GET /api/v1/runs?limit=N`: persisted run records, newest first; `limit` (1..=10000) returns the most recent N.
 - `POST /api/v1/runs`: `{ "prompt": "Hello", "provider": "...", "model": "..." }`.
 - `GET /api/v1/runs/{id}`: current run state.
-- `GET /api/v1/runs/{id}/events?after=0`: durable event replay by sequence.
-- `GET /api/v1/runs/{id}/stream?after=0`: SSE replay then live delivery; accepts `Last-Event-ID`.
+- `GET /api/v1/runs/{id}/events?after=0&limit=N`: durable event replay by sequence; the optional `limit`
+  (1..=10000) returns the first N events after the cursor, so a client pages from the last sequence it
+  received. A cursor above 2^63-1 is a 400.
+- `GET /api/v1/runs/{id}/stream?after=0`: SSE replay then live delivery; accepts `Last-Event-ID`. The
+  stream ends when the run can never change again: a demo or baseline run at any terminal state, a
+  workflow only at `completed`, `cancelled` or `reviewed` with no worker attached. A `failed` or
+  `interrupted` workflow stays followed, because repair, re-validation and automatic repair continue on
+  the same run id. Every stream ends when shutdown begins.
 - `POST /api/v1/runs/{id}/cancel`: request abort; terminal cancellation follows process reaping.
+  Repeating it, or cancelling a run whose worker already returned, answers with the settled run (200)
+  or 409 for an idle run with no worker; it never fails with 500.
 - `GET /api/v1/projects`, `GET /api/v1/projects/{id}`: registered projects, machine-registry
   repositories, the current confirmed manifest and the latest discovery.
 - `POST /api/v1/projects`: `{ "id"?: "slug", "name": "...", "repositories": [{ "id": "app", "path": "/abs/root" }] }`
@@ -141,12 +165,27 @@ writer that uses that gate is M2c.
 
 Only one runtime can own a data directory. Startup recovery marks abandoned
 active attempts interrupted after obtaining that exclusive ownership. A
-Ctrl+C or SIGTERM shutdown signals owned workers to stop, waits for supervised
-cleanup (process groups reaped, at most five seconds), and records the stopped
-work as `interrupted` with the reason "interrupted by runtime shutdown …", the
-same resumable state a hard kill leaves after restart; `cancelled` is reserved
-for the developer's cancel request (ADR 0004).
-At most four demo runs may be active. Prompt acknowledgements and low-level
+Ctrl+C or SIGTERM shutdown (on Windows also Ctrl+Break, console close and system
+shutdown, best effort because Windows ends the process within seconds; use the
+endpoint above from a supervisor) closes admission, signals owned workers to
+stop, waits for supervised cleanup (process groups reaped, at most five seconds),
+and records the stopped work as `interrupted` with the reason "interrupted by
+runtime shutdown …", the same resumable state a hard kill leaves after restart;
+`cancelled` is reserved for the developer's cancel request (ADR 0004). Every
+step is bounded, so the process always exits; a second Ctrl+C or SIGTERM exits
+at once (status 130) without waiting, leaving any unsettled work to restart
+recovery. Shutdown start, the number of signalled runs and the outcome are
+written to stderr.
+
+Every worker (demo run, baseline, writer, validation with its automatic
+repairs) runs under a supervisor. If a worker panics, its run settles `failed`
+with the reason "internal error: the runtime worker stopped unexpectedly", its
+slot is released, and unreported spend is reserved as restart recovery reserves
+it: a running attempt takes the remaining approved time and cost, a candidate
+stage keeps its elapsed time (a review also the remaining cost) and an active
+lease is abandoned with its files preserved. Deadlines derived from an approved
+budget saturate instead of overflowing the platform clock.
+At most four runs (demo, baseline, writer or validation) may be active at once. Prompt acknowledgements and low-level
 `agent_end` events do not complete a run: Pi 1.3.0's `agent_settled` is required.
 Completion means the connectivity request finished, not a feature passed
 validation or a publication was approved.

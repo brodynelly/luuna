@@ -963,7 +963,7 @@ async fn project_event_pages_are_bounded_and_huge_cursors_are_client_errors() {
     };
     let (status, body) = page("?after=18446744073709551615").await;
     assert_eq!(status, StatusCode::BAD_REQUEST, "{body}");
-    assert!(body["error"].as_str().unwrap().contains("after"), "{body}");
+    assert!(body["error"].as_str().unwrap().contains("cursor"), "{body}");
     let (status, body) = page("?after=9223372036854775807").await;
     assert_eq!((status, body), (StatusCode::OK, json!([])));
     let (status, body) = page("?limit=1").await;
