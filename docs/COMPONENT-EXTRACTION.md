@@ -6,9 +6,9 @@ The owner explicitly authorized three public component repositories. Luuna remai
 
 | Component | Destination and immutable consumer pin | Independent full verification |
 | --- | --- | --- |
-| Missions | [brodynelly/missions](https://github.com/brodynelly/missions), `b9166821144fd373328930f4a44856448e8de77b` | [CI passed](https://github.com/brodynelly/missions/actions/runs/39655004223) |
-| Atlas | [brodynelly/atlas](https://github.com/brodynelly/atlas), `18fc7e2c526d3f7a0ac4c2850573c21ca5964819` | [CI passed](https://github.com/brodynelly/atlas/actions/runs/39655044656) |
-| Beacon | [brodynelly/beacon](https://github.com/brodynelly/beacon), `0330712a76fec338498d4b683a4d8ec9474f77d0` | [CI passed](https://github.com/brodynelly/beacon/actions/runs/39655069583) |
+| Missions | [brodynelly/luuna-missions](https://github.com/brodynelly/luuna-missions), `e1b5db171892de653e7462e630d64d4964d01422` | [CI passed](https://github.com/brodynelly/luuna-missions/actions/runs/39658081094) |
+| Atlas | [brodynelly/luuna-atlas](https://github.com/brodynelly/luuna-atlas), `76ad209daf404dd9a12aeaf46293e05e9f41e517` | [CI passed](https://github.com/brodynelly/luuna-atlas/actions/runs/39655044656) |
+| Beacon | [brodynelly/luuna-beacon](https://github.com/brodynelly/luuna-beacon), `072e482169e0d469c3744ec712222f8b310fa7da` | [CI passed](https://github.com/brodynelly/luuna-beacon/actions/runs/39658110584) |
 
 ## Preservation and destination verification
 
@@ -41,7 +41,7 @@ Luuna's CI runs the consumer setup, verification and real CLI smoke on Linux, ma
 
 ## Setup, updates and rollback
 
-Run `npm run components:setup` after a fresh Luuna clone. Plain `git clone --recurse-submodules` retrieves source but still needs frozen dependency installation. `npm run components:run -- missions -- --help` invokes the approved pinned source; atlas and beacon follow the same interface. The root npm workspace remains separate from these Bun packages.
+Run `npm run components:setup` after a fresh Luuna clone. Plain `git clone --recurse-submodules` retrieves source but still needs frozen dependency installation. `npm run components:run -- luuna-missions -- --help` invokes the approved pinned source; atlas and beacon follow the same interface. The root npm workspace remains separate from these Bun packages.
 
 To update, review the component's own change and CI, fetch/check out its exact commit in the submodule, update the manifest commit, and commit both manifest and gitlink in the Luuna PR. Setup never uses a floating branch or silently overwrites local changes. Reverting the extraction commit restores Luuna's original tracked component trees; no original monorepo history is rewritten. Local source rollback copies remain outside tracking during migration.
 
@@ -53,3 +53,5 @@ Full M6 runtime ticket reconciliation, scoped memory retrieval and explicit prom
 Review found that setup performed checkout before detecting local edits, and that the developer launcher captured stdin/output and collapsed nonzero CLI statuses into its own error handling. Setup now validates all component identities, manifest completeness, gitlinks, URLs and initialized worktree cleanliness before any checkout/install. Regression tests cover dirty and uninitialized checkouts and missing/duplicate manifest entries. Clean prior pins can still be updated through the committed gitlinks.
 
 The developer CLI now inherits stdin/stdout/stderr, preserves the component exit status, and uses npm's INIT_CWD so `npm --prefix` operates on the calling project rather than Luuna's root. The bounded programmatic JSON helper remains separate. The real smoke additionally pipes an Atlas record through the launcher from a different package directory and checks a Missions JSON failure and exit code, raising the smoke to 14 operations. MIT and component README links now target the exact public repository revisions so they work on GitHub across submodule boundaries.
+
+The owner requested canonical luuna-* repository names during PR review. GitHub repository renames preserve repository identity and maintained history; all active submodule URLs, package repository/homepage/issue metadata, documentation and consumer pins use luuna-missions, luuna-atlas and luuna-beacon. The launcher accepts those full primary names and retains the short component selectors as compatibility aliases. Internal components paths and upstream data formats remain stable.

@@ -19,7 +19,7 @@ try {
     GIT_TERMINAL_PROMPT: '0' });
   execFileSync('git', ['-c', 'core.hooksPath=', 'init', '--template=', project], { env, stdio: 'pipe' });
   const json = (name, args) => {
-    const result = JSON.parse(runComponent(name, [...args, '--json'], { cwd: project, env }));
+    const result = JSON.parse(runComponent(`luuna-${name}`, [...args, '--json'], { cwd: project, env }));
     assert.equal(result.success, true, `${name} ${args[0]} failed`);
     checks++;
     return result;
@@ -41,7 +41,7 @@ try {
   assert.ok(JSON.stringify(rendered).includes('Preserve Luuna runtime approval policy'));
   json('beacon', ['list']);
   const launcher = join(repositoryRoot, 'scripts/components.mjs');
-  const piped = spawnSync(process.execPath, [launcher, 'run', 'atlas', '--', 'record', 'extraction', '--stdin', '--json'], {
+  const piped = spawnSync(process.execPath, [launcher, 'run', 'luuna-atlas', '--', 'record', 'extraction', '--stdin', '--json'], {
     // npm runs scripts from the package root, keeping the caller in INIT_CWD.
     cwd: repositoryRoot, env: { ...env, INIT_CWD: project },
     input: JSON.stringify({ type: 'convention', content: 'CLI stdin reaches the extracted Atlas' }),
@@ -50,7 +50,7 @@ try {
   assert.equal(piped.status, 0, piped.stderr);
   assert.equal(JSON.parse(piped.stdout).success, true);
   checks++;
-  const invalid = spawnSync(process.execPath, [launcher, 'run', 'missions', '--', 'deliberately-unknown-command', '--json'], {
+  const invalid = spawnSync(process.execPath, [launcher, 'run', 'luuna-missions', '--', 'deliberately-unknown-command', '--json'], {
     cwd: project, env, encoding: 'utf8', timeout: 30_000,
   });
   assert.equal(invalid.status, 1);

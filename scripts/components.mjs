@@ -20,7 +20,7 @@ function verifyPinMetadata(root, component) {
   const expectedPath = `components/${component.brand.replace('Luuna ', '').toLowerCase()}`;
   if (!componentNames.includes(expectedPath.split('/')[1]) || component.path !== expectedPath ||
       !/^[a-f0-9]{40}$/.test(component.commit) ||
-      component.repository !== `https://github.com/brodynelly/${expectedPath.split('/')[1]}.git`) {
+      component.repository !== `https://github.com/brodynelly/luuna-${expectedPath.split('/')[1]}.git`) {
     throw new Error('Invalid component identity or immutable commit in manifest');
   }
   const entry = git(root, ['ls-files', '--stage', '--', component.path]);
@@ -69,7 +69,7 @@ export function bunExecutable(root = repositoryRoot) {
 }
 export function runComponent(name, args, options = {}) {
   const root = options.root ?? repositoryRoot;
-  const component = manifest(root).components.find(item => item.path === `components/${name}`);
+  const component = manifest(root).components.find(item => item.cli.primary === name || item.path === `components/${name}`);
   if (!component) throw new Error(`Unknown component: ${name}`);
   const directory = verifyComponent(root, component, true);
   return execFileSync(bunExecutable(root), [join(directory, component.cli.entrypoint), ...args], {
@@ -106,7 +106,7 @@ function main() {
       console.log(`${component.brand}: ${component.commit}`);
     }
   } else if (action === 'run') {
-    const component = data.components.find(item => item.path === `components/${name}`);
+    const component = data.components.find(item => item.cli.primary === name || item.path === `components/${name}`);
     if (!component) throw new Error(`Unknown component: ${name}`);
     const directory = verifyComponent(repositoryRoot, component, true);
     // Developer CLI use preserves stdin, live output, stderr and the tool's exit
@@ -119,7 +119,7 @@ function main() {
     if (child.signal) process.kill(process.pid, child.signal);
     process.exitCode = child.status ?? 1;
   } else {
-    throw new Error('Usage: node scripts/components.mjs setup|verify|run <missions|atlas|beacon> -- <CLI arguments>');
+    throw new Error('Usage: node scripts/components.mjs setup|verify|run <luuna-missions|luuna-atlas|luuna-beacon> -- <CLI arguments>');
   }
 }
 if (process.argv[1] && import.meta.url === pathToFileURL(resolve(process.argv[1])).href) {
