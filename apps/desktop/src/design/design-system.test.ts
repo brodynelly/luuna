@@ -18,6 +18,9 @@ const MANIFEST = "styles.css";
 const EXPECTED_SHEETS = [MANIFEST, TOKENS, "design/base.css", "design/components.css", "screens/app.css", "screens/projects.css", "screens/workflows.css", "screens/candidate-review.css"];
 const MEDIA = ["(max-width: 920px)", "(max-width: 680px)", "(prefers-reduced-motion: reduce)", "(prefers-color-scheme: light)", "(forced-colors: active)"];
 
+const STATES = [...new Set([runTone, candidateTone, checkTone, baselineTone, verdictTone, severityTone, leaseTone, connectionTone].flatMap((map) => Object.keys(map)))];
+const STATE_SELECTOR = new RegExp(`[.="'](?:${STATES.join("|")})(?![\\w-])`);
+
 function declarations(css: string): Array<[string, string]> {
   return [...css.matchAll(/([-\w]+)\s*:\s*([^;{}]+)(?=[;}])/g)].map((match) => [match[1], match[2].trim()]);
 }
@@ -58,11 +61,16 @@ describe("stylesheets", () => {
           if (/\b(?:code|pre)\b/.test(selector) && (property === "text-overflow" || property === "-webkit-line-clamp" || (property === "overflow" && value === "hidden"))) problems.push(`identities are never truncated: ${selector} { ${property}: ${value} }`);
         }
         if (/\[data-tone=/.test(selector) && file !== "design/components.css") problems.push(`tone mapping outside components.css: ${selector}`);
+        // Custom properties inherit: a rule may read the tone only from an element that carries data-tone itself.
+        if (/var\(--tone-(?:fg|bg|border|mark)\)/.test(body)) for (const part of selector.split(",")) if (!part.includes("[data-tone")) problems.push(`reads a tone without carrying data-tone: ${part.trim()}`);
+        // Style by tone, never by a runtime state name (Kanban columns, badges and cards all go through tone.ts).
+        for (const part of selector.replace(/\[data-tone(?:="[^"]*")?\]/g, "").split(",")) if (STATE_SELECTOR.test(part)) problems.push(`selector names a runtime state: ${part.trim()}`);
+        if (file.startsWith("screens/") && selector.split(",").some((part) => (part.match(/>/g) ?? []).length > 3)) problems.push(`scope by a unique class with at most three child steps: ${selector}`);
       }
       for (const prelude of css.matchAll(/@media\s+([^{]+)\{/g)) {
         for (const part of prelude[1].split(/\band\b|,/).map((item) => item.trim()).filter(Boolean)) if (!MEDIA.includes(part)) problems.push(`unapproved media query ${part}`);
       }
-      expect(problems).toEqual([]);
+      expect(problems, `\n${problems.join("\n")}`).toEqual([]);
     });
   }
 
@@ -93,7 +101,7 @@ function contrast(one: string, two: string): number {
   const [high, low] = [luminance(one), luminance(two)].sort((x, y) => y - x);
   return (high + 0.05) / (low + 0.05);
 }
-const SURFACES = ["color-bg", "color-surface", "color-surface-raised", "color-surface-sunken", "color-control", "color-selected"];
+const SURFACES = ["color-bg", "color-surface", "color-surface-raised", "color-surface-sunken", "color-field", "color-control", "color-selected"];
 const TEXT = ["color-text", "color-text-muted", "color-text-subtle", "color-accent"];
 const PAIRS: Array<[string, string, number]> = [
   ...TEXT.flatMap((fg) => SURFACES.map((bg): [string, string, number] => [fg, bg, 4.5])),
@@ -111,7 +119,7 @@ const PAIRS: Array<[string, string, number]> = [
   ["color-text", "color-control-hover", 4.5],
   ["color-accent", "color-selected", 3],
   ...["color-bg", "color-surface", "color-surface-raised", "color-surface-sunken"].map((bg): [string, string, number] => ["color-focus", bg, 3]),
-  ...["color-bg", "color-surface", "color-surface-sunken", "color-control"].map((bg): [string, string, number] => ["color-border-control", bg, 3]),
+  ...["color-bg", "color-surface", "color-surface-raised", "color-surface-sunken", "color-field", "color-control", "color-selected"].map((bg): [string, string, number] => ["color-border-control", bg, 3]),
 ];
 
 describe("colour tokens", () => {
@@ -134,15 +142,19 @@ describe("colour tokens", () => {
 });
 
 // ---- Screens: structure the smoke and the accessibility audit depend on ----
-const SCREENS: Record<string, string[]> = { "App.tsx": ["h1", "h2", "h3"], "Projects.tsx": ["h2"], "Workflows.tsx": ["h3"], "CandidateReview.tsx": ["h4"] };
+const SCREENS: Record<string, string[]> = { "App.tsx": ["h1", "h2", "h3"], "Projects.tsx": ["h2"], "Workflows.tsx": ["h3"], "CandidateReview.tsx": ["h4"], "main.tsx": [], "design/StatusBadge.tsx": [] };
 describe("screens", () => {
+  test("every component file is registered here, so a new screen inherits these checks", () => {
+    const components = files.filter((file) => file.endsWith(".tsx") && !file.includes(".test."));
+    expect(components.filter((file) => !(file in SCREENS))).toEqual([]);
+  });
   for (const [file, levels] of Object.entries(SCREENS)) {
     const source = raw(file);
     test(`${file}: headings keep their level, no inline styles, no positive tabIndex, badges through StatusBadge`, () => {
       expect([...new Set([...source.matchAll(/<(h[1-6])\b/g)].map((match) => match[1]))].sort()).toEqual(levels);
       expect(source).not.toMatch(/style=\{\{/);
       expect(source).not.toMatch(/tabIndex=\{[1-9]/);
-      expect(source).not.toMatch(/className=\{?["'`]state\b/);
+      if (file !== "design/StatusBadge.tsx") expect(source).not.toMatch(/className=\{?["'`]state\b/);
     });
     test(`${file}: every alert carries a Dismiss button`, () => {
       for (const match of source.matchAll(/role="alert"/g)) {

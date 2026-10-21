@@ -49,11 +49,13 @@ pre {
 :focus-visible { outline: var(--focus-width) solid var(--color-focus); outline-offset: var(--focus-offset); }
 main:focus { outline: none; }
 
-/* Forms. */
+/* Forms. Fields are wells of --color-field; typed identifiers (spellCheck off) are monospace,
+   hints never are. :where() keeps the text-field selector at element specificity, so the
+   disabled and monospace refinements below always win. */
 fieldset { display: grid; gap: var(--space-3); min-width: 0; margin: 0; padding: 0; border: 0; }
 label { display: block; color: var(--color-text-muted); font-size: var(--text-xs); font-weight: var(--weight-medium); }
 input, textarea, select, button { font: inherit; -webkit-tap-highlight-color: transparent; }
-input:not([type="checkbox"]):not([type="radio"]), textarea {
+input:where(:not([type="checkbox"], [type="radio"])), textarea {
   display: block;
   width: 100%;
   min-height: var(--control-height);
@@ -61,15 +63,16 @@ input:not([type="checkbox"]):not([type="radio"]), textarea {
   padding: var(--space-2) var(--space-3);
   border: var(--border-width) solid var(--color-border-control);
   border-radius: var(--radius-md);
-  background: var(--color-surface-sunken);
+  background: var(--color-field);
   color: var(--color-text);
   font-size: var(--text-sm);
+  font-weight: var(--weight-regular);
   line-height: var(--leading);
 }
-textarea { min-height: var(--empty-min); resize: vertical; }
+textarea { min-height: var(--textarea-min); resize: vertical; }
 input[spellcheck="false"], textarea[spellcheck="false"] { font-family: var(--font-mono); font-size: var(--text-xs); }
-input::placeholder, textarea::placeholder { color: var(--color-text-subtle); }
-input:disabled, textarea:disabled { border-color: var(--color-border); background: var(--color-control); color: var(--color-text-disabled); cursor: not-allowed; }
+input::placeholder, textarea::placeholder { color: var(--color-text-subtle); font-family: var(--font-sans); font-size: var(--text-sm); font-weight: var(--weight-regular); }
+input:disabled, textarea:disabled { border-color: var(--color-border); background: var(--color-field-disabled); color: var(--color-text-disabled); cursor: not-allowed; }
 input[type="checkbox"], input[type="radio"] { flex: none; width: var(--checkbox-size); height: var(--checkbox-size); margin: 0; accent-color: var(--color-accent); }
 label:has(> input[type="checkbox"]) { display: flex; align-items: center; gap: var(--space-2); color: var(--color-text); font-size: var(--text-xs); font-weight: var(--weight-regular); cursor: pointer; }
 
@@ -92,9 +95,11 @@ button {
   transition: background-color var(--duration-fast) var(--ease), border-color var(--duration-fast) var(--ease), color var(--duration-fast) var(--ease);
 }
 button:hover:not(:disabled) { background: var(--color-control-hover); }
-button:disabled { border-color: var(--color-border); background: var(--color-control); color: var(--color-text-disabled); cursor: not-allowed; }
+/* Disabled controls are ghosted: no fill, a quiet edge, the disabled text colour. */
+button:disabled { border-color: var(--color-border); background: transparent; color: var(--color-text-disabled); cursor: not-allowed; }
 
 @media (forced-colors: active) {
   button, input, textarea { border-color: ButtonText; }
+  button:disabled, input:disabled, textarea:disabled { border-color: GrayText; color: GrayText; }
   :focus-visible { outline-color: Highlight; }
 }

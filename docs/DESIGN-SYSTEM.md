@@ -40,23 +40,24 @@ Dark is the default; the light scheme redefines every colour under `@media (pref
 | --- | --- | --- | --- |
 | `--color-bg` | `#101216` | `#f5f6f9` | page |
 | `--color-surface` | `#191d24` | `#ffffff` | panel |
-| `--color-surface-raised` | `#20252e` | `#f0f2f6` | record row, hover |
-| `--color-surface-sunken` | `#0d1014` | `#eef1f5` | inputs, pre, scroll regions |
-| `--color-control` / `-hover` | `#262c36` / `#353c47` | `#eef1f5` / `#e2e6ee` | secondary button |
-| `--color-selected` / `-border` | `#262e40` / `#435579` | `#e8ecf8` / `#8c9bc4` | selected card |
+| `--color-surface-raised` | `#20252e` | `#f8f9fb` | record row, tray, hover |
+| `--color-surface-sunken` | `#0d1014` | `#eceff4` | pre, scroll regions |
+| `--color-field` / `-disabled` | `#0d1014` / `#191d24` | `#ffffff` / `#eef1f5` | text fields: enabled well, disabled |
+| `--color-control` / `-hover` | `#262c36` / `#353c47` | `#f6f7f9` / `#eceff3` | secondary button (disabled buttons are ghosted: no fill) |
+| `--color-selected` / `-border` | `#262e40` / `#435579` | `#e8ecf8` / `#8f9fd6` | selected card |
 | `--color-border` | `#303640` | `#d3d9e2` | decorative dividers |
 | `--color-border-control` | `#6e788a` | `#7d8697` | control edges (3:1 non-text) |
 | `--color-text` | `#e9edf4` | `#191d24` | body text |
 | `--color-text-muted` | `#a7b0bf` | `#4a5363` | labels, terms, scope, small |
 | `--color-text-subtle` | `#8f9aac` | `#5c6576` | meta: times, event numbers, placeholders |
 | `--color-text-disabled` | `#7a8494` | `#7d8697` | disabled controls (exempt from 1.4.3) |
-| `--color-accent` / `-hover` | `#b7c8fb` / `#d1dcff` | `#3f5385` / `#34466f` | primary, next step, links, selection |
+| `--color-accent` / `-hover` | `#b7c8fb` / `#d1dcff` | `#3b4fa0` / `#30418a` | primary, next step, links, selection |
 | `--color-on-accent` | `#101216` | `#ffffff` | text on accent |
-| `--color-focus` | `#c3d1ff` | `#3f5385` | focus ring |
+| `--color-focus` | `#c3d1ff` | `#3b4fa0` | focus ring |
 
 Each tone has `--tone-<name>-fg` (text), `-bg` (tint), `-border` and `-mark` (shape) in both schemes; see `tokens.css`.
 
-Scales: type `--text-2xs` 11 px (badges, eyebrow, meta), `--text-xs` 12 px (evidence, labels, code), `--text-sm` 13 px (controls, card text, h4), `--text-md` 14 px (body, h3), `--text-lg` 16 px (h2), `--text-xl` fluid 26 to 34 px (h1); weights 400, 550, 650; space on a 4 px rhythm (`--space-1` 4 px to `--space-7` 48 px, plus 2 px and 6 px half steps); radii 4, 7, 11 px; `--border-width` 1 px, `--rule-width` 3 px, `--focus-width` 2 px; controls 34 px (28 px small); layout `--layout-max` 1280 px with a gutter of 40, 24 and 16 px at full width, 920 px and 680 px; `--scroll-max` 28 rem and `--plan-max` 24 rem for bounded regions; one motion duration, `--duration-fast` 120 ms, which is 0 ms under reduced motion.
+Scales: type `--text-2xs` 11 px (badges, eyebrow, meta), `--text-xs` 12 px (evidence, labels, code), `--text-sm` 13 px (controls, card text, h4), `--text-md` 14 px (body, h3), `--text-lg` 16 px (h2), `--text-xl` fluid 26 to 34 px (h1); weights 400, 550, 650; space on a 4 px rhythm (`--space-1` 4 px to `--space-7` 48 px, plus 2 px and 6 px half steps); radii 4, 7, 11 px; `--border-width` 1 px, `--rule-width` 3 px, `--focus-width` 2 px; controls 34 px (28 px small); layout `--layout-max` 1280 px with a gutter of 40, 24 and 16 px at full width, 920 px and 680 px; textareas start at their `rows` with a 68 px floor; `--scroll-max` 28 rem and `--plan-max` 24 rem for bounded regions; one motion duration, `--duration-fast` 120 ms, which is 0 ms under reduced motion.
 
 ## Tones
 
@@ -75,28 +76,32 @@ Scales: type `--text-2xs` 11 px (badges, eyebrow, meta), `--text-xs` 12 px (evid
 
 | Component | Markup | Rules |
 | --- | --- | --- |
-| Status badge | `<StatusBadge tone={…}>{text}</StatusBadge>` renders `span.state[data-tone]` | Text is exactly the runtime value (underscores replaced as the screen already does). Never add words inside the badge. |
+| Status badge | `<StatusBadge tone={…}>{text}</StatusBadge>` renders `span.state[data-tone]` | Text is exactly the runtime value (underscores replaced as the screen already does); badges never transform case. Never add words inside the badge. |
+| Tone mark | `i.tone-mark[data-tone]` (`aria-hidden`) | The badge's shape on its own, for a status dot outside a badge (the connection status). |
 | Tag | `span.tag` | Static descriptor in a panel heading. |
-| Panel | `section.panel[aria-labelledby]` > `.panel-heading` (h2, then tag/badge/action) > `.scope` > body | One h2 per panel. No dimming, no hover. |
-| Subpanel | `.subpanel` | Top rule and grid rhythm for a section inside a panel or card (`.workflows`, `.candidate-review`). |
+| Panel | `section.panel[aria-labelledby]` > `.panel-heading` (h2, then tag/badge/action) > `.scope` > body | One h2 per panel. A panel is a grid spaced by `gap` (16 px); components carry no outer margin; a heading's description sits 8 px under it. No dimming, no hover. |
+| Subpanel | `.subpanel` | Top rule and a 12 px grid rhythm for a section inside a panel or card (`.workflows`, `.candidate-review`). |
+| Tray | `.tray` | A raised group of related settings inside a panel (the workflow run settings). |
+| Meta line | `.meta` | A muted evidence sentence (run detail, plan meta, worktree, usage, diff meta); its `code` identities stay at full contrast, figures are tabular. |
 | Button | `button` (secondary), `.primary`, `.danger`, `.text-button` | One `.primary` per action group. `.danger` and `.text-button` are small. Disabled uses the disabled colour tokens, never opacity. |
 | Field | `label` wrapping `input`/`textarea` | Label text above the field. `spellCheck={false}` fields render monospace. A checkbox label is an inline row. |
-| Field row | `.field-row` | Side-by-side fields that wrap without a breakpoint; a trailing `small` spans the row. |
-| Form footer | `.form-footer` > `small` + primary | Hint left, action right; wraps. |
+| Field row | `.field-row` | Side-by-side fields that share the row and wrap one per line below 2 × 14 rem; a trailing `small` takes the full row. |
+| Form footer | `.form-footer` > `small` + primary | Hint left, primary right even when it wraps. |
+| Form group | `.form-group` | A bordered, unfilled group around a form (register, ticket). |
 | Action row | `.actions` | Wrapping row; a trailing `small` takes the full row; `.danger` goes to the end. |
 | Facts | `dl.facts` > `div` > `dt` + `dd` | Full identities in `dd code`. Term column 150 px, one column at 680 px. |
-| Record list | `ul.record-list` > `li.record` | Bordered rows: baselines, recipes, tickets, checks. A nested record alternates its surface. `data-tone` on a record adds a toned rule on its leading edge. |
+| Record list | `ul.record-list` > `li.record` | Bordered rows: baselines, recipes, tickets, checks, findings. A nested record alternates its surface. `data-tone` on a leaf record (baseline, check, finding) adds a toned rule on its leading edge; a ticket card carries its state in its run badge, not a page-length rule. `.record-headed` puts the title and badge on the first line and every later child on its own full-width line. |
 | Selectable card | `button.run-card[aria-pressed]` > `.run-prompt` + `.run-meta` | Selection shows by fill, border and a lavender inset rule, not colour alone. `.run-prompt` may clamp prose to two lines, never identities. |
-| Reason and next step | `.failure-note[data-tone]` then `.recovery-note` | The reason takes the tone of the state it explains; the next step is a lavender-ruled block. |
+| Reason and next step | `.failure-note[data-tone]` then `.recovery-note` | The reason carries an 8 px-inset rule and text in the tone of the state it explains; the next step follows flush under it, ruled in lavender, whether nested in the reason or its next sibling. |
 | Callout | `.callout[data-tone]` | Toned box for outages, open questions and the runtime's activity status. |
 | Alert banner | `.error[role=alert]` with a Dismiss `.text-button` | Refused actions and failed loads only; always dismissible. Outages are `role=status`, not alerts. |
-| Disclosure | `details` > `summary` | CSS caret, never text, so it adds nothing to the accessible name. |
+| Disclosure | `details` > `summary`; `details.section` for a section heading (diff, check evidence, event record) | CSS caret, never text, so it adds nothing to the accessible name; the caret aligns with the content edge. |
 | Scroll region | `ol.events`, `pre[aria-label][tabIndex=0]` | The only elements that scroll; bounded by `--scroll-max` (`--plan-max` for the plan). Focusable, with an inset focus ring. |
-| Empty state | `.empty`, `.activity-empty` | Muted text; the glyph is `aria-hidden`. |
+| Empty state | `.empty` (inline text), `.empty-box` (dashed box), `.activity-empty` | Muted text; the glyph is `aria-hidden`. |
 
 ## Screens
 
-- **App shell** (`App.tsx`, `screens/app.css`): skip link, topbar (wordmark, stage, connection status with a toned dot), intro, the runtime connection panel, Projects, then the workspace of session history and the main column (start form, session events). The workspace is two columns above 680 px and one column below, in DOM order.
+- **App shell** (`App.tsx`, `screens/app.css`): skip link, topbar (wordmark, stage, connection status with a tone mark), intro, the runtime connection panel, Projects, then the workspace of session history and the main column (start form, session events). The workspace is two columns above 920 px and one column at 920 px and below, in DOM order, matching the Projects rail.
 - **Projects** (`Projects.tsx`, `screens/projects.css`): a rail with the register form and project cards, and a detail column: facts first (the first `.facts` on the page), the action row, baselines, discovery (questions callout, problems, recipes, the manifest form), the Workflows subpanel, then the project event record.
 - **Workflows** (`Workflows.tsx`, `screens/workflows.css`): the ticket form, the run settings (paths, writes, approver, provider and model, automatic repair), then ticket cards. A ticket card holds its head, intent, actions with the run badge, the plan review with the complete plan in a bounded region, plan meta, the reason and next step, worktree lines and the candidate.
 - **Candidate review** (`CandidateReview.tsx`, `screens/candidate-review.css`): heading with badge, full identities, the action row, the runtime's activity callout, reason and next step, the diff, check evidence with logs, the independent review with findings, and usage.
@@ -113,9 +118,9 @@ Scales: type `--text-2xs` 11 px (badges, eyebrow, meta), `--text-xs` 12 px (evid
 
 `npm test` runs `design/design-system.test.ts`. It reads stylesheets with `node:fs`, because Vitest replaces `*.css?raw` imports with an empty string, and it fails on an empty sheet so no check can pass vacuously. It asserts:
 
-- Outside `tokens.css`: no colour literal or function, no raw length or duration, font sizes only from `--text-*`, no `opacity`, no `!important`, approved media queries only, `outline: none` only on `main:focus`, scrolling only on labelled scroll regions, no truncation of `code`/`pre`, tone mapping only in `components.css`.
+- Outside `tokens.css`: no colour literal or function, no raw length or duration, font sizes only from `--text-*`, no `opacity`, no `!important`, approved media queries only, `outline: none` only on `main:focus`, scrolling only on labelled scroll regions, no truncation of `code`/`pre`, tone mapping only in `components.css`, no selector named after a runtime state, tone variables read only by a rule whose selector carries `[data-tone]`, and screen selectors scoped by a unique class with at most three child steps.
 - Every `var()` resolves; both schemes define the same colour roles; every semantic pair meets its WCAG ratio in both schemes.
-- Each screen keeps its heading levels, has no inline styles or positive `tabIndex`, renders badges through `StatusBadge`, and every alert carries Dismiss.
+- Every component file is registered, and each screen keeps its heading levels, has no inline styles or positive `tabIndex`, renders badges through `StatusBadge`, and every alert carries Dismiss.
 - The tone taxonomy: exactly the five evidence states are success; interruption is never danger; the badge renders the runtime text unchanged.
 
 `node scripts/mvp-ui-smoke.mjs` checks the rendered result: contrast of every visible text run against its composited background in both schemes, that the client follows the system scheme, no horizontal scroll at 760 px, plus the existing keyboard, accessibility, DOM and lifecycle checks.

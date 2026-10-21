@@ -11,11 +11,13 @@
 :root {
   color-scheme: dark;
 
-  /* Surfaces: page, panel, record, inset, controls, selection and dividers. */
+  /* Surfaces: page, panel, record, inset, fields, controls, selection and dividers. */
   --color-bg: #101216;
   --color-surface: #191d24;
   --color-surface-raised: #20252e;
   --color-surface-sunken: #0d1014;
+  --color-field: #0d1014;
+  --color-field-disabled: #191d24;
   --color-control: #262c36;
   --color-control-hover: #353c47;
   --color-selected: #262e40;
@@ -132,6 +134,7 @@
   --measure: 72ch;
   --number-width: 3ch;
   --scroll-max: 28rem;
+  --textarea-min: 68px;
   --plan-max: 24rem;
   --empty-min: 168px;
 
@@ -145,22 +148,24 @@
     color-scheme: light;
     --color-bg: #f5f6f9;
     --color-surface: #ffffff;
-    --color-surface-raised: #f0f2f6;
-    --color-surface-sunken: #eef1f5;
-    --color-control: #eef1f5;
-    --color-control-hover: #e2e6ee;
+    --color-surface-raised: #f8f9fb;
+    --color-surface-sunken: #eceff4;
+    --color-field: #ffffff;
+    --color-field-disabled: #eef1f5;
+    --color-control: #f6f7f9;
+    --color-control-hover: #eceff3;
     --color-selected: #e8ecf8;
-    --color-selected-border: #8c9bc4;
+    --color-selected-border: #8f9fd6;
     --color-border: #d3d9e2;
     --color-border-control: #7d8697;
     --color-text: #191d24;
     --color-text-muted: #4a5363;
     --color-text-subtle: #5c6576;
     --color-text-disabled: #7d8697;
-    --color-accent: #3f5385;
-    --color-accent-hover: #34466f;
+    --color-accent: #3b4fa0;
+    --color-accent-hover: #30418a;
     --color-on-accent: #ffffff;
-    --color-focus: #3f5385;
+    --color-focus: #3b4fa0;
     --tone-success-fg: #17603e;
     --tone-success-bg: #e2f3e9;
     --tone-success-border: #a6d6bb;
@@ -194,7 +199,6 @@
     --gutter: 24px;
     --section-gap: 16px;
     --panel-pad: 18px;
-    --aside-width: 220px;
   }
 }
 
