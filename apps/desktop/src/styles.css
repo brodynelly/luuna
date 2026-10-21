@@ -11,3 +11,4 @@
 @import "./screens/projects.css" layer(screens);
 @import "./screens/workflows.css" layer(screens);
 @import "./screens/candidate-review.css" layer(screens);
+@import "./screens/project-components.css" layer(screens);

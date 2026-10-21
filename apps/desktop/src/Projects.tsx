@@ -1,8 +1,9 @@
 import { useEffect, useRef, useState } from "react";
 import type { FormEvent } from "react";
-import type { BaselineEvidence, Discovery, EventEnvelope, LuunaClient, ProjectRecord, ProjectView } from "@luuna/api-client";
+import type { BaselineEvidence, ComponentContext, ComponentStatus, Discovery, EventEnvelope, LuunaClient, ProjectRecord, ProjectView } from "@luuna/api-client";
 import { isTerminal, mergeEvents } from "@luuna/api-client";
 import { Workflows } from "./Workflows";
+import { ProjectComponents } from "./ProjectComponents";
 import { StatusBadge } from "./design/StatusBadge";
 import { baselineTone, confidenceTone, manifestTone } from "./design/tone";
 import { actionFailure, describeFailure } from "./failures";
@@ -30,6 +31,9 @@ export function Projects({ client, connectionEpoch = 0 }: { client: LuunaClient 
   const [pollTick, setPollTick] = useState(0);
   const [error, setError] = useState("");
   const [busy, setBusy] = useState(false);
+  const [componentContext, setComponentContext] = useState<ComponentContext>({ memory_ids: [] });
+  const [componentStatus, setComponentStatus] = useState<ComponentStatus | null>(null);
+  const [componentEpoch, setComponentEpoch] = useState(0);
   const operation = useRef<AbortController | null>(null);
 
   useEffect(() => () => operation.current?.abort(), []);
@@ -62,6 +66,8 @@ export function Projects({ client, connectionEpoch = 0 }: { client: LuunaClient 
     setDraft("");
     setBaselines([]);
     setPendingBaselineRun(null);
+    setComponentContext({ memory_ids: [] });
+    setComponentStatus(null);
     if (!client || !selected) return;
     const controller = new AbortController();
     Promise.all([client.project(selected, controller.signal), client.projectEvents(selected, 0, controller.signal), client.listBaselines(selected, controller.signal)]).then(([next, replay, recorded]) => {
@@ -213,6 +219,14 @@ export function Projects({ client, connectionEpoch = 0 }: { client: LuunaClient 
   const registration = view?.repositories[0];
   const observation = registration?.observation;
 
+  function selectProject(id: string) {
+    if (id === selected) return;
+    setView(null);
+    setComponentContext({ memory_ids: [] });
+    setComponentStatus(null);
+    setSelected(id);
+  }
+
   return <section className="panel projects-panel" aria-labelledby="projects-heading">
     <div className="panel-heading"><h2 id="projects-heading">Projects</h2><span className="tag">Import · baseline · candidate workflow</span></div>
     <p className="scope">Register an existing repository root. The runtime observes identity, base commit and dirty state without touching the checkout, proposes check recipes from its manifests, and records an immutable manifest revision only when you confirm it.</p>
@@ -230,7 +244,7 @@ export function Projects({ client, connectionEpoch = 0 }: { client: LuunaClient 
           </fieldset>
         </form>
         {projects.length > 0 && <ul className="project-list" aria-label="Registered projects">{projects.map((project) => <li key={project.id}>
-          <button type="button" className={`run-card ${selected === project.id ? "selected" : ""}`} aria-pressed={selected === project.id} onClick={() => setSelected(project.id)}>
+          <button type="button" className={`run-card ${selected === project.id ? "selected" : ""}`} aria-pressed={selected === project.id} onClick={() => selectProject(project.id)}>
             <span className="run-prompt">{project.name}</span>
             <span className="run-meta"><StatusBadge tone={manifestTone(project.revision)}>{project.revision > 0 ? `manifest r${project.revision}` : "unconfirmed"}</StatusBadge><code>{project.id}</code></span>
           </button>
@@ -272,7 +286,8 @@ export function Projects({ client, connectionEpoch = 0 }: { client: LuunaClient 
               </fieldset>
             </form>
           </>}
-          <Workflows client={client} projectId={view.project.id} repositoryId={registration.repository_id} manifestConfirmed={view.manifest !== null && view.manifest !== undefined} connectionEpoch={connectionEpoch} onChanged={() => { if (selected) void guarded("Refresh", (signal) => refresh(selected, signal)); }} />
+          <ProjectComponents key={view.project.id} client={client} projectId={view.project.id} connectionEpoch={connectionEpoch} onContextChange={setComponentContext} onStatusChange={setComponentStatus} onChanged={() => setComponentEpoch((value) => value + 1)} />
+          <Workflows client={client} projectId={view.project.id} repositoryId={registration.repository_id} manifestConfirmed={view.manifest !== null && view.manifest !== undefined} connectionEpoch={connectionEpoch} componentContext={componentContext} componentsEnabled={componentStatus?.enabled ?? false} componentEpoch={componentEpoch} onChanged={() => { if (selected) void guarded("Refresh", (signal) => refresh(selected, signal)); }} />
           <details className="project-events section"><summary>Project event record ({events.length})</summary>
             <ol className="events" aria-label="Durable project events" tabIndex={0}>{events.map((event) => <li key={event.event_id}><details><summary><span className="event-number">{event.sequence}</span><span>{event.type}</span></summary><pre>{JSON.stringify(event.payload, null, 2)}</pre></details></li>)}</ol>
           </details>

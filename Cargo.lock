@@ -473,6 +473,19 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "f9f8bd3e56ce4dfc153cf470fffbfa98c7620958b312ca5c3a4b8d5181fd13c6"
 
 [[package]]
+name = "luuna-components"
+version = "0.1.0"
+dependencies = [
+ "libc",
+ "serde",
+ "serde_json",
+ "tempfile",
+ "thiserror",
+ "tokio",
+ "windows-sys",
+]
+
+[[package]]
 name = "luuna-discovery"
 version = "0.1.0"
 dependencies = [
@@ -538,6 +551,7 @@ dependencies = [
  "constant_time_eq",
  "fs2",
  "libc",
+ "luuna-components",
  "luuna-discovery",
  "luuna-domain",
  "luuna-engine-pi",

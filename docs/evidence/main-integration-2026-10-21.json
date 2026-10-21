@@ -1,0 +1,771 @@
+{
+  "date": "2026-10-21",
+  "pull_request": "https://github.com/brodynelly/luuna/pull/10",
+  "initial_snapshot": "f0790da36c09913e0e5f5f136583d607a42ca8f2",
+  "upstream_base": "7308d86ea1eedc059d2d3cebfe40c8bd3a7fea75",
+  "initial_changed_files": [
+    "AI-START-HERE.md",
+    "Cargo.lock",
+    "apps/desktop/src/ProjectComponents.test.tsx",
+    "apps/desktop/src/ProjectComponents.tsx",
+    "apps/desktop/src/Projects.tsx",
+    "apps/desktop/src/Workflows.test.tsx",
+    "apps/desktop/src/Workflows.tsx",
+    "apps/desktop/src/styles.css",
+    "components/README.md",
+    "crates/luuna-components/Cargo.toml",
+    "crates/luuna-components/assets/cli-bridge.mjs",
+    "crates/luuna-components/src/lib.rs",
+    "crates/luuna-components/tests/real.rs",
+    "crates/luuna-domain/src/lib.rs",
+    "crates/luuna-domain/src/writer.rs",
+    "crates/luuna-runtime/Cargo.toml",
+    "crates/luuna-runtime/README.md",
+    "crates/luuna-runtime/src/baselines.rs",
+    "crates/luuna-runtime/src/candidates.rs",
+    "crates/luuna-runtime/src/integrations.rs",
+    "crates/luuna-runtime/src/integrations_tests.rs",
+    "crates/luuna-runtime/src/lib.rs",
+    "crates/luuna-runtime/src/missions.rs",
+    "crates/luuna-runtime/src/writer.rs",
+    "crates/luuna-runtime/tests/writer.rs",
+    "crates/luuna-storage/src/components.rs",
+    "crates/luuna-storage/src/lib.rs",
+    "crates/luuna-storage/src/missions.rs",
+    "crates/luuna-storage/src/writer.rs",
+    "crates/luuna-storage/tests/writer.rs",
+    "docs/COMPONENT-WORKFLOWS.md",
+    "docs/CURRENT-ARCHITECTURE.md",
+    "docs/FOUNDATION-STATUS.md",
+    "docs/WINDOWS-VERIFICATION.md",
+    "docs/decisions/0013-runtime-component-workflows.md",
+    "docs/evidence/component-workflows-2026-10-21.json",
+    "docs/evidence/native-component-workflows-2026-10-21.json",
+    "docs/evidence/native-lifecycle-2026-10-21.json",
+    "docs/evidence/native-startup-2026-10-21.json",
+    "fixtures/pi-rpc/mock_pi.py",
+    "packages/api-client/src/index.ts",
+    "packages/api-client/test/client.test.ts",
+    "schemas/plan-revision.schema.json",
+    "schemas/ticket.schema.json",
+    "scripts/check-contracts.mjs",
+    "scripts/m6-ui-smoke.mjs"
+  ],
+  "reports": {
+    "native_components": {
+      "surface": "native Tauri WebView2",
+      "passed": 27,
+      "checks": [
+        {
+          "name": "native Tauri app loads its bundled frontend in actual WebView2",
+          "ok": true
+        },
+        {
+          "name": "native app authenticates automatic startup without token entry",
+          "ok": true
+        },
+        {
+          "name": "native app authenticates directly to the isolated runtime under production CORS",
+          "ok": true
+        },
+        {
+          "name": "app creates a legacy ticket before explicit component activation",
+          "ok": true
+        },
+        {
+          "name": "activation migrates existing ticket identity and revision to genuine Missions",
+          "ok": true
+        },
+        {
+          "name": "app creates process-scoped Atlas memory with displayed provenance",
+          "ok": true
+        },
+        {
+          "name": "memory retry preserves its idempotency key and exact payload after a committed response is lost",
+          "ok": true
+        },
+        {
+          "name": "uncertain memory delivery creates one actual Atlas record",
+          "ok": true
+        },
+        {
+          "name": "app writes and hash-deletes actual Atlas memory",
+          "ok": true
+        },
+        {
+          "name": "app retrieves matching Atlas knowledge with displayed provenance",
+          "ok": true
+        },
+        {
+          "name": "turning off private user memory removes it from the view and pending plan",
+          "ok": true
+        },
+        {
+          "name": "project memory API omits user scope without explicit opt-in",
+          "ok": true
+        },
+        {
+          "name": "second project neither imports project knowledge nor exposes user knowledge by default",
+          "ok": true
+        },
+        {
+          "name": "prompts retry preserves its idempotency key and exact payload after a committed response is lost",
+          "ok": true
+        },
+        {
+          "name": "app creates and updates a real versioned Beacon prompt with exact rendered hash",
+          "ok": true
+        },
+        {
+          "name": "a changed Beacon prompt clears UI selection and rejects an old prompt pin",
+          "ok": true
+        },
+        {
+          "name": "runtime refuses plan approval after its selected prompt source changes",
+          "ok": true
+        },
+        {
+          "name": "runtime refuses implementation after an approved memory source is deleted",
+          "ok": true
+        },
+        {
+          "name": "new Missions ticket plan seals exact selected Atlas content/provenance and Beacon body",
+          "ok": true
+        },
+        {
+          "name": "external Missions edit disables app planning and runtime rejects stale approved work",
+          "ok": true
+        },
+        {
+          "name": "app reconciliation preserves ticket identity and advances the source revision",
+          "ok": true
+        },
+        {
+          "name": "re-planning produces a new exact hash for the reconciled ticket revision",
+          "ok": true
+        },
+        {
+          "name": "synthetic writer asserts approved memory and prompt content with unselected private memory absent",
+          "ok": true
+        },
+        {
+          "name": "app runs real candidate checks and a fresh synthetic reviewer that asserts the same explicit component context",
+          "ok": true
+        },
+        {
+          "name": "client reload restores authoritative Missions tickets without auto-attaching resources",
+          "ok": true
+        },
+        {
+          "name": "native test window closes normally",
+          "ok": true
+        },
+        {
+          "name": "native window closure leaves the independent fixture runtime healthy",
+          "ok": true
+        }
+      ],
+      "provider_evidence": false,
+      "runtime_sha256": "3cee449015ac59fe6429c3339818490396bbafbd263f24fe3931be39b42e5a2a",
+      "native_sha256": "77f4387cc67febf0c8c6fb817f73a1ed0a56a2db601406e798cb55bbb01cb320",
+      "transport": "actual native WebView origin to authenticated loopback API with production CORS",
+      "runtime_exit": {
+        "code": 0,
+        "signal": null
+      }
+    },
+    "browser_components": {
+      "surface": "Chromium browser",
+      "passed": 23,
+      "checks": [
+        {
+          "name": "app authenticates to the isolated loopback runtime through the test proxy",
+          "ok": true
+        },
+        {
+          "name": "app creates a legacy ticket before explicit component activation",
+          "ok": true
+        },
+        {
+          "name": "activation migrates existing ticket identity and revision to genuine Missions",
+          "ok": true
+        },
+        {
+          "name": "app creates process-scoped Atlas memory with displayed provenance",
+          "ok": true
+        },
+        {
+          "name": "memory retry preserves its idempotency key and exact payload after a committed response is lost",
+          "ok": true
+        },
+        {
+          "name": "uncertain memory delivery creates one actual Atlas record",
+          "ok": true
+        },
+        {
+          "name": "app writes and hash-deletes actual Atlas memory",
+          "ok": true
+        },
+        {
+          "name": "app retrieves matching Atlas knowledge with displayed provenance",
+          "ok": true
+        },
+        {
+          "name": "turning off private user memory removes it from the view and pending plan",
+          "ok": true
+        },
+        {
+          "name": "project memory API omits user scope without explicit opt-in",
+          "ok": true
+        },
+        {
+          "name": "second project neither imports project knowledge nor exposes user knowledge by default",
+          "ok": true
+        },
+        {
+          "name": "prompts retry preserves its idempotency key and exact payload after a committed response is lost",
+          "ok": true
+        },
+        {
+          "name": "app creates and updates a real versioned Beacon prompt with exact rendered hash",
+          "ok": true
+        },
+        {
+          "name": "a changed Beacon prompt clears UI selection and rejects an old prompt pin",
+          "ok": true
+        },
+        {
+          "name": "runtime refuses plan approval after its selected prompt source changes",
+          "ok": true
+        },
+        {
+          "name": "runtime refuses implementation after an approved memory source is deleted",
+          "ok": true
+        },
+        {
+          "name": "new Missions ticket plan seals exact selected Atlas content/provenance and Beacon body",
+          "ok": true
+        },
+        {
+          "name": "external Missions edit disables app planning and runtime rejects stale approved work",
+          "ok": true
+        },
+        {
+          "name": "app reconciliation preserves ticket identity and advances the source revision",
+          "ok": true
+        },
+        {
+          "name": "re-planning produces a new exact hash for the reconciled ticket revision",
+          "ok": true
+        },
+        {
+          "name": "synthetic writer asserts approved memory and prompt content with unselected private memory absent",
+          "ok": true
+        },
+        {
+          "name": "app runs real candidate checks and a fresh synthetic reviewer that asserts the same explicit component context",
+          "ok": true
+        },
+        {
+          "name": "client reload restores authoritative Missions tickets without auto-attaching resources",
+          "ok": true
+        }
+      ],
+      "provider_evidence": false,
+      "runtime_sha256": "3cee449015ac59fe6429c3339818490396bbafbd263f24fe3931be39b42e5a2a",
+      "native_sha256": null,
+      "transport": "test-only same-origin Vite proxy to authenticated runtime",
+      "runtime_exit": {
+        "code": 0,
+        "signal": null
+      }
+    },
+    "native_lifecycle": {
+      "surface": "native Tauri WebView2",
+      "passed": 55,
+      "checks": [
+        {
+          "name": "native Tauri executable loaded its bundled frontend in WebView2",
+          "ok": true
+        },
+        {
+          "name": "the native skip link moves focus to the main region",
+          "ok": true
+        },
+        {
+          "name": "a wrong service token is refused with a clear next step",
+          "ok": true
+        },
+        {
+          "name": "the native skip link moves focus to the main region",
+          "ok": true
+        },
+        {
+          "name": "the client connects with the service token entered through native form controls",
+          "ok": true
+        },
+        {
+          "name": "the token field is gone after connecting; the token stays only in memory",
+          "ok": true
+        },
+        {
+          "name": "registering a path that is not a repository is refused with the runtime's reason",
+          "ok": true
+        },
+        {
+          "name": "walkthrough: an existing repository is registered and its read-only observation is shown",
+          "ok": true
+        },
+        {
+          "name": "walkthrough: discovery proposes a manifest draft for editing without executing repository commands",
+          "ok": true
+        },
+        {
+          "name": "walkthrough: the edited manifest is confirmed as revision 1 with the exact base commit",
+          "ok": true
+        },
+        {
+          "name": "walkthrough: the ticket form is enabled only once a manifest is confirmed",
+          "ok": true
+        },
+        {
+          "name": "walkthrough: the baseline runs the real unittest recipe and passes",
+          "ok": true
+        },
+        {
+          "name": "walkthrough: the full plan hash is shown and approval stays disabled until the acknowledgment is checked",
+          "ok": true
+        },
+        {
+          "name": "walkthrough: the approved writer settles in validating with a frozen candidate",
+          "ok": true
+        },
+        {
+          "name": "walkthrough: the candidate diff is bound to the candidate hash and changes only src/main.py",
+          "ok": true
+        },
+        {
+          "name": "walkthrough: active validation reports what the runtime is doing with cancellation available, or settles within a poll",
+          "ok": true
+        },
+        {
+          "name": "walkthrough: the invalid synthetic review fails the candidate without a verdict and the passed unittest check shows its detected test count",
+          "ok": true
+        },
+        {
+          "name": "walkthrough: the runtime offers re-validation in place with the reason and no writer attempt (repair stays available under the default two-attempt budget)",
+          "ok": true
+        },
+        {
+          "name": "walkthrough: re-validation reaches reviewed with a passed verdict on the same candidate, as generation 2",
+          "ok": true
+        },
+        {
+          "name": "walkthrough: a check log is readable by record identity and shows the unittest summary",
+          "ok": true
+        },
+        {
+          "name": "walkthrough: the developer checkout is untouched (clean before and after)",
+          "ok": true
+        },
+        {
+          "name": "walkthrough page: every visible control has an accessible name, every field a label, no positive tabindex, scroll regions focusable, heading levels contiguous",
+          "ok": true
+        },
+        {
+          "name": "walkthrough page, dark scheme: every visible text run meets WCAG AA contrast against its painted background",
+          "ok": true
+        },
+        {
+          "name": "walkthrough page, light scheme: every visible text run meets WCAG AA contrast against its painted background",
+          "ok": true
+        },
+        {
+          "name": "walkthrough page: the client follows the system colour scheme",
+          "ok": true
+        },
+        {
+          "name": "recovery: a second project is registered alongside the first",
+          "ok": true
+        },
+        {
+          "name": "recovery: discovery proposes a manifest draft for editing without executing repository commands",
+          "ok": true
+        },
+        {
+          "name": "recovery: the hold manifest is confirmed",
+          "ok": true
+        },
+        {
+          "name": "recovery: the baseline passes both required checks on the clean checkout (no hold without a candidate)",
+          "ok": true
+        },
+        {
+          "name": "recovery A: the writer settles in validating",
+          "ok": true
+        },
+        {
+          "name": "recovery A: the hold check is running in the Luuna-owned worktree",
+          "ok": true
+        },
+        {
+          "name": "recovery A: the runtime was hard-killed",
+          "ok": true
+        },
+        {
+          "name": "recovery A: the client reports the outage without losing its panels",
+          "ok": true
+        },
+        {
+          "name": "recovery A: after restart the client reconnects by itself and shows the run and candidate as interrupted with the recorded reason and next step",
+          "ok": true
+        },
+        {
+          "name": "recovery A: the outage note clears once the runtime answers",
+          "ok": true
+        },
+        {
+          "name": "recovery A: validating again runs a fresh generation of the same candidate and reaches reviewed",
+          "ok": true
+        },
+        {
+          "name": "recovery B: the writer settles in validating",
+          "ok": true
+        },
+        {
+          "name": "recovery B: the hold check is running",
+          "ok": true
+        },
+        {
+          "name": "recovery B: authenticated API shut the runtime down in an orderly way (exit before the 15 s bound)",
+          "ok": true
+        },
+        {
+          "name": "recovery B: explicit shutdown recorded interruption (resumable), not cancellation, with the shutdown reason shown",
+          "ok": true
+        },
+        {
+          "name": "recovery B: the interrupted candidate resumes with a fresh generation and reaches reviewed",
+          "ok": true
+        },
+        {
+          "name": "recovery C: the writer settles in validating",
+          "ok": true
+        },
+        {
+          "name": "recovery C: the independent reviewer is in flight",
+          "ok": true
+        },
+        {
+          "name": "recovery C: the interrupted review keeps the candidate and reserves the unreported provider spend",
+          "ok": true
+        },
+        {
+          "name": "recovery C: re-validation is refused because the budget is reserved, and the message names the next step (a new plan revision)",
+          "ok": true
+        },
+        {
+          "name": "recovery page: every visible control has an accessible name, every field a label, no positive tabindex, scroll regions focusable, heading levels contiguous",
+          "ok": true
+        },
+        {
+          "name": "recovery page, dark scheme: every visible text run meets WCAG AA contrast against its painted background",
+          "ok": true
+        },
+        {
+          "name": "recovery page, light scheme: every visible text run meets WCAG AA contrast against its painted background",
+          "ok": true
+        },
+        {
+          "name": "recovery page: the client follows the system colour scheme",
+          "ok": true
+        },
+        {
+          "name": "disconnect: the client forgets the token and shows the runtime as offline",
+          "ok": true
+        },
+        {
+          "name": "offline page, dark scheme: every visible text run meets WCAG AA contrast against its painted background",
+          "ok": true
+        },
+        {
+          "name": "offline page, light scheme: every visible text run meets WCAG AA contrast against its painted background",
+          "ok": true
+        },
+        {
+          "name": "offline page: the client follows the system colour scheme",
+          "ok": true
+        },
+        {
+          "name": "native client termination leaves the independent runtime answering",
+          "ok": true
+        },
+        {
+          "name": "final shutdown exited the runtime (orderly only with exit code 0)",
+          "ok": true
+        }
+      ],
+      "provider_evidence": false
+    },
+    "browser_lifecycle": {
+      "surface": "Chromium browser",
+      "passed": 57,
+      "checks": [
+        {
+          "name": "the first Tab stop is the skip link",
+          "ok": true
+        },
+        {
+          "name": "the skip link moves keyboard focus to the main region",
+          "ok": true
+        },
+        {
+          "name": "a wrong service token is refused with a clear next step",
+          "ok": true
+        },
+        {
+          "name": "the first Tab stop is the skip link",
+          "ok": true
+        },
+        {
+          "name": "the skip link moves keyboard focus to the main region",
+          "ok": true
+        },
+        {
+          "name": "the client connects with the service token entered by keyboard",
+          "ok": true
+        },
+        {
+          "name": "the token field is gone after connecting; the token stays only in memory",
+          "ok": true
+        },
+        {
+          "name": "registering a path that is not a repository is refused with the runtime's reason",
+          "ok": true
+        },
+        {
+          "name": "walkthrough: an existing repository is registered and its read-only observation is shown",
+          "ok": true
+        },
+        {
+          "name": "walkthrough: discovery proposes a manifest draft for editing without executing repository commands",
+          "ok": true
+        },
+        {
+          "name": "walkthrough: the edited manifest is confirmed as revision 1 with the exact base commit",
+          "ok": true
+        },
+        {
+          "name": "walkthrough: the ticket form is enabled only once a manifest is confirmed",
+          "ok": true
+        },
+        {
+          "name": "walkthrough: the baseline runs the real unittest recipe and passes",
+          "ok": true
+        },
+        {
+          "name": "walkthrough: the full plan hash is shown and approval stays disabled until the acknowledgment is checked",
+          "ok": true
+        },
+        {
+          "name": "walkthrough: the approved writer settles in validating with a frozen candidate",
+          "ok": true
+        },
+        {
+          "name": "walkthrough: the candidate diff is bound to the candidate hash and changes only src/main.py",
+          "ok": true
+        },
+        {
+          "name": "walkthrough: active validation reports what the runtime is doing with cancellation available, or settles within a poll",
+          "ok": true
+        },
+        {
+          "name": "walkthrough: the invalid synthetic review fails the candidate without a verdict and the passed unittest check shows its detected test count",
+          "ok": true
+        },
+        {
+          "name": "walkthrough: the runtime offers re-validation in place with the reason and no writer attempt (repair stays available under the default two-attempt budget)",
+          "ok": true
+        },
+        {
+          "name": "walkthrough: re-validation reaches reviewed with a passed verdict on the same candidate, as generation 2",
+          "ok": true
+        },
+        {
+          "name": "walkthrough: a check log is readable by record identity and shows the unittest summary",
+          "ok": true
+        },
+        {
+          "name": "walkthrough: the developer checkout is untouched (clean before and after)",
+          "ok": true
+        },
+        {
+          "name": "walkthrough page: every visible control has an accessible name, every field a label, no positive tabindex, scroll regions focusable, heading levels contiguous",
+          "ok": true
+        },
+        {
+          "name": "walkthrough page, dark scheme: every visible text run meets WCAG AA contrast against its painted background",
+          "ok": true
+        },
+        {
+          "name": "walkthrough page, light scheme: every visible text run meets WCAG AA contrast against its painted background",
+          "ok": true
+        },
+        {
+          "name": "walkthrough page: the client follows the system colour scheme",
+          "ok": true
+        },
+        {
+          "name": "walkthrough page, dark scheme: no horizontal page scroll at the native shell's minimum width",
+          "ok": true
+        },
+        {
+          "name": "walkthrough page, light scheme: no horizontal page scroll at the native shell's minimum width",
+          "ok": true
+        },
+        {
+          "name": "recovery: a second project is registered alongside the first",
+          "ok": true
+        },
+        {
+          "name": "recovery: discovery proposes a manifest draft for editing without executing repository commands",
+          "ok": true
+        },
+        {
+          "name": "recovery: the hold manifest is confirmed",
+          "ok": true
+        },
+        {
+          "name": "recovery: the baseline passes both required checks on the clean checkout (no hold without a candidate)",
+          "ok": true
+        },
+        {
+          "name": "recovery A: the writer settles in validating",
+          "ok": true
+        },
+        {
+          "name": "recovery A: the hold check is running in the Luuna-owned worktree",
+          "ok": true
+        },
+        {
+          "name": "recovery A: the runtime was hard-killed",
+          "ok": true
+        },
+        {
+          "name": "recovery A: the client reports the outage without losing its panels",
+          "ok": true
+        },
+        {
+          "name": "recovery A: after restart the client reconnects by itself and shows the run and candidate as interrupted with the recorded reason and next step",
+          "ok": true
+        },
+        {
+          "name": "recovery A: the outage note clears once the runtime answers",
+          "ok": true
+        },
+        {
+          "name": "recovery A: validating again runs a fresh generation of the same candidate and reaches reviewed",
+          "ok": true
+        },
+        {
+          "name": "recovery B: the writer settles in validating",
+          "ok": true
+        },
+        {
+          "name": "recovery B: the hold check is running",
+          "ok": true
+        },
+        {
+          "name": "recovery B: authenticated API shut the runtime down in an orderly way (exit before the 15 s bound)",
+          "ok": true
+        },
+        {
+          "name": "recovery B: explicit shutdown recorded interruption (resumable), not cancellation, with the shutdown reason shown",
+          "ok": true
+        },
+        {
+          "name": "recovery B: the interrupted candidate resumes with a fresh generation and reaches reviewed",
+          "ok": true
+        },
+        {
+          "name": "recovery C: the writer settles in validating",
+          "ok": true
+        },
+        {
+          "name": "recovery C: the independent reviewer is in flight",
+          "ok": true
+        },
+        {
+          "name": "recovery C: the interrupted review keeps the candidate and reserves the unreported provider spend",
+          "ok": true
+        },
+        {
+          "name": "recovery C: re-validation is refused because the budget is reserved, and the message names the next step (a new plan revision)",
+          "ok": true
+        },
+        {
+          "name": "recovery page: every visible control has an accessible name, every field a label, no positive tabindex, scroll regions focusable, heading levels contiguous",
+          "ok": true
+        },
+        {
+          "name": "recovery page, dark scheme: every visible text run meets WCAG AA contrast against its painted background",
+          "ok": true
+        },
+        {
+          "name": "recovery page, light scheme: every visible text run meets WCAG AA contrast against its painted background",
+          "ok": true
+        },
+        {
+          "name": "recovery page: the client follows the system colour scheme",
+          "ok": true
+        },
+        {
+          "name": "disconnect: the client forgets the token and shows the runtime as offline",
+          "ok": true
+        },
+        {
+          "name": "offline page, dark scheme: every visible text run meets WCAG AA contrast against its painted background",
+          "ok": true
+        },
+        {
+          "name": "offline page, light scheme: every visible text run meets WCAG AA contrast against its painted background",
+          "ok": true
+        },
+        {
+          "name": "offline page: the client follows the system colour scheme",
+          "ok": true
+        },
+        {
+          "name": "final shutdown exited the runtime (orderly only with exit code 0)",
+          "ok": true
+        }
+      ],
+      "provider_evidence": false
+    }
+  },
+  "ci": {
+    "run_id": 39672767336,
+    "jobs_started": false,
+    "reason": "Account payment or spending limit prevented jobs from starting; verified from check-run annotations."
+  },
+  "limitations": [
+    "Pi writer/reviewer sessions were synthetic.",
+    "App workflow reports used runtime 3cee449015ac59fe6429c3339818490396bbafbd263f24fe3931be39b42e5a2a before the subsequent Node 24 Windows scope-guard fix. Final Rust and pinned Node checks cover that fix.",
+    "Native width remained window-managed; the 760 px assertions ran on the browser surface."
+  ],
+  "final_validation": {
+    "rust_toolchain": "1.90.0",
+    "node": "24.19.0",
+    "npm": "11.9.0",
+    "rust_passed": 185,
+    "rust_failed": 0,
+    "rust_ignored": 10,
+    "formatting": true,
+    "clippy_warnings_denied": true,
+    "npm_test": true,
+    "typecheck": true,
+    "frontend_build": true,
+    "guard_tests_also_pass_on_node_26": true,
+    "final_runtime_sha256": "c23b8e64b9d6dd0c1b145f0c1935afa2b3a09fb5fd651173a073d125e36f9c65"
+  }
+}

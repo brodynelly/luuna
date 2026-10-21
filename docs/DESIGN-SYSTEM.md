@@ -28,6 +28,7 @@ apps/desktop/src/
   screens/projects.css       Projects panel
   screens/workflows.css      tickets, plan controls, plan review
   screens/candidate-review.css   candidate evidence, checks, diff, verdict
+  screens/project-components.css tickets, scoped memory and versioned prompts
 ```
 
 Vite inlines the imports into one bundled stylesheet served from `'self'`, which the Tauri CSP allows. Later layers win regardless of specificity, so a screen rule refines a component without `!important`. No font, script or stylesheet is fetched.

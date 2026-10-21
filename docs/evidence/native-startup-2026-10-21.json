@@ -1,0 +1,90 @@
+{
+  "date": "2026-10-21",
+  "surface": "native Tauri WebView2",
+  "runtime_sha256": "99d9521784bc373237ef4d65b3bdd6189f3290faf557fad2946705f39d890256",
+  "native_sha256": "21ddca8c75b1bb709bcd2886b6362e809b6d8aa6cc048447f94df74ce2591f4f",
+  "provider_evidence": false,
+  "passed": true,
+  "checks": [
+    {
+      "name": "test starts against an already healthy development runtime",
+      "passed": true
+    },
+    {
+      "name": "native view connects without token entry",
+      "passed": true
+    },
+    {
+      "name": "warm launch reuses the authenticated runtime PID",
+      "passed": true
+    },
+    {
+      "name": "normal window close leaves runtime answering",
+      "passed": true
+    },
+    {
+      "name": "foreign listener is refused before any HTTP request or token transmission",
+      "passed": true
+    },
+    {
+      "name": "native view connects without token entry",
+      "passed": true
+    },
+    {
+      "name": "native view connects without token entry",
+      "passed": true
+    },
+    {
+      "name": "retry starts a new independent runtime after cold stop",
+      "passed": true
+    },
+    {
+      "name": "cold startup preserves the existing data directory and visible history",
+      "passed": true
+    },
+    {
+      "name": "provider credential bytes are unchanged",
+      "passed": true
+    },
+    {
+      "name": "automatic connection writes no browser storage",
+      "passed": true
+    },
+    {
+      "name": "native view connects without token entry",
+      "passed": true
+    },
+    {
+      "name": "reload reauthenticates without spawning a duplicate runtime",
+      "passed": true
+    },
+    {
+      "name": "concurrent desktop windows reuse one runtime",
+      "passed": true
+    },
+    {
+      "name": "explicit disconnect stays disconnected and leaves runtime running",
+      "passed": true
+    },
+    {
+      "name": "native view connects without token entry",
+      "passed": true
+    },
+    {
+      "name": "closing all desktop windows leaves the runtime healthy",
+      "passed": true
+    }
+  ],
+  "deployment": {
+    "provider_bytes_preserved": true,
+    "data_directory_preserved": true,
+    "history_preserved": true,
+    "token_preserved": true,
+    "saved_runs": 3,
+    "smart_app_control": "Off, selected by user in Windows Security",
+    "healthy": true,
+    "normal_desktop_connected": true,
+    "normal_desktop_no_debugging_flags": true,
+    "installed_component_toolchain_available": true
+  }
+}

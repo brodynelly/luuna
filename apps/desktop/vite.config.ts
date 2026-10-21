@@ -5,6 +5,6 @@ export default defineConfig({
   plugins: [react()],
   clearScreen: false,
   envPrefix: ["VITE_", "TAURI_ENV_*"],
-  server: { strictPort: true },
+  server: { strictPort: true, watch: { ignored: ["**/src-tauri/**"] } },
   build: { target: "es2022" },
 });

@@ -1,0 +1,194 @@
+{
+  "date": "2026-10-21",
+  "surface": "native Tauri WebView2",
+  "runtime_sha256": "99d9521784bc373237ef4d65b3bdd6189f3290faf557fad2946705f39d890256",
+  "native_sha256": "21ddca8c75b1bb709bcd2886b6362e809b6d8aa6cc048447f94df74ce2591f4f",
+  "provider_evidence": false,
+  "verdict": "SYNTHETIC client/lifecycle smoke passed: desktop client, runtime restart and shutdown evidence only, never provider evidence",
+  "checks": [
+    {
+      "name": "native Tauri executable loaded its bundled frontend in WebView2",
+      "ok": true
+    },
+    {
+      "name": "the native skip link moves focus to the main region",
+      "ok": true
+    },
+    {
+      "name": "a wrong service token is refused with a clear next step",
+      "ok": true
+    },
+    {
+      "name": "the native skip link moves focus to the main region",
+      "ok": true
+    },
+    {
+      "name": "the client connects with the service token entered through native form controls",
+      "ok": true
+    },
+    {
+      "name": "the token field is gone after connecting; the token stays only in memory",
+      "ok": true
+    },
+    {
+      "name": "registering a path that is not a repository is refused with the runtime's reason",
+      "ok": true
+    },
+    {
+      "name": "walkthrough: an existing repository is registered and its read-only observation is shown",
+      "ok": true
+    },
+    {
+      "name": "walkthrough: discovery proposes a manifest draft for editing without executing repository commands",
+      "ok": true
+    },
+    {
+      "name": "walkthrough: the edited manifest is confirmed as revision 1 with the exact base commit",
+      "ok": true
+    },
+    {
+      "name": "walkthrough: the ticket form is enabled only once a manifest is confirmed",
+      "ok": true
+    },
+    {
+      "name": "walkthrough: the baseline runs the real unittest recipe and passes",
+      "ok": true
+    },
+    {
+      "name": "walkthrough: the full plan hash is shown and approval stays disabled until the acknowledgment is checked",
+      "ok": true
+    },
+    {
+      "name": "walkthrough: the approved writer settles in validating with a frozen candidate",
+      "ok": true
+    },
+    {
+      "name": "walkthrough: the candidate diff is bound to the candidate hash and changes only src/main.py",
+      "ok": true
+    },
+    {
+      "name": "walkthrough: active validation reports what the runtime is doing with cancellation available, or settles within a poll",
+      "ok": true
+    },
+    {
+      "name": "walkthrough: the invalid synthetic review fails the candidate without a verdict and the passed unittest check shows its detected test count",
+      "ok": true
+    },
+    {
+      "name": "walkthrough: the runtime offers re-validation in place with the reason and no writer attempt (repair stays available under the default two-attempt budget)",
+      "ok": true
+    },
+    {
+      "name": "walkthrough: re-validation reaches reviewed with a passed verdict on the same candidate, as generation 2",
+      "ok": true
+    },
+    {
+      "name": "walkthrough: a check log is readable by record identity and shows the unittest summary",
+      "ok": true
+    },
+    {
+      "name": "walkthrough: the developer checkout is untouched (clean before and after)",
+      "ok": true
+    },
+    {
+      "name": "walkthrough page: every visible control has an accessible name, every field a label, no positive tabindex, scroll regions focusable, heading levels contiguous",
+      "ok": true
+    },
+    {
+      "name": "recovery: a second project is registered alongside the first",
+      "ok": true
+    },
+    {
+      "name": "recovery: discovery proposes a manifest draft for editing without executing repository commands",
+      "ok": true
+    },
+    {
+      "name": "recovery: the hold manifest is confirmed",
+      "ok": true
+    },
+    {
+      "name": "recovery: the baseline passes both required checks on the clean checkout (no hold without a candidate)",
+      "ok": true
+    },
+    {
+      "name": "recovery A: the writer settles in validating",
+      "ok": true
+    },
+    {
+      "name": "recovery A: the hold check is running in the Luuna-owned worktree",
+      "ok": true
+    },
+    {
+      "name": "recovery A: the runtime was hard-killed",
+      "ok": true
+    },
+    {
+      "name": "recovery A: the client reports the outage without losing its panels",
+      "ok": true
+    },
+    {
+      "name": "recovery A: after restart the client reconnects by itself and shows the run and candidate as interrupted with the recorded reason and next step",
+      "ok": true
+    },
+    {
+      "name": "recovery A: the outage note clears once the runtime answers",
+      "ok": true
+    },
+    {
+      "name": "recovery A: validating again runs a fresh generation of the same candidate and reaches reviewed",
+      "ok": true
+    },
+    {
+      "name": "recovery B: the writer settles in validating",
+      "ok": true
+    },
+    {
+      "name": "recovery B: the hold check is running",
+      "ok": true
+    },
+    {
+      "name": "recovery B: authenticated API shut the runtime down in an orderly way (exit before the 15 s bound)",
+      "ok": true
+    },
+    {
+      "name": "recovery B: explicit shutdown recorded interruption (resumable), not cancellation, with the shutdown reason shown",
+      "ok": true
+    },
+    {
+      "name": "recovery B: the interrupted candidate resumes with a fresh generation and reaches reviewed",
+      "ok": true
+    },
+    {
+      "name": "recovery C: the writer settles in validating",
+      "ok": true
+    },
+    {
+      "name": "recovery C: the independent reviewer is in flight",
+      "ok": true
+    },
+    {
+      "name": "recovery C: the interrupted review keeps the candidate and reserves the unreported provider spend",
+      "ok": true
+    },
+    {
+      "name": "recovery C: re-validation is refused because the budget is reserved, and the message names the next step (a new plan revision)",
+      "ok": true
+    },
+    {
+      "name": "recovery page: every visible control has an accessible name, every field a label, no positive tabindex, scroll regions focusable, heading levels contiguous",
+      "ok": true
+    },
+    {
+      "name": "disconnect: the client forgets the token and shows the runtime as offline",
+      "ok": true
+    },
+    {
+      "name": "native client termination leaves the independent runtime answering",
+      "ok": true
+    },
+    {
+      "name": "final shutdown exited the runtime (orderly only with exit code 0)",
+      "ok": true
+    }
+  ]
+}

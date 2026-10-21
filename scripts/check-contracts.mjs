@@ -39,4 +39,22 @@ for (const item of entries) {
 }
 assert.equal(coverage.size, 7, 'All seven schemas must be exercised');
 for (const [schema, outcomes] of coverage) assert.equal(outcomes.size, 2, `Missing positive or negative fixture for ${schema}`);
+// Optional component snapshots preserve legacy fixtures and require reviewable bytes.
+const planValidator = compiled.get('schemas/plan-revision.schema.json');
+const componentPlan = read('fixtures/domain/plan.valid.json');
+componentPlan.component_context = {
+  memory: [{ id: 'mem-fixture', scope: 'project', hash: `sha256:${'1'.repeat(64)}`, content: 'Synthetic selected content', provenance: 'Explicit contract fixture' }],
+  prompt: { name: 'guidance', version: 1, hash: `sha256:${'2'.repeat(64)}`, body: 'Synthetic selected guidance' },
+};
+assert.equal(planValidator(componentPlan), true, ajv.errorsText(planValidator.errors));
+const missingContent = structuredClone(componentPlan);
+delete missingContent.component_context.memory[0].content;
+assert.equal(planValidator(missingContent), false, 'Component memory must expose exact approved bytes');
+const missingBody = structuredClone(componentPlan);
+delete missingBody.component_context.prompt.body;
+assert.equal(planValidator(missingBody), false, 'Component prompt must expose its approved body');
+const invalidScope = structuredClone(componentPlan);
+invalidScope.component_context.memory[0].scope = 'automatic';
+assert.equal(planValidator(invalidScope), false, 'Unknown memory scope was accepted');
+checks += 4;
 console.log(`Contracts: ${checks} positive/negative checks passed across ${compiled.size + starterPairs.length} schemas.`);

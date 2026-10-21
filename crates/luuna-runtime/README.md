@@ -75,14 +75,32 @@ require `Authorization: Bearer <token>`:
   record identity (text, capped at 16 MiB).
 
 - `POST /api/v1/projects/{id}/tickets`: `{ "idempotency_key", "title", "intent", "acceptance_criteria": [...], "repository_ids": [...] }`
-  creates the temporary local ticket (201; 200 when the key repeats with the same content,
+  creates a legacy temporary ticket or an enabled project's Missions-backed ticket (201; 200 when the key repeats with the same content,
   409 when it repeats with different content). `GET` lists them; `GET /api/v1/tickets/{id}`
   reads one. This is the only ticket creation route (ADR 0005).
-- `POST /api/v1/tickets/{id}/plans`: `{ "task": { "repository_id", "paths": [...], "operations": [...] }, "permissions"?, "budgets"? }`
+- `GET /api/v1/projects/{id}/components` reports activation/toolchain state. `POST` initializes
+  private managed component stores and migrates legacy ticket IDs/revisions without importing
+  developer or personal stores. Incomplete activation freezes affected actions until reconciled.
+- `GET /api/v1/tickets/{id}/source` observes authoritative Missions freshness/status/dependencies;
+  `POST /api/v1/tickets/{id}/reconcile` with `{ "expected_revision" }` advances a changed projection.
+  Ticket GET/list retain the last reconciled view; external changes block stale work and require
+  a new plan after reconciliation. Missing components fail closed for enabled projects.
+- `GET/POST /api/v1/projects/{id}/memory` retrieves/creates Atlas memory with explicit scope and
+  provenance. User memory retrieval needs `include_user=true`; creation requires
+  `{ "idempotency_key", "scope": "project|process|user", "content", "provenance" }`.
+  `DELETE /api/v1/projects/{id}/memory/{memory_id}?expected_hash=...` checks the displayed hash.
+- `GET/POST /api/v1/projects/{id}/prompts` lists/creates Beacon prompts. Creation/update requires
+  `{ "idempotency_key", "name", "body", "expected_version"? }`; an existing name needs its current
+  expected version. `GET /api/v1/projects/{id}/prompts/{name}/render?version=...` previews exact
+  current content/version/hash. A stale version is refused.
+- `POST /api/v1/tickets/{id}/plans`: `{ "task": { "repository_id", "paths": [...], "operations": [...] }, "permissions"?, "budgets"?, "component_context"? }`
   records the next immutable plan revision bound by the runtime to the ticket revision, the
   current manifest hash, its recorded base commit and its recipes, and opens the workflow run
   (`plan_ready`). Returns `{ plan, run }`. `GET` lists a ticket's plans; `GET /api/v1/plans/{id}`
-  reads the latest revision.
+  reads the latest revision. Optional selection is `{ "memory_ids": [...], "prompt": { "name", "version", "hash" }? }`;
+  the runtime resolves exact content/provenance snapshots into the canonical immutable plan.
+  Approval and worker/evidence boundaries recheck selected source freshness. The application
+  sends only explicitly selected, approved content to the writer/reviewer (ADR 0014).
 - `POST /api/v1/plans/{id}/approvals`: `{ "plan_revision", "plan_hash", "approved_by" }` approves
   exactly that hash; permissions are copied from the plan. Returns `{ approval, run }` with the
   run `approved`; a stale hash or revision returns 409.

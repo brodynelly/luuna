@@ -1,8 +1,8 @@
 //! Ticket, worktree lease and writer-scope contracts (M2c).
 //!
-//! A ticket is the unit of intent a plan binds to. Until the Missions adapter
-//! exists (ADR 0003, M6) the only source is the temporary local SQLite record,
-//! which is marked as such and never claims external synchronisation. A lease
+//! A ticket is the unit of intent a plan binds to. Explicitly enabled projects
+//! use Missions as their authority; legacy projects retain a clearly marked
+//! temporary SQLite source until migration (ADR 0003). A lease
 //! records Luuna's ownership of one detached worktree for one run. Scope
 //! checking is a deterministic runtime decision over the paths a writer
 //! actually changed; a prompt promising to obey paths is never evidence.
@@ -14,13 +14,14 @@ use crate::{
 };
 use serde::{Deserialize, Serialize};
 
-/// Where a ticket's intent is authoritative. Only the temporary local record
-/// exists before the Missions adapter; it is identified so migration can
-/// preserve identifiers and revisions (ADR 0003).
+/// Where a ticket's intent is authoritative. Migration preserves identifiers
+/// and revisions while changing authority to Missions (ADR 0003).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum TicketSource {
     LuunaSqliteTemporary,
+    /// The compatible Missions record is authoritative; SQLite is its projection.
+    Missions,
 }
 
 pub const MAX_TICKET_TITLE_BYTES: usize = 200;

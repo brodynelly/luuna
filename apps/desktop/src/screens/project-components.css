@@ -1,0 +1,23 @@
+/* Runtime-backed component resources; layout only, using the shared design tokens. */
+.project-components { min-width: 0; }
+.project-components h4 { margin: 0 0 var(--space-3); }
+.project-components > [role="status"] { color: var(--color-text-muted); font-size: var(--text-xs); }
+.component-location code, .component-location small { display: block; overflow-wrap: anywhere; margin-top: var(--space-1-5); }
+.component-columns { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: var(--space-5); }
+.component-columns section { min-width: 0; }
+.project-components .checkbox, .component-selection { display: flex; gap: var(--space-2); align-items: center; }
+.project-components .checkbox { margin-bottom: var(--space-3); }
+.project-components select { display: block; width: 100%; min-height: var(--control-height); margin-top: var(--space-1-5); border: var(--border-width) solid var(--color-border-control); border-radius: var(--radius-md); background: var(--color-field); color: var(--color-text); padding: var(--space-2) var(--space-3); font: inherit; }
+.project-components select:disabled { background: var(--color-field-disabled); color: var(--color-text-disabled); }
+.component-search { display: flex; flex-wrap: wrap; align-items: end; gap: var(--space-2); margin-bottom: var(--space-3); }
+.component-search label { flex: 1 1 var(--field-min); }
+.component-records { list-style: none; margin: var(--space-3) 0; padding: 0; display: grid; gap: var(--space-3); }
+.component-records li { display: grid; gap: var(--space-2); padding: var(--space-3); border: var(--border-width) solid var(--color-border); border-radius: var(--radius-md); min-width: 0; }
+.component-records p { white-space: pre-wrap; overflow-wrap: anywhere; font-size: var(--text-xs); }
+.component-records small, .component-record-meta code { overflow-wrap: anywhere; }
+.component-record-meta { display: flex; gap: var(--space-3); align-items: center; justify-content: space-between; font-size: var(--text-2xs); }
+.prompt-preview { display: grid; gap: var(--space-3); padding-top: var(--space-3); border-top: var(--border-width) solid var(--color-border); }
+.prompt-preview pre[aria-label] { min-width: 0; max-height: var(--plan-max); }
+.prompt-preview small { overflow-wrap: anywhere; }
+.component-context { border-top: var(--border-width) solid var(--color-border); padding-top: var(--space-3); }
+@media (max-width: 920px) { .component-columns { grid-template-columns: minmax(0, 1fr); } }

@@ -156,9 +156,12 @@ pub async fn start_baseline(
     };
     tokio::spawn(async move {
         baseline_worker(worker_state.clone(), job, rx).await;
-        if let Ok(mut active) = worker_state.active.lock() {
+        // Release the data-directory owner before declaring this worker gone.
+        let active_runs = worker_state.active.clone();
+        drop(worker_state);
+        if let Ok(mut active) = active_runs.lock() {
             active.remove(&run_id);
-        }
+        };
     });
     Ok((StatusCode::ACCEPTED, Json(run)))
 }

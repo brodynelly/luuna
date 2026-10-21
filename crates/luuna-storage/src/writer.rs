@@ -1,7 +1,8 @@
 //! Tickets, plan workflows, worktree leases and attempts (M2c).
 //!
-//! The ticket record is the temporary local source from ADR 0003: revisioned,
-//! idempotently created, marked as never synchronised. A plan workflow binds a
+//! Legacy tickets are the explicitly temporary local source from ADR 0003;
+//! enabled Missions tickets are revision-aware projections with durable delivery
+//! intent. A plan workflow binds a
 //! run to one immutable plan revision that names the ticket revision, manifest
 //! hash and base commits it was planned against. A lease records Luuna's
 //! ownership of one detached worktree; at most one lease per repository is
@@ -37,7 +38,7 @@ fn text<T: Serialize>(value: T) -> Result<String> {
 }
 
 impl Store {
-    /// Create the temporary local ticket. The same project and idempotency key
+    /// Reserve a ticket projection (or legacy local ticket). The same project and idempotency key
     /// returns the existing record; the same key with different content is a conflict.
     pub fn create_ticket(
         &mut self,
@@ -75,10 +76,13 @@ impl Store {
             )));
         }
         if let Some(existing) = ticket_by_key(&tx, &ticket.project_id, idempotency_key)? {
-            let same = existing.title == ticket.title
-                && existing.intent == ticket.intent
-                && existing.acceptance_criteria == ticket.acceptance_criteria
-                && existing.repository_ids == ticket.repository_ids;
+            let original = crate::missions::binding_in(&tx, &existing.id)?
+                .map(|binding| binding.original)
+                .unwrap_or_else(|| existing.clone());
+            let same = original.title == ticket.title
+                && original.intent == ticket.intent
+                && original.acceptance_criteria == ticket.acceptance_criteria
+                && original.repository_ids == ticket.repository_ids;
             if !same {
                 return Err(StorageError::AlreadyExists(format!(
                     "idempotency key {idempotency_key} was already used for different ticket content"
@@ -136,6 +140,12 @@ impl Store {
             .transaction_with_behavior(rusqlite::TransactionBehavior::Immediate)?;
         let mut ticket =
             load_ticket(&tx, ticket_id)?.ok_or_else(|| StorageError::NotFound(ticket_id.into()))?;
+        if ticket.source == luuna_domain::TicketSource::Missions {
+            return Err(StorageError::Invalid(
+                "Missions owns ticket intent; reconcile the source instead of writing SQLite"
+                    .into(),
+            ));
+        }
         if ticket.revision != expected_revision {
             return Err(StorageError::RevisionConflict {
                 expected: expected_revision,

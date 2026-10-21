@@ -107,6 +107,101 @@ fn approval(plan: &PlanRevision) -> Approval {
         permissions: plan.permissions.clone(),
     }
 }
+
+#[test]
+fn missions_delivery_survives_restart_and_preserves_legacy_identity() {
+    let directory = tempfile::tempdir().unwrap();
+    let path = directory.path().join("state.sqlite3");
+    let (mut store, _) = confirmed_store_at(&path);
+    let original = ticket();
+    store.create_ticket(&original, "original-request").unwrap();
+    let reservation = store.reserve_missions_delivery(&original.id).unwrap();
+    assert!(reservation.source_id.is_none());
+    assert!(!reservation.delivery_started);
+    store.begin_missions_delivery(&original.id).unwrap();
+    drop(store);
+    let mut store = Store::open(&path).unwrap();
+    assert!(
+        store
+            .missions_binding(&original.id)
+            .unwrap()
+            .unwrap()
+            .delivery_started
+    );
+    assert_eq!(
+        store
+            .missions_binding(&original.id)
+            .unwrap()
+            .unwrap()
+            .original,
+        original
+    );
+    let bound = store
+        .complete_missions_delivery(&original.id, 1, "project-abc1", &"a".repeat(64))
+        .unwrap();
+    assert_eq!(bound.id, original.id);
+    assert_eq!(bound.revision, original.revision);
+    assert_eq!(bound.created_at, original.created_at);
+    assert_eq!(bound.source, TicketSource::Missions);
+    assert!(matches!(
+        store.update_ticket(
+            &bound.id,
+            1,
+            "wrong authority",
+            "intent",
+            &["criterion".into()]
+        ),
+        Err(StorageError::Invalid(_))
+    ));
+    assert_eq!(
+        store
+            .complete_missions_delivery(&bound.id, 1, "project-abc1", &"a".repeat(64))
+            .unwrap(),
+        bound
+    );
+    assert!(store
+        .complete_missions_delivery(&bound.id, 1, "project-other", &"a".repeat(64))
+        .is_err());
+}
+
+#[test]
+fn missions_reconciliation_invalidates_old_plans_and_keeps_delivery_idempotency() {
+    let (mut store, manifest_hash) = confirmed_store();
+    let original = ticket();
+    store.create_ticket(&original, "stable-request").unwrap();
+    store.reserve_missions_delivery(&original.id).unwrap();
+    let mut projected = store
+        .complete_missions_delivery(&original.id, 1, "project-abc1", &"a".repeat(64))
+        .unwrap();
+    let old_plan = plan(&manifest_hash, 1, 1);
+    projected.title = "Changed outside Luuna".into();
+    let reconciled = store
+        .reconcile_missions_ticket(&projected, 1, "project-abc1", &"b".repeat(64))
+        .unwrap();
+    assert_eq!(reconciled.revision, 2);
+    assert_eq!(reconciled.source, TicketSource::Missions);
+    assert!(matches!(
+        store.open_plan_workflow("stale", &old_plan),
+        Err(StorageError::RevisionConflict { .. })
+    ));
+    assert!(matches!(
+        store.reconcile_missions_ticket(&projected, 1, "project-abc1", &"c".repeat(64)),
+        Err(StorageError::RevisionConflict { .. })
+    ));
+    let (replayed, created) = store.create_ticket(&original, "stable-request").unwrap();
+    assert!(!created);
+    assert_eq!(replayed, reconciled);
+    let unchanged = store
+        .reconcile_missions_ticket(&reconciled, 2, "project-abc1", &"b".repeat(64))
+        .unwrap();
+    assert_eq!(unchanged.revision, 2);
+    let mut widened = reconciled;
+    widened.repository_ids.push("unregistered".into());
+    assert!(matches!(
+        store.reconcile_missions_ticket(&widened, 2, "project-abc1", &"c".repeat(64)),
+        Err(StorageError::Invalid(_))
+    ));
+}
 fn identity(plan: &PlanRevision) -> BaselineIdentity {
     BaselineIdentity {
         manifest_hash: plan.manifest_hash.clone(),
