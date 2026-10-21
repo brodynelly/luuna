@@ -29,9 +29,7 @@ cp "$repository_dir/tools/pi/package-lock.json" "$luuna_tools_dir/luuna-pi/packa
 npm ci --prefix "$luuna_tools_dir/luuna-pi" --ignore-scripts --no-audit --no-fund
 cd "$repository_dir"
 npm ci --ignore-scripts --no-audit --no-fund
-for component in missions atlas beacon; do
-  (cd "components/$component" && bun install --frozen-lockfile --ignore-scripts)
-done
+node scripts/components.mjs setup
 cargo fetch --locked
 cargo build --locked --workspace
 printf 'Luuna cloud dependencies and runtime binary prepared. Run the checks documented in README.md.\n'

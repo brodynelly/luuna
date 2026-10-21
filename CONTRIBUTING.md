@@ -29,7 +29,9 @@ npm run typecheck
 npm run build
 ```
 
-`npm test` includes JSON-schema fixtures and API-client tests. These are separate from the Rust tests and component CLI suites. Each maintained CLI has its own Bun lockfile and package scripts; follow its package README rather than running its hook installer against the root repository.
+Run `npm run components:setup` with Bun 1.4.3 after cloning, or clone with `--recurse-submodules` and then install frozen component dependencies. `npm run components:verify` checks exact pins; `npm run test:components` exercises real CLI JSON operations on disposable stores. The component sources live in their independent public repositories.
+
+`npm test` includes component pin rejection tests, JSON-schema fixtures and API-client tests. These are separate from the Rust tests and component CLI suites. Each maintained CLI has its own Bun lockfile and package scripts; follow its package README rather than running its hook installer against the root repository.
 
 Run the schema/fixture suite when changing contracts, state transitions, or protocol handling. Keep fixtures synthetic. A deterministic Pi fixture validates framing and lifecycle logic; a real provider smoke test validates the pinned engine/model profile. Provider credentials belong in private configuration or environment bindings, never in source or test logs. Mark provider/platform checks as unavailable when their prerequisites are absent.
 

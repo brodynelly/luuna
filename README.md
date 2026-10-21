@@ -6,7 +6,7 @@ This repository is being established as an executable foundation. The design doc
 
 The runtime provides repository import, supervised baselines, immutable plan approval and scoped writers in owned worktrees. The M3 implementation adds candidate-bound checks, fresh read-only reviewer sessions and bounded manual/optional automatic repair, with durable evidence and recovery. Deterministic integration and browser checks pass; genuine-provider M3 acceptance and native desktop/platform proof remain open. Publication is not implemented. The desktop shell connects to a separately started service.
 
-**Repository decision, October 16, 2026:** keep Missions, Atlas, and Beacon together in `brodynelly/luuna` while building the product. Separate repositories are deferred and are not a prerequisite for implementation. See [ADR 0002](docs/decisions/0002-supporting-components.md).
+**Repository decision, October 21, 2026:** [Luuna Missions](https://github.com/brodynelly/luuna-missions), [Luuna Atlas](https://github.com/brodynelly/luuna-atlas), and [Luuna Beacon](https://github.com/brodynelly/luuna-beacon) are independent public repositories, consumed through pinned Git submodules at the existing `components/` paths. Luuna remains private. Run `npm run components:setup` after cloning. See [ADR 0012](docs/decisions/0012-independent-component-repositories.md).
 
 ## Start here
 
