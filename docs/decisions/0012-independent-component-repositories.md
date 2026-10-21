@@ -1,4 +1,4 @@
-# ADR 0011: independent public component repositories and pinned consumption
+# ADR 0012: independent public component repositories and pinned consumption
 
 Date: 2026-10-21. Status: accepted by explicit owner instruction. Supersedes ADR 0002's hosted-extraction deferral; its compatibility and attribution requirements remain.
 

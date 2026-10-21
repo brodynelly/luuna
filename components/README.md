@@ -8,7 +8,7 @@ Luuna maintains three MIT-licensed distributions with space-themed identities. E
 | [Atlas](atlas/README.md) | Expertise and project memory | luuna-atlas | la | Mulch 0.11.0 | .mulch/ |
 | [Beacon](beacon/README.md) | Composable prompts and instructions | luuna-beacon | lb | Canopy 0.2.6 | .canopy/ |
 
-[manifest.json](manifest.json) records package names, versions, entrypoints, and compatible data paths for tooling. Packages are private and unpublished. Source now lives in the public repositories [Missions](https://github.com/brodynelly/missions), [Atlas](https://github.com/brodynelly/atlas), and [Beacon](https://github.com/brodynelly/beacon). These directories are exact-commit Git submodules. The manifest commit and Git gitlink must agree; see [ADR 0011](../docs/decisions/0011-independent-component-repositories.md).
+[manifest.json](manifest.json) records package names, versions, entrypoints, and compatible data paths for tooling. Packages are private and unpublished. Source now lives in the public repositories [Missions](https://github.com/brodynelly/missions), [Atlas](https://github.com/brodynelly/atlas), and [Beacon](https://github.com/brodynelly/beacon). These directories are exact-commit Git submodules. The manifest commit and Git gitlink must agree; see [ADR 0012](../docs/decisions/0012-independent-component-repositories.md).
 
 The existing automation boundary is CLI execution with structured JSON output (consult each command's help for its output contract). Atlas additionally exports a TypeScript library through src/index.ts and src/api.ts. Missions and Beacon expose executable CLI entrypoints; importing their package main as a service API would execute command-line code and is not a supported integration.
 

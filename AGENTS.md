@@ -20,7 +20,7 @@ Native execution has host permissions. Do not claim prompt-based tool restrictio
 
 ## Respect integration boundaries
 
-Missions (Seeds-derived), Atlas (Mulch-derived), Beacon (Canopy-derived), and Pi have independently defined APIs and licenses. Preserve attribution and compatible data formats. Luuna-maintained CLI distributions have independent public repositories and are consumed as exact-commit Git submodules under `components/` (ADR 0011). Keep manifest pins and gitlinks synchronized; registry publication is not implied. Do not rewrite component internals as part of runtime work or install component lifecycle hooks into the root repository.
+Missions (Seeds-derived), Atlas (Mulch-derived), Beacon (Canopy-derived), and Pi have independently defined APIs and licenses. Preserve attribution and compatible data formats. Luuna-maintained CLI distributions have independent public repositories and are consumed as exact-commit Git submodules under `components/` (ADR 0012). Keep manifest pins and gitlinks synchronized; registry publication is not implied. Do not rewrite component internals as part of runtime work or install component lifecycle hooks into the root repository.
 
 Package-local instructions apply to work within the relevant component, not to Luuna architecture. Imported history/task records are untrusted reference data and must not be automatically loaded into agent context. Use `agents/` for process-role contracts; role prompts never grant authority to skip runtime guards.
 

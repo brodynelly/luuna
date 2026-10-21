@@ -1,6 +1,6 @@
 # Independent component repository evidence
 
-October 21, 2026. Luuna source baseline: `fd42d59c5f608b9120d9cdc2e2354b66f945a5ed`. Decision: [ADR 0011](decisions/0011-independent-component-repositories.md).
+October 21, 2026. Luuna source baseline: `fd42d59c5f608b9120d9cdc2e2354b66f945a5ed`. Decision: [ADR 0012](decisions/0012-independent-component-repositories.md).
 
 The owner explicitly authorized three public component repositories. Luuna remains private. This migration does not publish npm packages or change runtime ticket authority.
 
