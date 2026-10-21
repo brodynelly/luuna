@@ -259,10 +259,10 @@ async function connectWithKeyboard(serviceToken) {
 }
 
 async function registerProject(name, id, dir, expectFailure = false) {
-  await page.getByLabel("Project name").fill(name);
-  await page.getByLabel("Project ID").fill(id);
-  await page.getByLabel("Repository ID").fill("app");
-  await page.getByLabel("Repository root path").fill(dir);
+  await page.getByLabel("Project name", { exact: true }).fill(name);
+  await page.getByLabel("Project ID", { exact: true }).fill(id);
+  await page.getByLabel("Repository ID", { exact: true }).fill("app");
+  await page.getByLabel("Repository root path", { exact: true }).fill(dir);
   await page.getByRole("button", { name: "Register repository" }).click();
   if (expectFailure) return null;
   // Store-packaged Windows hosts can virtualize the requested path. Match the
