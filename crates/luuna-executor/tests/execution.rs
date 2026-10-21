@@ -16,6 +16,7 @@ fn spec(root: &std::path::Path, args: &[&str], timeout_seconds: u64) -> CommandS
         repository_root: root.to_path_buf(),
         cwd: ".".into(),
         timeout: Duration::from_secs(timeout_seconds),
+        budget: None,
         capabilities: vec!["python".into()],
         artifact_dir: root.join(".luuna-artifacts"),
     }
@@ -245,11 +246,24 @@ async fn secrets_and_luuna_variables_never_reach_the_command() {
     std::env::set_var("FIXTURE_FAKE_API_KEY", "synthetic-secret-value");
     std::env::set_var("LUUNA_FIXTURE_PRIVATE", "synthetic-private-value");
     std::env::set_var("FIXTURE_PLAIN_SETTING", "visible");
+    // Credential shapes beyond the generic markers: vault sessions, passwords,
+    // personal access tokens, webhook URLs and connection strings.
+    for name in [
+        "FIXTURE_DB_PASS",
+        "FIXTURE_MYSQL_PWD",
+        "FIXTURE_GITHUB_PAT",
+        "FIXTURE_SLACK_WEBHOOK_URL",
+        "FIXTURE_STORAGE_CONNECTION_STRING",
+        "FIXTURE_DATABASE_URL",
+        "OP_SESSION_luunafixture",
+    ] {
+        std::env::set_var(name, "synthetic-secret-value");
+    }
     let dir = tempfile::tempdir().unwrap();
     let (_tx, cancel) = watch::channel(false);
     let execution = Executor::default()
         .execute(
-            &spec(dir.path(), &["-c", "import os; print(sorted(k for k in os.environ if k.startswith(('FIXTURE_', 'LUUNA_')))); print(os.environ.get('CI'))"], 30),
+            &spec(dir.path(), &["-c", "import os; print(sorted(k for k in os.environ if k.startswith(('FIXTURE_', 'LUUNA_', 'OP_SESSION_')))); print(os.environ.get('CI'))"], 30),
             cancel,
             None,
         )
@@ -261,6 +275,21 @@ async fn secrets_and_luuna_variables_never_reach_the_command() {
     assert!(stdout.contains("LUUNA_CHECK"), "{stdout}");
     assert!(!stdout.contains("FIXTURE_FAKE_API_KEY"), "{stdout}");
     assert!(!stdout.contains("LUUNA_FIXTURE_PRIVATE"), "{stdout}");
+    for withheld in [
+        "PASS",
+        "PWD",
+        "PAT",
+        "WEBHOOK",
+        "CONNECTION",
+        "DATABASE",
+        "OP_SESSION",
+    ] {
+        assert!(
+            !stdout.contains(withheld),
+            "{withheld} reached the check: {stdout}"
+        );
+    }
+    assert!(stdout.contains("LUUNA_CHECK_GROUP"), "{stdout}");
     assert!(!stdout.contains("secret-value"));
     assert!(stdout.contains("true"));
     let _ = PathBuf::new();
@@ -406,4 +435,441 @@ async fn version_probes_never_see_secrets() {
         }
         other => panic!("probe must resolve: {other:?}"),
     }
+}
+
+#[tokio::test]
+async fn a_background_process_left_by_a_passing_check_is_reaped_and_named() {
+    let dir = tempfile::tempdir().unwrap();
+    let marker = dir.path().join("server.pid");
+    // A test that starts a server with redirected output and exits 0: the
+    // server holds no pipe, so only the post-exit group reap can stop it.
+    let script = format!(
+        "import subprocess, sys\np = subprocess.Popen([sys.executable, '-c', 'import time; time.sleep(60)'], stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)\nopen({marker:?}, 'w').write(str(p.pid))\nprint('server started')",
+        marker = marker.to_string_lossy()
+    );
+    let (_tx, cancel) = watch::channel(false);
+    let (progress, mut events) = mpsc::unbounded_channel();
+    let execution = Executor::default()
+        .execute(
+            &spec(dir.path(), &["-c", &script], 60),
+            cancel,
+            Some(progress),
+        )
+        .await
+        .unwrap();
+    assert_eq!(execution.status, CheckStatus::Passed, "{execution:?}");
+    assert_eq!(execution.reason, None);
+    if cfg!(unix) {
+        let server: u32 = std::fs::read_to_string(&marker)
+            .unwrap()
+            .trim()
+            .parse()
+            .unwrap();
+        assert!(
+            !alive(server),
+            "a process the check left running must not outlive its result"
+        );
+        assert!(
+            !execution.reaped_descendants.is_empty(),
+            "the reaped process is recorded: {execution:?}"
+        );
+        if cfg!(target_os = "linux") {
+            assert!(
+                execution.reaped_descendants[0].contains(&format!("pid {server}")),
+                "{:?}",
+                execution.reaped_descendants
+            );
+        }
+        let mut reported = false;
+        while let Ok(event) = events.try_recv() {
+            reported |= matches!(event, Progress::Reaped { .. });
+        }
+        assert!(reported, "the reap is reported as progress");
+    }
+}
+
+#[tokio::test]
+async fn skip_only_suites_and_summaries_past_the_artifact_cap_are_judged_correctly() {
+    let dir = tempfile::tempdir().unwrap();
+    std::fs::write(
+        dir.path().join("test_skipped.py"),
+        "import unittest\nclass Skipped(unittest.TestCase):\n    @unittest.skip('environment-gated')\n    def test_a(self):\n        pass\n    @unittest.skip('environment-gated')\n    def test_b(self):\n        pass\n",
+    )
+    .unwrap();
+    let (_tx, cancel) = watch::channel(false);
+    let skipped = Executor::default()
+        .execute(
+            &spec(dir.path(), &["-m", "unittest", "-v", "test_skipped"], 30),
+            cancel.clone(),
+            None,
+        )
+        .await
+        .unwrap();
+    assert_eq!(skipped.status, CheckStatus::Blocked, "{skipped:?}");
+    assert_eq!(skipped.exit_code, Some(0));
+    assert_eq!(skipped.tests_detected, Some(0));
+    assert!(skipped
+        .reason
+        .as_deref()
+        .unwrap()
+        .starts_with("empty suite"));
+
+    // A custom success line is not a runner summary.
+    let custom = Executor::default()
+        .execute(
+            &spec(
+                dir.path(),
+                &["-c", "print('checked 42 cases'); print('Tests passed!')"],
+                30,
+            ),
+            cancel.clone(),
+            None,
+        )
+        .await
+        .unwrap();
+    assert_eq!(custom.status, CheckStatus::Passed, "{custom:?}");
+    assert_eq!(custom.tests_detected, None);
+
+    // An empty first crate, then more output than an artifact keeps, then
+    // the suite that ran: the whole stream decides, not the retained bytes.
+    let large = Executor::default()
+        .execute(
+            &spec(
+                dir.path(),
+                &[
+                    "-c",
+                    "import sys\nprint('test result: ok. 0 passed; 0 failed; 0 ignored')\nline = 'x' * 1048575 + '\\n'\nfor _ in range(17):\n    sys.stdout.write(line)\nprint('test result: ok. 5 passed; 0 failed; 0 ignored')",
+                ],
+                60,
+            ),
+            cancel,
+            None,
+        )
+        .await
+        .unwrap();
+    assert_eq!(large.status, CheckStatus::Passed, "{:?}", large.reason);
+    assert_eq!(large.tests_detected, Some(5));
+    let stdout = &large.artifacts[0];
+    assert!(stdout.truncated);
+    assert_eq!(stdout.retained_bytes, luuna_executor::MAX_ARTIFACT_BYTES);
+    assert!(stdout.bytes > stdout.retained_bytes);
+    assert_eq!(
+        std::fs::metadata(&stdout.path).unwrap().len(),
+        stdout.retained_bytes
+    );
+}
+
+#[tokio::test]
+async fn missing_tools_and_dependencies_are_blocked_infrastructure_not_failures() {
+    let dir = tempfile::tempdir().unwrap();
+    std::fs::create_dir(dir.path().join("app")).unwrap();
+    std::fs::write(dir.path().join("app").join("__init__.py"), "").unwrap();
+    let (_tx, cancel) = watch::channel(false);
+    let run = |args: Vec<String>| {
+        let cancel = cancel.clone();
+        let spec = spec(
+            dir.path(),
+            &args.iter().map(String::as_str).collect::<Vec<_>>(),
+            30,
+        );
+        async move {
+            Executor::default()
+                .execute(&spec, cancel, None)
+                .await
+                .unwrap()
+        }
+    };
+    // `npm test` whose script tool is absent exits 127 after the shell's report.
+    let not_found = run(vec![
+        "-c".into(),
+        "import sys; print('sh: 1: vitest: not found', file=sys.stderr); sys.exit(127)".into(),
+    ])
+    .await;
+    assert_eq!(not_found.status, CheckStatus::Blocked, "{not_found:?}");
+    assert_eq!(not_found.exit_code, Some(127));
+    let reason = not_found.reason.unwrap();
+    assert!(
+        reason.contains("`vitest`") && reason.contains("dependency-preparation recipe"),
+        "{reason}"
+    );
+    let module = run(vec![
+        "-c".into(),
+        "import luuna_fixture_dependency_that_is_not_installed".into(),
+    ])
+    .await;
+    assert_eq!(module.status, CheckStatus::Blocked, "{module:?}");
+    assert_eq!(module.exit_code, Some(1));
+    assert!(module
+        .reason
+        .unwrap()
+        .contains("Python module `luuna_fixture_dependency_that_is_not_installed`"));
+    // A broken import of the repository's own package is the code's failure.
+    let local = run(vec!["-c".into(), "import app.missing_module".into()]).await;
+    assert_eq!(local.status, CheckStatus::Failed, "{local:?}");
+    assert_eq!(local.reason.as_deref(), Some("exit code 1"));
+    // A repository-relative tool that an ignored dependency directory provides
+    // in the developer checkout only.
+    let mut relative = spec(dir.path(), &["run"], 30);
+    relative.executable = "node_modules/.bin/vitest".into();
+    relative.capabilities = vec![];
+    let missing = Executor::default()
+        .execute(&relative, cancel.clone(), None)
+        .await
+        .unwrap();
+    assert_eq!(missing.status, CheckStatus::Blocked, "{missing:?}");
+    let reason = missing.reason.unwrap();
+    assert!(
+        reason.contains("node_modules/.bin/vitest")
+            && reason.contains("dependency-preparation recipe"),
+        "{reason}"
+    );
+}
+
+#[tokio::test]
+async fn a_check_cut_short_by_the_workflow_budget_is_blocked_by_the_budget() {
+    let dir = tempfile::tempdir().unwrap();
+    let (_tx, cancel) = watch::channel(false);
+    let mut limited = spec(dir.path(), &["-c", "import time; time.sleep(30)"], 30);
+    limited.budget = Some(Duration::from_secs(1));
+    let execution = Executor::default()
+        .execute(&limited, cancel.clone(), None)
+        .await
+        .unwrap();
+    assert_eq!(execution.status, CheckStatus::Blocked, "{execution:?}");
+    assert!(execution.budget_exhausted);
+    let reason = execution.reason.unwrap();
+    assert!(
+        reason.starts_with("workflow time budget exhausted after 1s")
+            && reason.contains("re-plan required"),
+        "{reason}"
+    );
+    // A budget that outlasts the recipe leaves the recipe's own deadline in charge.
+    let mut own = spec(dir.path(), &["-c", "import time; time.sleep(30)"], 1);
+    own.budget = Some(Duration::from_secs(30));
+    let execution = Executor::default()
+        .execute(&own, cancel, None)
+        .await
+        .unwrap();
+    assert_eq!(execution.status, CheckStatus::Failed);
+    assert!(!execution.budget_exhausted);
+    assert!(execution
+        .reason
+        .unwrap()
+        .starts_with("deadline of 1s exceeded"));
+}
+
+#[cfg(unix)]
+fn shim(dir: &std::path::Path, name: &str, body: &str) -> PathBuf {
+    use std::os::unix::fs::PermissionsExt;
+    let path = dir.join(name);
+    std::fs::write(&path, format!("#!/bin/sh\n{body}\n")).unwrap();
+    std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o755)).unwrap();
+    path
+}
+
+#[cfg(unix)]
+#[tokio::test]
+async fn version_probes_run_in_the_recipe_cwd_with_tool_specific_arguments() {
+    let tools = tempfile::tempdir().unwrap();
+    let repo = tempfile::tempdir().unwrap();
+    std::fs::create_dir(repo.path().join("pinned")).unwrap();
+    // A version-manager shim reports the toolchain its working directory selects.
+    shim(tools.path(), "cargo", "echo \"cargo-shim $(pwd)\"");
+    shim(
+        tools.path(),
+        "go",
+        "if [ \"$1\" = version ]; then echo 'go version go1.99.0 shim'; exit 0; fi\necho 'flag provided but not defined: -version' >&2\nexit 2",
+    );
+    let executor = Executor {
+        search_path: Some(tools.path().as_os_str().to_owned()),
+        ..Executor::default()
+    };
+    let probe = |executable: &str, cwd: &str| {
+        let mut recipe = spec(repo.path(), &[], 30);
+        recipe.executable = executable.into();
+        recipe.cwd = cwd.into();
+        recipe.capabilities = vec![];
+        recipe
+    };
+    let resolved = |probe: luuna_executor::Probe| match probe {
+        luuna_executor::Probe::Resolved {
+            tool_version,
+            fingerprint,
+            ..
+        } => (tool_version.unwrap_or_default(), fingerprint),
+        other => panic!("probe must resolve: {other:?}"),
+    };
+    let (pinned, pinned_fingerprint) = resolved(executor.probe(&probe("cargo", "pinned")).await);
+    let canonical = repo.path().join("pinned").canonicalize().unwrap();
+    assert!(
+        pinned.ends_with(&*canonical.to_string_lossy()),
+        "the probe runs where the recipe runs: {pinned}"
+    );
+    let (root, root_fingerprint) = resolved(executor.probe(&probe("cargo", ".")).await);
+    assert_ne!(pinned, root);
+    assert_ne!(pinned_fingerprint, root_fingerprint);
+    let (go, _) = resolved(executor.probe(&probe("go", ".")).await);
+    assert_eq!(go, "go version go1.99.0 shim");
+
+    // A failing probe records no version, and its failure changes the fingerprint.
+    let node = shim(tools.path(), "node", "exit 0");
+    let (silent, silent_fingerprint) = resolved(executor.probe(&probe("node", ".")).await);
+    assert_eq!(silent, "");
+    shim(
+        tools.path(),
+        "node",
+        "echo 'node: bad option: --version' >&2\nexit 9",
+    );
+    let (failing, failing_fingerprint) = resolved(executor.probe(&probe("node", ".")).await);
+    assert_eq!(failing, "", "error text is never a version");
+    assert_ne!(silent_fingerprint, failing_fingerprint);
+    assert_eq!(
+        silent_fingerprint,
+        Executor::fingerprint(&node, None),
+        "a successful probe keeps the established fingerprint form"
+    );
+}
+
+#[cfg(unix)]
+#[tokio::test]
+async fn path_lookup_skips_files_without_an_execute_bit_and_relative_entries() {
+    let first = tempfile::tempdir().unwrap();
+    let second = tempfile::tempdir().unwrap();
+    std::fs::write(first.path().join("luuna-fixture-tool"), "not a program").unwrap();
+    let real = shim(second.path(), "luuna-fixture-tool", "echo real-tool");
+    let search = std::env::join_paths([
+        PathBuf::from("relative-entry"),
+        first.path().to_path_buf(),
+        second.path().to_path_buf(),
+    ])
+    .unwrap();
+    let executor = Executor {
+        search_path: Some(search),
+        ..Executor::default()
+    };
+    let dir = tempfile::tempdir().unwrap();
+    let mut recipe = spec(dir.path(), &[], 30);
+    recipe.executable = "luuna-fixture-tool".into();
+    recipe.capabilities = vec![];
+    let (_tx, cancel) = watch::channel(false);
+    let execution = executor.execute(&recipe, cancel, None).await.unwrap();
+    assert_eq!(execution.status, CheckStatus::Passed, "{execution:?}");
+    assert_eq!(execution.resolved_executable, Some(real));
+    assert!(execution.stdout_excerpt.contains("real-tool"));
+}
+
+#[cfg(windows)]
+#[tokio::test]
+async fn windows_lookup_prefers_the_cmd_shim_over_an_extensionless_script() {
+    let tools = tempfile::tempdir().unwrap();
+    // Node's Windows install ships an extensionless sh script beside npm.cmd.
+    std::fs::write(
+        tools.path().join("luuna-fixture-npm"),
+        "#!/bin/sh\necho posix\n",
+    )
+    .unwrap();
+    std::fs::write(
+        tools.path().join("luuna-fixture-npm.cmd"),
+        "@echo windows\r\n",
+    )
+    .unwrap();
+    let executor = Executor {
+        search_path: Some(tools.path().as_os_str().to_owned()),
+        ..Executor::default()
+    };
+    let dir = tempfile::tempdir().unwrap();
+    let mut recipe = spec(dir.path(), &[], 30);
+    recipe.executable = "luuna-fixture-npm".into();
+    recipe.capabilities = vec![];
+    match executor.probe(&recipe).await {
+        luuna_executor::Probe::Resolved { resolved, .. } => assert_eq!(
+            resolved
+                .file_name()
+                .unwrap()
+                .to_string_lossy()
+                .to_ascii_lowercase(),
+            "luuna-fixture-npm.cmd"
+        ),
+        other => panic!("probe must resolve: {other:?}"),
+    }
+}
+
+#[cfg(target_os = "linux")]
+#[tokio::test]
+async fn restart_recovery_reaps_only_verified_survivors_of_a_recorded_group() {
+    use luuna_executor::GroupReconciliation;
+    let dir = tempfile::tempdir().unwrap();
+    let marker = dir.path().join("orphan.pid");
+    let script = format!(
+        "import subprocess, sys, time\np = subprocess.Popen([sys.executable, '-c', 'import time; time.sleep(60)'], stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)\nopen({marker:?}, 'w').write(str(p.pid))\ntime.sleep(60)",
+        marker = marker.to_string_lossy()
+    );
+    let (_tx, cancel) = watch::channel(false);
+    let (progress, mut events) = mpsc::unbounded_channel();
+    let recipe = spec(dir.path(), &["-c", &script], 120);
+    let running = tokio::spawn(async move {
+        Executor::default()
+            .execute(&recipe, cancel, Some(progress))
+            .await
+    });
+    let group = loop {
+        match events.recv().await {
+            Some(Progress::Started { group, .. }) => break group,
+            Some(_) => continue,
+            None => panic!("the check never started"),
+        }
+    };
+    assert!(group.leader_start.is_some() && group.boot_id.is_some());
+    for _ in 0..200 {
+        if !std::fs::read_to_string(&marker)
+            .unwrap_or_default()
+            .is_empty()
+        {
+            break;
+        }
+        tokio::time::sleep(Duration::from_millis(25)).await;
+    }
+    let orphan: u32 = std::fs::read_to_string(&marker)
+        .unwrap()
+        .trim()
+        .parse()
+        .unwrap();
+    // The supervisor dies without settling the check: the direct child goes
+    // with it (as the parent-death signal does) and the grandchild survives.
+    running.abort();
+    let _ = running.await;
+    tokio::time::sleep(Duration::from_millis(200)).await;
+    assert!(alive(orphan), "the grandchild outlives its supervisor");
+
+    // A record whose marker and start time do not match is never acted on,
+    // even though its process-group ID names live processes.
+    let mut forged = group.clone();
+    forged.marker = "0".repeat(32);
+    forged.leader_start = Some("1".into());
+    match luuna_executor::reconcile_process_group(&forged) {
+        GroupReconciliation::Unverified { processes, .. } => {
+            assert!(processes
+                .iter()
+                .any(|p| p.contains(&format!("pid {orphan}"))))
+        }
+        other => panic!("an unverifiable group must not be signalled: {other:?}"),
+    }
+    assert!(alive(orphan));
+
+    match luuna_executor::reconcile_process_group(&group) {
+        GroupReconciliation::Reaped(processes) => {
+            assert!(
+                processes
+                    .iter()
+                    .any(|p| p.contains(&format!("pid {orphan}"))),
+                "{processes:?}"
+            )
+        }
+        other => panic!("the recorded survivor must be reaped: {other:?}"),
+    }
+    assert!(!alive(orphan));
+    assert_eq!(
+        luuna_executor::reconcile_process_group(&group),
+        GroupReconciliation::Gone
+    );
 }

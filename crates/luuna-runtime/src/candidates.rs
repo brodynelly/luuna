@@ -438,11 +438,18 @@ pub async fn validate(
     Ok((StatusCode::ACCEPTED, Json(started)))
 }
 
+/// A required check the remaining workflow time cut short: the candidate
+/// pauses for a re-plan instead of reading as failed.
+const BUDGET_EXHAUSTED_DURING_CHECKS: &str =
+    "workflow time budget exhausted during required checks; re-plan required";
+
 fn settle_failure(state: &AppState, id: &str, evidence: &CandidateEvidence, reason: &str) {
     if let Ok(mut store) = state.store.lock() {
         if let Ok(Some(run)) = store.get_run(id) {
             let (next, reason) = if reason.starts_with("cancelled") {
                 (state.stop_run_state(), state.stop_reason(reason))
+            } else if reason == BUDGET_EXHAUSTED_DURING_CHECKS {
+                (RunState::Paused, reason.to_owned())
             } else if reason.starts_with("testing blocked") {
                 (RunState::TestingBlocked, reason.to_owned())
             } else {
@@ -574,12 +581,18 @@ async fn pipeline(
         if remaining == 0 {
             return Err("budget exceeded: workflow timeout exhausted".into());
         }
-        spec.timeout = spec.timeout.min(Duration::from_secs(remaining));
+        // The executor records a check the budget cuts short as blocked by it.
+        spec.budget = Some(Duration::from_secs(remaining));
+        // The spawned process group is recorded so restart recovery can reap
+        // what a hard-killed runtime left running in the worktree.
+        let (progress, relay) = crate::baselines::relay_progress(state, id, &recipe.id, false);
         let result = state
             .executor
-            .execute(&spec, cancel.clone(), None)
-            .await
-            .map_err(|e| format!("executor infrastructure failure: {e}"))?;
+            .execute(&spec, cancel.clone(), Some(progress))
+            .await;
+        let _ = relay.await;
+        let result = result.map_err(|e| format!("executor infrastructure failure: {e}"))?;
+        let budget_exhausted = result.budget_exhausted;
         let check = CheckResult {
             schema_version: SCHEMA_VERSION.into(),
             id: uuid::Uuid::new_v4().to_string(),
@@ -625,6 +638,11 @@ async fn pipeline(
             .map_err(|e| e.to_string())?
             .record_candidate_check(id, hash, &check)
             .map_err(|e| e.to_string())?;
+        // Settled before the charge, which may itself pause the workflow; the
+        // error exit below charges the time either way.
+        if budget_exhausted {
+            return Err(BUDGET_EXHAUSTED_DURING_CHECKS.into());
+        }
         charge(0)?;
         if check.status == CheckStatus::Cancelled {
             return Err("cancelled; check process group reaped".into());

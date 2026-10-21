@@ -49,6 +49,30 @@ impl Store {
                 "baseline run belongs to a different project".into(),
             ));
         }
+        // One running baseline per repository: two would run the same recipes
+        // in the same developer checkout at once. The runtime refuses the
+        // second request; this keeps the rule in the transaction too.
+        let running: Option<String> = tx
+            .query_row(
+                "SELECT b.run_id FROM baselines b JOIN runs r ON r.id=b.run_id \
+                 WHERE b.project_id=?1 AND b.repository_id=?2 AND b.status='running' \
+                 AND b.run_id<>?3 AND r.state IN (?4,?5) LIMIT 1",
+                params![
+                    evidence.project_id,
+                    evidence.identity.repository_id,
+                    evidence.run_id,
+                    crate::state_json(RunState::Queued)?,
+                    crate::state_json(RunState::Running)?
+                ],
+                |r| r.get(0),
+            )
+            .optional()?;
+        if let Some(run) = running {
+            return Err(StorageError::AlreadyExists(format!(
+                "baseline run {run} is already running for repository {}",
+                evidence.identity.repository_id
+            )));
+        }
         tx.execute(
             "INSERT INTO baselines(id,project_id,repository_id,run_id,status,payload,started_at,finished_at) VALUES (?1,?2,?3,?4,?5,?6,?7,NULL)",
             params![
@@ -413,4 +437,86 @@ pub(crate) fn latest_baseline(
         .optional()?;
     id.map(|id| load_baseline(connection, &id)?.ok_or_else(|| StorageError::NotFound(id)))
         .transpose()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use luuna_domain::{BaselineIdentity, DirtyState, RepositoryIdentity, RepositoryObservation};
+
+    fn store_with_project() -> Store {
+        let mut store = Store::open(":memory:").unwrap();
+        let observation = RepositoryObservation {
+            local_path: "/srv/checkouts/app".into(),
+            identity: RepositoryIdentity {
+                remote: Some("https://example.invalid/app.git".into()),
+                push_remote: None,
+                root_commits: vec!["1".repeat(40)],
+                shallow: false,
+            },
+            head_commit: "2".repeat(40),
+            branch: Some("main".into()),
+            remote_default_branch: None,
+            local_branches: vec!["main".into()],
+            dirty: DirtyState::default(),
+            git_version: "git version 2.43.0".into(),
+            observed_at: "2026-10-17T00:00:00.000Z".into(),
+        };
+        store
+            .register_project("project", "Project", &[("app".into(), observation)])
+            .unwrap();
+        store
+    }
+
+    fn running_baseline(store: &mut Store, run_id: &str) -> BaselineEvidence {
+        let run = store
+            .create_run(run_id, "project", json!({"kind": "baseline"}))
+            .unwrap();
+        store
+            .transition_run(
+                &run.id,
+                run.revision,
+                RunState::Running,
+                "run.running",
+                json!({}),
+            )
+            .unwrap();
+        BaselineEvidence {
+            id: format!("baseline-{run_id}"),
+            run_id: run_id.into(),
+            project_id: "project".into(),
+            manifest_revision: 1,
+            identity: BaselineIdentity {
+                manifest_hash: format!("sha256:{}", "a".repeat(64)),
+                repository_id: "app".into(),
+                commit: "2".repeat(40),
+                tree: "3".repeat(40),
+            },
+            environment_fingerprint: format!("sha256:{}", "e".repeat(64)),
+            status: BaselineStatus::Running,
+            required_checks: vec!["unit".into()],
+            results: vec![],
+            started_at: "2026-10-17T00:00:00.000Z".into(),
+            finished_at: None,
+            reason: None,
+        }
+    }
+
+    #[test]
+    fn one_running_baseline_per_repository_is_enforced_in_the_transaction() {
+        let mut store = store_with_project();
+        let first = running_baseline(&mut store, "run-1");
+        store.start_baseline(&first).unwrap();
+        let second = running_baseline(&mut store, "run-2");
+        match store.start_baseline(&second) {
+            Err(StorageError::AlreadyExists(reason)) => {
+                assert!(reason.contains("run-1"), "{reason}")
+            }
+            other => panic!("a second running baseline must be refused: {other:?}"),
+        }
+        store
+            .finish_baseline(&first.id, BaselineStatus::Failed, Some("settled"))
+            .unwrap();
+        store.start_baseline(&second).unwrap();
+    }
 }

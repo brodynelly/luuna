@@ -121,6 +121,7 @@ impl AppState {
         // Own the acquired lease before fallible state initialization too.
         let owner_lock = RuntimeOwnership(owner_lock);
         let mut store = Store::open(config.data_dir.join("luuna.sqlite3"))?;
+        baselines::reap_orphaned_checks(&mut store)?;
         store.interrupt_active_runs()?;
         let git = GitInspector {
             program: config.git_program.clone(),

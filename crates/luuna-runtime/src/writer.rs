@@ -1192,7 +1192,7 @@ fn repair_check_output(
             };
             opened += 1;
             let Some(verified) = read_verified_tail(
-                &artifact_dir.join(format!("{reference}.log")),
+                &artifact_dir.join(luuna_executor::artifact_log_name(reference)),
                 expected,
                 &mut read_budget,
                 secrets,
@@ -1683,38 +1683,11 @@ fn pem_marker(line: &str, kind: &str) -> Option<(usize, usize, String)> {
         .then(|| (start, start + tag.len() + close + 5, label.to_owned()))
 }
 
-/// Whether a line looks like it carries a credential: a bearer header, a
-/// private-key assignment, or a well-known token prefix at a word boundary
-/// followed by a long run of token characters.
+/// Whether a line looks like it carries a credential: an authorization
+/// header, a secret-key or registry-token assignment, or a well-known token
+/// prefix followed by a run as long as that format's (the executor's shapes).
 fn line_carries_token(line: &str) -> bool {
-    const PREFIXES: [&str; 9] = [
-        "sk-",
-        "AKIA",
-        "ghp_",
-        "gho_",
-        "github_pat_",
-        "glpat-",
-        "xoxb-",
-        "xoxp-",
-        "AIza",
-    ];
-    let lowered = line.to_ascii_lowercase();
-    if lowered.contains("authorization: bearer ") || lowered.contains("private_key") {
-        return true;
-    }
-    PREFIXES.iter().any(|prefix| {
-        line.match_indices(prefix).any(|(at, _)| {
-            let boundary = line[..at]
-                .chars()
-                .next_back()
-                .is_none_or(|c| !c.is_ascii_alphanumeric());
-            let run = line[at + prefix.len()..]
-                .chars()
-                .take_while(|c| c.is_ascii_alphanumeric() || matches!(c, '_' | '-'))
-                .count();
-            boundary && run >= 20
-        })
-    })
+    luuna_executor::line_carries_token(line)
 }
 
 struct VerifiedTail {
@@ -3130,6 +3103,49 @@ mod redaction_tests {
             view.contains("\"recipe_id\":\"check0\"") && view.contains("\"exit_code\":1"),
             "{view}"
         );
+    }
+
+    #[test]
+    fn feedback_reads_the_log_the_executor_named_for_any_recipe_id() {
+        // Upper-case recipe IDs get escaped log names so case-insensitive
+        // filesystems keep them apart; feedback must still find the log.
+        let dir = tempfile::tempdir().unwrap();
+        let body = b"AssertionError: expected the greeting\n";
+        let reference = "c1-g1-Unit.stdout".to_owned();
+        std::fs::write(
+            dir.path()
+                .join(luuna_executor::artifact_file_name("c1-g1-Unit", "stdout")),
+            body,
+        )
+        .unwrap();
+        let mut result = failed_result(dir.path(), 0, b"other");
+        result.recipe_id = "Unit".into();
+        result.artifact_refs = vec![reference.clone()];
+        result.artifact_hashes = [(reference.clone(), luuna_executor::sha256_hex(body))].into();
+        let output = repair_check_output(dir.path(), &[result], &[]);
+        assert!(
+            output
+                .get(&reference)
+                .and_then(Value::as_str)
+                .is_some_and(|text| text.contains("expected the greeting")),
+            "{output:?}"
+        );
+    }
+
+    #[test]
+    fn real_format_token_shapes_are_removed_from_feedback() {
+        // Synthetic values in the real formats' lengths (AKIA plus 16).
+        for line in [
+            "aws key AKIAIOSFODNN7EXAMPLE".to_owned(),
+            format!("token ghs_{}", "Synthetic0".repeat(4)),
+            "Authorization: Basic dXNlcjpwYXNz".to_owned(),
+        ] {
+            assert_eq!(
+                redact_secrets(&format!("{line}\nok"), &[]),
+                "[redacted token-like line]\nok",
+                "{line}"
+            );
+        }
     }
 
     #[test]
