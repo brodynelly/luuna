@@ -1,6 +1,6 @@
 # Current Luuna architecture
 
-Date: 2026-10-16, updated 2026-10-17 for M2a, M2b, M2c and the M3 implementation. Status: authoritative foundation baseline; implementation evidence is required for each milestone.
+Date: 2026-10-16, updated 2026-10-17 for M2a, M2b, M2c and the M3 implementation, and 2026-10-21 for re-validation after a review that left no verdict. Status: authoritative foundation baseline; implementation evidence is required for each milestone.
 
 ## Purpose and precedence
 
@@ -61,7 +61,7 @@ The owner's explicit October 16, 2026 decision is to keep the application and al
 
 ## Candidate validation and review
 
-Migration 5 stores exact candidate commit/tree identities, append-only validation generations and structured independent reviews. `POST /api/v1/runs/{id}/validate` names the expected hash and optionally `auto_repair`; it executes the approved required recipes inside the owned candidate worktree and starts a fresh read-only Pi reviewer only after the checks pass. Checks and reviews cannot be reused across candidate revisions or interrupted generations. `GET …/candidate` and `GET …/diff` expose authoritative evidence and exact diffs; `POST …/repair` rechecks current approval, baseline/host and remaining aggregate budgets before creating the next scoped candidate. Model output never supplies command evidence. Repair writers receive the previous candidate's reason, check records, review and a bounded tail of each failed check log, never the private artifact paths. See [ADR 0009](decisions/0009-candidate-validation-review.md).
+Migration 5 stores exact candidate commit/tree identities, append-only validation generations and structured independent reviews. `POST /api/v1/runs/{id}/validate` names the expected hash and optionally `auto_repair`; it executes the approved required recipes inside the owned candidate worktree and starts a fresh read-only Pi reviewer only after the checks pass. Checks and reviews cannot be reused across candidate revisions or interrupted generations. A `failed` candidate whose required checks all passed in its current generation and whose reviewer left no verdict (invalid or self-inconsistent output, a refused session) may re-enter validation in place as generation `n+1`: same revision, approval and budgets, fresh checks and a fresh reviewer, no writer attempt; `GET …/candidate` reports that decision as `revalidate_allowed`. `GET …/candidate` and `GET …/diff` expose authoritative evidence and exact diffs; `POST …/repair` rechecks current approval, baseline/host and remaining aggregate budgets before creating the next scoped candidate. Model output never supplies command evidence. Repair writers receive the previous candidate's reason, check records, review and a bounded tail of each failed check log, never the private artifact paths. See [ADR 0009](decisions/0009-candidate-validation-review.md).
 
 Automatic repair is opt-in and bounded by both the immutable plan and project repair policy. Infrastructure errors stop without repeated edits. Interrupted check stages retain elapsed usage; interrupted model stages reserve unknown spend and require re-planning when headroom is exhausted. Review success is evidence for an exact candidate only; publication and human-controlled merge remain separate gates.
 
