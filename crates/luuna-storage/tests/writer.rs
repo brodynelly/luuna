@@ -861,6 +861,14 @@ fn repair_revisions_invalidate_checks_and_reviews_without_resetting_usage() {
     let run = store.get_run("workflow-1").unwrap().unwrap();
     let mut rejected = review(&candidate);
     rejected.verdict = ReviewVerdict::ChangesRequired;
+    // A non-passing verdict must name what to change.
+    rejected.findings = vec![Finding {
+        severity: Severity::Warning,
+        path: "src/main.rs".into(),
+        line: 1,
+        explanation: "seeded".into(),
+        evidence: vec!["seen".into()],
+    }];
     store
         .finish_candidate_review(&run.id, run.revision, &candidate.hash, &rejected)
         .unwrap();
@@ -1452,4 +1460,92 @@ fn only_an_unreviewed_candidate_with_passed_checks_can_be_revalidated_in_place()
         store.get_run("workflow-1").unwrap().unwrap().state,
         RunState::Failed
     );
+}
+
+#[test]
+fn drifted_candidates_never_revalidate_and_the_validate_decision_matches_the_claim() {
+    let (mut store, _, candidate) = candidate_fixture_at(":memory:", 1);
+    // Pending: validation is admitted and is not a re-validation.
+    assert!(!store
+        .can_candidate_validate("workflow-1", &candidate.hash)
+        .unwrap());
+    begin_validation(&mut store, &candidate);
+    // An active generation admits no second claim, in the decision or the claim.
+    let run = store.get_run("workflow-1").unwrap().unwrap();
+    let decided = store
+        .can_candidate_validate("workflow-1", &candidate.hash)
+        .unwrap_err()
+        .to_string();
+    let claimed = store
+        .begin_candidate_validation(&run.id, run.revision, &candidate.hash)
+        .unwrap_err()
+        .to_string();
+    assert_eq!(decided, claimed);
+    store
+        .record_candidate_check(
+            "workflow-1",
+            &candidate.hash,
+            &candidate_check(&candidate, CheckStatus::Passed),
+        )
+        .unwrap();
+    // A check rewrote tracked content after passing: drift, not a review gap.
+    let failed = store
+        .fail_candidate_drift(
+            &run.id,
+            run.revision,
+            &candidate.hash,
+            "candidate content drift: the candidate worktree changed while required check `unit` ran",
+        )
+        .unwrap();
+    assert!(failed.content_drift);
+    assert_eq!(failed.status, CandidateStatus::Failed);
+    let run = store.get_run("workflow-1").unwrap().unwrap();
+    assert_eq!(run.state, RunState::Failed);
+    let event = store.events_after(&run.id, 0).unwrap().pop().unwrap();
+    assert_eq!(event.event_type, "candidate.stage_failed");
+    assert_eq!(event.payload["content_drift"], true);
+    let decided = store
+        .can_candidate_validate("workflow-1", &candidate.hash)
+        .unwrap_err()
+        .to_string();
+    assert!(decided.contains("drifted"), "{decided}");
+    assert!(store
+        .can_candidate_revalidate("workflow-1", &candidate.hash)
+        .is_err());
+    let claimed = store
+        .begin_candidate_validation(&run.id, run.revision, &candidate.hash)
+        .unwrap_err()
+        .to_string();
+    assert_eq!(decided, claimed);
+    assert!(
+        store
+            .current_candidate("workflow-1")
+            .unwrap()
+            .unwrap()
+            .content_drift
+    );
+
+    // The same passed checks without the drift mark re-validate in place.
+    let (mut store, _, candidate) = candidate_fixture_at(":memory:", 1);
+    begin_validation(&mut store, &candidate);
+    store
+        .record_candidate_check(
+            "workflow-1",
+            &candidate.hash,
+            &candidate_check(&candidate, CheckStatus::Passed),
+        )
+        .unwrap();
+    let run = store.get_run("workflow-1").unwrap().unwrap();
+    store
+        .fail_candidate_stage(
+            &run.id,
+            run.revision,
+            &candidate.hash,
+            RunState::Failed,
+            "scope extension failed; session refused",
+        )
+        .unwrap();
+    assert!(store
+        .can_candidate_validate("workflow-1", &candidate.hash)
+        .unwrap());
 }

@@ -140,6 +140,37 @@ def run_reviewer(request_id, kind, message):
         send({"type": "tool_execution_end", "toolCallId": "review-write", "toolName": "write",
               "result": {"content": [{"type": "text", "text": "Luuna scope guard: write is not permitted"}]},
               "isError": True})
+    elif scenario == "review_no_findings":
+        # A non-passing verdict that names nothing to change: no verdict at all.
+        review["verdict"] = "changes_required"
+    elif scenario == "review_tools":
+        # Tool use the runtime records by name and path only: the search
+        # pattern and file contents below must never reach durable events.
+        for call, tool, args in (("review-read", "read", {"path": "src/main.py"}),
+                                 ("review-grep", "grep", {"pattern": "fixture-secret-pattern", "path": "src"})):
+            send({"type": "tool_execution_start", "toolCallId": call, "toolName": tool, "args": args})
+            send({"type": "tool_execution_end", "toolCallId": call, "toolName": tool,
+                  "result": {"content": [{"type": "text", "text": "fixture-file-contents"}]}, "isError": False})
+        send({"type": "tool_execution_start", "toolCallId": "review-escape", "toolName": "read",
+              "args": {"path": "../outside.txt"}})
+        send({"type": "tool_execution_end", "toolCallId": "review-escape", "toolName": "read",
+              "result": {"content": [{"type": "text", "text": "Luuna scope guard: path is outside"}]},
+              "isError": True})
+    elif scenario == "review_report":
+        # Reports what the runtime gave this reviewer, so tests can check the
+        # reviewer's diff evidence without the prompt being persisted.
+        diff = payload.get("diff", "")
+        scope = json.loads(os.environ.get("LUUNA_SCOPE_JSON", "null")) or {}
+        review["evidence"] = [
+            "scope_root_is_cwd=" + json.dumps(
+                os.path.normcase(scope.get("root", "")) == os.path.normcase(os.getcwd())),
+            "diff_truncated=" + json.dumps(payload.get("diff_truncated")),
+            "diff_notice=" + json.dumps(bool(payload.get("diff_notice"))),
+            "binary_patch=" + json.dumps("GIT binary patch" in diff),
+            "writer_change=" + json.dumps("+print('implemented by the synthetic writer')" in diff),
+            "files=" + json.dumps(payload.get("diff_files")),
+            "attention=" + json.dumps(payload.get("attention_paths")),
+        ]
     text = "not a review JSON object" if scenario == "review_malformed" else json.dumps(review)
     output = {"role": "assistant", "stopReason": "stop", "usage": usage(0.0005),
               "content": [{"type": "text", "text": text}]}

@@ -575,22 +575,10 @@ impl ReviewResult {
             || self.candidate_hash != candidate.hash
             || self.reviewer_session.is_empty()
             || self.reviewer_session == implementer_session
-            || self.evidence.is_empty()
-            || self.findings.iter().any(|f| {
-                f.path.is_empty()
-                    || f.line == 0
-                    || f.explanation.is_empty()
-                    || f.evidence.is_empty()
-            })
-            || (self.verdict == ReviewVerdict::Passed
-                && self
-                    .findings
-                    .iter()
-                    .any(|f| f.severity == Severity::Blocking))
         {
             return invalid("review must independently match the exact candidate and findings");
         }
-        Ok(())
+        self.check_contract()
     }
 }
 

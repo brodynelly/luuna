@@ -69,6 +69,7 @@ impl Store {
             started_at: now(),
             finished_at: None,
             reason: None,
+            content_drift: false,
         };
         evidence.validate()?;
         tx.execute(
@@ -126,19 +127,7 @@ impl Store {
             .transaction_with_behavior(TransactionBehavior::Immediate)?;
         let run = require_run(&tx, run_id, expected_revision)?;
         let mut evidence = require_candidate(&tx, run_id, hash)?;
-        let plan = current_plan(&tx, run_id)?;
-        let revalidation = match (run.state, evidence.status) {
-            (RunState::Validating, CandidateStatus::Pending)
-            | (RunState::Interrupted, CandidateStatus::Interrupted) => false,
-            (RunState::Failed, CandidateStatus::Failed) => {
-                require_unreviewed_passed_checks(&plan, &evidence)?;
-                true
-            }
-            _ => {
-                return invalid("candidate validation is already active or cannot be resumed");
-            }
-        };
-        require_headroom(&plan, workflow_usage(&tx, run_id)?)?;
+        let revalidation = validation_gate(&tx, &run, &evidence)?;
         evidence.validation_generation += 1;
         evidence.results.clear();
         evidence.review = None;
@@ -404,6 +393,40 @@ impl Store {
         next: RunState,
         reason: &str,
     ) -> Result<CandidateEvidence> {
+        self.settle_candidate_stage(run_id, expected_revision, hash, next, reason, false)
+    }
+
+    /// Fail a generation whose owned worktree no longer holds the frozen
+    /// candidate (a tracked edit, a moved HEAD, a missing or rebound worktree).
+    /// The candidate is marked so it is never re-validated in place: nothing
+    /// that ran there is evidence for the candidate any more. Repair (a new
+    /// revision in a fresh worktree) or a new plan revision remain.
+    pub fn fail_candidate_drift(
+        &mut self,
+        run_id: &str,
+        expected_revision: u64,
+        hash: &str,
+        reason: &str,
+    ) -> Result<CandidateEvidence> {
+        self.settle_candidate_stage(
+            run_id,
+            expected_revision,
+            hash,
+            RunState::Failed,
+            reason,
+            true,
+        )
+    }
+
+    fn settle_candidate_stage(
+        &mut self,
+        run_id: &str,
+        expected_revision: u64,
+        hash: &str,
+        next: RunState,
+        reason: &str,
+        content_drift: bool,
+    ) -> Result<CandidateEvidence> {
         if !matches!(
             next,
             RunState::Failed
@@ -424,14 +447,14 @@ impl Store {
         evidence.reason = Some(reason.into());
         evidence.finished_at = Some(now());
         evidence.stage_started_at = None;
+        evidence.content_drift |= content_drift;
         save_candidate(&tx, &evidence)?;
+        let mut payload = json!({"candidate_hash":hash,"reason":reason});
+        if content_drift {
+            payload["content_drift"] = json!(true);
+        }
         if run.state == RunState::Paused && next == RunState::Paused {
-            bump(
-                &tx,
-                &run,
-                "candidate.stage_failed",
-                json!({"candidate_hash":hash,"reason":reason}),
-            )?;
+            bump(&tx, &run, "candidate.stage_failed", payload)?;
         } else {
             transition(
                 &tx,
@@ -439,7 +462,7 @@ impl Store {
                 expected_revision,
                 next,
                 "candidate.stage_failed",
-                json!({"candidate_hash":hash,"reason":reason}),
+                payload,
             )?;
         }
         tx.commit()?;
@@ -515,9 +538,19 @@ impl Store {
         if (run.state, evidence.status) != (RunState::Failed, CandidateStatus::Failed) {
             return invalid("candidate is not a failed candidate awaiting a fresh validation");
         }
-        let plan = current_plan(&tx, run_id)?;
-        require_unreviewed_passed_checks(&plan, &evidence)?;
-        require_headroom(&plan, workflow_usage(&tx, run_id)?)
+        validation_gate(&tx, &run, &evidence).map(|_| ())
+    }
+
+    /// Whether `POST …/validate` may claim a generation of this exact
+    /// candidate now, and whether it would be a re-validation in place. This
+    /// is the gate `begin_candidate_validation` applies in its transaction,
+    /// evaluated in a read-only transaction that is dropped without a commit,
+    /// so `GET …/candidate` reports what the route decides.
+    pub fn can_candidate_validate(&self, run_id: &str, hash: &str) -> Result<bool> {
+        let tx = self.connection.unchecked_transaction()?;
+        let run = get_run(&tx, run_id)?.ok_or_else(|| StorageError::NotFound(run_id.into()))?;
+        let evidence = require_candidate(&tx, run_id, hash)?;
+        validation_gate(&tx, &run, &evidence)
     }
 
     /// Reuse the exact approved scope and durable budgets, never resetting them.
@@ -939,6 +972,11 @@ fn require_unreviewed_passed_checks(
     plan: &PlanRevision,
     evidence: &CandidateEvidence,
 ) -> Result<()> {
+    if evidence.content_drift {
+        return invalid(
+            "candidate content drifted from the frozen candidate; repair it in a fresh worktree or re-plan",
+        );
+    }
     if evidence.review.is_some() {
         return invalid("candidate already has a recorded review verdict");
     }
@@ -959,6 +997,31 @@ fn require_unreviewed_passed_checks(
         );
     }
     Ok(())
+}
+
+/// The single admission gate for a validation generation: a pending or
+/// interrupted candidate, or a failed one that qualifies for re-validation in
+/// place (ADR 0009 point 7), under the current approval, ticket and manifest
+/// binding and with budget headroom. Returns whether it is a re-validation.
+fn validation_gate(
+    tx: &Transaction<'_>,
+    run: &RunRecord,
+    evidence: &CandidateEvidence,
+) -> Result<bool> {
+    let revalidation = match (run.state, evidence.status) {
+        (RunState::Validating, CandidateStatus::Pending)
+        | (RunState::Interrupted, CandidateStatus::Interrupted) => false,
+        (RunState::Failed, CandidateStatus::Failed) => true,
+        _ => {
+            return invalid("candidate validation is already active or cannot be resumed");
+        }
+    };
+    let plan = current_plan(tx, &run.id)?;
+    if revalidation {
+        require_unreviewed_passed_checks(&plan, evidence)?;
+    }
+    require_headroom(&plan, workflow_usage(tx, &run.id)?)?;
+    Ok(revalidation)
 }
 
 fn require_headroom(plan: &PlanRevision, usage: BudgetUsage) -> Result<()> {

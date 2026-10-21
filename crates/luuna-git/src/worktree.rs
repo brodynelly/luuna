@@ -639,6 +639,295 @@ pub fn parse_changed_paths(bytes: &[u8]) -> Vec<ChangedPath> {
     changes
 }
 
+// Candidate validation and review (ADR 0009): every validation generation runs
+// on exactly the frozen candidate tree, and review diffs show each textual
+// change whatever the repository's attributes say about it.
+
+/// How one changed path appears in a [`ReviewDiff`].
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum DiffShown {
+    /// Its unified diff is part of the text.
+    Text,
+    /// Binary or non-UTF-8 content: a one-line summary naming both blobs.
+    Summary,
+    /// Left out so the text stays within the requested bound.
+    Omitted,
+}
+
+/// One path that differs between the base and the candidate commit.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct DiffFile {
+    pub path: String,
+    /// Git's raw status letter (`A`, `D`, `M`, `T`).
+    pub status: String,
+    pub old_blob: String,
+    pub new_blob: String,
+    pub shown: DiffShown,
+}
+
+/// A patch between exact commits for independent review and display. `text`
+/// holds complete per-file sections only; `files` names every changed path,
+/// including those whose section did not fit (`truncated`).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ReviewDiff {
+    pub text: String,
+    pub files: Vec<DiffFile>,
+    pub truncated: bool,
+}
+
+impl GitInspector {
+    /// Git in a Luuna-owned worktree with the work tree named explicitly, so
+    /// repository configuration cannot point an operation at another tree.
+    async fn owned_worktree(
+        &self,
+        worktree: &Path,
+        args: &[&str],
+        overrides: &[String],
+    ) -> Result<crate::Output, GitError> {
+        let work_tree = crate::strip_verbatim_prefix(worktree)
+            .to_str()
+            .map(|path| format!("--work-tree={path}"))
+            .ok_or_else(|| GitError::Command {
+                command: "worktree".into(),
+                detail: "worktree paths must be valid UTF-8".into(),
+            })?;
+        let mut full = vec![work_tree.as_str()];
+        full.extend_from_slice(args);
+        // Errors name the subcommand, never the private path placed before it.
+        let subcommand = args.first().copied().unwrap_or("git").to_owned();
+        let output = match self.git(Some(worktree), &full, overrides).await {
+            Err(GitError::Timeout(_)) => return Err(GitError::Timeout(subcommand)),
+            other => other?,
+        };
+        if output.status != Some(0) {
+            return Err(GitError::Command {
+                command: subcommand,
+                detail: output.stderr,
+            });
+        }
+        Ok(output)
+    }
+
+    /// Tracked paths whose index or file content differs from HEAD in a
+    /// Luuna-owned worktree, so a drift reason can name them.
+    pub async fn tracked_changes(&self, worktree: &Path) -> Result<Vec<String>, GitError> {
+        let overrides = self.filter_overrides(worktree).await?;
+        let output = self
+            .owned_worktree(
+                worktree,
+                &[
+                    "status",
+                    "--porcelain=v2",
+                    "-z",
+                    "--no-renames",
+                    "--untracked-files=no",
+                    "--ignore-submodules=none",
+                ],
+                &overrides,
+            )
+            .await?;
+        Ok(parse_changed_paths(&output.stdout)
+            .into_iter()
+            .map(|change| change.path)
+            .collect())
+    }
+
+    /// Remove every untracked and ignored path from a Luuna-owned candidate
+    /// worktree (`git clean -ffdx`): what a writer, a person or an earlier
+    /// generation's checks left there is not part of the frozen candidate and
+    /// must not feed its checks or review. Callers verify HEAD, tree and
+    /// tracked content first. Returns the removed paths as Git names them, and
+    /// fails when anything untracked remains afterwards.
+    pub async fn clean_candidate_worktree(&self, worktree: &Path) -> Result<Vec<String>, GitError> {
+        let mut overrides = self.filter_overrides(worktree).await?;
+        overrides.push("core.quotePath=false".to_owned());
+        let planned = self
+            .owned_worktree(worktree, &["clean", "-ffdx", "--dry-run"], &overrides)
+            .await?;
+        let removed: Vec<String> = String::from_utf8_lossy(&planned.stdout)
+            .lines()
+            .filter_map(|line| line.strip_prefix("Would remove "))
+            .map(ToOwned::to_owned)
+            .collect();
+        if !removed.is_empty() {
+            self.owned_worktree(worktree, &["clean", "-ffdx", "--quiet"], &overrides)
+                .await?;
+        }
+        let left = self
+            .owned_worktree(
+                worktree,
+                &["ls-files", "--others", "--directory", "-z"],
+                &overrides,
+            )
+            .await?;
+        if left.stdout.iter().any(|byte| *byte != 0) {
+            let paths: Vec<String> = left
+                .stdout
+                .split(|byte| *byte == 0)
+                .filter(|path| !path.is_empty())
+                .take(8)
+                .map(|path| String::from_utf8_lossy(path).into_owned())
+                .collect();
+            return Err(GitError::Command {
+                command: "clean".into(),
+                detail: format!(
+                    "untracked paths remain after cleaning: {}",
+                    paths.join(", ")
+                ),
+            });
+        }
+        Ok(removed)
+    }
+
+    /// The patch between exact commits as independent review and the
+    /// developer see it. `--text` overrides `-diff`/`binary` attributes from
+    /// the tree, `info/attributes` or `core.attributesFile`, external drivers
+    /// and text conversion stay disabled and filters are overridden, so no
+    /// attribute can turn a source change into an opaque binary patch.
+    /// Content that really is binary (a NUL byte) or not valid UTF-8 becomes a
+    /// one-line summary naming both blobs instead of lossily decoded text.
+    /// Whole file sections are kept in order while they fit in `max_bytes`;
+    /// the rest are listed as omitted. A patch beyond Git's output cap yields
+    /// the file list alone, never a refusal.
+    pub async fn review_diff(
+        &self,
+        worktree: &Path,
+        base_commit: &str,
+        candidate_commit: &str,
+        max_bytes: usize,
+    ) -> Result<ReviewDiff, GitError> {
+        require_object_id(base_commit)?;
+        require_object_id(candidate_commit)?;
+        let overrides = self.filter_overrides(worktree).await?;
+        let common = [
+            "--no-ext-diff",
+            "--no-textconv",
+            "--no-renames",
+            "--no-color",
+            "--no-relative",
+            "--ignore-submodules=none",
+            base_commit,
+            candidate_commit,
+            "--",
+        ];
+        let mut raw_args = vec!["diff", "--raw", "-z", "--no-abbrev"];
+        raw_args.extend_from_slice(&common);
+        let raw = self.owned_worktree(worktree, &raw_args, &overrides).await?;
+        let mut files = parse_raw_diff(&raw.stdout).ok_or_else(|| GitError::Command {
+            command: "diff".into(),
+            detail: "unexpected raw diff output".into(),
+        })?;
+        let mut patch_args = vec![
+            "diff",
+            "--text",
+            "--full-index",
+            "--unified=3",
+            "--src-prefix=a/",
+            "--dst-prefix=b/",
+        ];
+        patch_args.extend_from_slice(&common);
+        let patch = match self.owned_worktree(worktree, &patch_args, &overrides).await {
+            Ok(output) => output.stdout,
+            Err(GitError::Oversized | GitError::Timeout(_)) => {
+                for file in &mut files {
+                    file.shown = DiffShown::Omitted;
+                }
+                return Ok(ReviewDiff {
+                    text: String::new(),
+                    truncated: !files.is_empty(),
+                    files,
+                });
+            }
+            Err(error) => return Err(error),
+        };
+        // Git shows a type change (a file replaced by a symlink or a gitlink)
+        // as a deletion followed by an addition of the same path: two sections
+        // for one raw entry.
+        let parts = |file: &DiffFile| if file.status == "T" { 2 } else { 1 };
+        let starts = patch_section_starts(&patch);
+        if starts.len() != files.iter().map(parts).sum::<usize>()
+            || starts.first().is_some_and(|start| *start != 0)
+            || (starts.is_empty() && !patch.is_empty())
+        {
+            return Err(GitError::Command {
+                command: "diff".into(),
+                detail: "patch sections do not match the changed paths".into(),
+            });
+        }
+        let mut text = String::new();
+        let mut truncated = false;
+        let mut next = 0;
+        for file in &mut files {
+            let from = starts[next];
+            next += parts(file);
+            let section = &patch[from..starts.get(next).copied().unwrap_or(patch.len())];
+            let rendered = match std::str::from_utf8(section) {
+                Ok(section) if !section.contains('\0') => {
+                    file.shown = DiffShown::Text;
+                    section.to_owned()
+                }
+                _ => {
+                    file.shown = DiffShown::Summary;
+                    // Escaped, so a path cannot add lines of its own.
+                    format!(
+                        "diff --git a/{path} b/{path}\nLuuna: {status} {path}: binary or non-UTF-8 content is not shown as text (old blob {old}, new blob {new}); inspect the file itself.\n",
+                        path = file.path.escape_debug(),
+                        status = file.status,
+                        old = file.old_blob,
+                        new = file.new_blob,
+                    )
+                }
+            };
+            if text.len() + rendered.len() <= max_bytes {
+                text.push_str(&rendered);
+            } else {
+                file.shown = DiffShown::Omitted;
+                truncated = true;
+            }
+        }
+        Ok(ReviewDiff {
+            text,
+            files,
+            truncated,
+        })
+    }
+}
+
+/// `git diff --raw -z --no-renames --no-abbrev` entries; `None` when the
+/// output does not have that shape.
+fn parse_raw_diff(bytes: &[u8]) -> Option<Vec<DiffFile>> {
+    let mut fields = bytes.split(|byte| *byte == 0);
+    let mut files = Vec::new();
+    while let Some(meta) = fields.next() {
+        if meta.is_empty() {
+            continue;
+        }
+        let meta = std::str::from_utf8(meta).ok()?.strip_prefix(':')?;
+        let parts: Vec<&str> = meta.split(' ').collect();
+        let [_, _, old, new, status] = parts.as_slice() else {
+            return None;
+        };
+        let path = fields.next().filter(|path| !path.is_empty())?;
+        files.push(DiffFile {
+            path: String::from_utf8_lossy(path).into_owned(),
+            status: (*status).to_owned(),
+            old_blob: (*old).to_owned(),
+            new_blob: (*new).to_owned(),
+            shown: DiffShown::Omitted,
+        });
+    }
+    Some(files)
+}
+
+/// Offsets of each `diff --git ` header line in a patch. Content lines always
+/// carry a ` `, `+`, `-` or `\` prefix, so no file content can start a section.
+fn patch_section_starts(patch: &[u8]) -> Vec<usize> {
+    const HEADER: &[u8] = b"diff --git ";
+    (0..patch.len())
+        .filter(|&at| (at == 0 || patch[at - 1] == b'\n') && patch[at..].starts_with(HEADER))
+        .collect()
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

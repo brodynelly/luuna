@@ -57,4 +57,16 @@ const invalidScope = structuredClone(componentPlan);
 invalidScope.component_context.memory[0].scope = 'automatic';
 assert.equal(planValidator(invalidScope), false, 'Unknown memory scope was accepted');
 checks += 4;
+// A review must be self-consistent: a non-passing verdict names a finding and
+// stored text carries no terminal control sequences.
+const reviewValidator = compiled.get('schemas/review-result.schema.json');
+const review = read('fixtures/domain/review.valid.json');
+for (const verdict of ['changes_required', 'blocked']) {
+  assert.equal(reviewValidator({ ...review, verdict, findings: [] }), false, `${verdict} without findings was accepted`);
+}
+const finding = { severity: 'warning', path: 'src/main.rs', line: 1, explanation: 'Seeded issue', evidence: ['observed'] };
+assert.equal(reviewValidator({ ...review, verdict: 'changes_required', findings: [finding] }), true, ajv.errorsText(reviewValidator.errors));
+assert.equal(reviewValidator({ ...review, verdict: 'changes_required', findings: [{ ...finding, explanation: 'red \u001b[31m alert' }] }), false, 'Terminal escapes were accepted in a finding');
+assert.equal(reviewValidator({ ...review, evidence: [' \n\t'] }), false, 'Whitespace-only review evidence was accepted');
+checks += 5;
 console.log(`Contracts: ${checks} positive/negative checks passed across ${compiled.size + starterPairs.length} schemas.`);

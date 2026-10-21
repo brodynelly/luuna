@@ -19,6 +19,10 @@ contract is exercised rather than assumed. `review_malformed_once` answers a
 candidate's first validation generation with malformed text and every later
 generation with a valid pass, so a fresh validation generation after an
 invalid review can be exercised against one immutable ticket.
+`review_no_findings` returns `changes_required` without a finding (invalid
+review output), `review_tools` emits read, search and refused tool calls whose
+patterns and results must never be recorded, and `review_report` passes with
+evidence strings that describe the diff and scope it was given.
 
 As Pi 1.3.0 does, the fixture reads `--system-prompt` from the named file when
 it exists; writer `fixture_args` report the prompt's size and whether it came

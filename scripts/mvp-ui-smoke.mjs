@@ -64,8 +64,9 @@ class MainTest(unittest.TestCase):
         completed = subprocess.run([sys.executable, "src/main.py"], capture_output=True, text=True, check=True)
         self.assertTrue(completed.stdout.strip())
 `;
-// Holds the first validation of a candidate for 20 s so the smoke can stop the runtime
-// mid-check; the marker is untracked build output in the Luuna-owned worktree.
+// Holds a candidate's validation for 20 s so the smoke can stop the runtime mid-check; the
+// marker is untracked build output in the Luuna-owned worktree. Every validation generation
+// starts from the candidate tree alone (ADR 0009), so a resumed generation holds again.
 const HOLD_CHECK = `import time
 from pathlib import Path
 
