@@ -133,7 +133,7 @@ let runtime = null;
 let runtimeExited = null;
 const runtimeLog = path.join(out, "runtime.log");
 async function startRuntime(label) {
-  const env = { ...toolEnv(), LUUNA_API_TOKEN: token, LUUNA_DATA_DIR: dataDir, LUUNA_PORT: String(runtimePort), LUUNA_PI_COMMAND: python, LUUNA_PI_ARGS_JSON: JSON.stringify([path.join(repository, "fixtures", "pi-rpc", "mock_pi.py")]), LUUNA_RUN_TIMEOUT_SECONDS: "600" };
+  const env = { ...toolEnv(), LUUNA_API_TOKEN: token, LUUNA_DATA_DIR: dataDir, LUUNA_PORT: String(runtimePort), LUUNA_PI_COMMAND: python, LUUNA_PI_ARGS_JSON: JSON.stringify([path.join(repository, "fixtures", "pi-rpc", "mock_pi.py")]), LUUNA_PI_PROVIDER: "test", LUUNA_PI_MODEL: "synthetic", LUUNA_RUN_TIMEOUT_SECONDS: "600" };
   const child = spawn(runtimeBinary, [], { env, stdio: ["ignore", "ignore", "pipe"] });
   child.stderr.on("data", (chunk) => writeFileSync(runtimeLog, `[${label}] ${chunk}`, { flag: "a" }));
   runtimeExited = new Promise((resolve) => child.once("exit", (code, signal) => resolve({ code, signal })));
@@ -346,7 +346,7 @@ async function walkthrough() {
   const tests = (await item.locator(".candidate-checks").innerText()).includes("Tests detected");
   record("walkthrough: the invalid synthetic review fails the candidate without a verdict and the passed unittest check shows its detected test count", failed === "failed" && /invalid structured reviewer response/.test(reason) && tests, `candidate ${failed}; ${reason.slice(0, 80)}; tests detected shown: ${tests}`);
   const revalidate = item.getByRole("button", { name: "Re-validate and review" });
-  record("walkthrough: the runtime offers re-validation in place with the reason and no writer attempt", (await revalidate.count()) === 1 && (await item.locator(".recovery-note").innerText()).includes("No writer attempt is spent") && (await item.getByRole("button", { name: "Repair candidate" }).count()) === 0, "Re-validate and review shown; Repair candidate hidden at max_attempts 1");
+  record("walkthrough: the runtime offers re-validation in place with the reason and no writer attempt", (await revalidate.count()) === 1 && (await item.locator(".candidate-review p.recovery-note").innerText()).includes("No writer attempt is spent") && (await item.getByRole("button", { name: "Repair candidate" }).count()) === 0, "Re-validate and review shown; Repair candidate hidden at max_attempts 1");
   await screenshot("03-invalid-review");
   await revalidate.focus();
   await page.keyboard.press("Enter");

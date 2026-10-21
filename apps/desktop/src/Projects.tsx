@@ -221,8 +221,8 @@ export function Projects({ client, connectionEpoch = 0 }: { client: LuunaClient 
         <form onSubmit={register} className="register-form">
           <fieldset disabled={!client || busy}>
             <label>Project name<input value={name} onChange={(event) => setName(event.target.value)} required placeholder="My product" /></label>
-            <label>Project ID<input value={projectId} onChange={(event) => setProjectId(event.target.value)} placeholder="derived from the name" spellCheck={false} pattern="[a-z][a-z0-9-]{0,63}" /></label>
-            <label>Repository ID<input value={repositoryId} onChange={(event) => setRepositoryId(event.target.value)} required spellCheck={false} pattern="[a-z][a-z0-9-]{0,63}" /></label>
+            <label>Project ID<input value={projectId} onChange={(event) => setProjectId(event.target.value)} placeholder="derived from the name" spellCheck={false} pattern="[a-z][a-z0-9\-]{0,63}" /></label>
+            <label>Repository ID<input value={repositoryId} onChange={(event) => setRepositoryId(event.target.value)} required spellCheck={false} pattern="[a-z][a-z0-9\-]{0,63}" /></label>
             <label>Repository root path<input value={path} onChange={(event) => setPath(event.target.value)} required spellCheck={false} placeholder="/absolute/path/to/checkout" /></label>
             <div className="form-footer"><small>Paths stay in the local machine registry; the manifest never contains them.</small><button className="primary" disabled={!name.trim() || !path.trim()}>Register repository</button></div>
           </fieldset>
