@@ -24,18 +24,20 @@ Tooling: Bun 1.4.3. Windows local consumer checks used Node 26.10.0, allowed by 
 
 | Check | Observed result |
 | --- | --- |
-| Independent destination CI: `bun install --frozen-lockfile --ignore-scripts`, `bun run verify` | All three passed; includes typecheck, instruction validation and complete inherited suites |
+| Independent destination CI: `bun install --frozen-lockfile --ignore-scripts`, `bun run verify` | All three passed; includes typecheck, instruction validation and complete inherited suites. Fresh local Linux destination clones also passed 1,053 Missions, 1,580 Atlas and 459 Beacon tests (3,092 total) |
 | Windows destination typecheck and instruction checks | Passed for all three repositories |
 | `node scripts/components.mjs setup` in the isolated Luuna consumer checkout | Passed; exact remote source pins, frozen installs, no change to root hooks |
 | `node scripts/components.mjs verify` | All three manifest/gitlink/checkout identities and CLI contracts passed |
 | `node scripts/components-smoke.mjs` on Windows | 12/12 genuine CLI operations passed: Missions init/create/show/list, Atlas init/add/record/search, Beacon init/create/render/list; only temporary test stores used |
 | `node --test scripts/components.test.mjs` on Windows | 5/5 passed, including missing checkout, changed pin, moved checkout, dirty tree, wrong URL, incompatible alias and missing dependencies |
-| Root schema fixture command | 20/20 passed |
-| `npm run typecheck`, `npm run build` on Windows | Passed |
+| Fresh recursive Linux Luuna clone, Node 24.19.0: `npm test` | Passed: 20 schema cases, 5 scope-guard tests, 5 component pin tests, 13 desktop tests and 22 API-client tests |
+| Fresh recursive Linux Luuna clone: setup and real consumer smoke | Frozen setup passed; 12/12 CLI operations passed |
+| `npm run test --workspaces --if-present` on Windows | 13 desktop and 22 API-client tests passed |
+| `npm run typecheck`, `npm run build` on Windows and fresh Linux clone | Passed |
 | `node scripts/check-hygiene.mjs`, `git diff --check` | Passed |
 | Root `npm test` on Windows from unchanged baseline guard source | Stopped at all five pre-existing scope-guard fixtures because Windows denied directory symlink creation with `EPERM`; this is not a passing full test run. Existing native-platform work is preserved separately, not imported into the extraction branch |
 
-Luuna's CI runs the consumer setup, verification and real CLI smoke on Linux, macOS and Windows. Platform results must be read from the migration PR's actual check runs; workflow configuration alone is not passing evidence.
+Luuna's CI runs the consumer setup, verification and real CLI smoke on Linux, macOS and Windows. The private Luuna Actions runs on [PR #8](https://github.com/brodynelly/luuna/pull/8) were refused before jobs started: GitHub reported recent account payments failed or the spending limit needs to be increased. Billing settings were not changed. The three public component repositories' own CI passed. Linux and Windows consumer evidence above was run locally; macOS consumer CI remains unverified until the account prerequisite is resolved. Workflow configuration alone is not passing evidence.
 
 ## Setup, updates and rollback
 
