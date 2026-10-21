@@ -1,8 +1,8 @@
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import type { FormEvent } from "react";
-import { LuunaClient, assistantText, isTerminal, mergeEvents } from "@luuna/api-client";
-import type { EventEnvelope, Health, RunRecord } from "@luuna/api-client";
-import { canCancel } from "./workflow-state";
+import { ApiError, LuunaClient, assistantText, isTerminal, mergeEvents, readEventPages } from "@luuna/api-client";
+import type { EventEnvelope, Health, RunRecord, RunState } from "@luuna/api-client";
+import { canCancel, sameRuns } from "./workflow-state";
 import { Projects } from "./Projects";
 import { actionFailure, describeFailure } from "./failures";
 import { ensureLocalRuntime, nativeDesktop } from "./native-runtime";
@@ -10,6 +10,42 @@ import { StatusBadge } from "./design/StatusBadge";
 import { connectionTone, runTone } from "./design/tone";
 
 const message = describeFailure;
+/** Session history shows the most recent runs; older ones stay in the runtime. */
+const HISTORY_LIMIT = 200;
+const EVENT_PAGE = 1000;
+
+/** A rejected token never recovers by waiting: the developer has to enter the current one. */
+export function authenticationLost(failure: unknown): boolean {
+  return failure instanceof ApiError && failure.status === 401;
+}
+
+/**
+ * The announced session status: the connection and the run's state, so a screen reader hears
+ * transitions rather than every replayed event sequence.
+ */
+export function sessionStatus(live: string, state: RunState): string {
+  return live === "Connected" ? `Connected · session ${state.replace(/_/g, " ")}` : live;
+}
+
+/**
+ * Lists runs until aborted. An outage is retried, because the runtime comes back by itself; a
+ * rejected token ends the loop, because only the developer can supply the current one.
+ */
+export async function watchRuns(client: Pick<LuunaClient, "listRuns">, signal: AbortSignal, on: { listed: (runs: RunRecord[]) => void; outage: (failure: unknown) => void; rejected: (failure: unknown) => void }, wait: (milliseconds: number, signal: AbortSignal) => Promise<void> = pause): Promise<void> {
+  while (!signal.aborted) {
+    try {
+      const next = await client.listRuns(signal, { limit: HISTORY_LIMIT });
+      if (signal.aborted) return;
+      on.listed(next);
+      await wait(2000, signal);
+    } catch (failure) {
+      if (signal.aborted) return;
+      if (authenticationLost(failure)) { on.rejected(failure); return; }
+      on.outage(failure);
+      await wait(3000, signal).catch(() => undefined);
+    }
+  }
+}
 
 function date(value: string): string {
   const parsed = new Date(value);
@@ -52,10 +88,16 @@ export function App() {
   const native = nativeDesktop();
   const outageRef = useRef(false);
   const operation = useRef<AbortController | null>(null);
+  const runsRef = useRef(runs);
+  runsRef.current = runs;
   const active = runs.find((run) => run.id === selected);
   const selectedWorkflow = active?.metadata.kind === "workflow";
-  const output = assistantText(events);
+  const output = useMemo(() => assistantText(events), [events]);
   const connectionState = client ? reachable ? "connected" : "reconnecting" : "offline";
+  // Rendering every payload is the costly part of a long run; only new events re-render the list.
+  const eventItems = useMemo(() => events.map((event) => <li key={event.event_id}>
+    <details open={event.type.includes("error") || event.type === "run.failed"}><summary><span className="event-number">{event.sequence}</span><span>{event.type}</span><time dateTime={event.timestamp}>{new Date(event.timestamp).toLocaleTimeString()}</time></summary><pre>{JSON.stringify(event.payload, null, 2)}</pre></details>
+  </li>), [events]);
 
   useEffect(() => () => operation.current?.abort(), []);
 
@@ -71,7 +113,7 @@ export function App() {
         const connection = await ensureLocalRuntime();
         if (controller.signal.aborted) return;
         const next = new LuunaClient(connection.url, connection.token);
-        const [status, saved] = await Promise.all([next.health(controller.signal), next.listRuns(controller.signal)]);
+        const [status, saved] = await Promise.all([next.health(controller.signal), next.listRuns(controller.signal, { limit: HISTORY_LIMIT })]);
         if (controller.signal.aborted) return;
         setUrl(connection.url);
         setHealth(status);
@@ -93,30 +135,29 @@ export function App() {
   useEffect(() => {
     if (!client) return;
     const controller = new AbortController();
-    const load = async () => {
-      while (!controller.signal.aborted) {
-        try {
-          const next = await client.listRuns(controller.signal);
-          if (controller.signal.aborted) return;
-          setReachable(true);
-          if (outageRef.current) {
-            outageRef.current = false;
-            setOutage("");
-            setConnectionEpoch((value) => value + 1);
-          }
-          setRuns(next);
-          setSelected((id) => id ?? next[0]?.id ?? null);
-          await pause(2000, controller.signal);
-        } catch (failure) {
-          if (controller.signal.aborted) return;
-          setReachable(false);
-          outageRef.current = true;
-          setOutage(message(failure));
-          await pause(3000, controller.signal).catch(() => undefined);
+    void watchRuns(client, controller.signal, {
+      listed: (next) => {
+        setReachable(true);
+        if (outageRef.current) {
+          outageRef.current = false;
+          setOutage("");
+          setConnectionEpoch((value) => value + 1);
         }
-      }
-    };
-    void load();
+        // An unchanged listing keeps its identity, so the panels below do not re-render.
+        setRuns((previous) => sameRuns(previous, next) ? previous : next);
+        setSelected((id) => id ?? next[0]?.id ?? null);
+      },
+      outage: (failure) => {
+        setReachable(false);
+        outageRef.current = true;
+        setOutage(message(failure));
+      },
+      // A restarted runtime with another token: show the connection form, not "reconnecting".
+      rejected: (failure) => {
+        disconnect();
+        setError(actionFailure("Connection", failure));
+      },
+    });
     return () => controller.abort();
   }, [client, refresh]);
 
@@ -132,16 +173,23 @@ export function App() {
         try {
           // Authenticated cursor replay also repairs gaps after sleep or disconnection.
           const [incoming, candidate] = await Promise.all([
-            client.events(selected, cursor, controller.signal),
+            readEventPages((after, page) => client.events(selected, after, controller.signal, page), cursor, EVENT_PAGE),
             selectedWorkflow ? client.candidate(selected, controller.signal) : Promise.resolve(null),
           ]);
           if (controller.signal.aborted) return;
-          received = mergeEvents(received, incoming);
-          setEvents(received);
+          if (incoming.length > 0) {
+            received = mergeEvents(received, incoming);
+            setEvents(received);
+            cursor = received.at(-1)?.sequence ?? 0;
+          }
           setCandidateActive(candidate?.active ?? false);
-          cursor = received.at(-1)?.sequence ?? 0;
-          setLive(`Connected · event replay from sequence ${cursor}`);
-          await pause(700, controller.signal);
+          // Announced only when it changes: the connection, not every replayed sequence.
+          setLive("Connected");
+          // A settled run is still followed (repair and re-validation continue on a failed
+          // workflow), just less often.
+          const state = runsRef.current.find((run) => run.id === selected)?.state;
+          const settled = state !== undefined && isTerminal(state) && !candidate?.active && incoming.length === 0;
+          await pause(settled ? 5000 : 700, controller.signal);
         } catch (failure) {
           if (controller.signal.aborted) return;
           setLive(`Reconnecting · replay will resume from sequence ${cursor} · ${message(failure)}`);
@@ -162,7 +210,7 @@ export function App() {
     setError("");
     try {
       const next = new LuunaClient(url, token.trim());
-      const [status, saved] = await Promise.all([next.health(controller.signal), next.listRuns(controller.signal)]);
+      const [status, saved] = await Promise.all([next.health(controller.signal), next.listRuns(controller.signal, { limit: HISTORY_LIMIT })]);
       if (controller.signal.aborted) return;
       setHealth(status);
       setRuns(saved);
@@ -286,12 +334,10 @@ export function App() {
           <section className="panel event-panel" aria-labelledby="events-heading">
             <div className="panel-heading"><h2 id="events-heading">{active ? "Session events" : "Live activity"}</h2>{active && <StatusBadge tone={runTone[active.state]}>{active.state}</StatusBadge>}</div>
             {active ? <>
-              <div className="run-detail meta"><code>{active.id}</code><span role="status">{live}</span>{canCancel(active.state, candidateActive) && <button className="danger" disabled={busy} onClick={() => void cancel()}>Cancel session</button>}</div>
+              <div className="run-detail meta"><code>{active.id}</code><span role="status">{sessionStatus(live, active.state)}</span><span>event replay from sequence {events.at(-1)?.sequence ?? 0}</span>{canCancel(active.state, candidateActive) && <button className="danger" disabled={busy} onClick={() => void cancel()}>Cancel session</button>}</div>
               {active.state === "failed" && <p className="failure-note" data-tone="danger">This session failed. Open the final events below for the runtime’s recorded reason.</p>}
-              {output && <div className="assistant-output"><h3>Pi response</h3><pre aria-live="polite">{output}</pre></div>}
-              <ol className="events" aria-label="Durable session events" tabIndex={0}>{events.map((event) => <li key={event.event_id}>
-                <details open={event.type.includes("error") || event.type === "run.failed"}><summary><span className="event-number">{event.sequence}</span><span>{event.type}</span><time dateTime={event.timestamp}>{new Date(event.timestamp).toLocaleTimeString()}</time></summary><pre>{JSON.stringify(event.payload, null, 2)}</pre></details>
-              </li>)}</ol>
+              {output && <div className="assistant-output"><h3>Pi response</h3><pre>{output}</pre></div>}
+              <ol className="events" aria-label="Durable session events" tabIndex={0}>{eventItems}</ol>
               {!events.length && <p className="empty">Waiting for the runtime’s event record…</p>}
               <p className="event-caption meta">Events replay from the last received sequence after a connection interruption. A completed session is not a validation result.</p>
             </> : <div className="activity-empty empty-box"><span aria-hidden="true">◌</span><p>Select a session or start a new one.</p><small>Live output and persisted event history appear here.</small></div>}

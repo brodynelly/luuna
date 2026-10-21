@@ -365,11 +365,44 @@ export interface PlanRevision {
   component_context?: ComponentContextSnapshot;
 }
 
+export interface PlanBudgetRequest {
+  max_attempts?: number;
+  /** Cumulative across the writer, checks, review and repairs of the workflow. */
+  timeout_seconds?: number;
+  cost_usd_micros?: number;
+}
+
 export interface CreatePlanRequest {
   task: { id?: string; repository_id: string; paths: string[]; operations: Operation[]; acceptance_criteria?: string[] };
   permissions?: Record<string, string[]>;
-  budgets?: { max_attempts?: number; timeout_seconds?: number; cost_usd_micros?: number };
+  budgets?: PlanBudgetRequest;
   component_context?: ComponentContext;
+  /** Repeating a delivery with the same key and request returns the plan it created. */
+  idempotency_key?: string;
+}
+
+/** The runtime's defaults when a plan names no budgets. */
+export const DEFAULT_PLAN_BUDGETS: Required<PlanBudgetRequest> = { max_attempts: 2, timeout_seconds: 600, cost_usd_micros: 1_000_000 };
+
+/** Inclusive bounds the runtime enforces for each plan budget. */
+export const PLAN_BUDGET_LIMITS: Record<keyof PlanBudgetRequest, readonly [number, number]> = {
+  max_attempts: [1, 10],
+  timeout_seconds: [1, 86_400],
+  cost_usd_micros: [1, 1_000_000_000],
+};
+
+/** The runtime's refusal for an out-of-range budget, or null when every named budget is in range. */
+export function planBudgetProblem(budgets: PlanBudgetRequest): string | null {
+  for (const [field, [low, high]] of Object.entries(PLAN_BUDGET_LIMITS) as [keyof PlanBudgetRequest, readonly [number, number]][]) {
+    const value = budgets[field];
+    if (value !== undefined && (!Number.isSafeInteger(value) || value < low || value > high)) return `budgets.${field} must be between ${low} and ${high}`;
+  }
+  return null;
+}
+
+/** Idempotency keys are 1 to 128 visible ASCII characters. */
+export function validIdempotencyKey(key: string): boolean {
+  return /^[\x21-\x7e]{1,128}$/.test(key);
 }
 
 export interface PlanOpened {
@@ -454,6 +487,27 @@ export interface CandidateEvidence {
   validation_generation: number;
 }
 
+/** The refusal each candidate route would give now, or null when it would admit the request. */
+export interface CandidateDecisionReasons {
+  validate: string | null;
+  repair: string | null;
+  revalidate: string | null;
+}
+
+/** The whole workflow's usage (writer attempts, validation and review) against its approved plan. */
+export interface WorkflowUsage {
+  attempts: number;
+  max_attempts: number;
+  elapsed_seconds: number;
+  timeout_seconds: number;
+  cost_usd_micros: number;
+  cost_budget_usd_micros: number;
+  /** A writer or reviewer reported tokens without a cost, so the cost budget did not meter them. */
+  cost_unreported: boolean;
+  repairs: number;
+  max_repairs: number | null;
+}
+
 export interface CandidateView {
   evidence: CandidateEvidence | null;
   /** Whether the runtime currently owns a worker for this workflow. */
@@ -466,6 +520,12 @@ export interface CandidateView {
    * headroom. Same revision, same approval, fresh checks and a fresh reviewer.
    */
   revalidate_allowed: boolean;
+  /** The validate route's own gate (absent from runtimes that predate it). */
+  validate_allowed?: boolean;
+  /** Why each refused action is refused (absent from runtimes that predate it). */
+  decision_reasons?: CandidateDecisionReasons;
+  /** Absent from runtimes that predate workflow usage reporting. */
+  usage?: WorkflowUsage;
 }
 
 export interface CandidateDiff {
@@ -523,10 +583,49 @@ export interface RegisterProjectRequest {
   repositories: { id: string; path: string }[];
 }
 
+/** Sending it is the developer's confirmation; the registered path is re-inspected when omitted. */
+export interface RebindRepositoryRequest {
+  local_path?: string;
+}
+
+/** The largest page a paged read may request. */
+export const MAX_PAGE = 10_000;
+
+export interface PageOptions {
+  /** At most this many records (1 to MAX_PAGE); omitted reads every record. */
+  limit?: number;
+}
+
 export class ApiError extends Error {
-  constructor(public readonly status: number, message: string) {
+  /**
+   * `fromRuntime` is true when the message is the runtime's own short reason from a JSON
+   * `{error}` body, false when the client substituted a generic sentence.
+   */
+  constructor(public readonly status: number, message: string, public readonly fromRuntime = false) {
     super(message);
     this.name = "ApiError";
+  }
+}
+
+function pageQuery(page: PageOptions, separator: "?" | "&"): string {
+  if (page.limit === undefined) return "";
+  if (!Number.isSafeInteger(page.limit) || page.limit < 1 || page.limit > MAX_PAGE) throw new Error(`limit must be an integer from 1 to ${MAX_PAGE}.`);
+  return `${separator}limit=${page.limit}`;
+}
+
+/**
+ * Every event after `after`, read in pages of `limit` from a cursor; it stops at the first short
+ * page. A runtime that ignores `limit` answers with one long page and an empty one.
+ */
+export async function readEventPages(read: (after: number, page: PageOptions) => Promise<EventEnvelope[]>, after: number, limit = 1000): Promise<EventEnvelope[]> {
+  const events: EventEnvelope[] = [];
+  let cursor = after;
+  for (;;) {
+    const page = await read(cursor, { limit });
+    events.push(...page);
+    const last = page.at(-1)?.sequence;
+    if (page.length < limit || last === undefined || last <= cursor) return events;
+    cursor = last;
   }
 }
 
@@ -584,8 +683,8 @@ export class LuunaClient {
         403: "The runtime denied this action.",
         409: "The run state changed or another session is active. Refresh and try again.",
       };
-      const reason = [400, 409, 422].includes(response.status) ? await runtimeReason(response) : undefined;
-      throw new ApiError(response.status, reason ?? messages[response.status] ?? `Runtime request failed (HTTP ${response.status}).`);
+      const reason = [400, 409, 413, 415, 422, 503].includes(response.status) ? await runtimeReason(response) : undefined;
+      throw new ApiError(response.status, reason ?? messages[response.status] ?? `Runtime request failed (HTTP ${response.status}).`, reason !== undefined);
     }
     return await response.json() as T;
   }
@@ -594,8 +693,9 @@ export class LuunaClient {
     return this.request("/health", { signal });
   }
 
-  listRuns(signal?: AbortSignal): Promise<RunRecord[]> {
-    return this.request("/runs", { signal });
+  /** Newest first; `limit` keeps the most recent records. */
+  listRuns(signal?: AbortSignal, page: PageOptions = {}): Promise<RunRecord[]> {
+    return this.request(`/runs${pageQuery(page, "?")}`, { signal });
   }
 
   run(id: string, signal?: AbortSignal): Promise<RunRecord> {
@@ -610,9 +710,9 @@ export class LuunaClient {
     return this.request(`/runs/${encodeURIComponent(id)}/cancel`, { method: "POST", signal });
   }
 
-  events(id: string, after = 0, signal?: AbortSignal): Promise<EventEnvelope[]> {
+  events(id: string, after = 0, signal?: AbortSignal, page: PageOptions = {}): Promise<EventEnvelope[]> {
     if (!Number.isSafeInteger(after) || after < 0) throw new Error("Invalid event cursor.");
-    return this.request(`/runs/${encodeURIComponent(id)}/events?after=${after}`, { signal });
+    return this.request(`/runs/${encodeURIComponent(id)}/events?after=${after}${pageQuery(page, "&")}`, { signal });
   }
 
   listProjects(signal?: AbortSignal): Promise<ProjectRecord[]> {
@@ -642,9 +742,17 @@ export class LuunaClient {
     });
   }
 
-  projectEvents(id: string, after = 0, signal?: AbortSignal): Promise<EventEnvelope[]> {
+  projectEvents(id: string, after = 0, signal?: AbortSignal, page: PageOptions = {}): Promise<EventEnvelope[]> {
     if (!Number.isSafeInteger(after) || after < 0) throw new Error("Invalid event cursor.");
-    return this.request(`/projects/${encodeURIComponent(id)}/events?after=${after}`, { signal });
+    return this.request(`/projects/${encodeURIComponent(id)}/events?after=${after}${pageQuery(page, "&")}`, { signal });
+  }
+
+  /**
+   * Re-points a moved or re-identified checkout after re-inspecting it read-only; the request is
+   * the developer's explicit intent. A manifest whose remote no longer matches must be confirmed again.
+   */
+  rebindRepository(projectId: string, repositoryId: string, request: RebindRepositoryRequest = {}, signal?: AbortSignal): Promise<ProjectView> {
+    return this.request(`/projects/${encodeURIComponent(projectId)}/repositories/${encodeURIComponent(repositoryId)}/rebind`, { method: "POST", body: JSON.stringify(request), signal });
   }
 
   listBaselines(id: string, signal?: AbortSignal): Promise<BaselineEvidence[]> {
@@ -724,8 +832,20 @@ export class LuunaClient {
   }
 
   /** Records an immutable plan revision; the runtime binds ticket, manifest, base and recipes. */
-  createPlan(ticketId: string, request: CreatePlanRequest, signal?: AbortSignal): Promise<PlanOpened> {
-    return this.request(`/tickets/${encodeURIComponent(ticketId)}/plans`, { method: "POST", body: JSON.stringify(request), signal });
+  async createPlan(ticketId: string, request: CreatePlanRequest, signal?: AbortSignal): Promise<PlanOpened> {
+    if (request.idempotency_key !== undefined && !validIdempotencyKey(request.idempotency_key)) throw new Error("An idempotency key is 1 to 128 visible ASCII characters.");
+    const problem = request.budgets ? planBudgetProblem(request.budgets) : null;
+    if (problem) throw new Error(problem);
+    const path = `/tickets/${encodeURIComponent(ticketId)}/plans`;
+    try {
+      return await this.request(path, { method: "POST", body: JSON.stringify(request), signal });
+    } catch (failure) {
+      // A runtime that predates plan idempotency rejects the unknown field while decoding the
+      // body (a 422 without a JSON reason), before anything is recorded; send it once without.
+      if (!(failure instanceof ApiError) || failure.status !== 422 || failure.fromRuntime || request.idempotency_key === undefined) throw failure;
+      const { idempotency_key: _unsupported, ...legacy } = request;
+      return this.request(path, { method: "POST", body: JSON.stringify(legacy), signal });
+    }
   }
 
   plan(id: string, signal?: AbortSignal): Promise<PlanRevision> {

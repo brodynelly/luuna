@@ -271,10 +271,21 @@ async function registerProject(name, id, dir, expectFailure = false) {
   return waitFor(async () => { const dd = page.locator(".facts").first(); const text = (await dd.count()) ? await dd.innerText() : ""; return text.includes(head.slice(0, 12)) ? text : null; }, 20_000);
 }
 
-async function confirmManifest(id, name, withHold) {
+async function confirmManifest(id, name, withHold, { unreadableFirst = false } = {}) {
   await page.getByRole("button", { name: "Discover proposed map" }).click();
   const shown = await waitFor(async () => ((await page.getByLabel(/Manifest to confirm/).count()) ? true : null), 20_000);
   record(`${id}: discovery proposes a manifest draft for editing without executing repository commands`, Boolean(shown), shown ? "draft shown" : "no draft");
+  if (unreadableFirst) {
+    // A quoted boolean: the runtime names the field (JSON reason), or an older runtime's text
+    // rejection becomes the client's own explanation; never a bare HTTP status.
+    const draft = manifest(id, name, withHold);
+    draft.repositories[0].checks[0].required = "true";
+    await page.getByLabel(/Manifest to confirm/).fill(JSON.stringify(draft, null, 2));
+    await page.getByRole("button", { name: "Confirm manifest" }).click();
+    const refused = await waitFor(alertText, 15_000);
+    record(`${id}: an unreadable manifest draft is refused with a reason, not a bare HTTP status`, /^Manifest confirmation refused: /.test(refused ?? "") && /invalid type|could not read the manifest draft/.test(refused ?? "") && !/HTTP 422\)\.$/.test(refused ?? ""), refused ?? "no alert");
+    await dismissAlerts();
+  }
   await page.getByLabel(/Manifest to confirm/).fill(JSON.stringify(manifest(id, name, withHold), null, 2));
   await page.getByRole("button", { name: "Confirm manifest" }).click();
   return waitFor(async () => ((await page.locator(".facts").first().innerText()).includes("revision 1") ? true : null), 20_000);
@@ -298,7 +309,7 @@ async function createTicket(title, intent, criteria) {
   await waitFor(async () => ((await ticketItem(title).count()) ? true : null), 20_000);
 }
 
-async function planApproveImplement(title) {
+async function planApproveImplement(title, { settle = true } = {}) {
   const item = ticketItem(title);
   await item.getByRole("button", { name: /^Plan/ }).click();
   await waitFor(async () => ((await runStateOf(title)) === "plan ready" ? true : null), 20_000);
@@ -312,6 +323,7 @@ async function planApproveImplement(title) {
   await page.keyboard.press("Enter");
   await waitFor(async () => ((await runStateOf(title)) === "approved" ? true : null), 20_000);
   await item.getByRole("button", { name: "Implement" }).click();
+  if (!settle) return { hash, disabledBefore, settled: null };
   const settled = await waitRunState(title, ["validating", "failed", "cancelled", "interrupted", "paused", "testing blocked"], 120_000);
   return { hash, disabledBefore, settled };
 }
@@ -458,7 +470,7 @@ async function walkthrough() {
   const facts = await registerProject("Walkthrough", "walkthrough", fixtures.walkthrough.dir);
   record("walkthrough: an existing repository is registered and its read-only observation is shown", Boolean(facts) && facts.includes(fixtures.walkthrough.head.slice(0, 12)), facts ? facts.split("\n").slice(0, 3).join(" · ") : "no facts");
   const checkoutBefore = git(fixtures.walkthrough.dir, "status", "--porcelain");
-  const confirmed = await confirmManifest("walkthrough", "Walkthrough", false);
+  const confirmed = await confirmManifest("walkthrough", "Walkthrough", false, { unreadableFirst: true });
   record("walkthrough: the edited manifest is confirmed as revision 1 with the exact base commit", Boolean(confirmed), (await page.locator(".facts").first().innerText()).split("\n").find((line) => line.includes("Confirmed manifest")) ?? "");
   const ticketFormEnabled = !(await page.getByLabel("Ticket title").isDisabled());
   record("walkthrough: the ticket form is enabled only once a manifest is confirmed", ticketFormEnabled);
@@ -466,6 +478,9 @@ async function walkthrough() {
   // 3. Baseline with a real unittest run.
   const baseline = await runBaseline();
   record("walkthrough: the baseline runs the real unittest recipe and passes", /^passed:/.test(baseline ?? "") && /unit: passed/.test(baseline ?? ""), baseline ?? "no record");
+  await page.locator('ul[aria-label="Recorded baselines"] li').first().getByRole("button", { name: "View unit stderr" }).click();
+  const baselineLog = await waitFor(async () => { const pre = page.locator('pre[aria-label="Baseline log"]'); return (await pre.count()) ? await pre.innerText() : null; }, 20_000);
+  record("walkthrough: a baseline recipe's log opens from its record and shows the unittest summary", Boolean(baselineLog) && /Ran 1 test/.test(baselineLog), baselineLog ? baselineLog.split("\n").filter(Boolean).slice(-2).join(" · ") : "no log");
   await screenshot("02-baseline");
 
   // 4. Ticket, plan, approval, writer, validation with an invalid review, re-validation.
@@ -503,8 +518,37 @@ async function walkthrough() {
   record("walkthrough: a check log is readable by record identity and shows the unittest summary", Boolean(log) && /Ran 1 test/.test(log), log ? log.split("\n").filter(Boolean).slice(-2).join(" · ") : "no log");
   record("walkthrough: the developer checkout is untouched (clean before and after)", checkoutBefore === "" && git(fixtures.walkthrough.dir, "status", "--porcelain") === "" && git(fixtures.walkthrough.dir, "rev-parse", "HEAD") === fixtures.walkthrough.head);
   await screenshot("04-reviewed");
+  await firstWriterCancel();
   await accessibilityAudit("walkthrough page");
   await presentationAudit("walkthrough page", { widths: true });
+}
+
+// Step 4 and 5 controls: chosen plan budgets, the next revision held back while the writer
+// runs, and cancelling the first writer attempt from its ticket (no candidate exists yet).
+async function firstWriterCancel() {
+  const title = "Cancel the first writer";
+  await page.getByLabel("Writer attempts").fill("3");
+  await page.getByLabel("Time budget (seconds)").fill("900");
+  await createTicket(title, "Make src/main.py print the greeting.", ["fixture:slow", "main prints the greeting"]);
+  await planApproveImplement(title, { settle: false });
+  const item = ticketItem(title);
+  const budgets = (await item.locator(".plan-meta").innerText()).trim();
+  record("budgets: the plan revision records the attempts and time budget chosen in the run settings", /budget 3 attempt\(s\), 900s/.test(budgets), budgets.replace(/^.*budget/, "budget"));
+  const implementing = await waitRunState(title, ["implementing"], 30_000);
+  const replanDisabled = implementing ? await item.getByRole("button", { name: "Plan r2" }).isDisabled() : false;
+  const blocker = (await item.locator(".plan-blocker").innerText().catch(() => "")).trim();
+  record("re-plan guard: Plan r2 is disabled with its reason while revision 1's writer runs", implementing === "implementing" && replanDisabled && /active work settles/.test(blocker), blocker || `run ${implementing}`);
+  const status = (await item.locator(".writer-status").innerText().catch(() => "")).trim();
+  const cancel = item.getByRole("button", { name: "Cancel workflow" });
+  record("first writer: the ticket says the writer runs and offers Cancel before any candidate exists", /running the scoped writer/.test(status) && (await cancel.count()) === 1, status);
+  await cancel.focus();
+  await page.keyboard.press("Enter");
+  const cancelled = await waitRunState(title, ["cancelled", "failed", "interrupted"], 30_000);
+  const replanAfter = cancelled ? !(await item.getByRole("button", { name: "Plan r2" }).isDisabled()) : false;
+  record("first writer: cancelling from the ticket settles the run and re-planning is available again", cancelled === "cancelled" && replanAfter, `run ${cancelled}`);
+  await page.getByLabel("Writer attempts").fill("2");
+  await page.getByLabel("Time budget (seconds)").fill("600");
+  await screenshot("04b-writer-cancelled");
 }
 
 async function recovery() {
@@ -581,10 +625,17 @@ async function recovery() {
   const interruptedC = await waitRunState(third, ["interrupted"], 30_000);
   const reasonC = (await itemC.locator(".candidate-review .failure-note").first().innerText().catch(() => "")).trim();
   record("recovery C: the interrupted review keeps the candidate and reserves the unreported provider spend", interruptedC === "interrupted" && /unreported provider spend|reserved/.test(reasonC), reasonC.slice(0, 120));
-  await itemC.getByRole("button", { name: "Validate and review" }).click();
-  const refusedC = await waitFor(alertText, 20_000);
-  record("recovery C: re-validation is refused because the budget is reserved, and the message names the next step (a new plan revision)", /^Validation refused: /.test(refusedC ?? "") && /budget/.test(refusedC ?? "") && /next plan revision/.test(refusedC ?? ""), refusedC ?? "no alert");
-  await dismissAlerts();
+  const validateC = itemC.getByRole("button", { name: "Validate and review" });
+  if (await validateC.count()) {
+    // A runtime that does not report its validate decision: the click is refused with the reason.
+    await validateC.click();
+    const refusedC = await waitFor(alertText, 20_000);
+    record("recovery C: re-validation is refused because the budget is reserved, and the message names the next step (a new plan revision)", /^Validation refused: /.test(refusedC ?? "") && /budget/.test(refusedC ?? "") && /next plan revision/.test(refusedC ?? ""), refusedC ?? "no alert");
+    await dismissAlerts();
+  } else {
+    const stepC = (await itemC.locator(".candidate-review p.recovery-note").first().innerText().catch(() => "")).trim();
+    record("recovery C: validation is not offered because the budget is reserved, and the candidate names the next step (a new plan revision)", /budget|reserved/.test(`${reasonC} ${stepC}`) && /next plan revision/.test(stepC), stepC || "no next step");
+  }
   await screenshot("07-budget-refusal");
   await accessibilityAudit("recovery page");
   await presentationAudit("recovery page");
