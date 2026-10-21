@@ -336,46 +336,57 @@ async function contrastAudit() {
     for (const element of document.body.querySelectorAll("*")) {
       if (!element.checkVisibility?.({ checkOpacity: true, checkVisibilityCSS: true })) continue;
       const own = [...element.childNodes].some((node) => node.nodeType === Node.TEXT_NODE && node.textContent.trim());
-      const field = element.matches("input:not([type=checkbox]):not([type=radio]), textarea") && element.value;
-      if (!own && !field) continue;
+      const textField = element.matches("input:not([type=checkbox]):not([type=radio]), textarea");
+      const field = textField && element.value;
+      // An empty field shows its placeholder: that text is measured in its ::placeholder colour.
+      const placeholder = textField && !element.value && element.placeholder && element.matches(":placeholder-shown");
+      if (!own && !field && !placeholder) continue;
       const rect = element.getBoundingClientRect();
       if (rect.width === 0 || rect.height === 0 || element.closest("[aria-hidden='true']")) continue;
       if (inactive(element) || translucent(element)) { exempt += 1; continue; }
       const style = getComputedStyle(element);
       const background = backgroundOf(element);
-      const foreground = over(rgba(style.color), background);
+      const foreground = over(rgba(placeholder ? getComputedStyle(element, "::placeholder").color : style.color), background);
       const size = parseFloat(style.fontSize);
       const large = size >= 24 || (size >= 18.66 && Number(style.fontWeight) >= 700);
       const value = ratio(foreground, background);
       checked += 1;
-      if (value < (large ? 3 : 4.5)) failures.push(`${element.tagName.toLowerCase()}${element.className && typeof element.className === "string" ? "." + element.className.trim().split(/\s+/).join(".") : ""} "${(element.textContent || element.value || "").trim().slice(0, 32)}" ${value.toFixed(2)}:1`);
+      if (value < (large ? 3 : 4.5)) failures.push(`${element.tagName.toLowerCase()}${element.className && typeof element.className === "string" ? "." + element.className.trim().split(/\s+/).join(".") : ""} "${(element.textContent || element.value || (placeholder ? `placeholder: ${element.placeholder}` : "")).trim().slice(0, 32)}" ${value.toFixed(2)}:1`);
     }
     const page = backgroundOf(document.body);
     return { checked, exempt, failures, background: `rgb(${Math.round(page.r)}, ${Math.round(page.g)}, ${Math.round(page.b)})` };
   });
 }
 
+// A scheme switch starts colour transitions; measure only the settled colours.
+async function settle() {
+  await page.evaluate(() => Promise.all(document.getAnimations().map((animation) => animation.finished.catch(() => undefined))));
+}
+
 async function presentationAudit(label, { widths = false } = {}) {
   const schemes = {};
   for (const scheme of ["dark", "light"]) {
     await page.emulateMedia({ colorScheme: scheme });
+    await settle();
     const report = await contrastAudit();
     schemes[scheme] = report;
     record(`${label}, ${scheme} scheme: every visible text run meets WCAG AA contrast against its painted background`, report.checked > 0 && report.failures.length === 0, `${report.checked} text runs checked, ${report.exempt} disabled/inactive exempt${report.failures.length ? `; below AA: ${report.failures.slice(0, 12).join(" | ")}${report.failures.length > 12 ? ` (+${report.failures.length - 12} more)` : ""}` : ""}`);
-    if (scheme === "light") await screenshot(`${label.replace(/\W+/g, "-")}-light`);
+    await screenshot(`${label.replace(/\W+/g, "-")}-${scheme}`);
   }
   record(`${label}: the client follows the system colour scheme`, schemes.dark.background !== schemes.light.background, `dark page background ${schemes.dark.background}, light page background ${schemes.light.background}`);
   if (widths) {
     await page.setViewportSize({ width: 760, height: 900 });
     for (const scheme of ["dark", "light"]) {
       await page.emulateMedia({ colorScheme: scheme });
+      await settle();
       const overflow = await page.evaluate(() => ({ scroll: document.documentElement.scrollWidth, view: window.innerWidth }));
       record(`${label}, ${scheme} scheme: no horizontal page scroll at the native shell's minimum width`, overflow.scroll <= overflow.view, `scrollWidth ${overflow.scroll}, viewport ${overflow.view}`);
       await screenshot(`${label.replace(/\W+/g, "-")}-760-${scheme}`);
     }
     await page.setViewportSize({ width: 1280, height: 900 });
   }
-  await page.emulateMedia({ colorScheme: "dark" });
+  // Back to the context's own scheme (Playwright emulates light by default) for the next scenario.
+  await page.emulateMedia({ colorScheme: null });
 }
 
 // ---------- scenarios ----------
