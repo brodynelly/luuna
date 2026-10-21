@@ -654,7 +654,7 @@ function git(cwd, ...args) {
   const env = toolEnv();
   // GIT_OPTIONAL_LOCKS=0: `git status` does not refresh and rewrite the index, so the harness's
   // own commands leave the index bytes it snapshots unchanged.
-  Object.assign(env, { GIT_OPTIONAL_LOCKS: "0", GIT_CONFIG_NOSYSTEM: "1", GIT_CONFIG_GLOBAL: devNull, GIT_TEMPLATE_DIR: noHooks, GIT_AUTHOR_NAME: "Fixture", GIT_AUTHOR_EMAIL: "fixture@example.invalid", GIT_COMMITTER_NAME: "Fixture", GIT_COMMITTER_EMAIL: "fixture@example.invalid" });
+  Object.assign(env, { GIT_OPTIONAL_LOCKS: "0", GIT_CONFIG_NOSYSTEM: "1", GIT_CONFIG_GLOBAL: process.platform === "win32" ? "NUL" : devNull, GIT_TEMPLATE_DIR: noHooks, GIT_AUTHOR_NAME: "Fixture", GIT_AUTHOR_EMAIL: "fixture@example.invalid", GIT_COMMITTER_NAME: "Fixture", GIT_COMMITTER_EMAIL: "fixture@example.invalid" });
   const config = ["-c", `core.hooksPath=${noHooks}`, "-c", "core.fsmonitor=false", "-c", "commit.gpgsign=false"];
   try {
     return execFileSync("git", ["-C", cwd, ...config, ...args], { encoding: "utf8", env, timeout: GIT_TIMEOUT_MS, killSignal: "SIGKILL", maxBuffer: 64 * 1024 * 1024 }).trim();
@@ -1029,11 +1029,9 @@ async function developerCheckoutUntouched() {
 
 async function gracefulShutdown() {
   if (process.platform === "win32") {
-    // Node's kill() terminates unconditionally on Windows, so this harness cannot
-    // deliver a console control event and does not claim an orderly Windows shutdown.
-    note("shutdown", "orderly shutdown is not established on Windows by this harness; the runtime was terminated");
-    runtime.kill();
-    await waitForExit(runtime, 15_000);
+    const stop = await api("POST", "/shutdown");
+    const exit = await waitForExit(runtime, 15_000);
+    record("authenticated API performs an orderly Windows shutdown", stop.status === 202 && exit.exited && runtime.exitCode === 0, `status=${stop.status} exited=${exit.exited} code=${runtime.exitCode} after ${exit.elapsed}ms`);
     return;
   }
   const signal = "SIGTERM";

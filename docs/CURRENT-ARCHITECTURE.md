@@ -1,5 +1,13 @@
 # Current Luuna architecture
 
+Windows native development startup invokes a fixed local bootstrap command,
+starts or authenticates/reuses the independent runtime and connects without
+manual token entry. DPAPI records live in `%USERPROFILE%\.luuna\credentials`;
+existing encrypted LocalAppData records migrate once without deleting them.
+Tokens reach the view through local IPC and stay in memory. Closing the window
+leaves the service running. See [ADR 0011](decisions/0011-windows-native-bootstrap.md)
+for the command boundary, reconciliation and checkout-based distribution limits.
+
 Date: 2026-10-16, updated 2026-10-17 for M2a, M2b, M2c and the M3 implementation, and 2026-10-21 for re-validation after a review that left no verdict, shutdown interruption and the client hardening of the MVP gate. Status: authoritative foundation baseline; implementation evidence is required for each milestone.
 
 ## Purpose and precedence
@@ -72,6 +80,12 @@ All application routes use `/api/v1`. Implemented project routes are `POST /api/
 Bind the development service to loopback and authenticate protected API actions. A development launch may use an explicitly managed foreground process. The desktop reconnects to that service; closing a window or losing SSE does not decide run lifetime. Explicit shutdown stops or reconciles owned workers and persists interruption: since 2026-10-21 work stopped by Ctrl+C or SIGTERM is recorded `interrupted` (resumable after restart), never `cancelled`, and the client shows a lost runtime as an outage, reconnects by itself and reloads authoritative state when the runtime answers again. A Tauri child/sidecar alone does not prove independent lifetime. Platform-specific startup, supervision, token storage, and shutdown must be tested before distribution. See [ADR 0004](decisions/0004-service-lifecycle.md).
 
 ## Milestone evidence
+
+Windows orderly service stop is `POST /api/v1/shutdown`, authenticated with the
+existing bearer token. The runtime closes scheduling admission, drains admitted
+mutation handlers, interrupts owned work and exits cleanly; window closure is
+still only a client disconnect. Windows scripts reuse the DPAPI-encrypted token
+and data directory across restart. See [ADR 0010](decisions/0010-authenticated-service-shutdown.md).
 
 The initial executable implementation is a tool-free connectivity slice, not the approved implementation workflow. It exposes authenticated run creation/history, cursor event replay and SSE, and cancellation; the UI currently reconnects through replay polling. M2a adds read-only repository import, discovery proposals and confirmed manifest revisions; M2b adds supervised baselines with bound evidence; M2c adds temporary local tickets, immutable plan revisions, exact-hash approvals, Luuna-owned worktree leases and one scoped writer whose candidate waits in `validating`. M3 adds candidate-bound required checks, a fresh read-only reviewer, structured findings, optional bounded automatic repairs and conservative restart recovery; its genuine-provider exit is closed on Linux (see the status report) while native Mac/Windows lifecycle evidence remains open. Seeds/Missions reconciliation and publication remain subsequent capabilities.
 

@@ -38,6 +38,11 @@ an override). The route is unauthenticated, so it carries names and none/set sta
 flag values, wrapper paths or config file paths. All other endpoints
 require `Authorization: Bearer <token>`:
 
+- `POST /api/v1/shutdown`: idempotently request an orderly service stop (202).
+  Already admitted scheduling requests drain; new mutations receive 503.
+  Owned work settles as interrupted, preserving its evidence, and main exits
+  cleanly. This is separate from cancellation and from closing a client window.
+
 - `GET /api/v1/runs`: persisted run records.
 - `POST /api/v1/runs`: `{ "prompt": "Hello", "provider": "...", "model": "..." }`.
 - `GET /api/v1/runs/{id}`: current run state.

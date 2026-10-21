@@ -16,4 +16,9 @@ Implementation note (2026-10-21): until this date the runtime's Ctrl+C/SIGTERM p
 
 ## Consequences and validation
 
+The authenticated action and scheduling-admission implementation are specified
+by [ADR 0010](0010-authenticated-service-shutdown.md). Windows development launch
+and clean-stop evidence is recorded in `docs/WINDOWS-VERIFICATION.md`; installed
+service supervision and signed distribution remain distinct requirements.
+
 Distribution needs a tested Mac/Windows startup, supervision, token storage, and shutdown strategy. A Tauri sidecar is allowed only if measured lifecycle behavior satisfies the contract. Validate disconnect/reconnect, cancellation, forced process exit, restart reconciliation, and no duplicate external side effects. Do not claim these properties from unit fixtures alone.

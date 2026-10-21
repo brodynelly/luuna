@@ -21,6 +21,32 @@ fn spec(root: &std::path::Path, args: &[&str], timeout_seconds: u64) -> CommandS
     }
 }
 
+#[tokio::test]
+async fn canonical_nested_worktree_runs_the_actual_test_module() {
+    let dir = tempfile::tempdir().unwrap();
+    let root = dir
+        .path()
+        .join("representative-private-data-directory-for-workflows")
+        .join("worktrees")
+        .join("workflow-11111111-1111-1111-1111-111111111111")
+        .join("attempt-22222222-2222-2222-2222-222222222222")
+        .join("app");
+    std::fs::create_dir_all(&root).unwrap();
+    std::fs::write(root.join("test_probe.py"), "import unittest\nclass Probe(unittest.TestCase):\n    def test_present(self):\n        self.assertTrue(True)\n").unwrap();
+    let canonical = root.canonicalize().unwrap();
+    let (_tx, cancel) = watch::channel(false);
+    let result = Executor::default()
+        .execute(
+            &spec(&canonical, &["-m", "unittest", "-v", "test_probe"], 30),
+            cancel,
+            None,
+        )
+        .await
+        .unwrap();
+    assert_eq!(result.status, CheckStatus::Passed, "{result:?}");
+    assert_eq!(result.tests_detected, Some(1), "{result:?}");
+}
+
 /// A process counts as alive only when it still runs; a killed child whose
 /// parent died is a zombie until the init process reaps it.
 fn alive(pid: u32) -> bool {

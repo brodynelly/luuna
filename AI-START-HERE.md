@@ -4,6 +4,14 @@ You are continuing an executable foundation, not starting an empty repository. R
 
 ## Settled decisions
 
+Windows development evidence (October 21, 2026, after the Linux handoff below):
+authenticated shutdown, DPAPI provider setup, the bundled Tauri/WebView2 app and
+automatic runtime startup/connection are implemented and verified. See
+[Windows verification](docs/WINDOWS-VERIFICATION.md) and ADRs 0010/0011 for
+commands, results and remaining limits. The historical Linux host statements
+below do not describe the later Windows run. Signed installation, installed
+service supervision and strict clean-revision Windows M3 acceptance remain open.
+
 - Tauri/React desktop first; one independent Rust runtime owns policy and persistent state. Browser/TUI capability parity remains required for full v1.
 - Pi RPC is the engine. Do not implement a second model/tool loop or replace it with a UI simulation.
 - Keep Luuna and **Missions, Atlas and Beacon in this monorepo now**. They are maintained CLI/API boundaries under `components/`, not a task to create hosted repositories. Preserve compatible formats, legacy aliases and upstream MIT notices. Product/new contributions are MIT.
