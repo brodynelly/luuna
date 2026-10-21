@@ -7,7 +7,7 @@ The owner explicitly authorized three public component repositories. Luuna remai
 | Component | Destination and immutable consumer pin | Independent full verification |
 | --- | --- | --- |
 | Missions | [brodynelly/luuna-missions](https://github.com/brodynelly/luuna-missions), `e1b5db171892de653e7462e630d64d4964d01422` | [CI passed](https://github.com/brodynelly/luuna-missions/actions/runs/39658081094) |
-| Atlas | [brodynelly/luuna-atlas](https://github.com/brodynelly/luuna-atlas), `76ad209daf404dd9a12aeaf46293e05e9f41e517` | [CI passed](https://github.com/brodynelly/luuna-atlas/actions/runs/39655044656) |
+| Atlas | [brodynelly/luuna-atlas](https://github.com/brodynelly/luuna-atlas), `76ad209daf404dd9a12aeaf46293e05e9f41e517` | [CI passed](https://github.com/brodynelly/luuna-atlas/actions/runs/39658097498) |
 | Beacon | [brodynelly/luuna-beacon](https://github.com/brodynelly/luuna-beacon), `072e482169e0d469c3744ec712222f8b310fa7da` | [CI passed](https://github.com/brodynelly/luuna-beacon/actions/runs/39658110584) |
 
 ## Preservation and destination verification
@@ -55,3 +55,5 @@ Review found that setup performed checkout before detecting local edits, and tha
 The developer CLI now inherits stdin/stdout/stderr, preserves the component exit status, and uses npm's INIT_CWD so `npm --prefix` operates on the calling project rather than Luuna's root. The bounded programmatic JSON helper remains separate. The real smoke additionally pipes an Atlas record through the launcher from a different package directory and checks a Missions JSON failure and exit code, raising the smoke to 14 operations. MIT and component README links now target the exact public repository revisions so they work on GitHub across submodule boundaries.
 
 The owner requested canonical luuna-* repository names during PR review. GitHub repository renames preserve repository identity and maintained history; all active submodule URLs, package repository/homepage/issue metadata, documentation and consumer pins use luuna-missions, luuna-atlas and luuna-beacon. The launcher accepts those full primary names and retains the short component selectors as compatibility aliases. Internal components paths and upstream data formats remain stable.
+
+Final review validation: the branded repository pins passed frozen setup and 14/14 real CLI operations on both Windows and Linux. All eight setup/pin regressions passed on Windows, and the final Linux npm test passed 20 schema cases, 5 scope-guard tests, 8 component-pin tests, 13 desktop tests and 22 API-client tests at 2cb556e. The earlier reviewed code also passed frontend typecheck/build. All three renamed public repositories passed their full independent CI at the exact final component commits linked above. Private Luuna Actions remains blocked before job startup by account payment/spending limits; no billing settings or branch policies were altered.
