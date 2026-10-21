@@ -43,18 +43,18 @@ Run inherited component suites one at a time, separately from builds. On this cl
 
 This initial service permits tool-free model requests. It does not edit repositories, run approved implementation plans, expose ticket creation, or publish changes. Start the service separately from the desktop so that closing the client does not terminate it.
 
-Install the pinned Pi package `@earendil-works/pi-coding-agent@1.3.0` in a private local tool location and make its executable available. See [Pi's official repository](https://github.com/earendil-works/pi) for provider configuration. Its package executable is `dist/bundle/cli.js`. The service launches a fresh isolated tool-free session: it does not read the developer's ordinary Pi configuration, OAuth session, extensions, skills, or project instructions. Supply supported provider credentials securely through environment bindings. The cloud network policy must also allow the selected provider's HTTPS destination. Allow `api.anthropic.com` or `api.openai.com`, as appropriate, in environment settings before testing access.
+Install the pinned Pi package `@earendil-works/pi-coding-agent@1.3.0` in a private local tool location and make its executable available. See [Pi's official repository](https://github.com/earendil-works/pi) for provider configuration. Its package executable is `dist/bundle/cli.js`. Install ripgrep (`rg`) and fd (`fd`, or Debian's `fdfind`) on PATH as well: Luuna runs Pi offline, so Pi cannot download them, and writers and reviewers are not offered the `grep` or `find` tools without them. The service launches a fresh isolated tool-free session: it does not read the developer's ordinary Pi configuration, OAuth session, extensions, skills, or project instructions. Supply supported provider credentials securely through environment bindings. The cloud network policy must also allow the selected provider's HTTPS destination. Allow `api.anthropic.com` or `api.openai.com`, as appropriate, in environment settings before testing access.
 
 | Setting | Purpose and default |
 | --- | --- |
 | `LUUNA_API_TOKEN` | Required private bearer token, at least 32 bytes; provide the same token to the client |
-| `LUUNA_PI_COMMAND` | Pi executable, default `pi`; may be an absolute path |
+| `LUUNA_PI_COMMAND` | Pi executable, default `pi`; may be an absolute path. On Windows an npm `pi.cmd` shim found through PATH and PATHEXT is started as `node.exe` with its `dist/bundle/cli.js`; other batch launchers are refused, so point this at `node.exe` and pass `cli.js` in `LUUNA_PI_ARGS_JSON` for any other layout |
 | `LUUNA_PI_ARGS_JSON` | Optional JSON array of launcher arguments, useful with a direct Node executable |
 | `LUUNA_PI_PROVIDER`, `LUUNA_PI_MODEL` | Explicit provider/model defaults; may also be selected per run in the client |
 | `LUUNA_PI_<PROVIDER>_API_KEY` | Optional alias for any supported provider key, such as `LUUNA_PI_ANTHROPIC_API_KEY`, for hosts that reserve the plain name; mapped to Pi's standard variable with precedence over a direct key |
 | `HTTP_PROXY`, `HTTPS_PROXY`, `ALL_PROXY`, `NO_PROXY` | Preserved for provider routing, including lowercase variants and `NODE_USE_ENV_PROXY`; TLS verification remains enabled |
 | Provider-specific API key | Required for the selected provider; use private environment settings |
-| `LUUNA_DATA_DIR` | Private local state/artifacts directory, default `.luuna` |
+| `LUUNA_DATA_DIR` | Private local state/artifacts directory, default `.luuna`; keep it short on Windows (for example `%USERPROFILE%\.luuna`) because managed worktrees below it count toward the 260-character path limit |
 | `LUUNA_PORT` | Loopback service port, default `4242` |
 | `LUUNA_RUN_TIMEOUT_SECONDS` | Positive run deadline, default `600` |
 

@@ -1,17 +1,90 @@
 //! Supervised JSONL transport for pinned Pi. A response acknowledges a command;
 //! only `agent_settled` finishes all automatic work in Pi 1.3.0. No shell is used.
-use serde_json::{json, Value};
-use std::{collections::HashMap, path::PathBuf, process::Stdio, time::Duration};
+use serde::de::{self, DeserializeSeed, IgnoredAny, MapAccess, SeqAccess, Visitor};
+use serde_json::{json, Map, Value};
+use std::{
+    collections::{HashMap, VecDeque},
+    ffi::OsStr,
+    fmt,
+    path::{Component, Path, PathBuf},
+    process::Stdio,
+    sync::{Arc, Mutex},
+    time::Duration,
+};
 use thiserror::Error;
 use tokio::{
-    io::{AsyncBufReadExt, AsyncWriteExt, BufReader},
+    io::{AsyncBufReadExt, AsyncRead, AsyncReadExt, AsyncWriteExt, BufReader},
     process::{Child, ChildStdin, ChildStdout, Command},
     task::JoinHandle,
 };
 
 pub const PI_PACKAGE: &str = "@earendil-works/pi-coding-agent";
 pub const PI_VERSION: &str = "1.3.0";
+/// Largest record buffered and returned verbatim, including its LF.
 pub const MAX_RECORD_BYTES: usize = 1024 * 1024;
+/// Largest oversized session event read as a summary (see [`PiProcess::next`]).
+/// Its bulky content is skipped as it streams past, never buffered, so this
+/// bounds reading time rather than memory.
+pub const MAX_SUMMARIZED_RECORD_BYTES: usize = 256 * 1024 * 1024;
+/// Session events whose size grows with the session in Pi 1.3.0: `agent_end`
+/// and `turn_end` repeat every message and tool result of the run, and message
+/// and tool events carry whole prompts, file contents and tool arguments.
+/// Beyond `MAX_RECORD_BYTES` only the fields the runtime reads are kept; any
+/// other record that large is still a protocol error.
+pub const SUMMARIZED_KINDS: [&str; 8] = [
+    "agent_end",
+    "turn_end",
+    "message_start",
+    "message_update",
+    "message_end",
+    "tool_execution_start",
+    "tool_execution_update",
+    "tool_execution_end",
+];
+/// Messages a summary keeps from `messages` or `toolResults`: the last ones,
+/// plus the first failed one, which [`Record::model_error`] reports.
+const SUMMARY_MESSAGES: usize = 64;
+/// Longest string a summary keeps, such as a provider error message.
+const SUMMARY_STRING_BYTES: usize = 1024;
+/// Message fields the runtime reads; content and tool arguments are dropped.
+const MESSAGE_FIELDS: [&str; 7] = [
+    "role",
+    "stopReason",
+    "errorMessage",
+    "usage",
+    "toolCallId",
+    "toolName",
+    "isError",
+];
+/// Top-level event fields a summary keeps besides its messages.
+const EVENT_FIELDS: [&str; 7] = [
+    "type",
+    "willRetry",
+    "aborted",
+    "usage",
+    "toolCallId",
+    "toolName",
+    "isError",
+];
+/// Pi reads the system prompt from this file in the session's private agent
+/// directory (`--system-prompt <path>`), never from argv text: writer
+/// instructions embed approved ticket text that can exceed per-argument limits
+/// (128 KiB on Linux, 32,767 characters for a whole Windows command line), and
+/// argv is visible to other local accounts in the process list.
+pub const SYSTEM_PROMPT_FILE: &str = "luuna-system-prompt.md";
+const TOOL_FREE_PROMPT: &str = "You are the Luuna read-only connectivity demo. You have no tools. Answer the user's request as plain text.";
+/// Built-in tools that Pi 1.3.0 implements with a helper program: `grep` runs
+/// ripgrep and `find` runs fd (`fdfind` on Debian). Pi looks in its agent
+/// `bin` directory, then on PATH, and downloads a missing helper only when
+/// online. Luuna always passes `--offline` with a fresh agent directory, so a
+/// tool whose helper is absent fails every call and is not declared at all.
+pub const TOOL_HELPERS: [(&str, &[&str]); 2] = [("grep", &["rg"]), ("find", &["fd", "fdfind"])];
+/// The reviewer's fixed read-only tools, before helper availability.
+pub const REVIEWER_TOOLS: [&str; 4] = ["read", "grep", "find", "ls"];
+/// Pi's stderr is drained continuously and only its end is kept: this much is
+/// redacted as a whole, then at most `STDERR_TAIL_BYTES` of it is reported.
+const STDERR_WINDOW_BYTES: usize = 16 * 1024;
+pub const STDERR_TAIL_BYTES: usize = 2 * 1024;
 
 /// Direct provider API-key variables the isolated child may inherit. Each also
 /// accepts a `LUUNA_PI_` prefixed alias for hosts that reserve the plain name;
@@ -39,14 +112,35 @@ pub fn configured_provider_keys() -> Vec<&'static str> {
         .collect()
 }
 
+/// Values of every provider credential the child can receive, for redaction.
+fn credential_values() -> Vec<String> {
+    PROVIDER_KEY_VARIABLES
+        .iter()
+        .flat_map(|name| {
+            [
+                std::env::var(format!("LUUNA_PI_{name}")).ok(),
+                std::env::var(name).ok(),
+            ]
+        })
+        .flatten()
+        .filter(|value| !value.is_empty())
+        .collect()
+}
+
 #[derive(Debug, Error)]
 pub enum EngineError {
     #[error("Pi I/O: {0}")]
     Io(#[from] std::io::Error),
     #[error("invalid Pi RPC record: {0}")]
     Protocol(String),
-    #[error("Pi closed stdout before the operation completed")]
-    Closed,
+    /// Pi's stdout ended; carries its exit status and redacted stderr tail.
+    #[error("Pi closed stdout before the operation completed{0}")]
+    Closed(String),
+    /// Pi stopped reading commands; carries the same diagnostics as `Closed`.
+    #[error("cannot send a command to Pi: {0}{1}")]
+    Write(std::io::Error, String),
+    #[error("Pi launcher: {0}")]
+    Launcher(String),
     #[error("Pi command {command} failed: {message}")]
     Rejected { command: String, message: String },
     #[error("Pi RPC timed out")]
@@ -82,7 +176,8 @@ pub enum SessionProfile {
 
 #[derive(Clone, Debug)]
 pub struct WriterProfile {
-    /// Built-in tool names declared to the model, e.g. `read`, `edit`, `write`.
+    /// Built-in tool names requested for the model, e.g. `read`, `edit`,
+    /// `write`; a tool whose helper program is missing is left out.
     pub tools: Vec<String>,
     pub system_prompt: String,
     /// Extension files loaded with `-e`; the scope guard is always one of them.
@@ -111,8 +206,132 @@ pub fn install_scope_guard(dir: &std::path::Path) -> Result<PathBuf, std::io::Er
     Ok(path)
 }
 
+/// The system prompt a profile runs with.
+pub fn system_prompt(profile: &SessionProfile) -> &str {
+    match profile {
+        SessionProfile::ToolFree => TOOL_FREE_PROMPT,
+        SessionProfile::Writer(profile) => &profile.system_prompt,
+        SessionProfile::Reviewer(profile) => &profile.system_prompt,
+    }
+}
+
+/// Where [`PiProcess::spawn`] writes the system prompt. The path is absolute:
+/// Pi resolves a relative one against the session's working directory.
+pub fn system_prompt_path(config: &PiConfig) -> PathBuf {
+    let path = config.config_dir.join(SYSTEM_PROMPT_FILE);
+    std::path::absolute(&path).unwrap_or(path)
+}
+
+/// Tools declared to a session and the requested ones left out.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct ToolSelection {
+    /// Declared to the model, in the requested order.
+    pub declared: Vec<String>,
+    /// Requested but not declared, each with its reason.
+    pub omitted: Vec<(String, String)>,
+}
+
+impl ToolSelection {
+    /// The omitted tools as `[{"tool", "reason"}]` for a durable event.
+    pub fn omitted_json(&self) -> Value {
+        Value::Array(
+            self.omitted
+                .iter()
+                .map(|(tool, reason)| json!({"tool": tool, "reason": reason}))
+                .collect(),
+        )
+    }
+}
+
+/// Splits requested built-in tools into those Pi can run (see
+/// [`TOOL_HELPERS`]) and those it cannot, given which helpers are available.
+pub fn select_tools(
+    requested: &[String],
+    helper_available: impl Fn(&str) -> bool,
+) -> ToolSelection {
+    let mut selection = ToolSelection::default();
+    for tool in requested {
+        match TOOL_HELPERS.iter().find(|(name, _)| name == tool) {
+            Some((_, helpers)) if !helpers.iter().any(|helper| helper_available(helper)) => {
+                selection.omitted.push((
+                    tool.clone(),
+                    format!(
+                        "Pi's {tool} tool runs {}, which is not on PATH; Pi runs offline and cannot download it",
+                        helpers.join(" or ")
+                    ),
+                ))
+            }
+            _ => selection.declared.push(tool.clone()),
+        }
+    }
+    selection
+}
+
+/// The tools a configuration's session declares on this host. Helpers are
+/// looked up as Pi does: its agent `bin` directory, then the PATH the child
+/// inherits.
+pub fn session_tools(config: &PiConfig) -> ToolSelection {
+    let requested: Vec<String> = match &config.profile {
+        SessionProfile::ToolFree => Vec::new(),
+        SessionProfile::Writer(profile) => profile.tools.clone(),
+        SessionProfile::Reviewer(_) => REVIEWER_TOOLS.map(String::from).to_vec(),
+    };
+    let bin = config.config_dir.join("bin");
+    let path = std::env::var_os("PATH");
+    select_tools(&requested, |helper| {
+        helper_available(helper, &bin, path.as_deref(), cfg!(windows))
+    })
+}
+
+/// Whether Pi would find a helper program: in its agent `bin` directory or on
+/// PATH, with `.exe`/`.com` appended on Windows as Node's process API does.
+fn helper_available(name: &str, bin: &Path, path: Option<&OsStr>, windows: bool) -> bool {
+    let names: Vec<String> = if windows {
+        vec![format!("{name}.exe"), format!("{name}.com")]
+    } else {
+        vec![name.to_owned()]
+    };
+    std::iter::once(bin.to_path_buf())
+        .chain(
+            path.map(|path| search_path(path, windows))
+                .unwrap_or_default(),
+        )
+        .any(|dir| names.iter().any(|name| is_executable(&dir.join(name))))
+}
+
+fn is_executable(path: &Path) -> bool {
+    match std::fs::metadata(path) {
+        #[cfg(unix)]
+        Ok(metadata) => {
+            use std::os::unix::fs::PermissionsExt;
+            metadata.is_file() && metadata.permissions().mode() & 0o111 != 0
+        }
+        #[cfg(not(unix))]
+        Ok(metadata) => metadata.is_file(),
+        Err(_) => false,
+    }
+}
+
+/// Directories of a PATH value: `;`-separated (quotes removed) on Windows.
+fn search_path(path: &OsStr, windows: bool) -> Vec<PathBuf> {
+    if windows {
+        path.to_string_lossy()
+            .split(';')
+            .map(|dir| dir.trim().trim_matches('"'))
+            .filter(|dir| !dir.is_empty())
+            .map(PathBuf::from)
+            .collect()
+    } else {
+        std::env::split_paths(path).collect()
+    }
+}
+
 /// Command-line arguments for a profile, after the launcher arguments.
 pub fn session_arguments(config: &PiConfig) -> Vec<String> {
+    launch_arguments(config, &session_tools(config))
+}
+
+fn launch_arguments(config: &PiConfig, tools: &ToolSelection) -> Vec<String> {
     let mut args: Vec<String> = [
         "--mode",
         "rpc",
@@ -129,33 +348,25 @@ pub fn session_arguments(config: &PiConfig) -> Vec<String> {
     .into_iter()
     .map(ToOwned::to_owned)
     .collect();
-    match &config.profile {
-        SessionProfile::ToolFree => {
-            args.push("--no-tools".into());
-            args.push("--system-prompt".into());
-            args.push("You are the Luuna read-only connectivity demo. You have no tools. Answer the user's request as plain text.".into());
-        }
-        SessionProfile::Writer(profile) => {
-            args.push("--tools".into());
-            args.push(profile.tools.join(","));
-            for extension in &profile.extensions {
-                args.push("--extension".into());
-                args.push(extension.to_string_lossy().into_owned());
-            }
-            args.push("--system-prompt".into());
-            args.push(profile.system_prompt.clone());
-        }
-        SessionProfile::Reviewer(profile) => {
-            args.push("--tools".into());
-            args.push("read,grep,find,ls".into());
-            for extension in &profile.extensions {
-                args.push("--extension".into());
-                args.push(extension.to_string_lossy().into_owned());
-            }
-            args.push("--system-prompt".into());
-            args.push(profile.system_prompt.clone());
-        }
+    let extensions = match &config.profile {
+        SessionProfile::ToolFree => None,
+        SessionProfile::Writer(profile) => Some(&profile.extensions),
+        SessionProfile::Reviewer(profile) => Some(&profile.extensions),
+    };
+    // An empty selection disables tools; it never falls back to Pi's
+    // defaults, which include `bash`.
+    if extensions.is_none() || tools.declared.is_empty() {
+        args.push("--no-tools".into());
+    } else {
+        args.push("--tools".into());
+        args.push(tools.declared.join(","));
     }
+    for extension in extensions.into_iter().flatten() {
+        args.push("--extension".into());
+        args.push(extension.to_string_lossy().into_owned());
+    }
+    args.push("--system-prompt".into());
+    args.push(system_prompt_path(config).to_string_lossy().into_owned());
     if let Some(provider) = &config.provider {
         args.push("--provider".into());
         args.push(provider.clone());
@@ -165,6 +376,119 @@ pub fn session_arguments(config: &PiConfig) -> Vec<String> {
         args.push(model.clone());
     }
     args
+}
+
+/// Resolves the configured launcher to a program started without a shell.
+/// Elsewhere the operating system resolves it as given. On Windows, Rust's
+/// process API only appends `.exe` to a bare name while npm installs Pi as a
+/// `pi.cmd` shim, and a batch file would run through cmd.exe, which rejects
+/// multi-line arguments and survives a stop request as Pi's parent. A bare
+/// name is therefore searched through PATH, executables first and then
+/// PATHEXT, and an npm shim is replaced by the Node executable and Pi entry
+/// point it would start; any other batch launcher is refused. The version
+/// probe still verifies the result.
+pub fn resolve_launcher(
+    program: &Path,
+    launcher_args: &[String],
+) -> Result<(PathBuf, Vec<String>), EngineError> {
+    resolve_launcher_for(
+        program,
+        launcher_args,
+        cfg!(windows),
+        std::env::var_os("PATH").as_deref(),
+        std::env::var_os("PATHEXT").as_deref(),
+    )
+}
+
+fn resolve_launcher_for(
+    program: &Path,
+    launcher_args: &[String],
+    windows: bool,
+    path: Option<&OsStr>,
+    pathext: Option<&OsStr>,
+) -> Result<(PathBuf, Vec<String>), EngineError> {
+    if !windows {
+        return Ok((program.to_path_buf(), launcher_args.to_vec()));
+    }
+    let extensions: Vec<String> = pathext
+        .map(|value| value.to_string_lossy().into_owned())
+        .unwrap_or_else(|| ".COM;.EXE;.BAT;.CMD".into())
+        .split(';')
+        .filter(|extension| extension.starts_with('.') && extension.len() > 1)
+        .map(str::to_ascii_lowercase)
+        .collect();
+    let bare = matches!(
+        program.components().collect::<Vec<_>>()[..],
+        [Component::Normal(_)]
+    );
+    // An executable anywhere on PATH wins, as it does for Rust's own lookup;
+    // only a name with no executable is looked up as a PATHEXT script.
+    let resolved = if bare {
+        windows_search(program, path, &[".exe".into(), ".com".into()])
+            .or_else(|| windows_search(program, path, &extensions))
+            .unwrap_or_else(|| program.to_path_buf())
+    } else {
+        program.to_path_buf()
+    };
+    let batch = resolved
+        .extension()
+        .map(|extension| extension.to_string_lossy().to_ascii_lowercase())
+        .is_some_and(|extension| extension == "cmd" || extension == "bat");
+    if !batch {
+        return Ok((resolved, launcher_args.to_vec()));
+    }
+    // npm writes `<prefix>\pi.cmd` beside `node_modules` for a global install
+    // and `node_modules\.bin\pi.cmd` for a local one; both start Node with
+    // the package's `bin` entry, preferring a `node.exe` beside the shim.
+    let shim_dir = resolved.parent().unwrap_or(Path::new(""));
+    let entry = [shim_dir.join("node_modules"), shim_dir.join("..")]
+        .into_iter()
+        .map(|root| {
+            root.join("@earendil-works")
+                .join("pi-coding-agent")
+                .join("dist")
+                .join("bundle")
+                .join("cli.js")
+        })
+        .find(|candidate| candidate.is_file());
+    let node = Some(shim_dir.join("node.exe"))
+        .filter(|candidate| candidate.is_file())
+        .or_else(|| windows_search(Path::new("node"), path, &[".exe".into(), ".com".into()]));
+    match (entry, node) {
+        (Some(entry), Some(node)) => {
+            let mut args = vec![entry.to_string_lossy().into_owned()];
+            args.extend(launcher_args.iter().cloned());
+            Ok((node, args))
+        }
+        _ => Err(EngineError::Launcher(format!(
+            "{} is a batch file, which would run Pi through cmd.exe; configure node.exe as the launcher with Pi's dist\\bundle\\cli.js as its first argument",
+            resolved.display()
+        ))),
+    }
+}
+
+/// The first `program` on a Windows PATH: as named when its extension is
+/// listed in `extensions`, otherwise with each listed extension appended.
+fn windows_search(program: &Path, path: Option<&OsStr>, extensions: &[String]) -> Option<PathBuf> {
+    let name = program.to_string_lossy();
+    let listed = program
+        .extension()
+        .map(|extension| format!(".{}", extension.to_string_lossy().to_ascii_lowercase()))
+        .is_some_and(|extension| extensions.contains(&extension));
+    let candidates: Vec<String> = if listed {
+        vec![name.into_owned()]
+    } else {
+        extensions
+            .iter()
+            .map(|extension| format!("{name}{extension}"))
+            .collect()
+    };
+    search_path(path?, true).into_iter().find_map(|dir| {
+        candidates
+            .iter()
+            .map(|candidate| dir.join(candidate))
+            .find(|candidate| candidate.is_file())
+    })
 }
 
 #[derive(Debug, Clone)]
@@ -180,6 +504,11 @@ impl Record {
         }
         let raw: Value =
             serde_json::from_slice(line).map_err(|e| EngineError::Protocol(e.to_string()))?;
+        Self::from_value(raw)
+    }
+
+    /// Validates a decoded record: a whole one, or an oversized event's summary.
+    fn from_value(raw: Value) -> Result<Self, EngineError> {
         let kind = raw
             .get("type")
             .and_then(Value::as_str)
@@ -318,11 +647,217 @@ impl SessionUsage {
     }
 }
 
+/// The kind of a record from its first member, which Pi 1.3.0 always writes as
+/// `"type"`; the buffered start of an oversized record is enough to read it.
+fn leading_kind(prefix: &[u8]) -> Option<String> {
+    let start = String::from_utf8_lossy(&prefix[..prefix.len().min(256)]);
+    let rest = start
+        .trim_start()
+        .strip_prefix('{')?
+        .trim_start()
+        .strip_prefix("\"type\"")?
+        .trim_start()
+        .strip_prefix(':')?
+        .trim_start()
+        .strip_prefix('"')?;
+    let kind = &rest[..rest.find('"')?];
+    (!kind.is_empty() && kind.bytes().all(|b| b.is_ascii_lowercase() || b == b'_'))
+        .then(|| kind.to_owned())
+}
+
+/// A summary keeps strings to `SUMMARY_STRING_BYTES`, cut at a character boundary.
+fn clip(value: Value) -> Value {
+    match value {
+        Value::String(text) if text.len() > SUMMARY_STRING_BYTES => {
+            let mut cut = SUMMARY_STRING_BYTES;
+            while !text.is_char_boundary(cut) {
+                cut -= 1;
+            }
+            Value::String(format!(
+                "{}… [truncated {} bytes]",
+                &text[..cut],
+                text.len() - cut
+            ))
+        }
+        other => other,
+    }
+}
+
+/// Keeps the listed members of a JSON object and skips the others without
+/// buffering them. Anything but an object is an error, as for a whole record.
+#[derive(Clone, Copy)]
+struct Fields(&'static [&'static str]);
+
+impl<'de> DeserializeSeed<'de> for Fields {
+    type Value = Map<String, Value>;
+    fn deserialize<D: de::Deserializer<'de>>(
+        self,
+        deserializer: D,
+    ) -> Result<Self::Value, D::Error> {
+        deserializer.deserialize_map(self)
+    }
+}
+
+impl<'de> Visitor<'de> for Fields {
+    type Value = Map<String, Value>;
+    fn expecting(&self, formatter: &mut fmt::Formatter) -> fmt::Result {
+        formatter.write_str("a JSON object")
+    }
+    fn visit_map<A: MapAccess<'de>>(self, mut map: A) -> Result<Self::Value, A::Error> {
+        let mut kept = Map::new();
+        while let Some(key) = map.next_key::<String>()? {
+            if self.0.contains(&key.as_str()) {
+                let value = map.next_value::<Value>()?;
+                kept.insert(key, clip(value));
+            } else {
+                map.next_value::<IgnoredAny>()?;
+            }
+        }
+        Ok(kept)
+    }
+}
+
+/// A message array reduced to the message fields of its last
+/// `SUMMARY_MESSAGES` elements and its first failed one, with its length.
+struct Messages;
+
+impl<'de> DeserializeSeed<'de> for Messages {
+    type Value = (Vec<Value>, usize);
+    fn deserialize<D: de::Deserializer<'de>>(
+        self,
+        deserializer: D,
+    ) -> Result<Self::Value, D::Error> {
+        deserializer.deserialize_seq(self)
+    }
+}
+
+impl<'de> Visitor<'de> for Messages {
+    type Value = (Vec<Value>, usize);
+    fn expecting(&self, formatter: &mut fmt::Formatter) -> fmt::Result {
+        formatter.write_str("an array of message objects")
+    }
+    fn visit_seq<A: SeqAccess<'de>>(self, mut seq: A) -> Result<Self::Value, A::Error> {
+        let mut first_failure = None;
+        let mut last = VecDeque::new();
+        let mut total = 0usize;
+        while let Some(message) = seq.next_element_seed(Fields(&MESSAGE_FIELDS))? {
+            let failed = matches!(
+                message.get("stopReason").and_then(Value::as_str),
+                Some("error" | "aborted")
+            );
+            if failed && first_failure.is_none() {
+                first_failure = Some((total, message.clone()));
+            }
+            last.push_back((total, message));
+            if last.len() > SUMMARY_MESSAGES {
+                last.pop_front();
+            }
+            total += 1;
+        }
+        let mut kept = Vec::new();
+        if let Some((index, message)) = first_failure {
+            if last
+                .front()
+                .is_some_and(|(first_kept, _)| index < *first_kept)
+            {
+                kept.push(Value::Object(message));
+            }
+        }
+        kept.extend(last.into_iter().map(|(_, message)| Value::Object(message)));
+        Ok((kept, total))
+    }
+}
+
+/// The summary of an oversized session event: its scalar fields, message
+/// fields and message counts, under a `luuna_summary` marker.
+struct EventSummary;
+
+impl<'de> Visitor<'de> for EventSummary {
+    type Value = Map<String, Value>;
+    fn expecting(&self, formatter: &mut fmt::Formatter) -> fmt::Result {
+        formatter.write_str("a Pi session event object")
+    }
+    fn visit_map<A: MapAccess<'de>>(self, mut map: A) -> Result<Self::Value, A::Error> {
+        let mut kept = Map::new();
+        let mut marker = Map::from_iter([("content_omitted".to_owned(), json!(true))]);
+        while let Some(key) = map.next_key::<String>()? {
+            match key.as_str() {
+                "message" => {
+                    let message = map.next_value_seed(Fields(&MESSAGE_FIELDS))?;
+                    kept.insert(key, Value::Object(message));
+                }
+                "messages" | "toolResults" => {
+                    let (messages, total) = map.next_value_seed(Messages)?;
+                    marker.insert(key.clone(), json!(total));
+                    kept.insert(key, Value::Array(messages));
+                }
+                "assistantMessageEvent" => {
+                    let event = map.next_value_seed(Fields(&["type", "contentIndex"]))?;
+                    kept.insert(key, Value::Object(event));
+                }
+                field if EVENT_FIELDS.contains(&field) => {
+                    let value = map.next_value::<Value>()?;
+                    kept.insert(key, clip(value));
+                }
+                _ => {
+                    map.next_value::<IgnoredAny>()?;
+                }
+            }
+        }
+        kept.insert("luuna_summary".into(), Value::Object(marker));
+        Ok(kept)
+    }
+}
+
+/// A blocking reader over the chunks of one oversized record.
+struct ChunkReader {
+    receiver: tokio::sync::mpsc::Receiver<Vec<u8>>,
+    chunk: Vec<u8>,
+    offset: usize,
+}
+
+impl std::io::Read for ChunkReader {
+    fn read(&mut self, buffer: &mut [u8]) -> std::io::Result<usize> {
+        while self.offset == self.chunk.len() {
+            match self.receiver.blocking_recv() {
+                Some(chunk) => {
+                    self.chunk = chunk;
+                    self.offset = 0;
+                }
+                None => return Ok(0),
+            }
+        }
+        let count = buffer.len().min(self.chunk.len() - self.offset);
+        buffer[..count].copy_from_slice(&self.chunk[self.offset..self.offset + count]);
+        self.offset += count;
+        Ok(count)
+    }
+}
+
+/// Parses one streamed record into its summary; the sender closing ends it.
+fn summarize(
+    receiver: tokio::sync::mpsc::Receiver<Vec<u8>>,
+) -> Result<Map<String, Value>, EngineError> {
+    let protocol = |error: serde_json::Error| EngineError::Protocol(error.to_string());
+    let mut deserializer = serde_json::Deserializer::from_reader(ChunkReader {
+        receiver,
+        chunk: Vec::new(),
+        offset: 0,
+    });
+    let summary =
+        de::Deserializer::deserialize_map(&mut deserializer, EventSummary).map_err(protocol)?;
+    deserializer.end().map_err(protocol)?;
+    Ok(summary)
+}
+
 pub struct PiProcess {
     child: Child,
     stdin: ChildStdin,
     stdout: BufReader<ChildStdout>,
-    stderr_drain: JoinHandle<()>,
+    /// Taken once it has finished, so it is never polled again.
+    stderr_drain: Option<JoinHandle<()>>,
+    stderr_tail: Arc<Mutex<Vec<u8>>>,
+    tools: ToolSelection,
     pending: HashMap<String, String>,
 }
 
@@ -331,13 +866,14 @@ impl PiProcess {
     /// credentials are inherited; Git/publication auth is excluded. The runtime
     /// gives every assignment a separate private configuration directory.
     pub async fn spawn(config: &PiConfig) -> Result<Self, EngineError> {
-        verify_version(config).await?;
-        private_directory(&config.cwd)?;
-        private_directory(&config.config_dir)?;
-        let mut command = Command::new(&config.program);
+        let (program, launcher_args) = resolve_launcher(&config.program, &config.launcher_args)?;
+        probe_version(config, &program, &launcher_args).await?;
+        write_private_file(&system_prompt_path(config), system_prompt(&config.profile))?;
+        let tools = session_tools(config);
+        let mut command = Command::new(&program);
         command
-            .args(&config.launcher_args)
-            .args(session_arguments(config));
+            .args(&launcher_args)
+            .args(launch_arguments(config, &tools));
         command.env_clear();
         for name in [
             "PATH",
@@ -401,19 +937,21 @@ impl PiProcess {
                 .take()
                 .ok_or_else(|| EngineError::Protocol("stdout unavailable".into()))?,
         );
-        let mut stderr = child
+        let stderr = child
             .stderr
             .take()
             .ok_or_else(|| EngineError::Protocol("stderr unavailable".into()))?;
-        // Drain rather than expose diagnostics that may contain upstream paths or credentials.
-        let stderr_drain = tokio::spawn(async move {
-            let _ = tokio::io::copy(&mut stderr, &mut tokio::io::sink()).await;
-        });
+        // Diagnostics stay private until a failure needs them, and then only a
+        // redacted tail is reported: they may contain paths or credentials.
+        let stderr_tail = Arc::new(Mutex::new(Vec::new()));
+        let stderr_drain = tokio::spawn(keep_tail(stderr, stderr_tail.clone()));
         Ok(Self {
             child,
             stdin,
             stdout,
-            stderr_drain,
+            stderr_drain: Some(stderr_drain),
+            stderr_tail,
+            tools,
             pending: HashMap::new(),
         })
     }
@@ -423,7 +961,24 @@ impl PiProcess {
         self.child.id()
     }
 
+    /// The tools declared to this session and those left out, with reasons.
+    pub fn tools(&self) -> &ToolSelection {
+        &self.tools
+    }
+
     pub async fn command(
+        &mut self,
+        id: &str,
+        command_type: &str,
+        data: Value,
+    ) -> Result<(), EngineError> {
+        match self.send(id, command_type, data).await {
+            Err(EngineError::Io(error)) => Err(EngineError::Write(error, self.diagnostics().await)),
+            other => other,
+        }
+    }
+
+    async fn send(
         &mut self,
         id: &str,
         command_type: &str,
@@ -444,12 +999,16 @@ impl PiProcess {
     }
 
     /// Bounded LF framing, including Unicode separators inside JSON strings.
+    /// A session event of a kind in [`SUMMARIZED_KINDS`] that exceeds
+    /// `MAX_RECORD_BYTES` is returned as a summary of the fields the runtime
+    /// reads (its type, retry and error state, message roles, stop reasons and
+    /// usage), marked `luuna_summary`; its content is skipped unbuffered.
     pub async fn next(&mut self) -> Result<Record, EngineError> {
         let mut line = Vec::new();
         loop {
             let available = self.stdout.fill_buf().await?;
             if available.is_empty() {
-                return Err(EngineError::Closed);
+                return Err(EngineError::Closed(self.diagnostics().await));
             }
             let count = available
                 .iter()
@@ -457,7 +1016,7 @@ impl PiProcess {
                 .map(|p| p + 1)
                 .unwrap_or(available.len());
             if line.len() + count > MAX_RECORD_BYTES {
-                return Err(EngineError::Protocol("record exceeds 1 MiB".into()));
+                return self.summarize_oversized(line).await;
             }
             let complete = available[count - 1] == b'\n';
             line.extend_from_slice(&available[..count]);
@@ -482,11 +1041,91 @@ impl PiProcess {
         Ok(record)
     }
 
+    /// Streams the rest of an oversized record through a blocking parser that
+    /// keeps only its summary, so memory stays bounded by the first
+    /// `MAX_RECORD_BYTES` and a few chunks in flight.
+    async fn summarize_oversized(&mut self, head: Vec<u8>) -> Result<Record, EngineError> {
+        let kind = leading_kind(&head)
+            .filter(|kind| SUMMARIZED_KINDS.contains(&kind.as_str()))
+            .ok_or_else(|| EngineError::Protocol("record exceeds 1 MiB".into()))?;
+        let (sender, receiver) = tokio::sync::mpsc::channel::<Vec<u8>>(4);
+        let parser = tokio::task::spawn_blocking(move || summarize(receiver));
+        let mut size = head.len();
+        let mut open = sender.send(head).await.is_ok();
+        while open {
+            let available = self.stdout.fill_buf().await?;
+            if available.is_empty() {
+                drop(sender);
+                return Err(EngineError::Closed(self.diagnostics().await));
+            }
+            let count = available
+                .iter()
+                .position(|b| *b == b'\n')
+                .map(|p| p + 1)
+                .unwrap_or(available.len());
+            let complete = available[count - 1] == b'\n';
+            size += count;
+            if size > MAX_SUMMARIZED_RECORD_BYTES {
+                return Err(EngineError::Protocol(format!(
+                    "{kind} record exceeds 256 MiB"
+                )));
+            }
+            let chunk = available[..count].to_vec();
+            self.stdout.consume(count);
+            // A parser that stopped early has already failed; its error is the result.
+            open = sender.send(chunk).await.is_ok() && !complete;
+        }
+        drop(sender);
+        let mut summary = parser
+            .await
+            .map_err(|error| EngineError::Protocol(error.to_string()))??;
+        if summary.get("type").and_then(Value::as_str) != Some(kind.as_str()) {
+            return Err(EngineError::Protocol(
+                "oversized record type is inconsistent".into(),
+            ));
+        }
+        if let Some(Value::Object(marker)) = summary.get_mut("luuna_summary") {
+            marker.insert("record_bytes".into(), json!(size));
+        }
+        Record::from_value(Value::Object(summary))
+    }
+
+    /// Why Pi stopped, for a failure reason: its exit status once it has
+    /// exited, and the redacted end of its stderr, where Pi 1.3.0 reports
+    /// startup failures such as an unknown provider or a broken extension.
+    async fn diagnostics(&mut self) -> String {
+        // Pi writes its reason and exits; give both a moment so the reason is
+        // not lost to a race with the end of stdout.
+        if let Some(drain) = self.stderr_drain.as_mut() {
+            if tokio::time::timeout(Duration::from_millis(500), drain)
+                .await
+                .is_ok()
+            {
+                self.stderr_drain = None;
+            }
+        }
+        let mut diagnostics = String::new();
+        if let Ok(Ok(status)) =
+            tokio::time::timeout(Duration::from_millis(250), self.child.wait()).await
+        {
+            diagnostics.push_str(&format!("; Pi exited with {status}"));
+        }
+        let tail = self
+            .stderr_tail
+            .lock()
+            .map(|window| diagnostic_tail(&window, &credential_values()))
+            .unwrap_or_default();
+        if !tail.is_empty() {
+            diagnostics.push_str(&format!("; Pi stderr (redacted tail): {tail}"));
+        }
+        diagnostics
+    }
+
     /// Abort is a request, not proof the process has stopped. Always reap it.
     pub async fn stop(&mut self) -> Result<(), EngineError> {
         let _ = tokio::time::timeout(
             Duration::from_secs(1),
-            self.command("shutdown-abort", "abort", json!({})),
+            self.send("shutdown-abort", "abort", json!({})),
         )
         .await;
         let _ = tokio::time::timeout(Duration::from_secs(1), self.stdin.shutdown()).await;
@@ -495,9 +1134,138 @@ impl PiProcess {
             self.child.kill().await?;
         }
         self.child.wait().await?;
-        self.stderr_drain.abort();
+        if let Some(drain) = self.stderr_drain.take() {
+            drain.abort();
+        }
         Ok(())
     }
+}
+
+/// Drains a child's stderr, keeping only its last `STDERR_WINDOW_BYTES`,
+/// from a line start when the window holds one: a line cut by the window
+/// edge could hold the unredactable remainder of a credential, so it is
+/// dropped. A single longer line stays cut, far ahead of the reported tail.
+async fn keep_tail(mut stream: impl AsyncRead + Unpin, window: Arc<Mutex<Vec<u8>>>) {
+    let mut buffer = [0u8; 4096];
+    loop {
+        let read = match stream.read(&mut buffer).await {
+            Ok(0) | Err(_) => return,
+            Ok(read) => read,
+        };
+        if let Ok(mut kept) = window.lock() {
+            kept.extend_from_slice(&buffer[..read]);
+            if kept.len() > STDERR_WINDOW_BYTES {
+                let mut excess = kept.len() - STDERR_WINDOW_BYTES;
+                if let Some(newline) = kept[excess..].iter().position(|b| *b == b'\n') {
+                    excess += newline + 1;
+                }
+                kept.drain(..excess);
+            }
+        }
+    }
+}
+
+/// The end of a diagnostic stream as one line: redacted as a whole, control
+/// characters removed, then cut to its last `STDERR_TAIL_BYTES`.
+pub fn diagnostic_tail(window: &[u8], known: &[String]) -> String {
+    let text = redact_diagnostics(&String::from_utf8_lossy(window), known);
+    let line: String = text
+        .lines()
+        .map(str::trim)
+        .filter(|line| !line.is_empty())
+        .collect::<Vec<_>>()
+        .join(" | ")
+        .chars()
+        .filter(|c| !c.is_control())
+        .collect();
+    if line.len() <= STDERR_TAIL_BYTES {
+        return line;
+    }
+    let mut start = line.len() - STDERR_TAIL_BYTES;
+    while !line.is_char_boundary(start) {
+        start += 1;
+    }
+    format!("…{}", &line[start..])
+}
+
+/// Best-effort removal of credentials from diagnostic text before it becomes
+/// part of a durable failure reason: the configured provider key values
+/// (longest first), URL userinfo, bearer and well-known API token shapes, and
+/// the values of secret-named assignments (`api_key=…`, `"token": "…"`).
+pub fn redact_diagnostics(text: &str, known: &[String]) -> String {
+    let mut values: Vec<&str> = known
+        .iter()
+        .map(String::as_str)
+        .filter(|value| !value.is_empty())
+        .collect();
+    values.sort_by(|a, b| b.len().cmp(&a.len()).then_with(|| a.cmp(b)));
+    values.dedup();
+    let mut text = text.to_owned();
+    for value in values {
+        text = text.replace(value, "[redacted credential]");
+    }
+    let mut output = String::with_capacity(text.len());
+    let mut after_bearer = false;
+    for piece in text.split_inclusive(char::is_whitespace) {
+        let word = piece.trim_end_matches(char::is_whitespace);
+        output.push_str(&redact_word(word, after_bearer));
+        output.push_str(&piece[word.len()..]);
+        if !word.is_empty() {
+            after_bearer = word.eq_ignore_ascii_case("bearer");
+        }
+    }
+    output
+}
+
+fn redact_word(word: &str, after_bearer: bool) -> String {
+    const TOKEN_PREFIXES: [&str; 10] = [
+        "sk-",
+        "AKIA",
+        "ghp_",
+        "gho_",
+        "ghs_",
+        "github_pat_",
+        "glpat-",
+        "xoxb-",
+        "xoxp-",
+        "AIza",
+    ];
+    const SECRET_NAMES: [&str; 6] = ["key", "secret", "password", "passwd", "token", "credential"];
+    let core = word.trim_matches(|c: char| !c.is_ascii_alphanumeric() && c != '_' && c != '-');
+    if after_bearer && core.len() >= 8 {
+        return word.replacen(core, "[redacted token]", 1);
+    }
+    if let Some(scheme) = word.find("://") {
+        let rest = &word[scheme + 3..];
+        let host = rest.find(['/', '?', '#']).unwrap_or(rest.len());
+        if let Some(at) = rest[..host].rfind('@') {
+            return format!("{}[redacted userinfo]{}", &word[..scheme + 3], &rest[at..]);
+        }
+        return word.to_owned();
+    }
+    let token_like = |text: &str| {
+        TOKEN_PREFIXES.iter().any(|prefix| {
+            text.strip_prefix(prefix).is_some_and(|rest| {
+                rest.len() >= 16
+                    && rest
+                        .bytes()
+                        .all(|b| b.is_ascii_alphanumeric() || b == b'_' || b == b'-')
+            })
+        })
+    };
+    if token_like(core) {
+        return word.replacen(core, "[redacted token]", 1);
+    }
+    if let Some(separator) = word.find(['=', ':']) {
+        let name = word[..separator]
+            .trim_matches(|c: char| !c.is_ascii_alphanumeric())
+            .to_ascii_lowercase();
+        let value = word[separator + 1..].trim_matches(|c: char| c == '"' || c == '\'' || c == ',');
+        if value.len() >= 8 && SECRET_NAMES.iter().any(|secret| name.ends_with(secret)) {
+            return format!("{}[redacted]", &word[..=separator]);
+        }
+    }
+    word.to_owned()
 }
 
 fn private_directory(path: &std::path::Path) -> Result<(), std::io::Error> {
@@ -511,26 +1279,70 @@ fn private_directory(path: &std::path::Path) -> Result<(), std::io::Error> {
     builder.create(path)
 }
 
+/// Writes text readable by the current account only: mode 0600 on Unix, and
+/// on Windows the private data directory's inherited access.
+fn write_private_file(path: &Path, contents: &str) -> Result<(), std::io::Error> {
+    let mut options = std::fs::OpenOptions::new();
+    options.write(true).create(true).truncate(true);
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::OpenOptionsExt;
+        options.mode(0o600);
+    }
+    std::io::Write::write_all(&mut options.open(path)?, contents.as_bytes())
+}
+
 /// Reject unsupported launchers before any provider request. The configured
 /// launcher is trusted local configuration, never an API request parameter.
 pub async fn verify_version(config: &PiConfig) -> Result<(), EngineError> {
-    let mut command = Command::new(&config.program);
+    let (program, launcher_args) = resolve_launcher(&config.program, &config.launcher_args)?;
+    probe_version(config, &program, &launcher_args).await
+}
+
+/// The probe runs with the session's private agent directory and working
+/// directory, as the session itself does: Pi 1.3.0 reads (and locks) its
+/// global settings before it answers `--version`, and the user's own Pi
+/// configuration must never be touched.
+async fn probe_version(
+    config: &PiConfig,
+    program: &Path,
+    launcher_args: &[String],
+) -> Result<(), EngineError> {
+    private_directory(&config.cwd)?;
+    private_directory(&config.config_dir)?;
+    let mut command = Command::new(program);
     command
-        .args(&config.launcher_args)
+        .args(launcher_args)
         .arg("--version")
         .env_clear()
+        .current_dir(&config.cwd)
         .kill_on_drop(true);
     for name in ["PATH", "SystemRoot", "WINDIR", "TEMP", "TMP"] {
         if let Some(value) = std::env::var_os(name) {
             command.env(name, value);
         }
     }
+    command
+        .env("HOME", &config.config_dir)
+        .env("USERPROFILE", &config.config_dir)
+        .env("PI_CODING_AGENT_DIR", &config.config_dir);
     let output = tokio::time::timeout(Duration::from_secs(15), command.output())
         .await
         .map_err(|_| EngineError::Timeout)??;
-    if !output.status.success() || String::from_utf8_lossy(&output.stdout).trim() != PI_VERSION {
+    let reported = String::from_utf8_lossy(&output.stdout);
+    if !output.status.success() || reported.trim() != PI_VERSION {
+        let known = credential_values();
+        let mut detail = format!("launcher exited with {}", output.status);
+        let reported = diagnostic_tail(reported.trim().as_bytes(), &known);
+        if !reported.is_empty() {
+            detail.push_str(&format!("; reported {:.64}", reported));
+        }
+        let stderr = diagnostic_tail(&output.stderr, &known);
+        if !stderr.is_empty() {
+            detail.push_str(&format!("; stderr (redacted tail): {stderr}"));
+        }
         return Err(EngineError::Protocol(format!(
-            "unsupported Pi version; expected {PI_VERSION}"
+            "unsupported Pi version; expected {PI_VERSION} ({detail})"
         )));
     }
     Ok(())
@@ -571,7 +1383,28 @@ mod tests {
             args[position("--extension") + 1],
             "/tmp/config/luuna-scope-guard.js"
         );
-        assert_eq!(args[position("--system-prompt") + 1], "task");
+        // Only the private file's absolute path is argv; the instructions are
+        // not. Pi would resolve a relative path against the worktree.
+        let prompt_file = PathBuf::from(&args[position("--system-prompt") + 1]);
+        assert!(prompt_file.is_absolute());
+        assert_eq!(
+            prompt_file,
+            std::path::absolute("/tmp/config/luuna-system-prompt.md").unwrap()
+        );
+        let relative = PiConfig {
+            config_dir: "relative-config".into(),
+            ..writer.clone()
+        };
+        assert_eq!(
+            system_prompt_path(&relative),
+            std::env::current_dir()
+                .unwrap()
+                .join("relative-config")
+                .join(SYSTEM_PROMPT_FILE)
+        );
+        assert_eq!(system_prompt(&writer.profile), "task");
+        assert!(!args.contains(&"task".to_owned()));
+        assert!(!demo.iter().any(|arg| arg.contains("connectivity demo")));
         assert!(!args.contains(&"--no-tools".to_owned()));
         // Discovery stays off even for writers; only the explicit extension loads.
         assert!(args.contains(&"--no-extensions".to_owned()));
@@ -603,9 +1436,17 @@ mod tests {
             }),
         };
         let args = session_arguments(&config);
+        // grep and find are declared only where their helpers exist.
+        let declared = session_tools(&config).declared;
+        assert!(
+            declared.starts_with(&["read".to_owned()]) && declared.ends_with(&["ls".to_owned()])
+        );
+        assert!(declared
+            .iter()
+            .all(|tool| REVIEWER_TOOLS.contains(&tool.as_str())));
         assert_eq!(
             args[args.iter().position(|arg| arg == "--tools").unwrap() + 1],
-            "read,grep,find,ls"
+            declared.join(",")
         );
         for flag in [
             "--no-session",
@@ -771,5 +1612,281 @@ mod tests {
         }
         assert!(Record::parse(br#"{"type":"agent_settled","aborted":false}"#).is_ok());
         assert!(Record::parse(br#"{"type":"agent_end","messages":[],"willRetry":false}"#).is_ok());
+    }
+
+    /// Streams `record` to the summary parser in small chunks, as `next` does.
+    fn summary_of(record: &Value) -> Result<Record, EngineError> {
+        let bytes = format!("{record}\n").into_bytes();
+        let (sender, receiver) = tokio::sync::mpsc::channel(bytes.len() / 4096 + 2);
+        for chunk in bytes.chunks(4096) {
+            sender.try_send(chunk.to_vec()).unwrap();
+        }
+        drop(sender);
+        Record::from_value(Value::Object(summarize(receiver)?))
+    }
+
+    #[test]
+    fn oversized_events_keep_completion_fields_and_drop_content() {
+        let read = |i: usize| json!({"role":"toolResult","toolName":"read","toolCallId":format!("read-{i}"),"isError":false,"content":[{"type":"text","text":"x".repeat(50_000)}]});
+        let mut messages: Vec<Value> = (0..100).map(read).collect();
+        messages.insert(3, json!({"role":"assistant","stopReason":"error","errorMessage":"e".repeat(5_000),"content":[{"type":"text","text":"partial"}]}));
+        messages.push(json!({"role":"assistant","stopReason":"aborted","errorMessage":"later","usage":{"cost":{"total":0.5}}}));
+        let record = json!({"type":"agent_end","messages":messages,"willRetry":false});
+        assert!(record.to_string().len() > MAX_RECORD_BYTES);
+        let summary = summary_of(&record).unwrap();
+        assert_eq!(summary.kind, "agent_end");
+        assert_eq!(summary.raw["willRetry"], false);
+        assert_eq!(summary.raw["luuna_summary"]["messages"], 102);
+        let kept = summary.raw["messages"].as_array().unwrap();
+        // The first failure (index 3) plus the last 64 messages, in order.
+        assert_eq!(kept.len(), SUMMARY_MESSAGES + 1);
+        assert_eq!(kept[0]["stopReason"], "error");
+        assert_eq!(kept.last().unwrap()["stopReason"], "aborted");
+        assert!(kept.iter().all(|message| message.get("content").is_none()));
+        let error = summary.model_error().unwrap();
+        assert!(
+            error.starts_with("eee") && error.len() < 2 * SUMMARY_STRING_BYTES,
+            "{error}"
+        );
+        assert!(summary.raw.to_string().len() < 64 * 1024);
+
+        let turn = json!({"type":"turn_end","message":{"role":"assistant","stopReason":"toolUse","content":[{"type":"text","text":"y".repeat(10)}]},"toolResults":(0..30).map(read).collect::<Vec<_>>()});
+        let summary = summary_of(&turn).unwrap();
+        assert_eq!(summary.raw["message"]["stopReason"], "toolUse");
+        assert!(summary.raw["message"].get("content").is_none());
+        assert_eq!(summary.raw["luuna_summary"]["toolResults"], 30);
+
+        // Usage survives on message events, so cost accounting is unchanged.
+        let update = json!({"type":"message_update","usage":{"cost":{"total":0.25}},"assistantMessageEvent":{"type":"toolcall_end","contentIndex":0,"toolCall":{"arguments":{"content":"z".repeat(2_000_000)}}}});
+        let summary = summary_of(&update).unwrap();
+        assert_eq!(
+            summary.raw["assistantMessageEvent"],
+            json!({"type":"toolcall_end","contentIndex":0})
+        );
+        assert_eq!(SessionUsage::default().observe(&summary), 250_000);
+    }
+
+    #[test]
+    fn oversized_events_are_validated_like_whole_records() {
+        for record in [
+            json!({"type":"agent_end","messages":[{"role":"user"}, null],"willRetry":false}),
+            json!({"type":"agent_end","messages":[],"willRetry":"false"}),
+            json!({"type":"agent_end","messages":{}}),
+            json!({"type":"agent_end","messages":[]}),
+            json!({"type":"message_end","message":null}),
+            json!({"type":"message_end","message":[]}),
+        ] {
+            assert!(
+                matches!(summary_of(&record), Err(EngineError::Protocol(_))),
+                "{record}"
+            );
+        }
+        let bytes = br#"{"type":"agent_end","messages":[],"willRetry":false} trailing"#;
+        let (sender, receiver) = tokio::sync::mpsc::channel(1);
+        sender.try_send(bytes.to_vec()).unwrap();
+        drop(sender);
+        assert!(summarize(receiver).is_err());
+        assert_eq!(
+            leading_kind(br#" { "type" : "turn_end", "message""#).as_deref(),
+            Some("turn_end")
+        );
+        assert_eq!(leading_kind(br#"{"message":{},"type":"turn_end"}"#), None);
+        assert_eq!(leading_kind(br#"{"type":"agent\"end"}"#), None);
+    }
+
+    #[test]
+    fn tools_whose_helper_is_missing_are_omitted_with_a_reason() {
+        let requested: Vec<String> = ["read", "grep", "find", "ls", "edit"]
+            .map(String::from)
+            .to_vec();
+        let all = select_tools(&requested, |_| true);
+        assert_eq!(all.declared, requested);
+        assert!(all.omitted.is_empty());
+        let fdfind_only = select_tools(&requested, |helper| helper == "fdfind");
+        assert_eq!(fdfind_only.declared, ["read", "find", "ls", "edit"]);
+        assert_eq!(fdfind_only.omitted.len(), 1);
+        assert!(fdfind_only.omitted[0].1.contains("runs rg"));
+        let none = select_tools(&requested, |_| false);
+        assert_eq!(none.declared, ["read", "ls", "edit"]);
+        assert_eq!(none.omitted_json()[1]["tool"], "find");
+        assert!(none.omitted_json()[1]["reason"]
+            .as_str()
+            .unwrap()
+            .contains("fd or fdfind"));
+
+        // An empty selection disables tools instead of falling back to Pi's defaults.
+        let config = PiConfig {
+            program: "pi".into(),
+            launcher_args: vec![],
+            cwd: "/tmp/work".into(),
+            config_dir: "/tmp/config".into(),
+            provider: None,
+            model: None,
+            profile: SessionProfile::Writer(WriterProfile {
+                tools: vec!["grep".into()],
+                system_prompt: "task".into(),
+                extensions: vec![],
+                environment: vec![],
+            }),
+        };
+        let args = launch_arguments(&config, &select_tools(&["grep".into()], |_| false));
+        assert!(args.contains(&"--no-tools".to_owned()) && !args.contains(&"--tools".to_owned()));
+
+        let dir = std::env::temp_dir().join(format!("luuna-helper-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        for name in ["rg", "fd.exe"] {
+            std::fs::write(dir.join(name), "").unwrap();
+            #[cfg(unix)]
+            {
+                use std::os::unix::fs::PermissionsExt;
+                std::fs::set_permissions(dir.join(name), std::fs::Permissions::from_mode(0o755))
+                    .unwrap();
+            }
+        }
+        let empty = dir.join("empty-bin");
+        assert!(helper_available("rg", &empty, Some(dir.as_os_str()), false));
+        assert!(!helper_available(
+            "fd",
+            &empty,
+            Some(dir.as_os_str()),
+            false
+        ));
+        assert!(helper_available("fd", &empty, Some(dir.as_os_str()), true));
+        assert!(helper_available("rg", &dir, None, false));
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
+    #[test]
+    fn windows_launchers_resolve_through_pathext_and_unwrap_npm_shims() {
+        let root = std::env::temp_dir().join(format!("luuna-launcher-{}", std::process::id()));
+        let global = root.join("npm");
+        let package = |base: &Path| {
+            let entry = base
+                .join("@earendil-works/pi-coding-agent/dist/bundle")
+                .join("cli.js");
+            std::fs::create_dir_all(entry.parent().unwrap()).unwrap();
+            std::fs::write(&entry, "").unwrap();
+            entry
+        };
+        let global_entry = package(&global.join("node_modules"));
+        std::fs::write(global.join("pi.cmd"), "@ECHO off").unwrap();
+        std::fs::write(global.join("node.exe"), "").unwrap();
+        let path = std::ffi::OsString::from(format!(
+            "{};\"{}\"",
+            root.join("missing").display(),
+            global.display()
+        ));
+        let pathext = OsStr::new(".COM;.EXE;.BAT;.CMD");
+        let args = vec!["--extra".to_owned()];
+
+        // Off Windows the launcher is used exactly as configured.
+        let (program, launcher) =
+            resolve_launcher_for(Path::new("pi"), &args, false, Some(&path), Some(pathext))
+                .unwrap();
+        assert_eq!((program, launcher), (PathBuf::from("pi"), args.clone()));
+        // A bare `pi` finds the npm shim, which becomes Node and Pi's entry point.
+        let (program, launcher) =
+            resolve_launcher_for(Path::new("pi"), &args, true, Some(&path), Some(pathext)).unwrap();
+        assert_eq!(program, global.join("node.exe"));
+        // Compared as paths: on Windows `/` and `\` are both separators.
+        assert_eq!(PathBuf::from(&launcher[0]), global_entry);
+        assert_eq!(launcher[1..], ["--extra"]);
+
+        // A local `node_modules\.bin\pi.cmd` uses Node from PATH.
+        let local = root.join("project/node_modules");
+        let local_entry = package(&local);
+        std::fs::create_dir_all(local.join(".bin")).unwrap();
+        std::fs::write(local.join(".bin/pi.cmd"), "@ECHO off").unwrap();
+        let tools = root.join("tools");
+        std::fs::create_dir_all(&tools).unwrap();
+        std::fs::write(tools.join("node.cmd"), "").unwrap();
+        std::fs::write(tools.join("node.exe"), "").unwrap();
+        let tools_path = tools.clone().into_os_string();
+        let (program, launcher) = resolve_launcher_for(
+            &local.join(".bin/pi.cmd"),
+            &[],
+            true,
+            Some(&tools_path),
+            Some(pathext),
+        )
+        .unwrap();
+        assert_eq!(program, tools.join("node.exe"));
+        assert_eq!(
+            PathBuf::from(&launcher[0]).canonicalize().unwrap(),
+            local_entry.canonicalize().unwrap()
+        );
+
+        // Any other batch launcher is refused rather than run through cmd.exe.
+        std::fs::write(root.join("other.bat"), "").unwrap();
+        let refused = resolve_launcher_for(
+            &root.join("other.bat"),
+            &[],
+            true,
+            Some(&path),
+            Some(pathext),
+        );
+        assert!(matches!(refused, Err(EngineError::Launcher(reason)) if reason.contains("cli.js")));
+        // Executables and unresolvable names are left to the operating system.
+        let (program, _) =
+            resolve_launcher_for(Path::new("node"), &[], true, Some(&path), Some(pathext)).unwrap();
+        assert_eq!(program, global.join("node.exe"));
+        let (program, _) =
+            resolve_launcher_for(Path::new("absent"), &[], true, Some(&path), Some(pathext))
+                .unwrap();
+        assert_eq!(program, PathBuf::from("absent"));
+        // An executable later on PATH wins over an earlier script shim, as
+        // Rust's own lookup of a bare name would pick it.
+        let shims = root.join("shims");
+        std::fs::create_dir_all(&shims).unwrap();
+        std::fs::write(shims.join("python.bat"), "").unwrap();
+        std::fs::write(tools.join("python.exe"), "").unwrap();
+        let shims_first =
+            std::ffi::OsString::from(format!("{};{}", shims.display(), tools.display()));
+        let (program, _) = resolve_launcher_for(
+            Path::new("python"),
+            &[],
+            true,
+            Some(&shims_first),
+            Some(pathext),
+        )
+        .unwrap();
+        assert_eq!(program, tools.join("python.exe"));
+        let _ = std::fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn diagnostics_are_redacted_bounded_and_keep_the_reason() {
+        let text = "Loading\n\
+            Error: No API key found for provider \"openai\"; set OPENAI_API_KEY\n\
+            proxy=https://user:hunter22@proxy.invalid:8080/path\n\
+            Authorization: Bearer abcdefghijklmnop\n\
+            leaked sk-ant-api03-ABCDEFGHIJKLMNOPQRSTUVWX in output\n\
+            {\"apiKey\":\"configured-value-1\",\"token\": \"short\"}\n\
+            unexpected token in JSON at position 3\n";
+        let known = vec!["configured-value-1".to_owned()];
+        let tail = diagnostic_tail(text.as_bytes(), &known);
+        for secret in [
+            "hunter22",
+            "abcdefghijklmnop",
+            "sk-ant-api03",
+            "configured-value-1",
+        ] {
+            assert!(!tail.contains(secret), "{secret} in {tail}");
+        }
+        for kept in [
+            "No API key found for provider \"openai\"; set OPENAI_API_KEY",
+            "proxy.invalid:8080",
+            "unexpected token in JSON",
+            " | ",
+        ] {
+            assert!(tail.contains(kept), "{kept} missing from {tail}");
+        }
+        assert!(!tail.contains('\n'));
+        let long = format!(
+            "{}\nfinal reason\u{1b}[0m\n",
+            "é".repeat(STDERR_WINDOW_BYTES)
+        );
+        let tail = diagnostic_tail(long.as_bytes(), &[]);
+        assert!(tail.len() <= STDERR_TAIL_BYTES + "…".len() && tail.ends_with("final reason[0m"));
     }
 }

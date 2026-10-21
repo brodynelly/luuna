@@ -731,7 +731,7 @@ async fn pipeline(
         .event(
             id,
             "review.started",
-            json!({"reviewer_session":session,"candidate_hash":hash,"pid":process.pid()}),
+            json!({"reviewer_session":session,"candidate_hash":hash,"pid":process.pid(),"tools":process.tools().declared,"omitted_tools":process.tools().omitted_json()}),
         )
         .is_err()
     {

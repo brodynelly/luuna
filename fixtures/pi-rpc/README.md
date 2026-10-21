@@ -20,6 +20,17 @@ candidate's first validation generation with malformed text and every later
 generation with a valid pass, so a fresh validation generation after an
 invalid review can be exercised against one immutable ticket.
 
+As Pi 1.3.0 does, the fixture reads `--system-prompt` from the named file when
+it exists; writer `fixture_args` report the prompt's size and whether it came
+from a file. The `large_session` writer and the `large_agent_end`,
+`large_agent_end_error`, `malformed_large_agent_end` and `oversized_unknown`
+demo prompts emit records over 1 MiB, as Pi's `turn_end` and `agent_end` do
+after many file reads. Launcher flags select startup behaviour:
+`--stall-stdin` stops reading commands, `--fail-startup` prints a diagnostic
+(with synthetic credentials to be redacted) to stderr and exits 1, and
+`--require-isolated-version` answers `--version` only when the probe runs with
+a private `PI_CODING_AGENT_DIR`.
+
 The real compatibility probe is `cargo run -p luuna-engine-pi --example probe`.
 Set `LUUNA_PI_COMMAND` to the installed `pi` executable, or to Node and provide
 `LUUNA_PI_ARGS_JSON='["/absolute/path/to/pi/dist/cli.js"]'`. The probe enforces

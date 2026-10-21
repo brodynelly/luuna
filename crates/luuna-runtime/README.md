@@ -9,13 +9,13 @@ variables locally; keep credentials out of repository files:
 | Variable | Purpose |
 | --- | --- |
 | `LUUNA_API_TOKEN` | Required random token, at least 32 bytes; frontend enters it locally |
-| `LUUNA_PI_COMMAND` | Pi executable, default `pi`; may be an absolute Node executable |
+| `LUUNA_PI_COMMAND` | Pi executable, default `pi`; may be an absolute Node executable. On Windows a bare name is searched through PATH, executables first and then PATHEXT, and an npm `pi.cmd` shim is started as the Node executable and `dist/bundle/cli.js` it names; other `.cmd`/`.bat` launchers are refused |
 | `LUUNA_GIT_COMMAND` | Host `git` used for read-only repository inspection, default `git` |
 | `LUUNA_PI_ARGS_JSON` | Optional JSON array of launcher arguments, e.g. absolute `dist/cli.js` path |
 | `LUUNA_PI_PROVIDER` / `LUUNA_PI_MODEL` | Optional explicit defaults; UI can supply them per run |
 | `LUUNA_PI_<PROVIDER>_API_KEY` | Optional alias for any supported provider key (for example `LUUNA_PI_ANTHROPIC_API_KEY`, `LUUNA_PI_OPENAI_API_KEY`) for hosts that reserve the plain name; it becomes the child's standard variable, takes precedence over a direct key, and is never passed through under the alias name |
 | `HTTP_PROXY`, `HTTPS_PROXY`, `ALL_PROXY`, `NO_PROXY` | Preserved for provider routing, including lowercase variants and `NODE_USE_ENV_PROXY`; existing TLS trust variables remain enabled |
-| `LUUNA_DATA_DIR` | Private durable state directory, default `.luuna` |
+| `LUUNA_DATA_DIR` | Private durable state directory, default `.luuna`; keep it short on Windows, where worktrees below it count toward the 260-character path limit |
 | `LUUNA_PORT` | Loopback port, default `4242` |
 | `LUUNA_RUN_TIMEOUT_SECONDS` | Positive operation deadline, default `600`; version probe has a separate 15s deadline |
 
@@ -148,6 +148,16 @@ required Pi version, and the names (never values) of provider credentials the
 child received. The terminal `run.*` event is persisted only after that child
 has been stopped and reaped, so a PID that is still alive after a terminal event
 is a defect. On Unix, `SIGTERM` and Ctrl+C both take the orderly shutdown path.
+
+Session system prompts reach Pi as a private file (`--system-prompt <path>`),
+never as argv text. Pi runs offline, so its `grep` and `find` tools work only
+where ripgrep (`rg`) and fd (`fd` or `fdfind`) are already on PATH; writers and
+reviewers omit them otherwise, and `pi.spawned`/`review.started` list the
+`omitted_tools` with the reason. When Pi exits or stops reading, the failure
+reason includes its exit status and a redacted 2 KiB tail of its stderr (for
+example an unknown provider). Records over 1 MiB fail the session, except the
+session events whose size grows with the run (`agent_end` and `turn_end` repeat
+every tool result): those are read as a bounded summary marked `luuna_summary`.
 
 `node scripts/m1-smoke.mjs --mode real --provider <p> --model <m>` drives a
 built runtime binary through the full M1 checklist (authentication, SSE

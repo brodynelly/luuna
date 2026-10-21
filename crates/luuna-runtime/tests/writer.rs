@@ -402,7 +402,21 @@ async fn an_approved_writer_changes_only_its_worktree_and_records_a_candidate() 
         .iter()
         .find(|e| e["type"] == "pi.fixture_args")
         .unwrap();
-    assert_eq!(fixture["payload"]["tools"], "read,grep,find,ls,edit,write");
+    // grep and find are declared only where Pi can run their helper programs
+    // offline; an omitted tool is recorded with its reason.
+    let declared: Vec<&str> = spawned["payload"]["tools"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|tool| tool.as_str().unwrap())
+        .collect();
+    assert_eq!(fixture["payload"]["tools"], declared.join(","));
+    assert!(declared.starts_with(&["read"]) && declared.ends_with(&["ls", "edit", "write"]));
+    let omitted = spawned["payload"]["omitted_tools"].as_array().unwrap();
+    assert_eq!(declared.len() + omitted.len(), 6, "{spawned}");
+    assert!(omitted
+        .iter()
+        .all(|tool| tool["reason"].as_str().unwrap().contains("not on PATH")));
     assert_eq!(fixture["payload"]["no_tools"], false);
     assert!(fixture["payload"]["extensions"][0]
         .as_str()
@@ -571,6 +585,97 @@ async fn component_source_edits_during_writer_and_reviewer_cannot_accept_stale_w
         );
         assert_eq!(snapshot(repo.path()), before);
     }
+}
+
+#[tokio::test]
+async fn a_maximum_size_ticket_launches_its_writer_in_a_short_worktree_path() {
+    // The largest ticket the 256 KiB request body admits. Its criteria reach
+    // the writer's system prompt, far above Linux's 128 KiB per-argument limit
+    // (and Windows' 32,767-character command line), so Pi must read that
+    // prompt from a private file rather than argv.
+    let harness = Harness::new();
+    let repo = tempfile::tempdir().unwrap();
+    ready(&harness, repo.path()).await;
+    let mut criteria = vec!["fixture:write_in_scope".to_owned()];
+    criteria.extend((0..15).map(|i| format!("{i:02} {}", "c".repeat(15_997))));
+    let (status, ticket) = harness
+        .request(
+            "POST",
+            "/api/v1/projects/fixture/tickets",
+            Some(json!({
+                "idempotency_key": format!("key-{}", uuid::Uuid::new_v4()),
+                "title": "T".repeat(200),
+                "intent": "i".repeat(16_000),
+                "acceptance_criteria": criteria,
+                "repository_ids": ["app"],
+            })),
+        )
+        .await;
+    assert_eq!(status, StatusCode::CREATED, "{ticket}");
+    let opened = harness
+        .plan(ticket["id"].as_str().unwrap(), json!({}))
+        .await;
+    harness.approve(&opened["plan"]).await;
+    let run_id = opened["run"]["id"].as_str().unwrap().to_owned();
+    assert_eq!(harness.implement(&run_id).await.0, StatusCode::ACCEPTED);
+    let settled = harness.settled(&run_id).await;
+    assert_eq!(settled["state"], "validating", "{settled}");
+    let events = harness.events(&run_id).await;
+    let fixture = &events
+        .iter()
+        .find(|e| e["type"] == "pi.fixture_args")
+        .unwrap()["payload"];
+    assert_eq!(fixture["system_prompt_from_file"], true);
+    assert!(
+        fixture["system_prompt_bytes"].as_u64().unwrap() > 240_000,
+        "{fixture}"
+    );
+    // The worktree is `worktrees/<run>/<attempt number>/<repository>`, not
+    // a second UUID: about 40 characters closer to Windows' MAX_PATH.
+    let (_, leases) = harness
+        .request("GET", &format!("/api/v1/runs/{run_id}/worktrees"), None)
+        .await;
+    assert_eq!(
+        PathBuf::from(leases[0]["path"].as_str().unwrap()),
+        harness
+            .root
+            .join("worktrees")
+            .join(&run_id)
+            .join("1")
+            .join("app")
+    );
+}
+
+#[tokio::test]
+async fn a_writer_session_whose_agent_end_exceeds_the_record_cap_records_its_candidate() {
+    // Pi's turn_end and agent_end repeat every tool result of the run, so a
+    // normal session that read 24 files emits them above 1 MiB. That is not a
+    // lost transport: the candidate is recorded, the reported cost charged
+    // and a bounded summary persisted in place of the echo.
+    let harness = Harness::new();
+    let repo = tempfile::tempdir().unwrap();
+    ready(&harness, repo.path()).await;
+    let (run_id, _) = harness
+        .approved(repo.path(), "large_session", json!({}))
+        .await;
+    assert_eq!(harness.implement(&run_id).await.0, StatusCode::ACCEPTED);
+    let settled = harness.settled(&run_id).await;
+    assert_eq!(settled["state"], "validating", "{settled}");
+    let events = harness.events(&run_id).await;
+    for kind in ["pi.turn_end", "pi.agent_end"] {
+        let event = events.iter().find(|e| e["type"] == kind).unwrap();
+        let summary = &event["payload"]["luuna_summary"];
+        assert!(
+            summary["record_bytes"].as_u64().unwrap() > 1024 * 1024,
+            "{kind}"
+        );
+        assert!(
+            event.to_string().len() < 64 * 1024,
+            "{kind} is persisted bounded"
+        );
+    }
+    let store = luuna_storage::Store::open(harness.root.join("luuna.sqlite3")).unwrap();
+    assert_eq!(store.workflow_usage(&run_id).unwrap().cost_usd_micros, 500);
 }
 
 #[tokio::test]

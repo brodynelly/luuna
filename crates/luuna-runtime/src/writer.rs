@@ -2026,12 +2026,14 @@ async fn writer_worker(state: AppState, job: WriterJob, mut cancel: watch::Recei
     };
     // Lease first so the path is reserved durably, then create the worktree.
     let attempt_dir = state.config.data_dir.join("attempts").join(&job.attempt.id);
+    // The attempt's number is unique within its run and far shorter than its
+    // identifier: Windows checkouts fail beyond MAX_PATH (260 characters).
     let worktree = state
         .config
         .data_dir
         .join("worktrees")
         .join(&job.run_id)
-        .join(&job.attempt.id)
+        .join(job.attempt.number.to_string())
         .join(&repository_id);
     let lease = WorktreeLease {
         id: format!("lease-{}", uuid::Uuid::new_v4()),
@@ -2211,7 +2213,7 @@ async fn writer_worker(state: AppState, job: WriterJob, mut cancel: watch::Recei
     let _ = state.event(
         &job.run_id,
         "pi.spawned",
-        json!({"pid": process.pid(), "pi_version": PI_VERSION, "tools": tools, "scope_guard": guard.to_string_lossy(), "scope": scope, "provider_credentials": luuna_engine_pi::configured_provider_keys()}),
+        json!({"pid": process.pid(), "pi_version": PI_VERSION, "tools": process.tools().declared, "omitted_tools": process.tools().omitted_json(), "scope_guard": guard.to_string_lossy(), "scope": scope, "provider_credentials": luuna_engine_pi::configured_provider_keys()}),
     );
     let budgets = job.plan.budgets.clone();
     let previous_usage = match state

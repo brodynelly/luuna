@@ -535,11 +535,23 @@ async fn repository_text_cannot_widen_the_approved_scope_or_tools() {
         .iter()
         .find(|e| e["type"] == "pi.fixture_args")
         .unwrap();
-    assert_eq!(
-        spawned["payload"]["tools"],
-        json!(["read", "grep", "find", "ls", "edit", "write"])
+    // `grep` and `find` are declared only where Pi can run them (rg/fd on
+    // PATH); the repository text never adds a tool beyond the approved file set.
+    let declared: Vec<&str> = spawned["payload"]["tools"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|tool| tool.as_str().unwrap())
+        .collect();
+    let approved_tools = ["read", "grep", "find", "ls", "edit", "write"];
+    assert!(
+        declared.iter().all(|tool| approved_tools.contains(tool)),
+        "{spawned}"
     );
-    assert_eq!(child["payload"]["tools"], "read,grep,find,ls,edit,write");
+    for tool in ["read", "ls", "edit", "write"] {
+        assert!(declared.contains(&tool), "{spawned}");
+    }
+    assert_eq!(child["payload"]["tools"], declared.join(","));
     for scope in [&spawned["payload"]["scope"], &child["payload"]["scope"]] {
         assert_eq!(scope["paths"], json!(["src"]), "{scope}");
         assert_eq!(scope["operations"], json!(["read", "write"]), "{scope}");

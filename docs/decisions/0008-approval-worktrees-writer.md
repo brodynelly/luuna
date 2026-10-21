@@ -1,6 +1,6 @@
 # ADR 0008: exact approval, Luuna-owned worktrees and one scoped writer
 
-Date: 2026-10-17. Status: accepted; amended 2026-10-21 (worktree integrity and plan scope bounds, below).
+Date: 2026-10-17. Status: accepted; amended 2026-10-21 (worktree integrity and plan scope bounds; Pi launch limits and portability; see below).
 
 ## Context
 
@@ -34,3 +34,11 @@ An audit showed that a writer with the documented `.` scope could rewrite the wo
 Unchanged: managed checkouts keep the effective line-ending configuration, because pinning LF would mismatch the usual CRLF Windows developer checkout where baselines still run; recording that configuration in the baseline fingerprint, or running baselines in leased worktrees, remains follow-up work. Content filters stay disabled as recorded in the current architecture, and repositories whose checks need populated submodules remain unsupported in managed worktrees. None of this is an operating-system boundary; native execution keeps host permissions.
 
 Amendment (2026-10-21, [ADR 0015](0015-storage-backup-and-schema-compatibility.md)): startup recovery now abandons every lease still `active` and interrupts every `running` attempt, whatever the state of its run. No writer runs before the runtime admits work, so all of them are orphans. This includes a lease whose run settled while its release failed, which previously refused every later writer on that repository. The recorded reason states that a commit made before the restart may exist unrecorded in the preserved worktree; it is never a candidate.
+
+## Amendment 2026-10-21: Pi launch limits and portability
+
+- The worktree path is `worktrees/<run>/<attempt number>/<repository>`. The attempt's number is unique within its run and replaces its 44-character identifier, keeping managed checkouts about 40 characters further from Windows' 260-character `MAX_PATH`. The `<run>` component and the candidate check that a worktree stays under `worktrees/<run>` are unchanged.
+- Session system prompts, including the writer's approved acceptance criteria, reach Pi as a mode-0600 file in the attempt's private agent directory (`--system-prompt <path>`, which Pi 1.3.0 reads as file contents). They are no longer argv text: tickets the API accepts exceeded Linux's 128 KiB per-argument limit and failed at spawn after approval, Windows limits a whole command line to 32,767 characters, and argv is visible to other local accounts.
+- Point 6's tools are declared only when Pi can run them. Pi 1.3.0's `grep` and `find` start ripgrep and fd (`fdfind`), which it downloads only when online; Luuna always runs it with `--offline` and a fresh agent directory. A tool whose helper is not on PATH is omitted, and `pi.spawned` (writers) and `review.started` (reviewers) record `omitted_tools` with the reason. An empty selection disables tools rather than falling back to Pi's defaults.
+- On Windows a bare launcher name is resolved through PATH, executables first and then PATHEXT, and an npm `pi.cmd` shim is replaced by the Node executable and `dist/bundle/cli.js` it would start; other batch launchers are refused, never run through cmd.exe.
+- Pi's `turn_end` and `agent_end` repeat every message and tool result of a run, so normal sessions exceed the 1 MiB record cap. Oversized session events of known kinds are streamed into a bounded summary (completion, error and usage fields, at most 65 message summaries, marked `luuna_summary`) instead of failing the attempt and reserving its remaining cost; other oversized records remain protocol errors. Startup and transport failures carry Pi's exit status and a redacted 2 KiB tail of its stderr, and the version probe runs with the session's private agent directory.
