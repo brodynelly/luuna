@@ -3,16 +3,17 @@ import type { FormEvent } from "react";
 import type { CandidateDiff, CandidateView, LuunaClient, Operation, PlanRevision, RunRecord, Ticket, WorktreeLease } from "@luuna/api-client";
 import { workflowNeedsRefresh, workflowReason } from "./workflow-state";
 import { CandidateReview } from "./CandidateReview";
+import { actionFailure, describeFailure, nextStep } from "./failures";
 
-function message(error: unknown): string {
-  return error instanceof Error ? error.message : "The runtime could not be reached.";
-}
+const message = describeFailure;
 
 interface Props {
   client: LuunaClient | null;
   projectId: string;
   repositoryId: string;
   manifestConfirmed: boolean;
+  /** Incremented when the runtime answers again after an outage. */
+  connectionEpoch?: number;
   onChanged: () => void;
 }
 
@@ -20,7 +21,7 @@ interface Props {
  * A temporary local ticket, an exact plan approval and the candidate workflow.
  * The runtime owns all execution, validation, review and repair decisions.
  */
-export function Workflows({ client, projectId, repositoryId, manifestConfirmed, onChanged }: Props) {
+export function Workflows({ client, projectId, repositoryId, manifestConfirmed, connectionEpoch = 0, onChanged }: Props) {
   const [reasons, setReasons] = useState<Record<string, string>>({});
   const [tickets, setTickets] = useState<Ticket[]>([]);
   const [plans, setPlans] = useState<Record<string, PlanRevision[]>>({});
@@ -99,7 +100,11 @@ export function Workflows({ client, projectId, repositoryId, manifestConfirmed, 
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [client, projectId, tick]);
 
-  async function guarded(action: () => Promise<void>) {
+  useEffect(() => {
+    if (connectionEpoch > 0) setTick((value) => value + 1);
+  }, [connectionEpoch]);
+
+  async function guarded(label: string, action: () => Promise<void>) {
     setBusy(true);
     setError("");
     try {
@@ -107,7 +112,9 @@ export function Workflows({ client, projectId, repositoryId, manifestConfirmed, 
       setTick((value) => value + 1);
       onChanged();
     } catch (failure) {
-      setError(message(failure));
+      setError(actionFailure(label, failure));
+      // A refusal usually means the authoritative state moved; show it.
+      setTick((value) => value + 1);
     } finally {
       setBusy(false);
     }
@@ -115,7 +122,7 @@ export function Workflows({ client, projectId, repositoryId, manifestConfirmed, 
 
   function createTicket(event: FormEvent) {
     event.preventDefault();
-    void guarded(async () => {
+    void guarded("Ticket creation", async () => {
       if (!client) return;
       await client.createTicket(projectId, {
         idempotency_key: crypto.randomUUID(),
@@ -131,7 +138,7 @@ export function Workflows({ client, projectId, repositoryId, manifestConfirmed, 
   }
 
   function plan(ticket: Ticket) {
-    void guarded(async () => {
+    void guarded("Planning", async () => {
       if (!client) return;
       const operations: Operation[] = write ? ["read", "write"] : ["read"];
       await client.createPlan(ticket.id, {
@@ -141,35 +148,35 @@ export function Workflows({ client, projectId, repositoryId, manifestConfirmed, 
   }
 
   function approve(plan: PlanRevision) {
-    void guarded(async () => {
+    void guarded("Approval", async () => {
       if (!client) return;
       await client.approvePlan(plan.id, { plan_revision: plan.revision, plan_hash: plan.hash, approved_by: approver.trim() || "developer" });
     });
   }
 
   function implement(run: RunRecord) {
-    void guarded(async () => {
+    void guarded("Implementation", async () => {
       if (!client) return;
       await client.implement(run.id, modelSettings());
     });
   }
 
   function validate(run: RunRecord, view: CandidateView) {
-    void guarded(async () => {
+    void guarded("Validation", async () => {
       if (!client || !view.evidence) return;
       await client.validateCandidate(run.id, { candidate_hash: view.evidence.candidate.hash, auto_repair: autoRepair, ...modelSettings() });
     });
   }
 
   function repair(run: RunRecord, view: CandidateView) {
-    void guarded(async () => {
+    void guarded("Repair", async () => {
       if (!client || !view.evidence) return;
       await client.repairCandidate(run.id, { candidate_hash: view.evidence.candidate.hash, ...modelSettings() });
     });
   }
 
   function cancel(run: RunRecord) {
-    void guarded(async () => { if (client) await client.cancelRun(run.id); });
+    void guarded("Cancellation", async () => { if (client) await client.cancelRun(run.id); });
   }
 
   function modelSettings(): { provider?: string; model?: string } {
@@ -177,7 +184,7 @@ export function Workflows({ client, projectId, repositoryId, manifestConfirmed, 
   }
 
   function inspectDiff(run: RunRecord) {
-    void guarded(async () => {
+    void guarded("Diff inspection", async () => {
       if (!client) return;
       const diff = await client.candidateDiff(run.id);
       setDiffs((previous) => ({ ...previous, [run.id]: diff }));
@@ -185,7 +192,7 @@ export function Workflows({ client, projectId, repositoryId, manifestConfirmed, 
   }
 
   function inspectArtifact(run: RunRecord, view: CandidateView, artifactId: string) {
-    void guarded(async () => {
+    void guarded("Log inspection", async () => {
       if (!client || !view.evidence) return;
       const text = await client.artifact(run.id, artifactId);
       setLogs((previous) => ({ ...previous, [run.id]: { candidateHash: view.evidence!.candidate.hash, artifactId, text } }));
@@ -235,7 +242,7 @@ export function Workflows({ client, projectId, repositoryId, manifestConfirmed, 
         </div>
         {latest && <PlanReview key={latest.hash} plan={latest} canApprove={run?.state === "plan_ready"} busy={busy} onApprove={() => approve(latest)} />}
         {latest && <small>plan {latest.id} r{latest.revision} · base <code>{Object.values(latest.base_commits)[0]?.slice(0, 12)}</code> · paths {latest.tasks[0]?.paths.join(", ")} · budget {latest.budgets.max_attempts} attempt(s), {latest.budgets.timeout_seconds}s</small>}
-        {run && ["failed", "cancelled", "interrupted", "testing_blocked", "paused"].includes(run.state) && reasons[run.id] && <small className="failure-note">{reasons[run.id]}</small>}
+        {run && ["failed", "cancelled", "interrupted", "testing_blocked", "paused"].includes(run.state) && reasons[run.id] && <small className="failure-note">{reasons[run.id]}{nextStep(reasons[run.id]) && <> <span className="recovery-note">{nextStep(reasons[run.id])}</span></>}</small>}
         {runLeases.map((lease) => <small key={lease.id}>worktree <code>{lease.path}</code> · {lease.state}{lease.candidate_commit && <> · candidate <code>{lease.candidate_commit.slice(0, 12)}</code></>}{lease.reason && ` · ${lease.reason}`}</small>)}
         {run && candidate && <CandidateReview run={run} view={candidate} diff={diffs[run.id]} log={logs[run.id]} busy={busy} onValidate={() => validate(run, candidate)} onRepair={() => repair(run, candidate)} onCancel={() => cancel(run)} onDiff={() => inspectDiff(run)} onArtifact={(id) => inspectArtifact(run, candidate, id)} />}
       </li>;
@@ -247,7 +254,7 @@ export function PlanReview({ plan, canApprove, busy, onApprove }: { plan: PlanRe
   const [reviewed, setReviewed] = useState(false);
   return <div className="plan-review">
     <p>Immutable plan hash: <code style={{ overflowWrap: "anywhere" }}>{plan.hash}</code></p>
-    <pre style={{ whiteSpace: "pre-wrap", overflowWrap: "anywhere" }} aria-label="Complete immutable plan">{JSON.stringify(plan, null, 2)}</pre>
+    <pre style={{ whiteSpace: "pre-wrap", overflowWrap: "anywhere" }} aria-label="Complete immutable plan" tabIndex={0}>{JSON.stringify(plan, null, 2)}</pre>
     {canApprove && <>
       <label><input type="checkbox" checked={reviewed} onChange={(event) => setReviewed(event.target.checked)} /> I reviewed this complete plan and hash.</label>
       <button type="button" disabled={busy || !reviewed} onClick={() => { if (reviewed) onApprove(); }}>Approve r{plan.revision}</button>

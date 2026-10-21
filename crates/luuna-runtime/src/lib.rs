@@ -49,6 +49,8 @@ pub struct AppState {
     config: Arc<RuntimeConfig>,
     git: Arc<GitInspector>,
     executor: Arc<Executor>,
+    /// Set by explicit shutdown before owned work is signalled to stop.
+    shutting_down: Arc<std::sync::atomic::AtomicBool>,
     _owner_lock: Arc<std::fs::File>,
 }
 
@@ -102,6 +104,7 @@ impl AppState {
             config: Arc::new(config),
             git: Arc::new(git),
             executor: Arc::new(Executor::default()),
+            shutting_down: Arc::new(std::sync::atomic::AtomicBool::new(false)),
             _owner_lock: Arc::new(owner_lock),
         })
     }
@@ -114,7 +117,42 @@ impl AppState {
         }
     }
 
+    /// True once explicit shutdown has begun. Owned work then settles as
+    /// `interrupted` (resumable after restart) rather than `cancelled`: the
+    /// developer did not cancel it, the service stopped (ADR 0004).
+    pub(crate) fn shutting_down(&self) -> bool {
+        self.shutting_down.load(std::sync::atomic::Ordering::SeqCst)
+    }
+
+    /// The terminal run state for work stopped by the cancellation signal.
+    pub(crate) fn stop_run_state(&self) -> RunState {
+        if self.shutting_down() {
+            RunState::Interrupted
+        } else {
+            RunState::Cancelled
+        }
+    }
+
+    pub(crate) fn stop_attempt_state(&self) -> luuna_domain::AttemptState {
+        if self.shutting_down() {
+            luuna_domain::AttemptState::Interrupted
+        } else {
+            luuna_domain::AttemptState::Cancelled
+        }
+    }
+
+    /// The recorded reason for work stopped by the cancellation signal.
+    pub(crate) fn stop_reason(&self, reason: &str) -> String {
+        if self.shutting_down() {
+            format!("interrupted by runtime shutdown: {reason}")
+        } else {
+            reason.to_owned()
+        }
+    }
+
     pub async fn shutdown(&self) {
+        self.shutting_down
+            .store(true, std::sync::atomic::Ordering::SeqCst);
         self.cancel_active();
         let deadline = tokio::time::Instant::now() + Duration::from_secs(5);
         loop {
@@ -474,8 +512,8 @@ async fn run_worker(
     if *cancel.borrow() {
         let _ = state.finish(
             &id,
-            RunState::Cancelled,
-            json!({"reason":"cancelled before startup"}),
+            state.stop_run_state(),
+            json!({"reason": state.stop_reason("cancelled before startup")}),
         );
         return;
     }
@@ -520,7 +558,7 @@ async fn run_worker(
     };
     let spawned = tokio::select! {
         biased;
-        _ = cancel.changed() => { let _ = state.finish(&id, RunState::Cancelled, json!({"reason":"cancelled during startup"})); return; },
+        _ = cancel.changed() => { let _ = state.finish(&id, state.stop_run_state(), json!({"reason": state.stop_reason("cancelled during startup")})); return; },
         spawned = PiProcess::spawn(&config) => spawned,
     };
     let mut process = match spawned {
@@ -636,8 +674,8 @@ async fn run_worker(
         ),
         (Outcome::Failed(reason), _) => (RunState::Failed, json!({"reason":reason})),
         (Outcome::Cancelled, _) => (
-            RunState::Cancelled,
-            json!({"reason":"abort requested; subprocess reaped"}),
+            state.stop_run_state(),
+            json!({"reason": state.stop_reason("abort requested; subprocess reaped")}),
         ),
     };
     let _ = state.finish(&id, terminal, payload);

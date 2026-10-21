@@ -64,6 +64,6 @@ Linux cloud checks cannot establish Mac or Windows installation support. A front
 
 The [desktop/Pi RPC proposal](LUUNA-Desktop-Pi-RPC-Full-Development-Proposal.md) supplies detailed rationale. The thirteen numbered chapters under `docs/`, [the complete reference](LUUNA-COMPLETE-REFERENCE.md), diagrams, examples, HTML, and PDF remain historical source material. Their original browser/TUI delivery order and conflicting API examples are superseded by the current architecture and decisions. Browser/TUI capability parity remains a full-v1 obligation.
 
-[FOUNDATION-STATUS.md](docs/FOUNDATION-STATUS.md) records the executable foundation checks and remaining milestones. [VALIDATION-REPORT.md](VALIDATION-REPORT.md) concerns the original documentation pack.
+[FOUNDATION-STATUS.md](docs/FOUNDATION-STATUS.md) records the executable foundation checks and remaining milestones; [MVP-WALKTHROUGH.md](docs/MVP-WALKTHROUGH.md) is the end-to-end single-repository workflow and [MVP-EVIDENCE.md](docs/MVP-EVIDENCE.md) names what that MVP proves and omits. [VALIDATION-REPORT.md](VALIDATION-REPORT.md) concerns the original documentation pack.
 
 Luuna uses the [MIT license](LICENSE). The branded component distributions preserve upstream copyright and MIT notices; see [THIRD-PARTY-NOTICES.md](THIRD-PARTY-NOTICES.md). They are maintained in this monorepo until a verified repository extraction is useful; their presence does not establish independently hosted or published packages. See [SECURITY.md](SECURITY.md) for handling sensitive findings.

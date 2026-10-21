@@ -1,5 +1,6 @@
 import type { CandidateDiff, CandidateView, RunRecord } from "@luuna/api-client";
 import { canCancel, canRevalidate, canValidate } from "./workflow-state";
+import { nextStep } from "./failures";
 
 interface Props {
   run: RunRecord;
@@ -38,8 +39,9 @@ export function CandidateReview({ run, view, diff, log, busy, onValidate, onRepa
     </div>
     {view.active && <p role="status">The runtime is {run.state === "implementing" ? "running the scoped writer repair" : evidence.status === "reviewing" ? "running the independent reviewer" : "executing the approved checks"}. Closing this view does not cancel the workflow.</p>}
     {evidence.reason && <p className="failure-note">{evidence.reason}</p>}
+    {evidence.reason && !canRevalidate(run, view) && !view.active && nextStep(evidence.reason) && <p className="recovery-note">{nextStep(evidence.reason)}</p>}
     {canRevalidate(run, view) && <p className="recovery-note">Required checks passed in validation generation {evidence.validation_generation} but no review verdict was recorded. Re-validation starts a fresh generation for this same candidate revision under the existing approval and budgets: the checks run again and a fresh reviewer session is started. No writer attempt is spent.</p>}
-    {boundDiff && <details open className="candidate-diff"><summary>Diff for <code>{boundDiff.candidate_hash}</code></summary><p>{boundDiff.repository_id} · base <code>{boundDiff.base_commit}</code> · candidate commit <code>{boundDiff.commit}</code></p><pre aria-label="Candidate diff">{boundDiff.diff || "No changes."}</pre></details>}
+    {boundDiff && <details open className="candidate-diff"><summary>Diff for <code>{boundDiff.candidate_hash}</code></summary><p>{boundDiff.repository_id} · base <code>{boundDiff.base_commit}</code> · candidate commit <code>{boundDiff.commit}</code></p><pre aria-label="Candidate diff" tabIndex={0}>{boundDiff.diff || "No changes."}</pre></details>}
     <details className="candidate-checks" open={evidence.results.length > 0}>
       <summary>Check evidence · {evidence.results.length} recorded result(s)</summary>
       {evidence.results.length === 0 && <p>No check results recorded for this candidate.</p>}
@@ -57,7 +59,7 @@ export function CandidateReview({ run, view, diff, log, busy, onValidate, onRepa
         <div className="ticket-actions">{result.artifact_refs.filter((id) => /^[A-Za-z0-9._-]+\.(stdout|stderr)$/.test(id) && !id.includes("..")).map((id) => <button type="button" key={id} disabled={busy} onClick={() => onArtifact(id)}>View {id.endsWith(".stdout") ? "stdout" : "stderr"}</button>)}</div>
         <details><summary>Complete check and artifact evidence</summary><pre>{JSON.stringify(result, null, 2)}</pre></details>
       </li>)}</ul>
-      {boundLog && <details open><summary>Check log · <code>{boundLog.artifactId}</code></summary><pre aria-label="Check log">{boundLog.text || "Empty log."}</pre></details>}
+      {boundLog && <details open><summary>Check log · <code>{boundLog.artifactId}</code></summary><pre aria-label="Check log" tabIndex={0}>{boundLog.text || "Empty log."}</pre></details>}
     </details>
     <div className="candidate-verdict">
       <h4>Independent review</h4>
