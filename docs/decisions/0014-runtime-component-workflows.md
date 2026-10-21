@@ -1,4 +1,4 @@
-# ADR 0013: explicit managed component workflows and approved context
+# ADR 0014: explicit managed component workflows and approved context
 
 Date: 2026-10-21. Status: accepted for the owner's requested runtime integration. Implements the ticket authority boundary of ADR 0003 and the runtime adapters deferred by ADR 0012. Existing approval, baseline, candidate and publication decisions remain in force.
 

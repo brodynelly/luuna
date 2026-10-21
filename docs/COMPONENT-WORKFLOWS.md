@@ -1,6 +1,6 @@
 # Component workflows in Luuna
 
-The application uses the pinned public luuna-missions, luuna-atlas and luuna-beacon sources through runtime adapters. See [ADR 0013](decisions/0013-runtime-component-workflows.md) for authority and recovery rules.
+The application uses the pinned public luuna-missions, luuna-atlas and luuna-beacon sources through runtime adapters. See [ADR 0014](decisions/0014-runtime-component-workflows.md) for authority and recovery rules.
 
 ## Use the application
 

@@ -100,7 +100,7 @@ require `Authorization: Bearer <token>`:
   reads the latest revision. Optional selection is `{ "memory_ids": [...], "prompt": { "name", "version", "hash" }? }`;
   the runtime resolves exact content/provenance snapshots into the canonical immutable plan.
   Approval and worker/evidence boundaries recheck selected source freshness. The application
-  sends only explicitly selected, approved content to the writer/reviewer (ADR 0013).
+  sends only explicitly selected, approved content to the writer/reviewer (ADR 0014).
 - `POST /api/v1/plans/{id}/approvals`: `{ "plan_revision", "plan_hash", "approved_by" }` approves
   exactly that hash; permissions are copied from the plan. Returns `{ approval, run }` with the
   run `approved`; a stale hash or revision returns 409.

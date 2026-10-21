@@ -194,9 +194,9 @@ async function dismissAlerts() {
   }
 }
 function ticketItem(title) { return page.locator('ul[aria-label="Tickets"] > li').filter({ has: page.locator(".ticket-head strong", { hasText: title }) }); }
-// State badges are capitalised by CSS; compare the lower-cased rendered text.
-async function runStateOf(title) { const span = ticketItem(title).locator(".ticket-actions .state"); return (await span.count()) ? (await span.first().innerText()).trim().toLowerCase() : ""; }
-async function candidateStateOf(title) { const span = ticketItem(title).locator(".candidate-heading .state"); return (await span.count()) ? (await span.first().innerText()).trim().toLowerCase() : ""; }
+// A status badge's rendered text is exactly the runtime value (StatusBadge never transforms case); compare it verbatim.
+async function runStateOf(title) { const span = ticketItem(title).locator(".ticket-actions .state"); return (await span.count()) ? (await span.first().innerText()).trim() : ""; }
+async function candidateStateOf(title) { const span = ticketItem(title).locator(".candidate-heading .state"); return (await span.count()) ? (await span.first().innerText()).trim() : ""; }
 async function waitRunState(title, states, timeoutMs) {
   return waitFor(async () => { const state = await runStateOf(title); return states.includes(state) ? state : null; }, timeoutMs, 400);
 }
@@ -284,7 +284,7 @@ async function runBaseline() {
   return waitFor(async () => {
     const item = page.locator('ul[aria-label="Recorded baselines"] li').first();
     if (!(await item.count())) return null;
-    const state = (await item.locator(".state").first().innerText()).trim().toLowerCase();
+    const state = (await item.locator(".state").first().innerText()).trim();
     return state && state !== "running" ? `${state}: ${(await item.innerText()).replace(/\n/g, " · ")}` : null;
   }, 120_000, 500);
 }
@@ -334,6 +334,101 @@ async function accessibilityAudit(label) {
   const ok = report.unnamed.length === 0 && report.unlabelled.length === 0 && report.positiveTabindex === 0 && report.unfocusableRegions === 0 && !report.headingsSkipLevels && report.alertsWithoutDismiss === 0 && report.lang === "en";
   record(`${label}: every visible control has an accessible name, every field a label, no positive tabindex, scroll regions focusable, heading levels contiguous`, ok, `${report.buttons} controls, ${report.fields} fields, ${report.scrollRegions} scroll regions${report.unnamed.length ? `, unnamed: ${report.unnamed.join(" | ")}` : ""}${report.unlabelled.length ? `, unlabelled: ${report.unlabelled.join(" | ")}` : ""}`);
   return report;
+}
+
+// Design-system presentation audit: every visible text run meets WCAG 2.1 AA contrast against
+// the background it is actually painted on (layers composited through a canvas, so any colour
+// syntax works), in the dark and the light system colour scheme; the client follows the system
+// scheme; and at the native shell's minimum width (760 px) the page never scrolls horizontally.
+// Disabled controls are exempt (WCAG 1.4.3 "inactive user interface components"), and counted.
+async function contrastAudit() {
+  return page.evaluate(() => {
+    const canvas = document.createElement("canvas");
+    canvas.width = canvas.height = 1;
+    const context = canvas.getContext("2d", { willReadFrequently: true });
+    const rgba = (value) => {
+      context.clearRect(0, 0, 1, 1);
+      context.fillStyle = "#000";
+      context.fillStyle = value;
+      context.fillRect(0, 0, 1, 1);
+      const [r, g, b, a] = context.getImageData(0, 0, 1, 1).data;
+      return { r, g, b, a: a / 255 };
+    };
+    const over = (top, bottom) => ({ r: top.r * top.a + bottom.r * (1 - top.a), g: top.g * top.a + bottom.g * (1 - top.a), b: top.b * top.a + bottom.b * (1 - top.a), a: 1 });
+    const luminance = ({ r, g, b }) => { const channel = (value) => { const c = value / 255; return c <= 0.03928 ? c / 12.92 : ((c + 0.055) / 1.055) ** 2.4; }; return 0.2126 * channel(r) + 0.7152 * channel(g) + 0.0722 * channel(b); };
+    const ratio = (one, two) => { const [high, low] = [luminance(one), luminance(two)].sort((x, y) => y - x); return (high + 0.05) / (low + 0.05); };
+    const backgroundOf = (element) => {
+      const layers = [];
+      for (let node = element; node; node = node.parentElement) {
+        const layer = rgba(getComputedStyle(node).backgroundColor);
+        if (layer.a > 0) layers.push(layer);
+        if (layer.a >= 1) break;
+      }
+      let painted = layers.length && layers[layers.length - 1].a >= 1 ? layers.pop() : { r: 255, g: 255, b: 255, a: 1 };
+      while (layers.length) painted = over(layers.pop(), painted);
+      return painted;
+    };
+    const inactive = (element) => Boolean(element.closest(":disabled, fieldset:disabled, [aria-disabled='true']"));
+    const translucent = (element) => { for (let node = element; node; node = node.parentElement) if (Number(getComputedStyle(node).opacity) < 1) return true; return false; };
+    const failures = [];
+    let checked = 0;
+    let exempt = 0;
+    for (const element of document.body.querySelectorAll("*")) {
+      if (!element.checkVisibility?.({ checkOpacity: true, checkVisibilityCSS: true })) continue;
+      const own = [...element.childNodes].some((node) => node.nodeType === Node.TEXT_NODE && node.textContent.trim());
+      const textField = element.matches("input:not([type=checkbox]):not([type=radio]), textarea");
+      const field = textField && element.value;
+      // An empty field shows its placeholder: that text is measured in its ::placeholder colour.
+      const placeholder = textField && !element.value && element.placeholder && element.matches(":placeholder-shown");
+      if (!own && !field && !placeholder) continue;
+      const rect = element.getBoundingClientRect();
+      if (rect.width === 0 || rect.height === 0 || element.closest("[aria-hidden='true']")) continue;
+      if (inactive(element) || translucent(element)) { exempt += 1; continue; }
+      const style = getComputedStyle(element);
+      const background = backgroundOf(element);
+      const foreground = over(rgba(placeholder ? getComputedStyle(element, "::placeholder").color : style.color), background);
+      const size = parseFloat(style.fontSize);
+      const large = size >= 24 || (size >= 18.66 && Number(style.fontWeight) >= 700);
+      const value = ratio(foreground, background);
+      checked += 1;
+      if (value < (large ? 3 : 4.5)) failures.push(`${element.tagName.toLowerCase()}${element.className && typeof element.className === "string" ? "." + element.className.trim().split(/\s+/).join(".") : ""} "${(element.textContent || element.value || (placeholder ? `placeholder: ${element.placeholder}` : "")).trim().slice(0, 32)}" ${value.toFixed(2)}:1`);
+    }
+    const page = backgroundOf(document.body);
+    return { checked, exempt, failures, background: `rgb(${Math.round(page.r)}, ${Math.round(page.g)}, ${Math.round(page.b)})` };
+  });
+}
+
+// A scheme switch starts colour transitions; measure only the settled colours.
+async function settle() {
+  await page.evaluate(() => Promise.all(document.getAnimations().map((animation) => animation.finished.catch(() => undefined))));
+}
+
+async function presentationAudit(label, { widths = false } = {}) {
+  const schemes = {};
+  for (const scheme of ["dark", "light"]) {
+    await page.emulateMedia({ colorScheme: scheme });
+    await settle();
+    const report = await contrastAudit();
+    schemes[scheme] = report;
+    record(`${label}, ${scheme} scheme: every visible text run meets WCAG AA contrast against its painted background`, report.checked > 0 && report.failures.length === 0, `${report.checked} text runs checked, ${report.exempt} disabled/inactive exempt${report.failures.length ? `; below AA: ${report.failures.slice(0, 12).join(" | ")}${report.failures.length > 12 ? ` (+${report.failures.length - 12} more)` : ""}` : ""}`);
+    await screenshot(`${label.replace(/\W+/g, "-")}-${scheme}`);
+  }
+  record(`${label}: the client follows the system colour scheme`, schemes.dark.background !== schemes.light.background, `dark page background ${schemes.dark.background}, light page background ${schemes.light.background}`);
+  // The native window keeps its own size; the minimum-width layout is checked on the browser surface.
+  if (widths && nativeBinary) note(`${label}: the 760 px width check runs on the browser surface only; the native window keeps its own size`);
+  if (widths && !nativeBinary) {
+    await page.setViewportSize({ width: 760, height: 900 });
+    for (const scheme of ["dark", "light"]) {
+      await page.emulateMedia({ colorScheme: scheme });
+      await settle();
+      const overflow = await page.evaluate(() => ({ scroll: document.documentElement.scrollWidth, view: window.innerWidth }));
+      record(`${label}, ${scheme} scheme: no horizontal page scroll at the native shell's minimum width`, overflow.scroll <= overflow.view, `scrollWidth ${overflow.scroll}, viewport ${overflow.view}`);
+      await screenshot(`${label.replace(/\W+/g, "-")}-760-${scheme}`);
+    }
+    await page.setViewportSize({ width: 1280, height: 900 });
+  }
+  // Back to the context's own scheme (Playwright emulates light by default) for the next scenario.
+  await page.emulateMedia({ colorScheme: null });
 }
 
 // ---------- scenarios ----------
@@ -408,6 +503,7 @@ async function walkthrough() {
   record("walkthrough: the developer checkout is untouched (clean before and after)", checkoutBefore === "" && git(fixtures.walkthrough.dir, "status", "--porcelain") === "" && git(fixtures.walkthrough.dir, "rev-parse", "HEAD") === fixtures.walkthrough.head);
   await screenshot("04-reviewed");
   await accessibilityAudit("walkthrough page");
+  await presentationAudit("walkthrough page", { widths: true });
 }
 
 async function recovery() {
@@ -490,11 +586,13 @@ async function recovery() {
   await dismissAlerts();
   await screenshot("07-budget-refusal");
   await accessibilityAudit("recovery page");
+  await presentationAudit("recovery page");
 
   // D. Disconnect clears the session.
   await page.getByRole("button", { name: "Disconnect" }).click();
   const offline = await waitConnection("Local runtime offline", 10_000);
   record("disconnect: the client forgets the token and shows the runtime as offline", Boolean(offline) && (await page.locator('input[type="password"]').inputValue()) === "");
+  await presentationAudit("offline page");
 }
 
 // ---------- run ----------

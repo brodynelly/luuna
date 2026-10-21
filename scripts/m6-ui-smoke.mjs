@@ -335,10 +335,10 @@ try {
   record("re-planning produces a new exact hash for the reconciled ticket revision", resealed.hash !== sealed.hash && resealed.ticket_revision === reconciled.revision);
   await approve("External Missions edit");
   await ticketItem("External Missions edit").getByRole("button", { name: "Implement", exact: true }).click();
-  await waitFor("synthetic scoped writer settles", async () => (await ticketItem("External Missions edit").locator(".ticket-actions .state.validating").count()) > 0, 120_000);
+  await waitFor("synthetic scoped writer settles", async () => (await ticketItem("External Missions edit").locator(".ticket-actions .state").filter({ hasText: /^validating$/ }).count()) > 0, 120_000);
   record("synthetic writer asserts approved memory and prompt content with unselected private memory absent", true);
   await ticketItem("External Missions edit").getByRole("button", { name: "Validate and review", exact: true }).click();
-  await waitFor("real checks and synthetic independent review settle", async () => (await ticketItem("External Missions edit").locator(".ticket-actions .state.reviewed").count()) > 0, 120_000);
+  await waitFor("real checks and synthetic independent review settle", async () => (await ticketItem("External Missions edit").locator(".ticket-actions .state").filter({ hasText: /^reviewed$/ }).count()) > 0, 120_000);
   record("app runs real candidate checks and a fresh synthetic reviewer that asserts the same explicit component context", true);
   fixtureView = false;
   await page.reload();

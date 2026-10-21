@@ -175,7 +175,7 @@ export function ProjectComponents({ client, projectId, connectionEpoch = 0, onCo
     }
   }
 
-  return <section className="project-components" aria-labelledby="components-heading">
+  return <section className="project-components subpanel" aria-labelledby="components-heading">
     <div className="panel-heading"><h3 id="components-heading">Tickets, memory and prompts</h3><button type="button" className="text-button" disabled={!client || busy || loading} onClick={() => setRefreshTick((value) => value + 1)}>Refresh components</button></div>
     <p className="scope">luuna-missions owns enabled project tickets. luuna-atlas stores explicitly selected knowledge; luuna-beacon provides versioned prompts. The runtime binds selected resources into the exact plan you approve.</p>
     {error && <div className="error" role="alert">{error}<button type="button" className="text-button" onClick={() => setError("")}>Dismiss</button></div>}
