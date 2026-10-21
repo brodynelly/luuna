@@ -973,6 +973,7 @@ fn restart_keeps_consumed_budgets_and_retries_with_fresh_evidence_generation() {
         store.workflow_usage("workflow-1").unwrap().elapsed_seconds,
         23
     );
+    prompt_reviewer(&mut store, &candidate, "reviewer-g2");
     store.interrupt_active_runs().unwrap();
     assert_eq!(
         store
@@ -1056,8 +1057,10 @@ fn restart_conservatively_accounts_for_uncharged_stage_time_and_unknown_review_c
     let path = temp.path().join("state.sqlite");
     let (mut store, plan, candidate) = candidate_fixture_at(&path, 2);
     begin_validation(&mut store, &candidate);
+    // A record written before stage heartbeats existed has no checkpoint and
+    // is charged up to the restart.
     let connection = rusqlite::Connection::open(&path).unwrap();
-    connection.execute("UPDATE candidates SET payload=json_set(payload,'$.stage_started_at','2000-01-01T00:00:00.000Z') WHERE hash=?1",[&candidate.hash]).unwrap();
+    connection.execute("UPDATE candidates SET payload=json_remove(json_set(payload,'$.stage_started_at','2000-01-01T00:00:00.000Z'),'$.stage_checkpoint_at') WHERE hash=?1",[&candidate.hash]).unwrap();
     drop(connection);
     drop(store);
     let mut store = Store::open(&path).unwrap();
@@ -1081,6 +1084,7 @@ fn restart_conservatively_accounts_for_uncharged_stage_time_and_unknown_review_c
         )
         .unwrap();
     finish_validation(&mut store, &candidate);
+    prompt_reviewer(&mut store, &candidate, "reviewer-1");
     store.interrupt_active_runs().unwrap();
     let usage = store.workflow_usage("workflow-1").unwrap();
     assert_eq!(usage.cost_usd_micros, plan.budgets.cost_usd_micros);
@@ -1459,6 +1463,428 @@ fn only_an_unreviewed_candidate_with_passed_checks_can_be_revalidated_in_place()
     assert_eq!(
         store.get_run("workflow-1").unwrap().unwrap().state,
         RunState::Failed
+    );
+}
+
+/// A reviewer as the runtime starts one: `review.started` names its session
+/// and generation, and the prompt marker precedes the prompt.
+fn prompt_reviewer(store: &mut Store, candidate: &CandidateSet, session: &str) {
+    let generation = store
+        .current_candidate("workflow-1")
+        .unwrap()
+        .unwrap()
+        .validation_generation;
+    store
+        .append_event(
+            "workflow-1",
+            "review.started",
+            serde_json::json!({"reviewer_session": session, "candidate_hash": candidate.hash, "generation": generation, "pid": 1}),
+        )
+        .unwrap();
+    store
+        .record_review_prompt_sent("workflow-1", &candidate.hash, session)
+        .unwrap();
+}
+
+#[test]
+fn restart_charges_an_interrupted_stage_only_up_to_its_last_heartbeat() {
+    let temp = tempfile::tempdir().unwrap();
+    let path = temp.path().join("state.sqlite");
+    let (mut store, _, candidate) = candidate_fixture_at(&path, 2);
+    begin_validation(&mut store, &candidate);
+    // Only an active stage takes a heartbeat.
+    assert!(store
+        .checkpoint_candidate_stage("workflow-1", &candidate.hash)
+        .unwrap());
+    // The stage ran 20 s before its last heartbeat; the runtime then crashed
+    // and stayed down for decades.
+    let connection = rusqlite::Connection::open(&path).unwrap();
+    connection.execute("UPDATE candidates SET payload=json_set(payload,'$.stage_started_at','2000-01-01T00:00:00.000Z','$.stage_checkpoint_at','2000-01-01T00:00:20.000Z') WHERE hash=?1",[&candidate.hash]).unwrap();
+    drop(connection);
+    drop(store);
+    let mut store = Store::open(&path).unwrap();
+    store.interrupt_active_runs().unwrap();
+    let interrupted = store.current_candidate("workflow-1").unwrap().unwrap();
+    assert_eq!(interrupted.status, CandidateStatus::Interrupted);
+    assert!(interrupted.stage_checkpoint_at.is_none());
+    // 10 s of writer time, the 20 s up to the heartbeat and at most one more
+    // heartbeat interval; the outage is not charged.
+    assert_eq!(
+        store.workflow_usage("workflow-1").unwrap().elapsed_seconds,
+        10 + 20 + luuna_storage::STAGE_HEARTBEAT_SECONDS
+    );
+    assert!(!store
+        .checkpoint_candidate_stage("workflow-1", &candidate.hash)
+        .unwrap());
+    // The documented recovery stays open: a fresh validation generation.
+    begin_validation(&mut store, &candidate);
+    assert_eq!(
+        store
+            .current_candidate("workflow-1")
+            .unwrap()
+            .unwrap()
+            .validation_generation,
+        2
+    );
+}
+
+#[test]
+fn restart_reserves_review_spend_only_for_a_prompted_unsettled_reviewer() {
+    let reviewing = || {
+        let (mut store, plan, candidate) = candidate_fixture();
+        begin_validation(&mut store, &candidate);
+        store
+            .record_candidate_check(
+                "workflow-1",
+                &candidate.hash,
+                &candidate_check(&candidate, CheckStatus::Passed),
+            )
+            .unwrap();
+        finish_validation(&mut store, &candidate);
+        (store, plan, candidate)
+    };
+    // Spawned, but never prompted: nothing could have been billed.
+    let (mut store, plan, candidate) = reviewing();
+    store
+        .append_event(
+            "workflow-1",
+            "review.started",
+            serde_json::json!({"reviewer_session": "reviewer-1", "candidate_hash": candidate.hash, "generation": 1, "pid": 1}),
+        )
+        .unwrap();
+    store.interrupt_active_runs().unwrap();
+    let interrupted = store.current_candidate("workflow-1").unwrap().unwrap();
+    assert!(interrupted
+        .reason
+        .as_deref()
+        .unwrap()
+        .contains("before the reviewer was prompted"));
+    assert!(
+        store.workflow_usage("workflow-1").unwrap().cost_usd_micros < plan.budgets.cost_usd_micros
+    );
+    begin_validation(&mut store, &candidate);
+
+    // Prompted and never settled: the spend is unknown and reserved.
+    let (mut store, plan, candidate) = reviewing();
+    prompt_reviewer(&mut store, &candidate, "reviewer-1");
+    store.interrupt_active_runs().unwrap();
+    assert_eq!(
+        store.workflow_usage("workflow-1").unwrap().cost_usd_micros,
+        plan.budgets.cost_usd_micros
+    );
+    let run = store.get_run("workflow-1").unwrap().unwrap();
+    assert!(matches!(
+        store.begin_candidate_validation(&run.id, run.revision, &candidate.hash),
+        Err(StorageError::Domain(DomainError::BudgetExceeded(_)))
+    ));
+
+    // Settled with its usage charged before the restart: nothing is unknown.
+    let (mut store, plan, candidate) = reviewing();
+    prompt_reviewer(&mut store, &candidate, "reviewer-1");
+    store
+        .record_review_usage_settled("workflow-1", &candidate.hash, "reviewer-1")
+        .unwrap();
+    store.interrupt_active_runs().unwrap();
+    let interrupted = store.current_candidate("workflow-1").unwrap().unwrap();
+    assert!(interrupted
+        .reason
+        .as_deref()
+        .unwrap()
+        .contains("reported its final usage"));
+    assert!(
+        store.workflow_usage("workflow-1").unwrap().cost_usd_micros < plan.budgets.cost_usd_micros
+    );
+    begin_validation(&mut store, &candidate);
+
+    // A reviewer recorded by a runtime that wrote no markers stays conservative.
+    let (mut store, plan, candidate) = reviewing();
+    store
+        .append_event(
+            "workflow-1",
+            "review.started",
+            serde_json::json!({"reviewer_session": "reviewer-1", "candidate_hash": candidate.hash, "pid": 1}),
+        )
+        .unwrap();
+    store.interrupt_active_runs().unwrap();
+    assert_eq!(
+        store.workflow_usage("workflow-1").unwrap().cost_usd_micros,
+        plan.budgets.cost_usd_micros
+    );
+    // Markers need an active review.
+    assert!(store
+        .record_review_prompt_sent("workflow-1", &candidate.hash, "reviewer-2")
+        .is_err());
+}
+
+#[test]
+fn a_charge_of_nothing_checks_the_budget_without_growing_the_history() {
+    let (mut store, _, candidate) = candidate_fixture();
+    begin_validation(&mut store, &candidate);
+    let usage_events = |store: &Store| {
+        store
+            .events_after("workflow-1", 0)
+            .unwrap()
+            .iter()
+            .filter(|event| event.event_type == "candidate.usage")
+            .count()
+    };
+    let before = usage_events(&store);
+    for _ in 0..5 {
+        store
+            .charge_candidate_usage("workflow-1", &candidate.hash, 0, 0)
+            .unwrap();
+    }
+    assert_eq!(usage_events(&store), before);
+    store
+        .charge_candidate_usage("workflow-1", &candidate.hash, 1, 0)
+        .unwrap();
+    assert_eq!(usage_events(&store), before + 1);
+}
+
+#[test]
+fn usage_views_report_workflow_budgets_and_cumulative_ticket_spend() {
+    let (mut store, plan, candidate) = candidate_fixture();
+    begin_validation(&mut store, &candidate);
+    store
+        .charge_candidate_usage("workflow-1", &candidate.hash, 5, 400)
+        .unwrap();
+    let view = store.workflow_usage_view("workflow-1").unwrap().unwrap();
+    assert_eq!(
+        view,
+        luuna_storage::WorkflowUsageView {
+            attempts: 1,
+            max_attempts: u64::from(plan.budgets.max_attempts),
+            elapsed_seconds: 15,
+            timeout_seconds: plan.budgets.timeout_seconds,
+            cost_usd_micros: 500,
+            cost_budget_usd_micros: plan.budgets.cost_usd_micros,
+            cost_unreported: false,
+            repairs: 0,
+            max_repairs: Some(2),
+        }
+    );
+    // A run that is not bound to a plan has no budgets to report.
+    assert!(store.workflow_usage_view("baseline-run").unwrap().is_none());
+    store
+        .append_event(
+            "workflow-1",
+            luuna_storage::COST_UNREPORTED_EVENT,
+            serde_json::json!({"source": "writer"}),
+        )
+        .unwrap();
+    assert!(
+        store
+            .workflow_usage_view("workflow-1")
+            .unwrap()
+            .unwrap()
+            .cost_unreported
+    );
+    // A re-plan opens a workflow with fresh budgets; the ticket's usage keeps
+    // what the earlier revision consumed.
+    let run = store.get_run("workflow-1").unwrap().unwrap();
+    store
+        .fail_candidate_stage(
+            &run.id,
+            run.revision,
+            &candidate.hash,
+            RunState::Failed,
+            "synthetic failure",
+        )
+        .unwrap();
+    let next = super_plan(&plan, 2);
+    store.open_plan_workflow("workflow-2", &next).unwrap();
+    let usage = store.ticket_usage("ticket-1").unwrap();
+    assert_eq!(
+        usage,
+        luuna_storage::TicketUsage {
+            workflows: 2,
+            attempts: 1,
+            elapsed_seconds: 15,
+            cost_usd_micros: 500,
+            cost_unreported: true,
+            repairs: 0,
+        }
+    );
+    assert_eq!(
+        store
+            .workflow_usage_view("workflow-2")
+            .unwrap()
+            .unwrap()
+            .attempts,
+        0
+    );
+}
+
+/// The next revision of `plan`, sealed.
+fn super_plan(plan: &PlanRevision, revision: u64) -> PlanRevision {
+    let mut next = plan.clone();
+    next.revision = revision;
+    next.seal().unwrap()
+}
+
+#[test]
+fn plan_requests_replay_under_their_key_and_supersede_waiting_revisions() {
+    let (mut store, hash) = confirmed_store();
+    store.create_ticket(&ticket(), "key").unwrap();
+    let first = plan(&hash, 1, 1);
+    let opened = store
+        .open_plan_workflow_once(
+            "workflow-1",
+            &first,
+            Some(("retry-key", "sha256:request-a")),
+        )
+        .unwrap();
+    assert!(opened.created);
+    // The same key and request replays the first delivery, whatever revision
+    // a retry would otherwise have computed.
+    let replay = store
+        .open_plan_workflow_once(
+            "workflow-retry",
+            &plan(&hash, 2, 1),
+            Some(("retry-key", "sha256:request-a")),
+        )
+        .unwrap();
+    assert!(!replay.created);
+    assert_eq!(replay.run.id, "workflow-1");
+    assert_eq!(replay.plan, first);
+    assert_eq!(store.plans_for_ticket("ticket-1").unwrap().len(), 1);
+    assert!(store.get_run("workflow-retry").unwrap().is_none());
+    assert_eq!(
+        store
+            .plan_request("ticket-1", "retry-key", "sha256:request-a")
+            .unwrap()
+            .unwrap()
+            .run
+            .id,
+        "workflow-1"
+    );
+    // The same key with a different request is a conflict.
+    assert!(matches!(
+        store.open_plan_workflow_once(
+            "workflow-other",
+            &plan(&hash, 2, 1),
+            Some(("retry-key", "sha256:request-b")),
+        ),
+        Err(StorageError::AlreadyExists(_))
+    ));
+    assert!(matches!(
+        store.plan_request("ticket-1", "retry-key", "sha256:request-b"),
+        Err(StorageError::AlreadyExists(_))
+    ));
+    // A new revision supersedes the approved but never implemented one.
+    let run = store
+        .approve_plan("workflow-1", opened.run.revision, &approval(&first))
+        .unwrap();
+    assert_eq!(run.state, RunState::Approved);
+    let second = store
+        .open_plan_workflow_once(
+            "workflow-2",
+            &plan(&hash, 2, 1),
+            Some(("next-key", "sha256:request-c")),
+        )
+        .unwrap();
+    assert!(second.created);
+    assert_eq!(
+        store.get_run("workflow-1").unwrap().unwrap().state,
+        RunState::Cancelled
+    );
+    let superseded = store
+        .events_after("workflow-1", 0)
+        .unwrap()
+        .into_iter()
+        .find(|event| event.event_type == "plan.superseded")
+        .unwrap();
+    assert_eq!(superseded.payload["superseded_by"], 2);
+    assert_eq!(second.run.state, RunState::PlanReady);
+    // The superseded revision's replay still returns what it created.
+    assert_eq!(
+        store
+            .open_plan_workflow_once(
+                "workflow-x",
+                &plan(&hash, 3, 1),
+                Some(("retry-key", "sha256:request-a"))
+            )
+            .unwrap()
+            .run
+            .state,
+        RunState::Cancelled
+    );
+}
+
+#[test]
+fn a_second_workflow_admitted_to_the_same_repository_is_refused_in_the_claiming_transaction() {
+    let (mut store, hash) = confirmed_store();
+    store.create_ticket(&ticket(), "key").unwrap();
+    let mut other = ticket();
+    other.id = "ticket-2".into();
+    store.create_ticket(&other, "other-key").unwrap();
+    let first = plan(&hash, 1, 1);
+    let mut second = plan(&hash, 1, 1);
+    second.id = "plan-2".into();
+    second.ticket_id = "ticket-2".into();
+    let second = second.seal().unwrap();
+    let a = store.open_plan_workflow("workflow-a", &first).unwrap();
+    let b = store.open_plan_workflow("workflow-b", &second).unwrap();
+    let a = store
+        .approve_plan(&a.id, a.revision, &approval(&first))
+        .unwrap();
+    let mut second_approval = approval(&second);
+    second_approval.id = "approval-b".into();
+    let b = store
+        .approve_plan(&b.id, b.revision, &second_approval)
+        .unwrap();
+    passed_baseline(&mut store, &first);
+    // The first workflow is admitted; its worker has not leased a worktree yet.
+    store.begin_implementation(&a.id, a.revision, HOST).unwrap();
+    let error = store
+        .begin_implementation(&b.id, b.revision, HOST)
+        .unwrap_err();
+    assert!(
+        matches!(&error, StorageError::AlreadyExists(detail) if detail.contains("already has an active writer")),
+        "{error}"
+    );
+    assert_eq!(
+        store.get_run("workflow-b").unwrap().unwrap().state,
+        RunState::Approved
+    );
+}
+
+#[test]
+fn a_settled_attempt_keeps_the_provenance_it_started_with() {
+    let (mut store, hash) = confirmed_store();
+    store.create_ticket(&ticket(), "key").unwrap();
+    let plan = plan(&hash, 1, 1);
+    let run = store.open_plan_workflow("workflow-1", &plan).unwrap();
+    let run = store
+        .approve_plan(&run.id, run.revision, &approval(&plan))
+        .unwrap();
+    passed_baseline(&mut store, &plan);
+    store
+        .begin_implementation(&run.id, run.revision, HOST)
+        .unwrap();
+    store
+        .start_attempt(
+            "writer-1",
+            "workflow-1",
+            "implement",
+            2,
+            serde_json::json!({"provider": "test", "model": "writer-model", "environment_fingerprint": HOST, "pi_version": "1.3.0", "trigger": "implement"}),
+        )
+        .unwrap();
+    let settled = store
+        .finish_attempt(
+            "writer-1",
+            AttemptState::Failed,
+            serde_json::json!({"reason": "synthetic", "usage": {"elapsed_seconds": 3, "cost_usd_micros": 7}}),
+        )
+        .unwrap();
+    assert_eq!(settled.payload["model"], "writer-model");
+    assert_eq!(settled.payload["environment_fingerprint"], HOST);
+    assert_eq!(settled.payload["trigger"], "implement");
+    assert_eq!(settled.payload["reason"], "synthetic");
+    assert_eq!(
+        store.workflow_usage("workflow-1").unwrap().cost_usd_micros,
+        7
     );
 }
 

@@ -769,8 +769,10 @@ async fn candidate_decisions_match_what_the_routes_decide() {
     assert_eq!(status, StatusCode::CONFLICT);
     assert_eq!(refused["error"], "workflow already has active work");
 
-    // A runtime restart during review reserved the unreported spend: the
-    // interrupted candidate cannot resume, and the view says why.
+    // A runtime restart after the reviewer was prompted reserved the
+    // unreported spend: the interrupted candidate cannot resume, and the view
+    // says why.
+    harness.wait_for_event(&id, "review.prompt_sent").await;
     let mut store = luuna_storage::Store::open(harness.root.join("luuna.sqlite3")).unwrap();
     assert_eq!(store.interrupt_active_runs().unwrap(), 1);
     harness.state.cancel_active();

@@ -7,8 +7,51 @@ use luuna_domain::{
     DomainError, PlanRevision, ProjectManifest, ReviewResult, ReviewVerdict, RunState,
 };
 use rusqlite::{params, Connection, OptionalExtension, Transaction, TransactionBehavior};
+use serde::Serialize;
 use serde_json::json;
 use std::collections::BTreeMap;
+
+/// Seconds between the durable heartbeats of an active validation or review
+/// stage. Restart recovery charges an interrupted stage up to its last
+/// heartbeat plus one interval, so an outage is not charged as stage time.
+pub const STAGE_HEARTBEAT_SECONDS: u64 = 5;
+
+/// Event recorded when a writer or reviewer session reported token usage
+/// without a provider cost: the cost budget cannot meter that spend.
+pub const COST_UNREPORTED_EVENT: &str = "usage.cost_unreported";
+
+const REVIEW_PROMPT_SENT: &str = "review.prompt_sent";
+const REVIEW_USAGE_SETTLED: &str = "review.usage_settled";
+
+/// One workflow's aggregate usage (writer attempts plus validation and review)
+/// against its approved plan budgets and the project's repair policy.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub struct WorkflowUsageView {
+    pub attempts: u64,
+    pub max_attempts: u64,
+    pub elapsed_seconds: u64,
+    pub timeout_seconds: u64,
+    pub cost_usd_micros: u64,
+    pub cost_budget_usd_micros: u64,
+    /// A session reported tokens without a cost, so `cost_usd_micros` is a
+    /// lower bound and the cost budget did not meter that spend.
+    pub cost_unreported: bool,
+    pub repairs: u64,
+    /// `max_task_repairs` of the plan's manifest, when it is still recorded.
+    pub max_repairs: Option<u64>,
+}
+
+/// Usage accumulated across every workflow opened for one ticket's plan
+/// revisions; each revision has its own approved budgets.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize)]
+pub struct TicketUsage {
+    pub workflows: u64,
+    pub attempts: u64,
+    pub elapsed_seconds: u64,
+    pub cost_usd_micros: u64,
+    pub cost_unreported: bool,
+    pub repairs: u64,
+}
 
 impl Store {
     /// Freeze the writer's exact commit/tree identity and enter validation.
@@ -66,6 +109,7 @@ impl Store {
             cost_usd_micros: 0,
             stage_started_at: None,
             stage_start_elapsed_seconds: 0,
+            stage_checkpoint_at: None,
             started_at: now(),
             finished_at: None,
             reason: None,
@@ -135,6 +179,7 @@ impl Store {
         evidence.finished_at = None;
         evidence.reason = None;
         evidence.stage_started_at = Some(now());
+        evidence.stage_checkpoint_at = evidence.stage_started_at.clone();
         evidence.stage_start_elapsed_seconds = evidence.elapsed_seconds;
         save_candidate(&tx, &evidence)?;
         let payload = json!({
@@ -288,6 +333,7 @@ impl Store {
             evidence.stage_started_at = Some(now());
             evidence.stage_start_elapsed_seconds = evidence.elapsed_seconds;
         }
+        evidence.stage_checkpoint_at = evidence.stage_started_at.clone();
         save_candidate(&tx, &evidence)?;
         transition(
             &tx,
@@ -329,6 +375,7 @@ impl Store {
             evidence.reason = Some(error.to_string());
             evidence.finished_at = Some(now());
             evidence.stage_started_at = None;
+            evidence.stage_checkpoint_at = None;
             save_candidate(&tx, &evidence)?;
             transition(
                 &tx,
@@ -371,6 +418,7 @@ impl Store {
         evidence.finished_at = Some(now());
         evidence.review = Some(review.clone());
         evidence.stage_started_at = None;
+        evidence.stage_checkpoint_at = None;
         save_candidate(&tx, &evidence)?;
         transition(
             &tx,
@@ -448,6 +496,7 @@ impl Store {
         evidence.finished_at = Some(now());
         evidence.stage_started_at = None;
         evidence.content_drift |= content_drift;
+        evidence.stage_checkpoint_at = None;
         save_candidate(&tx, &evidence)?;
         let mut payload = json!({"candidate_hash":hash,"reason":reason});
         if content_drift {
@@ -487,9 +536,15 @@ impl Store {
             .transaction_with_behavior(TransactionBehavior::Immediate)?;
         let mut evidence = require_candidate(&tx, run_id, hash)?;
         let plan = bound_plan(&tx, run_id)?;
+        // A charge of nothing still checks the budget, but rewrites no row and
+        // appends no `candidate.usage` event: streaming records and stage
+        // boundaries that consumed nothing must not grow the history.
+        let changed = elapsed_seconds > 0 || cost_usd_micros > 0;
         evidence.elapsed_seconds = evidence.elapsed_seconds.saturating_add(elapsed_seconds);
         evidence.cost_usd_micros = evidence.cost_usd_micros.saturating_add(cost_usd_micros);
-        save_candidate(&tx, &evidence)?;
+        if changed {
+            save_candidate(&tx, &evidence)?;
+        }
         let usage = workflow_usage(&tx, run_id)?;
         if let Err(error) = plan.budgets.check(usage) {
             let run = get_run(&tx, run_id)?.ok_or_else(|| StorageError::NotFound(run_id.into()))?;
@@ -508,14 +563,145 @@ impl Store {
                 )?;
             }
         }
+        if changed {
+            append(
+                &tx,
+                run_id,
+                "candidate.usage",
+                json!({"candidate_hash":hash,"usage":usage}),
+            )?;
+        }
+        tx.commit()?;
+        Ok(usage)
+    }
+
+    /// Stamp the active validation or review stage's durable heartbeat. The
+    /// runtime calls this every `STAGE_HEARTBEAT_SECONDS` while the stage
+    /// runs; nothing is charged and no event is appended. Returns whether a
+    /// stage was active.
+    pub fn checkpoint_candidate_stage(&mut self, run_id: &str, hash: &str) -> Result<bool> {
+        let tx = self
+            .connection
+            .transaction_with_behavior(TransactionBehavior::Immediate)?;
+        let mut evidence = require_candidate(&tx, run_id, hash)?;
+        if !matches!(
+            evidence.status,
+            CandidateStatus::Validating | CandidateStatus::Reviewing
+        ) || evidence.stage_started_at.is_none()
+        {
+            return Ok(false);
+        }
+        evidence.stage_checkpoint_at = Some(now());
+        save_candidate(&tx, &evidence)?;
+        tx.commit()?;
+        Ok(true)
+    }
+
+    /// Durable record, written immediately before the reviewer prompt is
+    /// sent, that provider work may now be billed before Pi reports it. Only
+    /// with this marker (and without a later settled marker) does restart
+    /// recovery reserve the remaining approved cost budget.
+    pub fn record_review_prompt_sent(
+        &mut self,
+        run_id: &str,
+        hash: &str,
+        reviewer_session: &str,
+    ) -> Result<()> {
+        self.review_marker(run_id, hash, reviewer_session, REVIEW_PROMPT_SENT)
+    }
+
+    /// Durable record that the reviewer settled (Pi will do no further model
+    /// work) after its final usage was charged.
+    pub fn record_review_usage_settled(
+        &mut self,
+        run_id: &str,
+        hash: &str,
+        reviewer_session: &str,
+    ) -> Result<()> {
+        self.review_marker(run_id, hash, reviewer_session, REVIEW_USAGE_SETTLED)
+    }
+
+    fn review_marker(
+        &mut self,
+        run_id: &str,
+        hash: &str,
+        reviewer_session: &str,
+        kind: &str,
+    ) -> Result<()> {
+        let tx = self
+            .connection
+            .transaction_with_behavior(TransactionBehavior::Immediate)?;
+        let evidence = require_candidate(&tx, run_id, hash)?;
+        if evidence.status != CandidateStatus::Reviewing || reviewer_session.is_empty() {
+            return invalid("reviewer markers require an active candidate review");
+        }
         append(
             &tx,
             run_id,
-            "candidate.usage",
-            json!({"candidate_hash":hash,"usage":usage}),
+            kind,
+            json!({"candidate_hash": hash, "generation": evidence.validation_generation, "reviewer_session": reviewer_session}),
         )?;
         tx.commit()?;
-        Ok(usage)
+        Ok(())
+    }
+
+    /// The workflow's aggregate usage against its approved budgets, as clients
+    /// display it; `None` for a run that is not bound to a plan.
+    pub fn workflow_usage_view(&self, run_id: &str) -> Result<Option<WorkflowUsageView>> {
+        let plan = match bound_plan(&self.connection, run_id) {
+            Ok(plan) => plan,
+            Err(StorageError::Invalid(_)) => return Ok(None),
+            Err(error) => return Err(error),
+        };
+        let usage = workflow_usage(&self.connection, run_id)?;
+        let max_repairs: Option<String> = self
+            .connection
+            .query_row(
+                "SELECT payload FROM manifest_revisions WHERE project_id=?1 AND hash=?2 ORDER BY revision DESC LIMIT 1",
+                params![plan.project_id, plan.manifest_hash],
+                |r| r.get(0),
+            )
+            .optional()?;
+        let max_repairs = max_repairs
+            .map(|payload| serde_json::from_str::<ProjectManifest>(&payload))
+            .transpose()?
+            .map(|manifest| u64::from(manifest.policy.max_task_repairs));
+        Ok(Some(WorkflowUsageView {
+            attempts: u64::from(usage.attempts),
+            max_attempts: u64::from(plan.budgets.max_attempts),
+            elapsed_seconds: usage.elapsed_seconds,
+            timeout_seconds: plan.budgets.timeout_seconds,
+            cost_usd_micros: usage.cost_usd_micros,
+            cost_budget_usd_micros: plan.budgets.cost_usd_micros,
+            cost_unreported: cost_unreported(&self.connection, run_id)?,
+            repairs: repair_count(&self.connection, run_id)?,
+            max_repairs,
+        }))
+    }
+
+    /// Usage accumulated by every workflow opened for the ticket's plan
+    /// revisions. A new revision starts its own budgets; this is what the
+    /// approver sees as already spent on the ticket.
+    pub fn ticket_usage(&self, ticket_id: &str) -> Result<TicketUsage> {
+        let mut statement = self.connection.prepare(
+            "SELECT r.id FROM runs r JOIN plan_revisions p ON p.id=r.plan_id AND p.revision=r.plan_revision WHERE json_extract(p.payload,'$.ticket_id')=?1 ORDER BY r.rowid",
+        )?;
+        let runs = statement
+            .query_map([ticket_id], |r| r.get::<_, String>(0))?
+            .collect::<std::result::Result<Vec<_>, _>>()?;
+        let mut total = TicketUsage::default();
+        for run_id in runs {
+            let usage = workflow_usage(&self.connection, &run_id)?;
+            total.workflows += 1;
+            total.attempts = total.attempts.saturating_add(u64::from(usage.attempts));
+            total.elapsed_seconds = total.elapsed_seconds.saturating_add(usage.elapsed_seconds);
+            total.cost_usd_micros = total.cost_usd_micros.saturating_add(usage.cost_usd_micros);
+            total.repairs = total
+                .repairs
+                .saturating_add(repair_count(&self.connection, &run_id)?);
+            total.cost_unreported |= cost_unreported(&self.connection, &run_id)?;
+        }
+        Ok(total)
     }
 
     pub fn can_candidate_repair(&self, run_id: &str, hash: &str) -> Result<()> {
@@ -584,6 +770,7 @@ impl Store {
                 return invalid("repair baseline run has not completed");
             }
         }
+        crate::writer::require_repositories_free(&tx, run_id, &plan)?;
         transition(
             &tx,
             run_id,
@@ -757,6 +944,18 @@ pub(crate) fn workflow_usage(connection: &Connection, run_id: &str) -> Result<Bu
     Ok(usage)
 }
 
+fn repair_count(connection: &Connection, run_id: &str) -> Result<u64> {
+    Ok(connection.query_row("SELECT COUNT(*) FROM events WHERE run_id=?1 AND json_extract(envelope,'$.type')='candidate.repair_started'",[run_id],|r|r.get(0))?)
+}
+
+fn cost_unreported(connection: &Connection, run_id: &str) -> Result<bool> {
+    Ok(connection.query_row(
+        "SELECT EXISTS(SELECT 1 FROM events WHERE run_id=?1 AND json_extract(envelope,'$.type')=?2)",
+        params![run_id, COST_UNREPORTED_EVENT],
+        |r| r.get(0),
+    )?)
+}
+
 fn repair_gate(connection: &Connection, run_id: &str, hash: &str) -> Result<BudgetUsage> {
     let run = get_run(connection, run_id)?.ok_or_else(|| StorageError::NotFound(run_id.into()))?;
     if !matches!(
@@ -814,7 +1013,7 @@ fn repair_gate(connection: &Connection, run_id: &str, hash: &str) -> Result<Budg
     )?;
     let manifest: ProjectManifest = serde_json::from_str(&manifest)?;
     let mut usage = workflow_usage(connection, run_id)?;
-    let repairs: u64 = connection.query_row("SELECT COUNT(*) FROM events WHERE run_id=?1 AND json_extract(envelope,'$.type')='candidate.repair_started'",[run_id],|r|r.get(0))?;
+    let repairs = repair_count(connection, run_id)?;
     if repairs >= u64::from(manifest.policy.max_task_repairs) {
         return Err(DomainError::BudgetExceeded(
             "max_task_repairs exhausted; re-plan required".into(),
@@ -858,11 +1057,31 @@ pub(crate) fn interrupt_candidates(
             }
             Err(error) => return Err(error),
         };
-        let was_reviewing = evidence.status == CandidateStatus::Reviewing;
+        let review = if evidence.status == CandidateStatus::Reviewing {
+            Some(review_spend(tx, &evidence)?)
+        } else {
+            None
+        };
         if let Some(started) = &evidence.stage_started_at {
             let elapsed = chrono::DateTime::parse_from_rfc3339(started)
                 .map(|started| {
-                    (chrono::Utc::now() - started.with_timezone(&chrono::Utc))
+                    let now = chrono::Utc::now();
+                    // A crash stops the stage's heartbeat, so time later than
+                    // one interval past the last durable checkpoint was not
+                    // spent on the stage: an outage is not charged as check or
+                    // review time. A record without a checkpoint (written
+                    // before heartbeats existed) is charged up to now.
+                    let end = evidence
+                        .stage_checkpoint_at
+                        .as_deref()
+                        .and_then(|at| chrono::DateTime::parse_from_rfc3339(at).ok())
+                        .and_then(|at| {
+                            at.with_timezone(&chrono::Utc).checked_add_signed(
+                                chrono::Duration::seconds(STAGE_HEARTBEAT_SECONDS as i64),
+                            )
+                        })
+                        .map_or(now, |end| end.min(now));
+                    (end - started.with_timezone(&chrono::Utc))
                         .num_seconds()
                         .max(0) as u64
                 })
@@ -871,7 +1090,7 @@ pub(crate) fn interrupt_candidates(
                 .elapsed_seconds
                 .max(evidence.stage_start_elapsed_seconds.saturating_add(elapsed));
         }
-        if was_reviewing {
+        if review == Some(ReviewSpend::Unknown) {
             let plan = bound_plan(tx, &evidence.run_id)?;
             let usage = workflow_usage(tx, &evidence.run_id)?;
             evidence.cost_usd_micros = evidence.cost_usd_micros.saturating_add(
@@ -882,12 +1101,14 @@ pub(crate) fn interrupt_candidates(
         }
         evidence.status = CandidateStatus::Interrupted;
         evidence.finished_at = Some(now());
-        evidence.reason = Some(if was_reviewing {
-            "runtime restarted during independent review; unreported provider spend reserved the remaining approved cost budget; re-plan required".into()
-        } else {
-            "runtime restarted before candidate validation settled; elapsed time retained and fresh evidence required".into()
+        evidence.reason = Some(match review {
+            Some(ReviewSpend::Unknown) => "runtime restarted during independent review; unreported provider spend reserved the remaining approved cost budget; re-plan required".into(),
+            Some(ReviewSpend::NotPrompted) => "runtime restarted during independent review before the reviewer was prompted, so no provider spend occurred; elapsed time retained and fresh evidence required".into(),
+            Some(ReviewSpend::Settled) => "runtime restarted after the independent reviewer reported its final usage; elapsed time retained and fresh evidence required".into(),
+            None => "runtime restarted before candidate validation settled; elapsed time retained and fresh evidence required".into(),
         });
         evidence.stage_started_at = None;
+        evidence.stage_checkpoint_at = None;
         save_candidate(tx, &evidence)?;
         append(
             tx,
@@ -944,8 +1165,62 @@ fn interrupt_undecodable_candidate(
     })
 }
 
+/// What an interrupted review may have spent at the provider.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum ReviewSpend {
+    /// No reviewer of the current generation received its prompt: nothing
+    /// could have been billed.
+    NotPrompted,
+    /// The prompted reviewer settled after its final usage was charged.
+    Settled,
+    /// A prompt was sent and the reviewer never settled, or the record
+    /// predates the markers: the spend is unknown.
+    Unknown,
+}
+
+/// Decides from durable markers, as the live path decides from its in-flight
+/// flag, whether an interrupted review's provider spend is unknown. The
+/// latest `review.started` names the reviewer; one recorded by a runtime that
+/// wrote no markers (no `generation`) is treated as prompted and unsettled.
+fn review_spend(connection: &Connection, evidence: &CandidateEvidence) -> Result<ReviewSpend> {
+    let started: Option<String> = connection
+        .query_row(
+            "SELECT json_extract(envelope,'$.payload') FROM events WHERE run_id=?1 AND json_extract(envelope,'$.type')='review.started' AND json_extract(envelope,'$.payload.candidate_hash')=?2 ORDER BY sequence DESC LIMIT 1",
+            params![evidence.run_id, evidence.candidate.hash],
+            |r| r.get(0),
+        )
+        .optional()?;
+    let Some(started) = started else {
+        return Ok(ReviewSpend::NotPrompted);
+    };
+    let started: serde_json::Value = serde_json::from_str(&started)?;
+    let Some(generation) = started["generation"].as_u64() else {
+        return Ok(ReviewSpend::Unknown);
+    };
+    let session = started["reviewer_session"].as_str().unwrap_or_default();
+    if generation != evidence.validation_generation || session.is_empty() {
+        return Ok(ReviewSpend::NotPrompted);
+    }
+    let marked = |kind: &str| -> Result<bool> {
+        Ok(connection.query_row(
+            "SELECT EXISTS(SELECT 1 FROM events WHERE run_id=?1 AND json_extract(envelope,'$.type')=?2 AND json_extract(envelope,'$.payload.reviewer_session')=?3)",
+            params![evidence.run_id, kind, session],
+            |r| r.get(0),
+        )?)
+    };
+    Ok(if !marked(REVIEW_PROMPT_SENT)? {
+        ReviewSpend::NotPrompted
+    } else if marked(REVIEW_USAGE_SETTLED)? {
+        ReviewSpend::Settled
+    } else {
+        ReviewSpend::Unknown
+    })
+}
+
 /// Raises the candidate's elapsed time to at least what its current stage has
-/// actually taken (whole seconds, rounded up), as restart recovery does.
+/// actually taken (whole seconds, rounded up). The runtime is alive here, so
+/// the stage ran until now; restart recovery instead stops at the stage's
+/// last heartbeat plus one interval.
 fn retain_live_elapsed(evidence: &mut CandidateEvidence) {
     let Some(started) = evidence
         .stage_started_at

@@ -22,7 +22,7 @@ invalid review can be exercised against one immutable ticket.
 `review_no_findings` returns `changes_required` without a finding (invalid
 review output), `review_tools` emits read, search and refused tool calls whose
 patterns and results must never be recorded, and `review_report` passes with
-evidence strings that describe the diff and scope it was given.
+evidence strings that describe the diff and scope it was given. `review_retry` emits a transient provider error that Pi retries itself (the errored `message_end`, `agent_end` with `willRetry`, then the passing review) and `review_stream` streams forty cumulative-usage updates before its verdict. The `write_compaction` writer reports a threshold compaction whose summary usage only `compaction_end` carries, and `write_unpriced` reports tokens with a zero cost, as Pi does for a model without pricing.
 
 As Pi 1.3.0 does, the fixture reads `--system-prompt` from the named file when
 it exists; writer `fixture_args` report the prompt's size and whether it came

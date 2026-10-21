@@ -38,6 +38,11 @@ pub struct CandidateEvidence {
     /// Recovery checkpoints for work consumed since the last durable charge.
     pub stage_started_at: Option<String>,
     pub stage_start_elapsed_seconds: u64,
+    /// The stage's last durable heartbeat while the runtime was alive; restart
+    /// recovery charges at most one heartbeat interval past it. Absent on
+    /// records written before heartbeats existed.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub stage_checkpoint_at: Option<String>,
     pub started_at: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub finished_at: Option<String>,

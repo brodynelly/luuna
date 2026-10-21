@@ -740,12 +740,20 @@ async fn stale_or_missing_approval_base_recipe_baseline_and_repository_are_refus
     assert_eq!(harness.run(&run_id).await["state"], "approved");
     harness.baseline().await;
 
-    // A newer plan revision makes the earlier approval stale.
+    // A newer plan revision makes the earlier approval stale: the waiting
+    // workflow is superseded (settled) and can no longer be implemented.
     let second = harness.plan(&ticket_id, json!({})).await;
     assert_eq!(second["plan"]["revision"], 2);
     let (status, body) = harness.implement(&run_id).await;
     assert_eq!(status, StatusCode::CONFLICT, "{body}");
-    assert!(body["error"].as_str().unwrap().contains("stale"), "{body}");
+    assert!(
+        body["error"]
+            .as_str()
+            .unwrap()
+            .contains("approval is required"),
+        "{body}"
+    );
+    assert_eq!(harness.run(&run_id).await["state"], "cancelled");
     let second_run = second["run"]["id"].as_str().unwrap().to_owned();
     harness.approve(&second["plan"]).await;
 
@@ -1730,7 +1738,9 @@ async fn restart_during_review_preserves_candidate_and_reserves_unknown_provider
         harness.candidate_action(&id, "validate", hash).await.0,
         StatusCode::ACCEPTED
     );
-    harness.wait_for_event(&id, "review.started").await;
+    // Unknown spend begins with the durable marker written just before the
+    // reviewer prompt; a crash before it reserves nothing.
+    harness.wait_for_event(&id, "review.prompt_sent").await;
     let mut store = luuna_storage::Store::open(harness.root.join("luuna.sqlite3")).unwrap();
     let usage_before = store.workflow_usage(&id).unwrap();
     assert_eq!(store.interrupt_active_runs().unwrap(), 1);

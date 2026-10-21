@@ -33,6 +33,15 @@ pub struct AttemptRecord {
     pub finished_at: Option<String>,
 }
 
+/// A plan revision and the workflow bound to it; `created` is false when an
+/// idempotent request replayed what an earlier delivery created.
+#[derive(Debug, Clone, PartialEq)]
+pub struct PlanOpening {
+    pub plan: PlanRevision,
+    pub run: crate::RunRecord,
+    pub created: bool,
+}
+
 fn text<T: Serialize>(value: T) -> Result<String> {
     Ok(serde_json::to_value(value)?
         .as_str()
@@ -202,10 +211,43 @@ impl Store {
         run_id: &str,
         plan: &PlanRevision,
     ) -> Result<crate::RunRecord> {
+        self.open_plan_workflow_once(run_id, plan, None)
+            .map(|opened| opened.run)
+    }
+
+    /// The plan and workflow an earlier request with this ticket idempotency
+    /// key created. The same key with a different request hash is a conflict.
+    pub fn plan_request(
+        &self,
+        ticket_id: &str,
+        idempotency_key: &str,
+        request_hash: &str,
+    ) -> Result<Option<PlanOpening>> {
+        plan_request_in(&self.connection, ticket_id, idempotency_key, request_hash)
+    }
+
+    /// `open_plan_workflow`, optionally under a client idempotency key and the
+    /// hash of the request it names: a key already recorded for the ticket
+    /// returns the plan and workflow it created (`created` is false) when the
+    /// request hash matches and is refused when it does not. Earlier revisions
+    /// of the plan still waiting for approval or implementation can never be
+    /// approved or scheduled again (both require the latest revision), so the
+    /// same transaction settles them as superseded.
+    pub fn open_plan_workflow_once(
+        &mut self,
+        run_id: &str,
+        plan: &PlanRevision,
+        request: Option<(&str, &str)>,
+    ) -> Result<PlanOpening> {
         plan.validate()?;
         let tx = self
             .connection
             .transaction_with_behavior(rusqlite::TransactionBehavior::Immediate)?;
+        if let Some((key, hash)) = request {
+            if let Some(existing) = plan_request_in(&tx, &plan.ticket_id, key, hash)? {
+                return Ok(existing);
+            }
+        }
         let ticket = load_ticket(&tx, &plan.ticket_id)?
             .ok_or_else(|| StorageError::NotFound(plan.ticket_id.clone()))?;
         if ticket.project_id != plan.project_id {
@@ -249,6 +291,36 @@ impl Store {
                 serde_json::to_string(plan)?
             ],
         )?;
+        let superseded = {
+            let mut statement = tx.prepare(
+                "SELECT id,revision,plan_revision FROM runs WHERE plan_id=?1 AND state IN (?2,?3) ORDER BY rowid",
+            )?;
+            let rows = statement.query_map(
+                params![
+                    plan.id,
+                    crate::state_json(RunState::PlanReady)?,
+                    crate::state_json(RunState::Approved)?
+                ],
+                |r| {
+                    Ok((
+                        r.get::<_, String>(0)?,
+                        r.get::<_, u64>(1)?,
+                        r.get::<_, u64>(2)?,
+                    ))
+                },
+            )?;
+            rows.collect::<std::result::Result<Vec<_>, _>>()?
+        };
+        for (id, revision, plan_revision) in superseded {
+            transition(
+                &tx,
+                &id,
+                revision,
+                RunState::Cancelled,
+                "plan.superseded",
+                json!({"plan_revision": plan_revision, "superseded_by": plan.revision, "reason": format!("plan revision {plan_revision} was superseded by revision {} before implementation; approve the latest revision", plan.revision)}),
+            )?;
+        }
         let created_at = now();
         let metadata = json!({"kind": "workflow", "ticket_id": plan.ticket_id, "ticket_revision": plan.ticket_revision, "plan_id": plan.id, "plan_revision": plan.revision});
         tx.execute(
@@ -291,9 +363,20 @@ impl Store {
             "plan.recorded",
             json!({"run_id": run_id, "ticket_id": plan.ticket_id, "ticket_revision": plan.ticket_revision, "plan_id": plan.id, "plan_revision": plan.revision, "plan_hash": plan.hash}),
         )?;
+        if let Some((key, hash)) = request {
+            tx.execute(
+                "INSERT INTO plan_requests(ticket_id,idempotency_key,request_hash,plan_id,plan_revision,run_id,created_at) VALUES (?1,?2,?3,?4,?5,?6,?7)",
+                params![plan.ticket_id, key, hash, plan.id, plan.revision, run_id, created_at],
+            )?;
+        }
         tx.commit()?;
-        self.get_run(run_id)?
-            .ok_or_else(|| StorageError::NotFound(run_id.into()))
+        Ok(PlanOpening {
+            plan: plan.clone(),
+            run: self
+                .get_run(run_id)?
+                .ok_or_else(|| StorageError::NotFound(run_id.into()))?,
+            created: true,
+        })
     }
 
     pub fn latest_plan(&self, plan_id: &str) -> Result<Option<PlanRevision>> {
@@ -529,7 +612,7 @@ impl Store {
             return Err(StorageError::Invalid("attempt is already settled".into()));
         }
         record.state = state;
-        record.payload = payload;
+        record.payload = with_launch(&record.payload, payload);
         record.finished_at = Some(now());
         tx.execute(
             "UPDATE attempts SET state=?1,payload=?2,finished_at=?3 WHERE id=?4",
@@ -597,6 +680,75 @@ pub(crate) fn check_manifest_binding(tx: &Transaction<'_>, plan: &PlanRevision) 
                 format!(
                 "plan base commit for {repository_id} is not the base the current manifest recorded"
             ),
+            )));
+        }
+    }
+    Ok(())
+}
+
+fn plan_request_in(
+    connection: &Connection,
+    ticket_id: &str,
+    idempotency_key: &str,
+    request_hash: &str,
+) -> Result<Option<PlanOpening>> {
+    let row: Option<(String, String, u64, String)> = connection
+        .query_row(
+            "SELECT request_hash,plan_id,plan_revision,run_id FROM plan_requests WHERE ticket_id=?1 AND idempotency_key=?2",
+            params![ticket_id, idempotency_key],
+            |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?)),
+        )
+        .optional()?;
+    let Some((recorded, plan_id, plan_revision, run_id)) = row else {
+        return Ok(None);
+    };
+    if recorded != request_hash {
+        return Err(StorageError::AlreadyExists(format!(
+            "idempotency key {idempotency_key} was already used for a different plan request"
+        )));
+    }
+    let plan: String = connection.query_row(
+        "SELECT payload FROM plan_revisions WHERE id=?1 AND revision=?2",
+        params![plan_id, plan_revision],
+        |r| r.get(0),
+    )?;
+    Ok(Some(PlanOpening {
+        plan: serde_json::from_str(&plan)?,
+        run: crate::get_run(connection, &run_id)?.ok_or(StorageError::NotFound(run_id))?,
+        created: false,
+    }))
+}
+
+/// One writer per repository, decided in the transaction that admits a writer
+/// (implementation or repair) before any state changes: a repository with an
+/// active lease, or with another workflow already admitted to implementation
+/// whose worker has not leased its worktree yet, is refused.
+pub(crate) fn require_repositories_free(
+    tx: &Transaction<'_>,
+    run_id: &str,
+    plan: &PlanRevision,
+) -> Result<()> {
+    for repository_id in plan.base_commits.keys() {
+        let other: Option<String> = tx
+            .query_row(
+                "SELECT run_id FROM worktree_leases WHERE project_id=?1 AND repository_id=?2 AND state='active' AND run_id!=?3
+                 UNION ALL
+                 SELECT r.id FROM runs r JOIN plan_revisions p ON p.id=r.plan_id AND p.revision=r.plan_revision
+                 WHERE r.project_id=?1 AND r.id!=?3 AND r.state=?4
+                 AND EXISTS(SELECT 1 FROM json_each(p.payload,'$.base_commits') WHERE key=?2)
+                 LIMIT 1",
+                params![
+                    plan.project_id,
+                    repository_id,
+                    run_id,
+                    crate::state_json(RunState::Implementing)?
+                ],
+                |r| r.get(0),
+            )
+            .optional()?;
+        if let Some(other) = other {
+            return Err(StorageError::AlreadyExists(format!(
+                "repository {repository_id} already has an active writer (workflow {other}); one writer per repository"
             )));
         }
     }
@@ -715,7 +867,12 @@ pub(crate) fn abandon_orphaned_work(
             }
         };
         let usage = reserved_usage(tx, run_id, previous.as_ref());
-        let payload = json!({"reason": "runtime restarted before the writer settled; unreported time and provider spend reserve the remaining approved budgets; re-plan required", "usage": usage});
+        let settled = json!({"reason": "runtime restarted before the writer settled; unreported time and provider spend reserve the remaining approved budgets; re-plan required", "usage": usage});
+        // Keep the provider/model provenance the attempt started with.
+        let payload = match previous.as_ref() {
+            Some(previous) => with_launch(previous, settled),
+            None => settled,
+        };
         tx.execute(
             "UPDATE attempts SET state='interrupted',payload=?1,finished_at=?2 WHERE id=?3",
             params![serde_json::to_string(&payload)?, released_at, id],
@@ -749,6 +906,20 @@ fn reserved_usage(tx: &Transaction<'_>, run_id: &str, previous: Option<&Value>) 
         .unwrap_or((0, 0));
     json!({"elapsed_seconds": reported("elapsed_seconds").saturating_add(plan.budgets.timeout_seconds.saturating_sub(elapsed)),
         "cost_usd_micros": reported("cost_usd_micros").saturating_add(plan.budgets.cost_usd_micros.saturating_sub(cost))})
+}
+
+/// A settled attempt's payload keeps the provenance recorded when it started
+/// (provider, model, host fingerprint, Pi version, trigger); the settlement's
+/// own fields (reason, usage, commit) are added and win on a name clash.
+fn with_launch(started: &Value, settled: Value) -> Value {
+    match (started, settled) {
+        (Value::Object(started), Value::Object(settled)) => {
+            let mut merged = started.clone();
+            merged.extend(settled);
+            Value::Object(merged)
+        }
+        (_, settled) => settled,
+    }
 }
 
 fn load_ticket(connection: &Connection, id: &str) -> Result<Option<Ticket>> {

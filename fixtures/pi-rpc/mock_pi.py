@@ -123,6 +123,20 @@ def run_reviewer(request_id, kind, message):
         # Accepted model work that never reports its usage: the process exits
         # mid-turn, as a lost transport or a crashed Pi would.
         sys.exit(9)
+    if scenario == "review_retry":
+        # A transient provider error that Pi retries itself, in Pi 1.3.0's
+        # order: the errored message, `agent_end` with `willRetry`, the retry.
+        failed = {"role": "assistant", "stopReason": "error", "usage": usage(0.0001),
+                  "errorMessage": "529 overloaded_error: Overloaded"}
+        send({"type": "message_end", "message": failed})
+        send({"type": "agent_end", "messages": [failed], "willRetry": True})
+        send({"type": "auto_retry_start", "attempt": 1, "maxAttempts": 3, "delayMs": 0,
+              "errorMessage": "529 overloaded_error: Overloaded"})
+    if scenario == "review_stream":
+        # A streamed answer: one cumulative-usage update per delta.
+        for index in range(40):
+            send({"type": "message_update", "usage": usage(0.0005 * (index + 1) / 40),
+                  "assistantMessageEvent": {"type": "text_delta", "contentIndex": 0, "delta": "."}})
     review = {"schema_version": "0.1", "id": "review-fixture",
               "candidate_hash": payload.get("candidate_hash"),
               "reviewer_session": payload.get("reviewer_session"),
@@ -176,6 +190,8 @@ def run_reviewer(request_id, kind, message):
               "content": [{"type": "text", "text": text}]}
     send({"type": "message_end", "message": output})
     send({"type": "agent_end", "messages": [output], "willRetry": False})
+    if scenario == "review_retry":
+        send({"type": "auto_retry_end", "success": True, "attempt": 2})
     send({"type": "agent_settled", "aborted": False})
 
 
@@ -199,14 +215,23 @@ def run_writer(request_id, kind, scenario, prompt):
     send({"type": "response", "id": request_id, "command": kind,
           "success": True, "data": {"disposition": "started"}})
     send({"type": "agent_start"})
-    cost = 0.0005
+    # `write_unpriced` stands for a model Pi has no price for: tokens, cost 0.
+    cost = 0.0 if scenario == "write_unpriced" else 0.0005
+    if scenario == "write_compaction":
+        # Pi's threshold compaction is a separate summarization call whose
+        # usage only `compaction_end` reports.
+        send({"type": "compaction_start", "reason": "threshold"})
+        send({"type": "compaction_end", "reason": "threshold", "aborted": False, "willRetry": False,
+              "result": {"summary": "synthetic summary", "firstKeptEntryId": "entry-1",
+                         "tokensBefore": 150000, "estimatedTokensAfter": 32000,
+                         "usage": usage(0.25), "details": {}}})
     if scenario == "writer_crash":
         # Accepted model work that never reports its usage: the process exits
         # mid-turn, as a lost transport or a crashed Pi would.
         sys.exit(9)
     if scenario == "slow":
         time.sleep(60)
-    elif scenario in ("write_in_scope", "component_context", "large_session") or scenario.startswith("review_"):
+    elif scenario in ("write_in_scope", "component_context", "large_session", "write_unpriced", "write_compaction") or scenario.startswith("review_"):
         repairing = "Repair feedback:" in prompt or "Repair feedback:" in (flag("--system-prompt") or "")
         write_file("src/main.py", "print('revised by the synthetic repair writer')\n" if repairing else "print('implemented by the synthetic writer')\n")
     elif scenario in ("repair_in_scope", "repair_hold"):

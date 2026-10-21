@@ -604,24 +604,52 @@ impl Record {
 /// Monotonic session cost in micros across assistant/tool turns. Pi's message
 /// updates repeat the current message's cumulative usage, while each completed
 /// assistant message adds a new cost. `agent_end` repeats those same messages
-/// and must never charge them again. This counter is local measurement; the
-/// runtime persists its deltas so interruptions cannot reset consumed budgets.
+/// and must never charge them again. A successful `compaction_end` reports the
+/// separate summarization call Pi makes outside the message stream, which Pi
+/// counts in its session totals, so it is added once. This counter is local
+/// measurement; the runtime persists its deltas so interruptions cannot reset
+/// consumed budgets.
 #[derive(Debug, Default)]
 pub struct SessionUsage {
     completed_cost: u64,
     current_cost: u64,
     total_cost: u64,
+    cost_unreported: bool,
+}
+
+/// Provider-reported cost in micros, rounded up; a missing, negative or
+/// non-finite value is no report.
+fn reported_cost(usage: &Value) -> Option<u64> {
+    usage["cost"]["total"]
+        .as_f64()
+        .filter(|cost| cost.is_finite() && *cost >= 0.0)
+        .map(|cost| (cost * 1_000_000.0).ceil() as u64)
+}
+
+/// Whether a completed usage report counted tokens without pricing them: Pi
+/// reports cost 0 (or none) for a model missing from its price table, a
+/// custom endpoint or a local model.
+fn tokens_without_cost(usage: &Value) -> bool {
+    let tokens = usage["totalTokens"].as_u64().unwrap_or_else(|| {
+        ["input", "output", "cacheRead", "cacheWrite"]
+            .iter()
+            .filter_map(|field| usage[*field].as_u64())
+            .sum()
+    });
+    tokens > 0 && reported_cost(usage).unwrap_or(0) == 0
 }
 
 impl SessionUsage {
+    /// Whether a completed message or summarization consumed tokens that the
+    /// provider reported no cost for: the cost budget cannot meter that spend.
+    pub fn cost_unreported(&self) -> bool {
+        self.cost_unreported
+    }
+
     pub fn observe(&mut self, record: &Record) -> u64 {
         let message = &record.raw["message"];
         let assistant = message["role"] == "assistant";
-        let cost = message["usage"]["cost"]["total"]
-            .as_f64()
-            .or_else(|| record.raw["usage"]["cost"]["total"].as_f64())
-            .filter(|cost| cost.is_finite() && *cost >= 0.0)
-            .map(|cost| (cost * 1_000_000.0).ceil() as u64);
+        let cost = reported_cost(&message["usage"]).or_else(|| reported_cost(&record.raw["usage"]));
         match record.kind.as_str() {
             "message_start" if assistant => {
                 // Retain provisional spend if a provider retry starts another
@@ -637,6 +665,14 @@ impl SessionUsage {
                     .completed_cost
                     .saturating_add(self.current_cost.max(cost.unwrap_or(0)));
                 self.current_cost = 0;
+                self.cost_unreported |= tokens_without_cost(&message["usage"]);
+            }
+            "compaction_end" if record.raw["aborted"] != true => {
+                let usage = &record.raw["result"]["usage"];
+                self.completed_cost = self
+                    .completed_cost
+                    .saturating_add(reported_cost(usage).unwrap_or(0));
+                self.cost_unreported |= tokens_without_cost(usage);
             }
             _ => {}
         }
@@ -1568,6 +1604,59 @@ mod tests {
             5000
         );
     }
+    #[test]
+    fn compaction_usage_is_charged_once_and_unpriced_tokens_are_flagged() {
+        let mut usage = SessionUsage::default();
+        let mut observe =
+            |raw: Value| usage.observe(&Record::parse(raw.to_string().as_bytes()).unwrap());
+        let priced = json!({"input":100,"output":10,"totalTokens":110,"cost":{"total":0.0005}});
+        observe(json!({"type":"message_end","message":{"role":"assistant","usage":priced}}));
+        // Pi's summarization call is reported only by `compaction_end`.
+        let summary = json!({"summary":"s","usage":{"input":9000,"output":500,"totalTokens":9500,"cost":{"total":0.25}}});
+        assert_eq!(
+            observe(
+                json!({"type":"compaction_end","reason":"threshold","result":summary,"aborted":false,"willRetry":false})
+            ),
+            250_500
+        );
+        // An aborted or failed compaction reports no result and costs nothing.
+        assert_eq!(
+            observe(
+                json!({"type":"compaction_end","reason":"threshold","aborted":true,"willRetry":false})
+            ),
+            250_500
+        );
+        assert_eq!(
+            observe(
+                json!({"type":"compaction_end","reason":"overflow","aborted":false,"willRetry":false,"errorMessage":"failed"})
+            ),
+            250_500
+        );
+        assert!(!usage.cost_unreported());
+    }
+
+    #[test]
+    fn tokens_reported_without_a_cost_mark_the_session_unmetered() {
+        for unpriced in [
+            json!({"input":100,"output":10,"totalTokens":110,"cost":{"total":0}}),
+            json!({"input":100,"output":10}),
+        ] {
+            let mut usage = SessionUsage::default();
+            let record =
+                json!({"type":"message_end","message":{"role":"assistant","usage":unpriced}});
+            assert_eq!(
+                usage.observe(&Record::parse(record.to_string().as_bytes()).unwrap()),
+                0
+            );
+            assert!(usage.cost_unreported(), "{unpriced}");
+        }
+        // No tokens, as for an errored request before any output, is not a gap.
+        let mut usage = SessionUsage::default();
+        let record = json!({"type":"message_end","message":{"role":"assistant","stopReason":"error","usage":{"input":0,"output":0,"cost":{"total":0}}}});
+        usage.observe(&Record::parse(record.to_string().as_bytes()).unwrap());
+        assert!(!usage.cost_unreported());
+    }
+
     #[test]
     fn rejects_malformed_records() {
         for value in ["not json", "{}", r#"{"type":"response","success":true}"#] {

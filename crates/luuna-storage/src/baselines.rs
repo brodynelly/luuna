@@ -295,6 +295,7 @@ impl Store {
             }
             baselines.insert(repository_id.clone(), evidence.id.clone());
         }
+        crate::writer::require_repositories_free(&tx, run_id, &plan)?;
         transition(
             &tx,
             run_id,

@@ -21,7 +21,10 @@ pub use backup::{
 pub use components::*;
 pub use missions::MissionsBinding;
 pub use projects::*;
-pub use writer::AttemptRecord;
+pub use validation::{
+    TicketUsage, WorkflowUsageView, COST_UNREPORTED_EVENT, STAGE_HEARTBEAT_SECONDS,
+};
+pub use writer::{AttemptRecord, PlanOpening};
 
 #[derive(Error)]
 pub enum StorageError {
@@ -651,6 +654,7 @@ const MIGRATIONS: &[(u32, &str)] = &[
     (5, MIGRATION_5),
     (6, MIGRATION_6),
     (7, MIGRATION_7),
+    (8, MIGRATION_8),
 ];
 
 /// The highest schema version this build creates and understands. A database
@@ -824,5 +828,16 @@ CREATE INDEX IF NOT EXISTS runs_plan ON runs(plan_id, plan_revision);
 CREATE INDEX IF NOT EXISTS worktree_leases_run ON worktree_leases(run_id);
 CREATE INDEX IF NOT EXISTS discoveries_project ON discoveries(project_id);
 INSERT OR IGNORE INTO schema_migrations(version) VALUES (7);
+COMMIT;
+";
+
+/// Plan requests a client may replay under a per-ticket idempotency key: the
+/// key returns the plan revision and workflow its first delivery created.
+const MIGRATION_8: &str = "
+BEGIN IMMEDIATE;
+CREATE TABLE IF NOT EXISTS plan_requests(ticket_id TEXT NOT NULL REFERENCES tickets(id), idempotency_key TEXT NOT NULL,
+ request_hash TEXT NOT NULL, plan_id TEXT NOT NULL, plan_revision INTEGER NOT NULL, run_id TEXT NOT NULL REFERENCES runs(id),
+ created_at TEXT NOT NULL, PRIMARY KEY(ticket_id,idempotency_key), FOREIGN KEY(plan_id,plan_revision) REFERENCES plan_revisions(id,revision));
+INSERT OR IGNORE INTO schema_migrations(version) VALUES (8);
 COMMIT;
 ";

@@ -120,6 +120,9 @@ pub async fn candidate(
             )
         }
     };
+    // Aggregate workflow usage (writer attempts included) against the
+    // approved budgets and the project's repair limit.
+    let usage = store.workflow_usage_view(&id).map_err(internal)?;
     Ok(Json(json!({
         "evidence": evidence,
         "active": active,
@@ -131,6 +134,7 @@ pub async fn candidate(
             "repair": repair.err(),
             "revalidate": revalidate.err(),
         },
+        "usage": usage,
     })))
 }
 
@@ -577,7 +581,7 @@ pub async fn validate(
                 if run.state != RunState::Validating
                     || next.candidate.hash == current.candidate.hash
                 {
-                    return Err("repair produced no fresh candidate".into());
+                    return Err(repair_writer_failure(&store, &id));
                 }
                 store
                     .begin_candidate_validation(&id, run.revision, &next.candidate.hash)
@@ -591,7 +595,41 @@ pub async fn validate(
                             (store.get_run(&id), store.current_candidate(&id))
                         {
                             if matches!(run.state, RunState::Validating | RunState::Failed) {
-                                let _=store.fail_candidate_stage(&id,run.revision,&latest.candidate.hash,RunState::Paused,&format!("automatic validation stopped: {reason}; inspect evidence or re-plan"));
+                                // After a failed repair writer, whether another
+                                // repair may follow: a spent budget or repair
+                                // limit is named with its re-plan requirement.
+                                // The candidate's own earlier reason is kept.
+                                let next_step = if run.state == RunState::Failed {
+                                    store
+                                        .can_candidate_repair(&id, &latest.candidate.hash)
+                                        .err()
+                                        .map_or_else(
+                                            || {
+                                                "inspect evidence, then repair or re-plan"
+                                                    .to_owned()
+                                            },
+                                            repair_refusal,
+                                        )
+                                } else {
+                                    "inspect evidence or re-plan".to_owned()
+                                };
+                                let earlier = latest
+                                    .reason
+                                    .as_deref()
+                                    .map(|earlier| {
+                                        format!(
+                                            "; candidate revision {}: {earlier}",
+                                            latest.candidate.revision
+                                        )
+                                    })
+                                    .unwrap_or_default();
+                                let _ = store.fail_candidate_stage(
+                                    &id,
+                                    run.revision,
+                                    &latest.candidate.hash,
+                                    RunState::Paused,
+                                    &format!("automatic validation stopped: {reason}; {next_step}{earlier}"),
+                                );
                             }
                         }
                     }
@@ -608,6 +646,67 @@ pub async fn validate(
 /// pauses for a re-plan instead of reading as failed.
 const BUDGET_EXHAUSTED_DURING_CHECKS: &str =
     "workflow time budget exhausted during required checks; re-plan required";
+
+/// Why an automatic repair produced no fresh candidate: the repair writer's
+/// own settled reason (a spent cost or time budget, a scope violation, an
+/// empty change), not a generic failure.
+fn repair_writer_failure(store: &luuna_storage::Store, id: &str) -> String {
+    let reason = store
+        .attempts(id)
+        .ok()
+        .and_then(|attempts| {
+            attempts
+                .last()
+                .and_then(|attempt| attempt.payload["reason"].as_str().map(ToOwned::to_owned))
+        })
+        .unwrap_or_else(|| "it produced no fresh candidate".into());
+    format!("automatic repair writer failed: {reason}")
+}
+
+/// Why no further repair may follow, as a developer reads it; a spent budget
+/// always names the re-plan it requires.
+fn repair_refusal(error: luuna_storage::StorageError) -> String {
+    match error {
+        luuna_storage::StorageError::Domain(error) => {
+            let text = error.to_string();
+            if matches!(error, luuna_domain::DomainError::BudgetExceeded(_))
+                && !text.contains("re-plan")
+            {
+                format!("{text}; workflow budget exhausted; re-plan required")
+            } else {
+                text
+            }
+        }
+        luuna_storage::StorageError::Invalid(detail) => detail,
+        other => other.to_string(),
+    }
+}
+
+/// Runs a validation or review stage while stamping its durable heartbeat
+/// every `STAGE_HEARTBEAT_SECONDS`, so restart recovery after a crash charges
+/// the stage up to its last checkpoint plus one interval, not the outage.
+async fn with_stage_heartbeat<T>(
+    state: &AppState,
+    id: &str,
+    hash: &str,
+    work: impl std::future::Future<Output = T>,
+) -> T {
+    tokio::pin!(work);
+    let period = Duration::from_secs(luuna_storage::STAGE_HEARTBEAT_SECONDS);
+    let mut heartbeat = tokio::time::interval_at(tokio::time::Instant::now() + period, period);
+    heartbeat.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
+    loop {
+        tokio::select! {
+            biased;
+            output = &mut work => return output,
+            _ = heartbeat.tick() => {
+                if let Ok(mut store) = state.store.lock() {
+                    let _ = store.checkpoint_candidate_stage(id, hash);
+                }
+            }
+        }
+    }
+}
 
 fn settle_failure(state: &AppState, id: &str, evidence: &CandidateEvidence, reason: &str) {
     if let Ok(mut store) = state.store.lock() {
@@ -685,7 +784,7 @@ async fn pipeline(
     // Pipeline seconds already in durable usage, whether charged here or by a
     // storage call that charges its stage itself.
     let charged = std::sync::atomic::AtomicU64::new(0);
-    let charge = |cost: u64| -> Result<(), String> {
+    let charge = |cost: u64| -> Result<luuna_domain::BudgetUsage, String> {
         let seconds = crate::writer::charged_seconds(started.elapsed());
         let already = charged.load(std::sync::atomic::Ordering::Relaxed);
         let usage = state
@@ -695,14 +794,15 @@ async fn pipeline(
             .charge_candidate_usage(id, hash, seconds.saturating_sub(already), cost)
             .map_err(|e| e.to_string())?;
         charged.store(seconds.max(already), std::sync::atomic::Ordering::Relaxed);
-        plan.budgets.check(usage).map_err(|e| e.to_string())
+        plan.budgets.check(usage).map_err(|e| e.to_string())?;
+        Ok(usage)
     };
     // Every exit from the pipeline is charged: a check, guard installation or
     // reviewer startup that fails (a stalled guard write that ran into the
     // deadline included) still spent approved time, which is persisted before
     // the stage settles, so a later repair cannot reuse it. A charge that
     // exhausts the budget pauses the workflow in the same transaction.
-    let outcome = async {
+    let outcome = with_stage_heartbeat(state, id, hash, async {
     if execution != ExecutionProfile::Native {
         return Err("testing blocked: container profile is unavailable".into());
     }
@@ -931,8 +1031,8 @@ async fn pipeline(
         launcher_args: state.config.pi_launcher_args.clone(),
         cwd: worktree.to_path_buf(),
         config_dir: directory.clone(),
-        provider,
-        model,
+        provider: provider.clone(),
+        model: model.clone(),
         profile: SessionProfile::Reviewer(ReviewerProfile {
             system_prompt: system,
             extensions: vec![guard],
@@ -949,7 +1049,7 @@ async fn pipeline(
         .event(
             id,
             "review.started",
-            json!({"reviewer_session":session,"candidate_hash":hash,"pid":process.pid(),"tools":process.tools().declared,"omitted_tools":process.tools().omitted_json()}),
+            json!({"reviewer_session":session,"candidate_hash":hash,"generation":evidence.validation_generation,"provider":provider,"model":model,"pid":process.pid(),"tools":process.tools().declared,"omitted_tools":process.tools().omitted_json()}),
         )
         .is_err()
     {
@@ -957,10 +1057,15 @@ async fn pipeline(
         return Err("cannot persist reviewer startup".into());
     }
     // Whether model work may have spent more than Pi reported: true from the
-    // moment the prompt is sent until an explicit rejection or a record that
-    // settles or ends the turn. A transport loss, a Pi exit, the deadline or cancellation in that
-    // window leaves the provider's spend unknown.
+    // moment the prompt is sent until an explicit rejection or the session
+    // settles (a provider error Pi retries keeps it set). A transport loss, a
+    // Pi exit, the deadline or cancellation in that window leaves the
+    // provider's spend unknown.
     let in_flight = std::sync::atomic::AtomicBool::new(false);
+    // The session cost Pi has reported, and the part of it already charged
+    // durably; whatever lies between is charged when the session ends.
+    let observed = std::sync::atomic::AtomicU64::new(0);
+    let persisted = std::sync::atomic::AtomicU64::new(0);
     let operation = async {
         process
             .command("state-1", "get_state", json!({}))
@@ -974,7 +1079,15 @@ async fn pipeline(
             return Err("reviewer startup handshake rejected".to_owned());
         }
         // Spend is uncertain from the moment the prompt is sent: Pi may start
-        // billable work before its acknowledgement is read or persisted.
+        // billable work before its acknowledgement is read or persisted. The
+        // durable marker comes first, so restart recovery reserves unknown
+        // spend exactly when this flag would.
+        state
+            .store
+            .lock()
+            .map_err(|e| e.to_string())?
+            .record_review_prompt_sent(id, hash, &session)
+            .map_err(|e| format!("cannot persist the reviewer prompt marker: {e}"))?;
         in_flight.store(true, std::sync::atomic::Ordering::Relaxed);
         process
             .command("prompt-1", "prompt", json!({"message":prompt}))
@@ -982,9 +1095,11 @@ async fn pipeline(
             .map_err(|e| e.to_string())?;
         let mut accepted = false;
         let mut output = None;
-        let mut cost = 0u64;
+        let mut failure: Option<String> = None;
+        let mut cost_unreported = false;
         let mut session_usage = luuna_engine_pi::SessionUsage::default();
         let mut tool_events = 0usize;
+        let mut durable = charge(0)?;
         loop {
             let record = process.next().await.map_err(|e| e.to_string())?;
             record_reviewer_tool(state, id, &session, &record, &mut tool_events);
@@ -992,8 +1107,38 @@ async fn pipeline(
                 return Err("scope extension failed; session refused".to_owned());
             }
             let total = session_usage.observe(&record);
-            charge(total.saturating_sub(cost))?;
-            cost = total;
+            observed.store(total, std::sync::atomic::Ordering::Relaxed);
+            if session_usage.cost_unreported() && !cost_unreported {
+                cost_unreported = true;
+                state
+                    .event(
+                        id,
+                        luuna_storage::COST_UNREPORTED_EVENT,
+                        json!({"source":"reviewer","reviewer_session":session,"reason":crate::writer::COST_UNREPORTED_REASON}),
+                    )
+                    .map_err(|_| "cannot persist reviewer usage".to_owned())?;
+            }
+            // Every record is checked against the approved budgets, but usage
+            // is persisted only when a message completes, the session ends or
+            // the check fails: streaming deltas do not each become a
+            // transaction and a `candidate.usage` event.
+            let pending = total.saturating_sub(persisted.load(std::sync::atomic::Ordering::Relaxed));
+            let live = luuna_domain::BudgetUsage {
+                cost_usd_micros: durable.cost_usd_micros.saturating_add(pending),
+                elapsed_seconds: durable.elapsed_seconds.saturating_add(
+                    crate::writer::charged_seconds(started.elapsed())
+                        .saturating_sub(charged.load(std::sync::atomic::Ordering::Relaxed)),
+                ),
+                ..durable
+            };
+            if matches!(
+                record.kind.as_str(),
+                "message_end" | "agent_end" | "agent_settled"
+            ) || plan.budgets.check(live).is_err()
+            {
+                persisted.store(total, std::sync::atomic::Ordering::Relaxed);
+                durable = charge(pending)?;
+            }
             if record.kind == "response" && record.raw["id"] == "prompt-1" {
                 if record.raw["success"] != true || record.raw["data"]["disposition"] == "handled" {
                     in_flight.store(false, std::sync::atomic::Ordering::Relaxed);
@@ -1001,15 +1146,16 @@ async fn pipeline(
                 }
                 accepted = true;
             }
-            if let Some(error) = record.model_error() {
-                in_flight.store(false, std::sync::atomic::Ordering::Relaxed);
-                return Err(error);
-            }
             if record.kind == "extension_ui_request" {
                 in_flight.store(false, std::sync::atomic::Ordering::Relaxed);
                 return Err("reviewer requested unsupported interactive input".into());
             }
-            if record.kind == "message_end" {
+            // A provider error is provisional, as for the writer: Pi retries a
+            // transient failure itself (`agent_end` with `willRetry`), and a
+            // later successful message clears it. The verdict waits for the
+            // session to settle.
+            if record.kind == "message_end" && record.raw["message"]["role"] == "assistant" {
+                failure = record.model_error();
                 if let Some(text) = record.assistant_text() {
                     if text.len() > 256 * 1024 {
                         return Err("review response too large".into());
@@ -1017,10 +1163,26 @@ async fn pipeline(
                     output = Some(text);
                 }
             }
+            if record.kind == "agent_end" && record.raw["willRetry"] != true {
+                if let Some(error) = record.model_error() {
+                    failure = Some(error);
+                }
+            }
             if record.kind == "agent_settled" {
                 in_flight.store(false, std::sync::atomic::Ordering::Relaxed);
+                // Pi does no further model work and the usage above is
+                // charged: restart recovery has nothing to reserve.
+                state
+                    .store
+                    .lock()
+                    .map_err(|e| e.to_string())?
+                    .record_review_usage_settled(id, hash, &session)
+                    .map_err(|e| format!("cannot persist the reviewer settlement: {e}"))?;
                 if !accepted || record.raw["aborted"] == true {
                     return Err("reviewer settled without accepted successful work".into());
+                }
+                if let Some(error) = failure {
+                    return Err(error);
                 }
                 return output.ok_or_else(|| "reviewer returned no structured result".into());
             }
@@ -1031,6 +1193,10 @@ async fn pipeline(
         .stop()
         .await
         .map_err(|e| format!("reviewer cleanup failed: {e}"));
+    // Reported spend not yet charged when the session ended.
+    let pending = observed
+        .load(std::sync::atomic::Ordering::Relaxed)
+        .saturating_sub(persisted.load(std::sync::atomic::Ordering::Relaxed));
     // Unreported spend is reserved as restart recovery reserves it: the rest of
     // the approved cost budget is charged, so no repair or re-validation can
     // spend what the provider may already have billed.
@@ -1044,7 +1210,8 @@ async fn pipeline(
         charge(
             plan.budgets
                 .cost_usd_micros
-                .saturating_sub(usage.cost_usd_micros),
+                .saturating_sub(usage.cost_usd_micros)
+                .max(pending),
         )?;
         let reason = result.as_ref().err().cloned().unwrap_or_default();
         stopped?;
@@ -1052,7 +1219,7 @@ async fn pipeline(
             "{reason}; reviewer stopped before reporting its final usage, so the remaining approved cost budget is reserved"
         ));
     }
-    charge(0)?;
+    charge(pending)?;
     stopped?;
     if *cancel.borrow() {
         return Err("cancelled before reviewer verdict".into());
@@ -1101,7 +1268,7 @@ async fn pipeline(
         .finish_candidate_review(id, run.revision, hash, &review)
         .map_err(|e| e.to_string())?;
     Ok(())
-    }
+    })
     .await;
     // An error exit is charged here. A pipeline that returns Ok ended in
     // `finish_candidate_validation` (failed or blocked checks) or

@@ -955,6 +955,8 @@ async function hardKillDuringReviewReservesSpend(name) {
   record(`${name}: validation is accepted`, accepted.status === 202, `status ${accepted.status}`);
   const reviewStarted = await waitForEvent(runId, (event) => event.type === "review.started", (runTimeoutSeconds + 60) * 1000);
   const pid = reviewStarted?.payload?.pid;
+  // Provider spend is unknown only once the reviewer prompt is sent; the runtime records that durably first.
+  await waitForEvent(runId, (event) => event.type === "review.prompt_sent" && event.payload?.reviewer_session === reviewStarted?.payload?.reviewer_session, (runTimeoutSeconds + 60) * 1000);
   const before = await api("GET", `/runs/${runId}/candidate`);
   const costBefore = before.body?.evidence?.cost_usd_micros ?? 0;
   runtime.kill("SIGKILL");
