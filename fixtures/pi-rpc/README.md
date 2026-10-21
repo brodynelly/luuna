@@ -15,7 +15,10 @@ scenarios are named by `fixture:<name>` markers that tests place in the
 acceptance criteria; the reviewer branch answers `fixture:review_*` markers
 with a structured verdict. The `repair_in_scope` writer only repairs when its
 prompt quotes the failing check output, so the runtime's repair feedback
-contract is exercised rather than assumed.
+contract is exercised rather than assumed. `review_malformed_once` answers a
+candidate's first validation generation with malformed text and every later
+generation with a valid pass, so a fresh validation generation after an
+invalid review can be exercised against one immutable ticket.
 
 The real compatibility probe is `cargo run -p luuna-engine-pi --example probe`.
 Set `LUUNA_PI_COMMAND` to the installed `pi` executable, or to Node and provide

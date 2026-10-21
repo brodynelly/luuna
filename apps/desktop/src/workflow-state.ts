@@ -5,7 +5,12 @@ export function canCancel(state: RunState, candidateActive = false): boolean {
 }
 
 export function canValidate(run: RunRecord, view: CandidateView): boolean {
-  return !view.active && ((run.state === "validating" && view.evidence?.status === "pending") || (run.state === "interrupted" && view.evidence?.status === "interrupted"));
+  return !view.active && ((run.state === "validating" && view.evidence?.status === "pending") || (run.state === "interrupted" && view.evidence?.status === "interrupted") || canRevalidate(run, view));
+}
+
+/** A failed candidate whose checks passed and whose reviewer left no verdict; the runtime decides. */
+export function canRevalidate(run: RunRecord, view: CandidateView): boolean {
+  return !view.active && run.state === "failed" && view.evidence?.status === "failed" && view.revalidate_allowed === true;
 }
 
 /** Run and candidate reads may straddle a transition; reconcile before stopping. */

@@ -325,6 +325,8 @@ const profile = mode === "fixture"
       blocking: ticket("Blocking review probe", "Make src/main.py print the greeting.", ["fixture:write_in_scope", "fixture:review_blocking", "main prints the greeting"], ["src/main.py"], 2),
       cancel: ticket("Cancellation probe", "Make src/main.py print the greeting.", ["fixture:review_hold", "main prints the greeting"], ["src/main.py"], 1),
       restart: ticket("Restart probe", "Make src/main.py print the greeting.", ["fixture:review_hold", "main prints the greeting"], ["src/main.py"], 1),
+      // Fixture only: no real provider can be made to return invalid reviewer output on demand.
+      revalidate: ticket("Re-validation probe", "Make src/main.py print the greeting.", ["fixture:write_in_scope", "fixture:review_malformed_once", "main prints the greeting"], ["src/main.py"], 1),
     },
   }
   : {
@@ -368,6 +370,7 @@ let finalStop = { exited: false };
 let startingRuntime = null;
 // Scenarios after which the verified Pi tree or launcher no longer matched (real mode).
 const piTreeChangedAfter = [];
+let scenariosRun = 0;
 
 try {
   // Cargo runs the checkout's build scripts and whatever its config names, with host permissions
@@ -411,7 +414,8 @@ try {
   await scenario("blocking", blockingFindingsAreBoundedByAutomaticRepair);
   await scenario("cancel", cancellationDuringReviewPreservesChecks);
   await scenario("restart", hardKillDuringReviewReservesSpend);
-  record("the verified Pi tree and launcher were unchanged after every scenario", piTreeChangedAfter.length === 0, mode === "fixture" ? "synthetic fixture; not provider evidence" : piTreeChangedAfter.length === 0 ? "re-hashed after each of the five scenarios" : `changed after: ${piTreeChangedAfter.join(", ")}`);
+  if (mode === "fixture") await scenario("revalidate", invalidReviewGetsAFreshGenerationInPlace);
+  record("the verified Pi tree and launcher were unchanged after every scenario", piTreeChangedAfter.length === 0, mode === "fixture" ? "synthetic fixture; not provider evidence" : piTreeChangedAfter.length === 0 ? `re-hashed after each of the ${scenariosRun} scenarios` : `changed after: ${piTreeChangedAfter.join(", ")}`);
   await developerCheckoutUntouched();
   await gracefulShutdown();
 } catch (error) {
@@ -711,6 +715,7 @@ async function registerProjectAndBaseline() {
 
 async function scenario(name, body) {
   console.log(`\n== ${name}`);
+  scenariosRun += 1;
   // The provider credential is handed only to the verified Pi: once the tree or launcher has
   // changed, no further scenario starts a provider session.
   if (piTreeChangedAfter.length > 0) {
@@ -795,7 +800,7 @@ async function approvedFeatureIsCheckedAndIndependentlyReviewed(name) {
   record(`${name}: a fresh independent reviewer session reviewed the exact candidate`, Boolean(ev.review) && ev.review.candidate_hash === hash && typeof ev.review.reviewer_session === "string" && ev.review.reviewer_session.startsWith("review-") && reviewStarted?.payload?.reviewer_session === ev.review.reviewer_session && ev.review.reviewer_session !== ev.implementer_session, `reviewer=${ev.review?.reviewer_session} implementer=${ev.implementer_session} verdict=${ev.review?.verdict}`);
   record(`${name}: candidate reached reviewed with evidence generation 1 and durable usage`, ev.status === "reviewed" && (await api("GET", `/runs/${runId}`)).body.state === "reviewed" && ev.validation_generation === 1 && ev.cost_usd_micros >= 0 && settled.active === false, `status=${ev.status} generation=${ev.validation_generation} cost_usd_micros=${ev.cost_usd_micros} elapsed_seconds=${ev.elapsed_seconds} reason=${truncate(ev.reason ?? "", 160)}`);
   const again = await validate(runId, hash);
-  record(`${name}: a reviewed candidate is not re-validated in place`, again.status !== 202, `status ${again.status}`);
+  record(`${name}: a reviewed candidate is not re-validated in place`, again.status !== 202 && settled.revalidate_allowed === false, `status ${again.status} revalidate_allowed=${settled.revalidate_allowed}`);
   if (mode === "real") note(name, `real reviewer verdict=${ev.review?.verdict} findings=${JSON.stringify(summarizeFindings(ev.review?.findings))}`);
 }
 
@@ -816,7 +821,7 @@ async function failingCheckRequiresManualRepairAndFreshEvidence(name) {
   }
   record(`${name}: a failing required check fails the candidate before any review and keeps the run repairable`, first.evidence.status === "failed" && failedCheck && first.evidence.review == null && !firstEvents.some((event) => event.type === "review.started") && first.repair_allowed === true, `status=${first.evidence.status} results=${JSON.stringify(summarizeResults(first.evidence.results))} repair_allowed=${first.repair_allowed}`);
   const refused = await validate(runId, hash1);
-  record(`${name}: a failed candidate cannot be re-validated; a new revision is required`, refused.status !== 202, `status ${refused.status}`);
+  record(`${name}: a candidate with a failed required check cannot be re-validated; a new revision is required`, refused.status !== 202 && first.revalidate_allowed === false, `status ${refused.status} revalidate_allowed=${first.revalidate_allowed}`);
   const repair = await api("POST", `/runs/${runId}/repair`, { candidate_hash: hash1, provider: profile.provider, model: profile.model });
   record(`${name}: manual repair of the exact failed candidate is admitted through the approval gate`, repair.status === 202, `status ${repair.status} ${repair.status === 202 ? "" : JSON.stringify(repair.body)}`);
   if (repair.status !== 202) return;
@@ -888,6 +893,33 @@ async function blockingFindingsAreBoundedByAutomaticRepair(name) {
   note(name, ev.review?.verdict && ev.review.verdict !== "passed"
     ? `the real reviewer did not pass the out-of-scope README requirement (verdict=${ev.review.verdict}, blocking finding=${blocking}): ${JSON.stringify(summarizeFindings(ev.review?.findings))}`
     : `the real reviewer passed the candidate despite the unmet README requirement (verdict=${ev.review?.verdict}); the scenario failed because no non-passing verdict was observed`);
+}
+
+/** Fixture only. A reviewer that leaves no verdict after passed checks costs a fresh generation, not a revision or an attempt. */
+async function invalidReviewGetsAFreshGenerationInPlace(name) {
+  const { summary, view } = await approvedCandidate(name);
+  const runId = summary.run_id;
+  const hash = view.evidence.candidate.hash;
+  record(`${name}: a pending candidate is validated, not re-validated`, view.revalidate_allowed === false, `revalidate_allowed=${view.revalidate_allowed}`);
+  const accepted = await validate(runId, hash);
+  record(`${name}: validation of the exact candidate is accepted`, accepted.status === 202, `status ${accepted.status}`);
+  const first = await candidateSettled(runId);
+  const firstEvents = await eventsOf(runId);
+  summary.validation_g1 = describeEvidence(first, firstEvents, firstEvents.find((event) => event.type === "review.started") ?? null);
+  const ev1 = first.evidence;
+  record(`${name}: invalid reviewer output after passed checks fails the candidate without a verdict, leaves repair closed at max_attempts=1 and opens re-validation`, ev1.status === "failed" && allRequiredPassed(ev1.results) && ev1.review == null && /invalid structured reviewer response/.test(ev1.reason ?? "") && ev1.validation_generation === 1 && first.repair_allowed === false && first.revalidate_allowed === true, `status=${ev1.status} generation=${ev1.validation_generation} repair_allowed=${first.repair_allowed} revalidate_allowed=${first.revalidate_allowed} reason=${truncate(ev1.reason ?? "", 160)}`);
+  const stale = await validate(runId, "sha256:" + "0".repeat(64));
+  const again = await validate(runId, hash);
+  record(`${name}: re-validation names the exact candidate; a stale hash is refused and the exact hash is accepted`, (stale.status === 409 || stale.status === 422) && again.status === 202, `stale=${stale.status} exact=${again.status} ${again.status === 202 ? "" : JSON.stringify(again.body)}`);
+  if (again.status !== 202) return;
+  const second = await candidateSettled(runId);
+  const events = await eventsOf(runId);
+  const starts = events.filter((event) => event.type === "candidate.validation_started");
+  const reviewers = events.filter((event) => event.type === "review.started").map((event) => event.payload?.reviewer_session);
+  summary.validation_g2 = describeEvidence(second, events, events.findLast((event) => event.type === "review.started") ?? null);
+  const ev2 = second.evidence;
+  const usage = (await api("GET", `/runs/${runId}/attempts`)).body;
+  record(`${name}: generation 2 of the same revision 1 ran fresh checks and a fresh reviewer and reached reviewed without a writer attempt`, ev2.status === "reviewed" && (await api("GET", `/runs/${runId}`)).body.state === "reviewed" && ev2.candidate.hash === hash && ev2.candidate.revision === 1 && ev2.validation_generation === 2 && allRequiredPassed(ev2.results) && ev2.results.every((result) => result.artifact_refs.every((ref) => ref.startsWith("c1-g2-"))) && ev2.review?.verdict === "passed" && ev2.review?.candidate_hash === hash && starts.length === 2 && starts[1].payload?.revalidation === true && reviewers.length === 2 && reviewers[0] !== reviewers[1] && ev2.review?.reviewer_session === reviewers[1] && Array.isArray(usage) && usage.length === 1 && second.revalidate_allowed === false && second.repair_allowed === false, `status=${ev2.status} revision=${ev2.candidate?.revision} generation=${ev2.validation_generation} verdict=${ev2.review?.verdict} starts=${starts.length} reviewers=${reviewers.length} attempts=${Array.isArray(usage) ? usage.length : "?"} revalidate_allowed=${second.revalidate_allowed}`);
 }
 
 async function cancellationDuringReviewPreservesChecks(name) {
@@ -1070,6 +1102,7 @@ function describeEvidence(view, events, reviewStarted) {
     status: ev.status,
     active: view.active,
     repair_allowed: view.repair_allowed,
+    revalidate_allowed: view.revalidate_allowed,
     candidate: ev.candidate ? { revision: ev.candidate.revision, hash: ev.candidate.hash } : null,
     implementer_session: ev.implementer_session,
     validation_generation: ev.validation_generation,

@@ -1124,3 +1124,237 @@ fn exhausted_repairs_pause_failed_candidates_and_refresh_an_existing_pause_reaso
             .is_err());
     }
 }
+
+#[test]
+fn a_failed_review_with_passed_checks_gets_a_fresh_generation_not_a_new_revision() {
+    let (mut store, plan, candidate) = candidate_fixture_at(":memory:", 1);
+    begin_validation(&mut store, &candidate);
+    store
+        .record_candidate_check(
+            "workflow-1",
+            &candidate.hash,
+            &candidate_check(&candidate, CheckStatus::Passed),
+        )
+        .unwrap();
+    finish_validation(&mut store, &candidate);
+    let reviewing = store.get_run("workflow-1").unwrap().unwrap();
+    assert_eq!(reviewing.state, RunState::Reviewing);
+    // Re-validation is not a way to abandon an active review.
+    assert!(store
+        .can_candidate_revalidate("workflow-1", &candidate.hash)
+        .is_err());
+    store
+        .fail_candidate_stage(
+            &reviewing.id,
+            reviewing.revision,
+            &candidate.hash,
+            RunState::Failed,
+            "invalid structured reviewer response: expected value",
+        )
+        .unwrap();
+    let failed = store.get_run("workflow-1").unwrap().unwrap();
+    assert_eq!(failed.state, RunState::Failed);
+    let usage_before = store.workflow_usage("workflow-1").unwrap();
+    // The single writer attempt is spent, so repair is closed; the fresh
+    // generation is the only recovery and it costs no attempt.
+    assert!(store
+        .can_candidate_repair("workflow-1", &candidate.hash)
+        .is_err());
+    store
+        .can_candidate_revalidate("workflow-1", &candidate.hash)
+        .unwrap();
+    assert!(store
+        .can_candidate_revalidate("workflow-1", &format!("sha256:{}", "0".repeat(64)))
+        .is_err());
+    let resumed = store
+        .begin_candidate_validation(&failed.id, failed.revision, &candidate.hash)
+        .unwrap();
+    assert_eq!(resumed.validation_generation, 2);
+    assert_eq!(resumed.candidate.revision, 1);
+    assert_eq!(resumed.candidate.hash, candidate.hash);
+    assert_eq!(resumed.status, CandidateStatus::Validating);
+    assert!(resumed.results.is_empty() && resumed.review.is_none());
+    assert!(resumed.reason.is_none());
+    let run = store.get_run("workflow-1").unwrap().unwrap();
+    assert_eq!(run.state, RunState::Validating);
+    assert_eq!(run.revision, failed.revision + 1);
+    let started = store.events_after(&run.id, 0).unwrap().pop().unwrap();
+    assert_eq!(started.event_type, "candidate.validation_started");
+    assert_eq!(started.payload["generation"], 2);
+    assert_eq!(started.payload["revalidation"], true);
+    let usage = store.workflow_usage("workflow-1").unwrap();
+    assert_eq!(usage.attempts, usage_before.attempts);
+    assert!(usage.elapsed_seconds >= usage_before.elapsed_seconds);
+    assert_eq!(usage.cost_usd_micros, usage_before.cost_usd_micros);
+    // Generation 1's passed check does not carry over: the gate needs fresh evidence.
+    let run = store.get_run("workflow-1").unwrap().unwrap();
+    let premature = store.finish_candidate_validation(&run.id, run.revision, &candidate.hash);
+    assert!(premature.is_ok());
+    let starved = store.current_candidate("workflow-1").unwrap().unwrap();
+    assert_eq!(starved.status, CandidateStatus::Failed);
+    assert!(starved
+        .reason
+        .unwrap()
+        .contains("lacks required command evidence"));
+    assert!(store
+        .can_candidate_revalidate("workflow-1", &candidate.hash)
+        .is_err());
+    let _ = plan;
+}
+
+#[test]
+fn only_an_unreviewed_candidate_with_passed_checks_can_be_revalidated_in_place() {
+    // A failed required check needs repair, never a fresh generation.
+    let (mut store, _, candidate) = candidate_fixture();
+    begin_validation(&mut store, &candidate);
+    store
+        .record_candidate_check(
+            "workflow-1",
+            &candidate.hash,
+            &candidate_check(&candidate, CheckStatus::Failed),
+        )
+        .unwrap();
+    finish_validation(&mut store, &candidate);
+    assert_eq!(
+        store.get_run("workflow-1").unwrap().unwrap().state,
+        RunState::Failed
+    );
+    let error = store
+        .can_candidate_revalidate("workflow-1", &candidate.hash)
+        .unwrap_err();
+    assert!(error.to_string().contains("repair"), "{error}");
+    let failed = store.get_run("workflow-1").unwrap().unwrap();
+    assert!(store
+        .begin_candidate_validation(&failed.id, failed.revision, &candidate.hash)
+        .is_err());
+    assert!(store
+        .can_candidate_repair("workflow-1", &candidate.hash)
+        .is_ok());
+
+    // A recorded verdict, even a failing one, is review evidence; the paused
+    // candidate repairs or re-plans.
+    let (mut store, _, candidate) = candidate_fixture();
+    begin_validation(&mut store, &candidate);
+    store
+        .record_candidate_check(
+            "workflow-1",
+            &candidate.hash,
+            &candidate_check(&candidate, CheckStatus::Passed),
+        )
+        .unwrap();
+    finish_validation(&mut store, &candidate);
+    let run = store.get_run("workflow-1").unwrap().unwrap();
+    let mut verdict = review(&candidate);
+    verdict.verdict = ReviewVerdict::ChangesRequired;
+    verdict.findings = vec![Finding {
+        severity: Severity::Blocking,
+        path: "src/main.rs".into(),
+        line: 1,
+        explanation: "seeded".into(),
+        evidence: vec!["seen".into()],
+    }];
+    store
+        .finish_candidate_review(&run.id, run.revision, &candidate.hash, &verdict)
+        .unwrap();
+    let paused = store.get_run("workflow-1").unwrap().unwrap();
+    assert_eq!(paused.state, RunState::Paused);
+    assert!(store
+        .can_candidate_revalidate("workflow-1", &candidate.hash)
+        .is_err());
+    assert!(store
+        .begin_candidate_validation(&paused.id, paused.revision, &candidate.hash)
+        .is_err());
+
+    // Reserved unreported reviewer spend closes the gate: no new budget.
+    let (mut store, plan, candidate) = candidate_fixture();
+    begin_validation(&mut store, &candidate);
+    store
+        .record_candidate_check(
+            "workflow-1",
+            &candidate.hash,
+            &candidate_check(&candidate, CheckStatus::Passed),
+        )
+        .unwrap();
+    finish_validation(&mut store, &candidate);
+    let run = store.get_run("workflow-1").unwrap().unwrap();
+    store
+        .fail_candidate_stage(
+            &run.id,
+            run.revision,
+            &candidate.hash,
+            RunState::Failed,
+            "reviewer stopped before reporting its final usage, so the remaining approved cost budget is reserved",
+        )
+        .unwrap();
+    let usage = store.workflow_usage("workflow-1").unwrap();
+    store
+        .charge_candidate_usage(
+            "workflow-1",
+            &candidate.hash,
+            0,
+            plan.budgets.cost_usd_micros - usage.cost_usd_micros - 1,
+        )
+        .unwrap();
+    store
+        .can_candidate_revalidate("workflow-1", &candidate.hash)
+        .unwrap();
+    store
+        .charge_candidate_usage("workflow-1", &candidate.hash, 0, 1)
+        .unwrap();
+    let error = store
+        .can_candidate_revalidate("workflow-1", &candidate.hash)
+        .unwrap_err();
+    assert!(error.to_string().contains("budget"), "{error}");
+    let failed = store.get_run("workflow-1").unwrap().unwrap();
+    assert_eq!(failed.state, RunState::Failed);
+    assert!(store
+        .begin_candidate_validation(&failed.id, failed.revision, &candidate.hash)
+        .is_err());
+
+    // A ticket revised after the review failed invalidates the plan binding:
+    // the predicate and the gate agree, and the client is not offered a
+    // control the runtime would refuse.
+    let (mut store, _, candidate) = candidate_fixture();
+    begin_validation(&mut store, &candidate);
+    store
+        .record_candidate_check(
+            "workflow-1",
+            &candidate.hash,
+            &candidate_check(&candidate, CheckStatus::Passed),
+        )
+        .unwrap();
+    finish_validation(&mut store, &candidate);
+    let run = store.get_run("workflow-1").unwrap().unwrap();
+    store
+        .fail_candidate_stage(
+            &run.id,
+            run.revision,
+            &candidate.hash,
+            RunState::Failed,
+            "invalid structured reviewer response: trailing characters",
+        )
+        .unwrap();
+    store
+        .can_candidate_revalidate("workflow-1", &candidate.hash)
+        .unwrap();
+    store
+        .update_ticket(
+            "ticket-1",
+            1,
+            "revised",
+            "New intent",
+            &["new criterion".into()],
+        )
+        .unwrap();
+    assert!(store
+        .can_candidate_revalidate("workflow-1", &candidate.hash)
+        .is_err());
+    let failed = store.get_run("workflow-1").unwrap().unwrap();
+    assert!(store
+        .begin_candidate_validation(&failed.id, failed.revision, &candidate.hash)
+        .is_err());
+    assert_eq!(
+        store.get_run("workflow-1").unwrap().unwrap().state,
+        RunState::Failed
+    );
+}

@@ -847,6 +847,22 @@ pub fn detect_tests_in(text: &str) -> Option<u64> {
             found = true;
             continue;
         }
+        // unittest: "Ran 3 tests in 0.002s" / "Ran 1 test in 0.000s" / "NO TESTS RAN"
+        // (Python 3.12+ prints the latter for an empty suite and exits 5).
+        if let Some(rest) = line.strip_prefix("Ran ") {
+            let mut words = rest.split_whitespace();
+            if let (Some(Ok(n)), Some("test" | "tests")) =
+                (words.next().map(str::parse::<u64>), words.next())
+            {
+                found = true;
+                total += n;
+                continue;
+            }
+        }
+        if line == "NO TESTS RAN" {
+            found = true;
+            continue;
+        }
         // vitest/jest: "Tests  13 passed (13)" / "No test files found"
         if line.contains("No test files found") || line.contains("No tests found") {
             found = true;
@@ -929,6 +945,22 @@ mod tests {
             Some(5)
         );
         assert_eq!(detect_tests_in("      Tests  13 passed (13)\n"), Some(13));
+        assert_eq!(
+            detect_tests_in(
+                "test_greeting (test_messages.MessagesTest.test_greeting) ... ok\n\n----------------------------------------------------------------------\nRan 2 tests in 0.001s\n\nOK\n"
+            ),
+            Some(2)
+        );
+        assert_eq!(
+            detect_tests_in("Ran 1 test in 0.000s\n\nFAILED (failures=1)\n"),
+            Some(1)
+        );
+        assert_eq!(
+            detect_tests_in("Ran 0 tests in 0.000s\n\nNO TESTS RAN\n"),
+            Some(0)
+        );
+        assert_eq!(detect_tests_in("Ran out of disk space\n"), None);
+        assert_eq!(detect_tests_in("Ran 3 testers in the room\n"), None);
         assert_eq!(
             detect_tests_in("No test files found, exiting with code 1\n"),
             Some(0)
