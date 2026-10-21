@@ -8,7 +8,7 @@ Date: 2026-10-21. Status: current; decision recorded in [ADR 0013](decisions/001
 2. **Six tones, three channels.** Every state is carried by a colour family, a shape mark and the unchanged runtime text. Colour is never the only signal, and no tone has two meanings.
 3. **Identities are shown whole.** Hashes, commits, trees, fingerprints, sessions, worktree paths and artifact ids render in `code`: monospace, wrapping anywhere. CSS never truncates them. The only short forms are the leading-prefix slices that summary rows already make in code.
 4. **Reason, then next step.** A recorded reason carries the tone of the state it explains. The next allowed step follows it on its own line, ruled in lavender.
-5. **Interruption is not failure.** Outages, restarts, interrupted work and abandoned leases use the interrupted tone (plum, dashed ring), never danger. Their work is durable.
+5. **Interruption is not failure.** Outages, restarts, interrupted work and abandoned leases use the interrupted tone (plum, pause bars), never danger. Their work is durable.
 6. **Lavender means the developer acts; cyan means the runtime works.** The brand lavender marks primary actions, the next step, focus and selection. The active tone is cyan, so runtime activity is never confused with a call to action. An action group has at most one primary button.
 7. **Tokens only.** Literal colours, lengths and durations live in `design/tokens.css` alone. Every colour exists in the dark and the light scheme, and every text pair meets WCAG 2.1 AA.
 8. **One page, one outline.** Heading levels follow the document outline in DOM order (h1, h2 per panel, h3 per subpanel, h4 inside a candidate). Visual order equals DOM order at every width.
@@ -57,7 +57,7 @@ Dark is the default; the light scheme redefines every colour under `@media (pref
 
 Each tone has `--tone-<name>-fg` (text), `-bg` (tint), `-border` and `-mark` (shape) in both schemes; see `tokens.css`.
 
-Scales: type `--text-2xs` 11 px (badges, eyebrow, meta), `--text-xs` 12 px (evidence, labels, code), `--text-sm` 13 px (controls, card text, h4), `--text-md` 14 px (body, h3), `--text-lg` 16 px (h2), `--text-xl` fluid 26 to 34 px (h1); weights 400, 550, 650; space on a 4 px rhythm (`--space-1` 4 px to `--space-7` 48 px, plus 2 px and 6 px half steps); radii 4, 7, 11 px; `--border-width` 1 px, `--rule-width` 3 px, `--focus-width` 2 px; controls 34 px (28 px small); layout `--layout-max` 1280 px with a gutter of 40, 24 and 16 px at full width, 920 px and 680 px; textareas start at their `rows` with a 68 px floor; `--scroll-max` 28 rem and `--plan-max` 24 rem for bounded regions; one motion duration, `--duration-fast` 120 ms, which is 0 ms under reduced motion.
+Scales: type `--text-2xs` 11 px (badges, eyebrow, meta), `--text-xs` 12 px (evidence, labels, code), `--text-sm` 13 px (controls, card text, h4), `--text-md` 14 px (body, h3), `--text-lg` 16 px (h2), `--text-xl` fluid 26 to 34 px (h1); weights 400, 550, 650; space on a 4 px rhythm (`--space-1` 4 px to `--space-7` 48 px, plus 2 px and 6 px half steps); radii 4, 7, 11 px; `--border-width` 1 px, `--rule-width` 3 px, `--focus-width` 2 px; controls and single-line fields 34 px (28 px small buttons); layout `--layout-max` 1280 px with a gutter of 40, 24 and 16 px at full width, 920 px and 680 px; textareas start at their `rows` with a 68 px floor; `--scroll-max` 28 rem and `--plan-max` 24 rem for bounded regions; one motion duration, `--duration-fast` 120 ms, which is 0 ms under reduced motion.
 
 ## Tones
 
@@ -68,7 +68,7 @@ Scales: type `--text-2xs` 11 px (badges, eyebrow, meta), `--text-xs` 12 px (evid
 | danger (rose) | failed or blocked evidence | diamond | run `failed`, `testing_blocked`; candidate `failed`, `testing_blocked`; check and baseline `failed`, `blocked`; verdict `changes_required`, `blocked`; severity `blocking` |
 | attention (amber) | waiting on the developer | triangle | run `plan_ready`, `approved`, `paused`; candidate `paused`; severity `warning`; recipe confidence `inferred`; project `unconfirmed` |
 | neutral (slate) | recorded, not evidence | bar | run `queued`, `completed`, `cancelled`, `discovered`; candidate `pending`, `cancelled`; check `cancelled`; severity `info`; lease `released`; connection offline |
-| interrupted (plum) | stopped by an outage or restart, recoverable | dashed ring | `interrupted` everywhere; lease `abandoned`; connection reconnecting |
+| interrupted (plum) | stopped by an outage or restart, recoverable | pause bars | `interrupted` everywhere; lease `abandoned`; connection reconnecting |
 
 `design/tone.ts` holds these as `Record<Union, Tone>` maps over the `@luuna/api-client` unions, so a new runtime state fails `npm run typecheck` until it is given a tone. Descriptor chips (`manifest r2`, `ticket r1 · …`, `required · observed`) take no tone and render as outlined chips.
 
@@ -89,7 +89,7 @@ Scales: type `--text-2xs` 11 px (badges, eyebrow, meta), `--text-xs` 12 px (evid
 | Form footer | `.form-footer` > `small` + primary | Hint left, primary right even when it wraps. |
 | Form group | `.form-group` | A bordered, unfilled group around a form (register, ticket). |
 | Action row | `.actions` | Wrapping row; a trailing `small` takes the full row; `.danger` goes to the end. |
-| Facts | `dl.facts` > `div` > `dt` + `dd` | Full identities in `dd code`. Term column 150 px, one column at 680 px. |
+| Facts | `dl.facts` > `div` > `dt` + `dd` | Full identities in `dd code`. Term column 150 px, one column at 680 px (at 920 px inside a candidate, where every value is a full hash). |
 | Record list | `ul.record-list` > `li.record` | Bordered rows: baselines, recipes, tickets, checks, findings. A nested record alternates its surface. `data-tone` on a leaf record (baseline, check, finding) adds a toned rule on its leading edge; a ticket card carries its state in its run badge, not a page-length rule. `.record-headed` puts the title and badge on the first line and every later child on its own full-width line. |
 | Selectable card | `button.run-card[aria-pressed]` > `.run-prompt` + `.run-meta` | Selection shows by fill, border and a lavender inset rule, not colour alone. `.run-prompt` may clamp prose to two lines, never identities. |
 | Reason and next step | `.failure-note[data-tone]` then `.recovery-note` | The reason carries an 8 px-inset rule and text in the tone of the state it explains; the next step follows flush under it, ruled in lavender, whether nested in the reason or its next sibling. |

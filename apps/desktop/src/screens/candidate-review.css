@@ -46,6 +46,7 @@
 .candidate-review .review-findings > .finding-record > .finding-evidence { display: grid; gap: var(--space-0-5); margin: 0; padding-left: var(--space-4); color: var(--color-text-muted); overflow-wrap: anywhere; }
 
 /* The component's one-column facts at the narrowest width. */
-@media (max-width: 680px) {
+/* Below 920 px every candidate identity stacks under its term, so values align within a list. */
+@media (max-width: 920px) {
   .candidate-review .facts > div { display: grid; }
 }

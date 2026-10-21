@@ -67,9 +67,10 @@ input:where(:not([type="checkbox"], [type="radio"])), textarea {
   color: var(--color-text);
   font-size: var(--text-sm);
   font-weight: var(--weight-regular);
-  line-height: var(--leading);
+  line-height: var(--field-line);
 }
-textarea { min-height: var(--textarea-min); resize: vertical; }
+/* Single-line fields are exactly --control-height whatever their font; textareas read as prose. */
+textarea { min-height: var(--textarea-min); line-height: var(--leading); resize: vertical; }
 input[spellcheck="false"], textarea[spellcheck="false"] { font-family: var(--font-mono); font-size: var(--text-xs); }
 input::placeholder, textarea::placeholder { color: var(--color-text-subtle); font-family: var(--font-sans); font-size: var(--text-sm); font-weight: var(--weight-regular); }
 input:disabled, textarea:disabled { border-color: var(--color-border); background: var(--color-field-disabled); color: var(--color-text-disabled); cursor: not-allowed; }

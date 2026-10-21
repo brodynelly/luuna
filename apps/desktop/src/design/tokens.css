@@ -116,6 +116,7 @@
 
   /* Controls and layout. */
   --control-height: 34px;
+  --field-line: 16px;
   --control-height-sm: 28px;
   --control-pad-x: 14px;
   --control-pad-x-sm: 10px;
