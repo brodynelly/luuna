@@ -46,5 +46,6 @@ Import a repository, confirm its checks, prove a baseline, write a ticket, appro
 
 - Deterministic tests: `cargo test --locked --workspace` (Rust domain, storage, executor, Git, discovery, engine and runtime suites with the synthetic Pi fixture and real host commands), `npm test` (schema, scope guard, client, desktop).
 - Lifecycle harnesses, synthetic: `node scripts/m1-smoke.mjs --mode fixture`, `node scripts/m3-smoke.mjs --mode fixture`, `node scripts/mvp-ui-smoke.mjs`.
+- Client presentation: `apps/desktop/src/design/design-system.test.ts` under `npm test` (token-only stylesheets, contrast of every semantic pair in both schemes, tone taxonomy, screen structure) and the desktop smoke's presentation audit (rendered contrast in the dark and light schemes, no horizontal scroll at 760 px). See [DESIGN-SYSTEM.md](DESIGN-SYSTEM.md).
 - Genuine provider: `node scripts/m1-smoke.mjs --mode real …` and `node scripts/m3-smoke.mjs --mode real …` with a configured credential; results are tabulated in the status report and never inferred from fixtures.
 - Native hosts: none yet.
