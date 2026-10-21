@@ -3,17 +3,16 @@ import type { FormEvent } from "react";
 import type { BaselineEvidence, Discovery, EventEnvelope, LuunaClient, ProjectRecord, ProjectView } from "@luuna/api-client";
 import { isTerminal, mergeEvents } from "@luuna/api-client";
 import { Workflows } from "./Workflows";
+import { actionFailure, describeFailure } from "./failures";
 
-function message(error: unknown): string {
-  return error instanceof Error ? error.message : "The runtime could not be reached.";
-}
+const message = describeFailure;
 
 /**
  * M2a: register an existing repository, review the read-only discovery proposal
  * and confirm an exact manifest revision. The runtime inspects and validates;
  * this panel only displays authoritative state and submits the developer's confirmation.
  */
-export function Projects({ client }: { client: LuunaClient | null }) {
+export function Projects({ client, connectionEpoch = 0 }: { client: LuunaClient | null; connectionEpoch?: number }) {
   const [projects, setProjects] = useState<ProjectRecord[]>([]);
   const [selected, setSelected] = useState<string | null>(null);
   const [view, setView] = useState<ProjectView | null>(null);
@@ -26,6 +25,7 @@ export function Projects({ client }: { client: LuunaClient | null }) {
   const [discovery, setDiscovery] = useState<Discovery | null>(null);
   const [baselines, setBaselines] = useState<BaselineEvidence[]>([]);
   const [pendingBaselineRun, setPendingBaselineRun] = useState<string | null>(null);
+  const [pollTick, setPollTick] = useState(0);
   const [error, setError] = useState("");
   const [busy, setBusy] = useState(false);
   const operation = useRef<AbortController | null>(null);
@@ -75,7 +75,7 @@ export function Projects({ client }: { client: LuunaClient | null }) {
     return () => controller.abort();
   }, [client, selected]);
 
-  async function guarded(action: (signal: AbortSignal) => Promise<void>) {
+  async function guarded(label: string, action: (signal: AbortSignal) => Promise<void>) {
     if (!client) return;
     operation.current?.abort();
     const controller = new AbortController();
@@ -85,11 +85,19 @@ export function Projects({ client }: { client: LuunaClient | null }) {
     try {
       await action(controller.signal);
     } catch (failure) {
-      if (!controller.signal.aborted) setError(message(failure));
+      if (!controller.signal.aborted) setError(actionFailure(label, failure));
     } finally {
       if (!controller.signal.aborted) setBusy(false);
     }
   }
+
+  // The runtime answered again after an outage: reload authoritative state
+  // (a restart marks abandoned work interrupted) instead of showing stale panels.
+  useEffect(() => {
+    if (!client || !selected || connectionEpoch === 0) return;
+    void guarded("Reload after reconnection", (signal) => refresh(selected, signal));
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [connectionEpoch]);
 
   async function refresh(id: string, signal: AbortSignal) {
     if (!client) return;
@@ -128,16 +136,20 @@ export function Projects({ client }: { client: LuunaClient | null }) {
             setError(typeof reason === "string" && reason ? `Baseline run ${run.state}: ${reason}` : `Baseline run ${run.state} before a baseline was recorded`);
           }
         }
-      }).catch(() => undefined);
+      }).catch(() => {
+        // A poll that fails (the runtime restarting, for example) is retried;
+        // otherwise the record would stay "running" until a manual refresh.
+        if (!controller.signal.aborted) setPollTick((value) => value + 1);
+      });
     }, 1500);
     return () => { controller.abort(); clearTimeout(timer); };
-  }, [client, selected, baselines, baselineInFlight, pendingBaselineRun]);
+  }, [client, selected, baselines, baselineInFlight, pendingBaselineRun, pollTick]);
 
   function runBaseline() {
     if (!selected || !view) return;
     const repository = view.repositories[0];
     if (!repository) return;
-    void guarded(async (signal) => {
+    void guarded("Baseline", async (signal) => {
       if (!client) return;
       const run = await client.startBaseline(selected, { repository_id: repository.repository_id }, signal);
       if (signal.aborted) return;
@@ -148,7 +160,7 @@ export function Projects({ client }: { client: LuunaClient | null }) {
 
   function register(event: FormEvent) {
     event.preventDefault();
-    void guarded(async (signal) => {
+    void guarded("Registration", async (signal) => {
       if (!client) return;
       const created = await client.registerProject({
         name: name.trim(),
@@ -165,7 +177,7 @@ export function Projects({ client }: { client: LuunaClient | null }) {
 
   function discover() {
     if (!selected) return;
-    void guarded(async (signal) => {
+    void guarded("Discovery", async (signal) => {
       if (!client) return;
       const proposal = await client.discover(selected, signal);
       if (signal.aborted) return;
@@ -178,7 +190,7 @@ export function Projects({ client }: { client: LuunaClient | null }) {
   function confirm(event: FormEvent) {
     event.preventDefault();
     if (!selected || !view) return;
-    void guarded(async (signal) => {
+    void guarded("Manifest confirmation", async (signal) => {
       if (!client) return;
       let manifest: unknown;
       try {
@@ -209,8 +221,8 @@ export function Projects({ client }: { client: LuunaClient | null }) {
         <form onSubmit={register} className="register-form">
           <fieldset disabled={!client || busy}>
             <label>Project name<input value={name} onChange={(event) => setName(event.target.value)} required placeholder="My product" /></label>
-            <label>Project ID<input value={projectId} onChange={(event) => setProjectId(event.target.value)} placeholder="derived from the name" spellCheck={false} pattern="[a-z][a-z0-9-]{0,63}" /></label>
-            <label>Repository ID<input value={repositoryId} onChange={(event) => setRepositoryId(event.target.value)} required spellCheck={false} pattern="[a-z][a-z0-9-]{0,63}" /></label>
+            <label>Project ID<input value={projectId} onChange={(event) => setProjectId(event.target.value)} placeholder="derived from the name" spellCheck={false} pattern="[a-z][a-z0-9\-]{0,63}" /></label>
+            <label>Repository ID<input value={repositoryId} onChange={(event) => setRepositoryId(event.target.value)} required spellCheck={false} pattern="[a-z][a-z0-9\-]{0,63}" /></label>
             <label>Repository root path<input value={path} onChange={(event) => setPath(event.target.value)} required spellCheck={false} placeholder="/absolute/path/to/checkout" /></label>
             <div className="form-footer"><small>Paths stay in the local machine registry; the manifest never contains them.</small><button className="primary" disabled={!name.trim() || !path.trim()}>Register repository</button></div>
           </fieldset>
@@ -258,9 +270,9 @@ export function Projects({ client }: { client: LuunaClient | null }) {
               </fieldset>
             </form>
           </>}
-          <Workflows client={client} projectId={view.project.id} repositoryId={registration.repository_id} manifestConfirmed={view.manifest !== null && view.manifest !== undefined} onChanged={() => { if (selected) void guarded((signal) => refresh(selected, signal)); }} />
+          <Workflows client={client} projectId={view.project.id} repositoryId={registration.repository_id} manifestConfirmed={view.manifest !== null && view.manifest !== undefined} connectionEpoch={connectionEpoch} onChanged={() => { if (selected) void guarded("Refresh", (signal) => refresh(selected, signal)); }} />
           <details className="project-events"><summary>Project event record ({events.length})</summary>
-            <ol className="events" aria-label="Durable project events">{events.map((event) => <li key={event.event_id}><details><summary><span className="event-number">{event.sequence}</span><span>{event.type}</span></summary><pre>{JSON.stringify(event.payload, null, 2)}</pre></details></li>)}</ol>
+            <ol className="events" aria-label="Durable project events" tabIndex={0}>{events.map((event) => <li key={event.event_id}><details><summary><span className="event-number">{event.sequence}</span><span>{event.type}</span></summary><pre>{JSON.stringify(event.payload, null, 2)}</pre></details></li>)}</ol>
           </details>
         </> : <p className="empty">{client ? "Register a repository or select a project." : "Connect to the runtime to import a repository."}</p>}
       </div>

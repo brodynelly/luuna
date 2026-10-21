@@ -471,3 +471,62 @@ async fn cancelled_run_records_pid_and_child_is_reaped_before_terminal_event() {
         "child must be reaped before run.cancelled persists"
     );
 }
+
+#[tokio::test]
+async fn explicit_shutdown_interrupts_a_demo_run_and_reaps_its_child() {
+    let harness = Harness::new();
+    let run = harness.start("slow").await;
+    let mut pid = None;
+    for _ in 0..100 {
+        let (_, events) = harness
+            .request(
+                "GET",
+                &format!("/api/v1/runs/{}/events", run.id),
+                None,
+                true,
+            )
+            .await;
+        if let Some(found) = events
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|e| e["type"] == "pi.spawned")
+            .and_then(|e| e["payload"]["pid"].as_u64())
+        {
+            pid = Some(found);
+            break;
+        }
+        tokio::time::sleep(Duration::from_millis(20)).await;
+    }
+    let pid = pid.expect("pi.spawned must record the child PID");
+    harness.state.shutdown().await;
+    let terminal = harness.terminal(&run.id).await;
+    assert_eq!(terminal.state, RunState::Interrupted);
+    let alive = std::process::Command::new("kill")
+        .args(["-0", &pid.to_string()])
+        .status()
+        .map(|s| s.success())
+        .unwrap_or(false);
+    assert!(
+        !alive,
+        "child must be reaped before run.interrupted persists"
+    );
+    let (_, events) = harness
+        .request(
+            "GET",
+            &format!("/api/v1/runs/{}/events", run.id),
+            None,
+            true,
+        )
+        .await;
+    let terminal = events
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|e| e["type"] == "run.interrupted")
+        .expect("run.interrupted persisted");
+    assert!(terminal["payload"]["reason"]
+        .as_str()
+        .unwrap()
+        .starts_with("interrupted by runtime shutdown"));
+}

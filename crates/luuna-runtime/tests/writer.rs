@@ -1963,3 +1963,104 @@ async fn cancelling_an_automatic_repair_stops_its_writer_and_preserves_both_atte
     assert_eq!(store.worktree_leases(&id).unwrap().len(), 2);
     assert_eq!(snapshot(repo.path()), before);
 }
+
+#[tokio::test]
+async fn explicit_shutdown_interrupts_candidate_checks_and_a_fresh_generation_resumes() {
+    // ADR 0004: shutdown stops owned workers and records interruption. The
+    // developer did not cancel this candidate, so it must stay resumable.
+    let harness = Harness::new();
+    let repo = tempfile::tempdir().unwrap();
+    clean_repository(repo.path());
+    register(&harness, repo.path()).await;
+    harness.confirm(0, vec![check("unit", "from pathlib import Path; import time; candidate = 'implemented by' in Path('src/main.py').read_text(); marker = Path('.check-started'); hold = candidate and not marker.exists(); marker.touch() if candidate else None; time.sleep(60) if hold else None; print('running 1 tests'); print('test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured')")]).await;
+    harness.baseline().await;
+    let before = snapshot(repo.path());
+    let (id, _) = harness
+        .approved(repo.path(), "write_in_scope", json!({"max_attempts":1}))
+        .await;
+    assert_eq!(harness.implement(&id).await.0, StatusCode::ACCEPTED);
+    harness.settled(&id).await;
+    let initial = harness.candidate(&id).await;
+    let hash = &initial["evidence"]["candidate"]["hash"];
+    let (_, leases) = harness
+        .request("GET", &format!("/api/v1/runs/{id}/worktrees"), None)
+        .await;
+    let worktree = PathBuf::from(leases[0]["path"].as_str().unwrap());
+    assert_eq!(
+        harness.candidate_action(&id, "validate", hash).await.0,
+        StatusCode::ACCEPTED
+    );
+    for _ in 0..200 {
+        if worktree.join(".check-started").exists() {
+            break;
+        }
+        tokio::time::sleep(Duration::from_millis(25)).await;
+    }
+    assert!(worktree.join(".check-started").exists());
+    harness.state.shutdown().await;
+    let interrupted = harness.candidate_settled(&id).await;
+    assert_eq!(
+        interrupted["evidence"]["status"], "interrupted",
+        "{interrupted}"
+    );
+    assert_eq!(harness.run(&id).await["state"], "interrupted");
+    assert!(interrupted["evidence"]["reason"]
+        .as_str()
+        .unwrap()
+        .starts_with("interrupted by runtime shutdown"));
+    assert_eq!(interrupted["evidence"]["results"][0]["status"], "cancelled");
+    assert!(interrupted["evidence"]["review"].is_null());
+    assert_eq!(interrupted["repair_allowed"], false);
+    let events = harness.events(&id).await;
+    assert!(events
+        .iter()
+        .any(|e| e["type"] == "candidate.stage_failed" && e["payload"]["state"] == "interrupted"));
+    assert!(!events.iter().any(|e| e["type"] == "run.cancelled"));
+    // The durable state admits the same recovery as a hard restart.
+    let (status, response) = harness.candidate_action(&id, "validate", hash).await;
+    assert_eq!(status, StatusCode::ACCEPTED, "{response}");
+    let passed = harness.candidate_settled(&id).await;
+    assert_eq!(passed["evidence"]["status"], "reviewed", "{passed}");
+    assert_eq!(passed["evidence"]["validation_generation"], 2);
+    assert_eq!(
+        passed["evidence"]["candidate"],
+        initial["evidence"]["candidate"]
+    );
+    assert_eq!(snapshot(repo.path()), before);
+}
+
+#[tokio::test]
+async fn explicit_shutdown_interrupts_the_writer_and_preserves_its_worktree() {
+    let harness = Harness::new();
+    let repo = tempfile::tempdir().unwrap();
+    ready(&harness, repo.path()).await;
+    let before = snapshot(repo.path());
+    let (slow, _) = harness
+        .approved(repo.path(), "slow", json!({"timeout_seconds": 120}))
+        .await;
+    assert_eq!(harness.implement(&slow).await.0, StatusCode::ACCEPTED);
+    harness.wait_for_event(&slow, "pi.agent_start").await;
+    harness.state.shutdown().await;
+    let settled = harness.settled(&slow).await;
+    assert_eq!(settled["state"], "interrupted", "{settled}");
+    let events = harness.events(&slow).await;
+    let terminal = events
+        .iter()
+        .find(|e| e["type"] == "run.interrupted")
+        .expect("run.interrupted persisted");
+    assert!(terminal["payload"]["reason"]
+        .as_str()
+        .unwrap()
+        .starts_with("interrupted by runtime shutdown"));
+    assert!(!events.iter().any(|e| e["type"] == "run.cancelled"));
+    let store = luuna_storage::Store::open(harness.root.join("luuna.sqlite3")).unwrap();
+    assert_eq!(
+        store.attempts(&slow).unwrap()[0].state,
+        luuna_domain::AttemptState::Interrupted
+    );
+    let leases = store.worktree_leases(&slow).unwrap();
+    assert_eq!(leases[0].state, luuna_domain::LeaseState::Released);
+    assert!(Path::new(&leases[0].path).join("src/main.py").exists());
+    assert!(store.active_worktree_leases().unwrap().is_empty());
+    assert_eq!(snapshot(repo.path()), before);
+}

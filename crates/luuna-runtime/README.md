@@ -100,7 +100,11 @@ writer that uses that gate is M2c.
 
 Only one runtime can own a data directory. Startup recovery marks abandoned
 active attempts interrupted after obtaining that exclusive ownership. A
-Ctrl+C shutdown requests cancellation and waits for supervised cleanup.
+Ctrl+C or SIGTERM shutdown signals owned workers to stop, waits for supervised
+cleanup (process groups reaped, at most five seconds), and records the stopped
+work as `interrupted` with the reason "interrupted by runtime shutdown …", the
+same resumable state a hard kill leaves after restart; `cancelled` is reserved
+for the developer's cancel request (ADR 0004).
 At most four demo runs may be active. Prompt acknowledgements and low-level
 `agent_end` events do not complete a run: Pi 1.3.0's `agent_settled` is required.
 Completion means the connectivity request finished, not a feature passed

@@ -15,6 +15,10 @@ Open `http://127.0.0.1:1420`. Start the runtime separately using the [root devel
 
 The live view polls the authenticated replay API using its last event sequence every 700 ms. Reconnecting repeats events safely without losing ordering or duplicating records. The persisted run state determines completion; text from Pi does not establish that a run or validation succeeded.
 
+A runtime that stops answering is shown as an outage beside the connection state ("Reconnecting to runtime", with a note that runs, candidates and worktrees are durable); the client keeps polling, and when the runtime answers again it reloads every panel, so work the runtime marked `interrupted` on restart appears with its reason and the next allowed action. Every refused action is reported as "<Action> refused: <the runtime's reason>" followed by what to do next (re-plan, repair, re-validate, run a baseline, wait for active work, reconnect); transport failures and server errors are described in plain words and no server body is ever shown. Every control is reachable and operable by keyboard: a "Skip to main content" link is the first Tab stop, buttons and checkboxes work with Enter and Space, and the event lists, diff, log and plan panes are focusable scroll regions; connection and activity changes are announced through live regions.
+
+`node scripts/mvp-ui-smoke.mjs` drives this client in headless Chromium against a built runtime and the synthetic Pi fixture through the [MVP walkthrough](../../docs/MVP-WALKTHROUGH.md): keyboard connection, refused token and registration, import, baseline, ticket, plan, approval, writer, diff, an invalid review followed by re-validation, a hard kill and an orderly shutdown during checks with reconnection and resumption, a hard kill during review with the budget refusal, an accessibility audit and disconnect. It needs the client port 1420 free (the runtime's CORS allowlist admits only that origin) and writes `report.md`, `report.json` and screenshots to `--out`. It is client and lifecycle evidence, never provider evidence.
+
 For the native Tauri 2 window:
 
 ```sh

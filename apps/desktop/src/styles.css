@@ -20,7 +20,10 @@ button.primary { color: #101216; background: #b7c8fb; border-color: #b7c8fb; }
 button.primary:hover:not(:disabled) { background: #d1dcff; }
 button.text-button { border: 0; background: transparent; color: #aebbd7; padding: 5px 2px; font-size: 12px; }
 button.danger { border-color: #674048; background: #321e26; color: #ffb8bf; font-size: 12px; padding: 6px 10px; }
-button:focus-visible, input:focus-visible, textarea:focus-visible, summary:focus-visible, a:focus-visible { outline: 2px solid #c3d1ff; outline-offset: 3px; }
+button:focus-visible, input:focus-visible, textarea:focus-visible, summary:focus-visible, a:focus-visible, [tabindex]:focus-visible { outline: 2px solid #c3d1ff; outline-offset: 3px; }
+.skip-link { position: absolute; left: -9999px; top: 10px; z-index: 100; padding: 9px 14px; border-radius: 7px; background: #b7c8fb; color: #101216; font-weight: 600; text-decoration: none; }
+.skip-link:focus { left: 16px; }
+main:focus { outline: none; }
 input, textarea { width: 100%; margin: 6px 0 0; border: 1px solid #3a414e; border-radius: 6px; background: #11151b; color: #eef1f8; padding: 9px 11px; }
 input::placeholder, textarea::placeholder { color: #727d91; }
 textarea { resize: vertical; min-height: 110px; }
@@ -82,6 +85,8 @@ summary > time { color: #7f8ca4; float: right; font-size: 10px; }
 pre { margin: 0 6px 12px; font-size: 11px; color: #aab9d2; padding: 13px; border-radius: 5px; background: #11151b; white-space: pre-wrap; overflow-wrap: anywhere; }
 .event-caption { font-size: 10px; color: #818da2; margin-top: 16px; }
 .failure-note { color: #edb0bb; font-size: 12px; margin-top: 12px; }
+.recovery-note { color: #b4ceff; font-size: 12px; }
+.outage { width: 100%; color: #f0d9a8; font-size: 12px; margin: 0; }
 .assistant-output { margin-top: 20px; }
 .assistant-output h3 { font-size: 11px; font-weight: 600; color: #96acd9; margin: 0 0 8px; }
 .assistant-output pre { margin: 0; color: #d8e0ef; font-family: inherit; font-size: 13px; line-height: 1.7; }

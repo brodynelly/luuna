@@ -4,10 +4,9 @@ import { LuunaClient, assistantText, isTerminal, mergeEvents } from "@luuna/api-
 import type { EventEnvelope, Health, RunRecord } from "@luuna/api-client";
 import { canCancel } from "./workflow-state";
 import { Projects } from "./Projects";
+import { actionFailure, describeFailure } from "./failures";
 
-function message(error: unknown): string {
-  return error instanceof Error ? error.message : "The runtime could not be reached.";
-}
+const message = describeFailure;
 
 function date(value: string): string {
   const parsed = new Date(value);
@@ -41,6 +40,12 @@ export function App() {
   const [busy, setBusy] = useState(false);
   const [live, setLive] = useState("Disconnected");
   const [refresh, setRefresh] = useState(0);
+  // A lost runtime is an outage, not an action failure: it is shown next to the
+  // connection state and clears itself when the runtime answers again. Each
+  // recovery bumps the epoch so every panel reloads authoritative state.
+  const [outage, setOutage] = useState("");
+  const [connectionEpoch, setConnectionEpoch] = useState(0);
+  const outageRef = useRef(false);
   const operation = useRef<AbortController | null>(null);
   const active = runs.find((run) => run.id === selected);
   const selectedWorkflow = active?.metadata.kind === "workflow";
@@ -57,13 +62,19 @@ export function App() {
           const next = await client.listRuns(controller.signal);
           if (controller.signal.aborted) return;
           setReachable(true);
+          if (outageRef.current) {
+            outageRef.current = false;
+            setOutage("");
+            setConnectionEpoch((value) => value + 1);
+          }
           setRuns(next);
           setSelected((id) => id ?? next[0]?.id ?? null);
           await pause(2000, controller.signal);
         } catch (failure) {
           if (controller.signal.aborted) return;
           setReachable(false);
-          setError(message(failure));
+          outageRef.current = true;
+          setOutage(message(failure));
           await pause(3000, controller.signal).catch(() => undefined);
         }
       }
@@ -92,11 +103,11 @@ export function App() {
           setEvents(received);
           setCandidateActive(candidate?.active ?? false);
           cursor = received.at(-1)?.sequence ?? 0;
-          setLive("Connected · event replay");
+          setLive(`Connected · event replay from sequence ${cursor}`);
           await pause(700, controller.signal);
         } catch (failure) {
           if (controller.signal.aborted) return;
-          setLive(`Reconnecting · ${message(failure)}`);
+          setLive(`Reconnecting · replay will resume from sequence ${cursor} · ${message(failure)}`);
           await pause(2500, controller.signal).catch(() => undefined);
         }
       }
@@ -123,7 +134,7 @@ export function App() {
       setLive("Connected");
       setToken("");
     } catch (failure) {
-      if (!controller.signal.aborted) setError(message(failure));
+      if (!controller.signal.aborted) setError(actionFailure("Connection", failure));
     } finally {
       if (!controller.signal.aborted) setBusy(false);
     }
@@ -133,6 +144,8 @@ export function App() {
     operation.current?.abort();
     setClient(null);
     setReachable(false);
+    outageRef.current = false;
+    setOutage("");
     setHealth(null);
     setToken("");
     setRuns([]);
@@ -184,13 +197,14 @@ export function App() {
   }
 
   return <div className="app">
+    <a className="skip-link" href="#main">Skip to main content</a>
     <header className="topbar">
       <a className="wordmark" href="#main" aria-label="Luuna home"><span aria-hidden="true">◒</span> luuna</a>
       <span className="stage">Development foundation</span>
-      <span className={`connection ${client && reachable ? "online" : ""}`}><i aria-hidden="true" />{client ? reachable ? "Local runtime connected" : "Reconnecting to runtime" : "Local runtime offline"}</span>
+      <span className={`connection ${client && reachable ? "online" : ""}`} role="status" aria-live="polite"><i aria-hidden="true" />{client ? reachable ? "Local runtime connected" : "Reconnecting to runtime" : "Local runtime offline"}</span>
     </header>
 
-    <main id="main">
+    <main id="main" tabIndex={-1}>
       <div className="intro"><p className="eyebrow">Your local workbench</p><h1>A clear starting point.</h1><p>Connect to your runtime, launch a real Pi session, and follow the durable event record.</p></div>
 
       {error && <div className="error" role="alert">{error}<button className="text-button" onClick={() => setError("")}>Dismiss</button></div>}
@@ -203,9 +217,10 @@ export function App() {
           <button className="primary" disabled={busy}>{busy ? "Connecting…" : "Connect"}</button>
           <small>The token stays in memory and is cleared when you disconnect or reload.</small>
         </form>}
+        {client && outage && <p className="outage" role="status">{outage} Runs, candidates and worktrees are durable in the runtime; nothing is lost while this panel waits.</p>}
       </section>
 
-      <Projects client={client} />
+      <Projects client={client} connectionEpoch={connectionEpoch} />
 
       <div className="workspace">
         <aside className="panel history" aria-labelledby="history-heading">
@@ -232,10 +247,10 @@ export function App() {
           <section className="panel event-panel" aria-labelledby="events-heading">
             <div className="panel-heading"><h2 id="events-heading">{active ? "Session events" : "Live activity"}</h2>{active && <span className={`state ${active.state}`}>{active.state}</span>}</div>
             {active ? <>
-              <div className="run-detail"><code>{active.id}</code><span>{live}</span>{canCancel(active.state, candidateActive) && <button className="danger" disabled={busy} onClick={() => void cancel()}>Cancel session</button>}</div>
+              <div className="run-detail"><code>{active.id}</code><span role="status">{live}</span>{canCancel(active.state, candidateActive) && <button className="danger" disabled={busy} onClick={() => void cancel()}>Cancel session</button>}</div>
               {active.state === "failed" && <p className="failure-note">This session failed. Open the final events below for the runtime’s recorded reason.</p>}
               {output && <div className="assistant-output"><h3>Pi response</h3><pre aria-live="polite">{output}</pre></div>}
-              <ol className="events" aria-label="Durable session events">{events.map((event) => <li key={event.event_id}>
+              <ol className="events" aria-label="Durable session events" tabIndex={0}>{events.map((event) => <li key={event.event_id}>
                 <details open={event.type.includes("error") || event.type === "run.failed"}><summary><span className="event-number">{event.sequence}</span><span>{event.type}</span><time dateTime={event.timestamp}>{new Date(event.timestamp).toLocaleTimeString()}</time></summary><pre>{JSON.stringify(event.payload, null, 2)}</pre></details>
               </li>)}</ol>
               {!events.length && <p className="empty">Waiting for the runtime’s event record…</p>}

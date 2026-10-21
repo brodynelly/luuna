@@ -1800,10 +1800,10 @@ async fn writer_worker(state: AppState, job: WriterJob, mut cancel: watch::Recei
     if *cancel.borrow() {
         settle(
             &state,
-            AttemptState::Cancelled,
-            RunState::Cancelled,
+            state.stop_attempt_state(),
+            state.stop_run_state(),
             None,
-            "cancelled before startup",
+            &state.stop_reason("cancelled before startup"),
             json!({}),
         );
         return;
@@ -1916,7 +1916,7 @@ async fn writer_worker(state: AppState, job: WriterJob, mut cancel: watch::Recei
     let created = tokio::select! {
         biased;
         _ = cancel.changed() => {
-            settle(&state, AttemptState::Cancelled, RunState::Cancelled, Some((&lease_id, LeaseState::Released, None)), "cancelled during worktree creation", spent(started));
+            settle(&state, state.stop_attempt_state(), state.stop_run_state(), Some((&lease_id, LeaseState::Released, None)), &state.stop_reason("cancelled during worktree creation"), spent(started));
             return;
         }
         created = tokio::time::timeout_at(
@@ -1960,7 +1960,7 @@ async fn writer_worker(state: AppState, job: WriterJob, mut cancel: watch::Recei
     let installed = tokio::select! {
         biased;
         _ = cancel.changed() => {
-            settle(&state, AttemptState::Cancelled, RunState::Cancelled, Some((&lease_id, LeaseState::Released, None)), "cancelled during startup; worktree preserved", spent(started));
+            settle(&state, state.stop_attempt_state(), state.stop_run_state(), Some((&lease_id, LeaseState::Released, None)), &state.stop_reason("cancelled during startup; worktree preserved"), spent(started));
             return;
         }
         installed = install_guard_by(attempt_dir.join("pi"), deadline) => installed,
@@ -2020,7 +2020,7 @@ async fn writer_worker(state: AppState, job: WriterJob, mut cancel: watch::Recei
     let spawned = tokio::select! {
         biased;
         _ = cancel.changed() => {
-            settle(&state, AttemptState::Cancelled, RunState::Cancelled, Some((&lease_id, LeaseState::Released, None)), "cancelled during startup; worktree preserved", spent(started));
+            settle(&state, state.stop_attempt_state(), state.stop_run_state(), Some((&lease_id, LeaseState::Released, None)), &state.stop_reason("cancelled during startup; worktree preserved"), spent(started));
             return;
         }
         _ = tokio::time::sleep_until(deadline) => {
@@ -2216,10 +2216,12 @@ async fn writer_worker(state: AppState, job: WriterJob, mut cancel: watch::Recei
     if *cancel.borrow() {
         settle(
             &state,
-            AttemptState::Cancelled,
-            RunState::Cancelled,
+            state.stop_attempt_state(),
+            state.stop_run_state(),
             Some((&lease_id, LeaseState::Released, None)),
-            &format!("cancelled before candidate judgement; worktree preserved{reserve_note}"),
+            &state.stop_reason(&format!(
+                "cancelled before candidate judgement; worktree preserved{reserve_note}"
+            )),
             usage_json,
         );
         return;
@@ -2228,10 +2230,12 @@ async fn writer_worker(state: AppState, job: WriterJob, mut cancel: watch::Recei
         Outcome::Cancelled => {
             settle(
                 &state,
-                AttemptState::Cancelled,
-                RunState::Cancelled,
+                state.stop_attempt_state(),
+                state.stop_run_state(),
                 Some((&lease_id, LeaseState::Released, None)),
-                &format!("abort requested; Pi reaped, worktree preserved{reserve_note}"),
+                &state.stop_reason(&format!(
+                    "abort requested; Pi reaped, worktree preserved{reserve_note}"
+                )),
                 usage_json,
             );
             return;
@@ -2395,10 +2399,12 @@ async fn writer_worker(state: AppState, job: WriterJob, mut cancel: watch::Recei
         None => {
             settle(
                 &state,
-                AttemptState::Cancelled,
-                RunState::Cancelled,
+                state.stop_attempt_state(),
+                state.stop_run_state(),
                 Some((&lease_id, LeaseState::Released, reconciled.as_deref())),
-                &format!("cancelled during candidate judgement; worktree preserved{note}"),
+                &state.stop_reason(&format!(
+                    "cancelled during candidate judgement; worktree preserved{note}"
+                )),
                 usage_json,
             );
             return;
@@ -2442,10 +2448,10 @@ async fn writer_worker(state: AppState, job: WriterJob, mut cancel: watch::Recei
     if *cancel.borrow() {
         settle(
             &state,
-            AttemptState::Cancelled,
-            RunState::Cancelled,
+            state.stop_attempt_state(),
+            state.stop_run_state(),
             Some((&lease_id, LeaseState::Released, Some(&commit))),
-            "cancelled before candidate verdict; committed worktree preserved",
+            &state.stop_reason("cancelled before candidate verdict; committed worktree preserved"),
             usage_json,
         );
         return;

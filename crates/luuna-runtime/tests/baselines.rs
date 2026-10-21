@@ -688,3 +688,53 @@ async fn restart_interrupts_a_running_baseline() {
         .await;
     assert_eq!(baselines[0]["status"], "interrupted");
 }
+
+#[tokio::test]
+async fn explicit_shutdown_interrupts_a_running_baseline_instead_of_cancelling_it() {
+    let harness = Harness::new();
+    let repo = tempfile::tempdir().unwrap();
+    clean_repository(repo.path());
+    register(&harness, repo.path()).await;
+    harness
+        .confirm(
+            "fixture",
+            0,
+            vec![
+                check("slow", "import time; time.sleep(60)", true, 120),
+                check("after", "print('never')", true, 30),
+            ],
+        )
+        .await;
+    let run = harness.baseline("fixture", false).await;
+    let id = run["id"].as_str().unwrap().to_owned();
+    for _ in 0..200 {
+        if harness
+            .events(&id)
+            .await
+            .iter()
+            .any(|e| e["type"] == "check.spawned")
+        {
+            break;
+        }
+        tokio::time::sleep(Duration::from_millis(25)).await;
+    }
+    harness.state.shutdown().await;
+    let terminal = harness.terminal(&id).await;
+    assert_eq!(terminal["state"], "interrupted", "{terminal}");
+    let (_, baselines) = harness
+        .request("GET", "/api/v1/projects/fixture/baselines", None)
+        .await;
+    assert_eq!(baselines[0]["status"], "interrupted");
+    assert!(baselines[0]["reason"]
+        .as_str()
+        .unwrap()
+        .contains("runtime shutdown"));
+    let results = baselines[0]["results"].as_array().unwrap();
+    assert_eq!(results.len(), 1);
+    assert_eq!(results[0]["status"], "cancelled");
+    assert!(!harness
+        .events(&id)
+        .await
+        .iter()
+        .any(|e| e["type"] == "run.cancelled"));
+}

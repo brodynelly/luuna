@@ -241,8 +241,8 @@ async fn baseline_worker(state: AppState, job: BaselineJob, cancel: watch::Recei
     if *cancel.borrow() {
         let _ = state.finish(
             &job.run_id,
-            RunState::Cancelled,
-            json!({"reason":"cancelled before startup"}),
+            state.stop_run_state(),
+            json!({"reason": state.stop_reason("cancelled before startup")}),
         );
         return;
     }
@@ -548,7 +548,9 @@ async fn baseline_worker(state: AppState, job: BaselineJob, cancel: watch::Recei
         .filter(|r| job.required.contains(&r.recipe_id))
         .cloned()
         .collect();
-    let mut status = if cancelled {
+    let mut status = if cancelled && state.shutting_down() {
+        BaselineStatus::Interrupted
+    } else if cancelled {
         BaselineStatus::Cancelled
     } else {
         BaselineStatus::from_results(&required_results, job.required.len())
@@ -606,6 +608,9 @@ async fn baseline_worker(state: AppState, job: BaselineJob, cancel: watch::Recei
         BaselineStatus::Cancelled => {
             Some("cancelled before every required check finished".to_owned())
         }
+        BaselineStatus::Interrupted => {
+            Some("interrupted by runtime shutdown before every required check finished".to_owned())
+        }
         _ => Some(
             required_results
                 .iter()
@@ -657,6 +662,13 @@ async fn baseline_worker(state: AppState, job: BaselineJob, cancel: watch::Recei
                 &job.run_id,
                 RunState::Cancelled,
                 json!({"reason":"abort requested; check process group reaped","baseline_id":baseline_id}),
+            );
+        }
+        (Ok(_), BaselineStatus::Interrupted) => {
+            let _ = state.finish(
+                &job.run_id,
+                RunState::Interrupted,
+                json!({"reason":"interrupted by runtime shutdown; check process group reaped","baseline_id":baseline_id}),
             );
         }
         (Ok(_), other) => fail(

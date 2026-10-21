@@ -344,7 +344,7 @@ pub async fn validate(
                             run.revision,
                             &next.candidate.hash,
                             if *rx.borrow() {
-                                RunState::Cancelled
+                                worker.stop_run_state()
                             } else {
                                 RunState::Paused
                             },
@@ -436,19 +436,19 @@ pub async fn validate(
 fn settle_failure(state: &AppState, id: &str, evidence: &CandidateEvidence, reason: &str) {
     if let Ok(mut store) = state.store.lock() {
         if let Ok(Some(run)) = store.get_run(id) {
-            let next = if reason.starts_with("cancelled") {
-                RunState::Cancelled
+            let (next, reason) = if reason.starts_with("cancelled") {
+                (state.stop_run_state(), state.stop_reason(reason))
             } else if reason.starts_with("testing blocked") {
-                RunState::TestingBlocked
+                (RunState::TestingBlocked, reason.to_owned())
             } else {
-                RunState::Failed
+                (RunState::Failed, reason.to_owned())
             };
             let _ = store.fail_candidate_stage(
                 id,
                 run.revision,
                 &evidence.candidate.hash,
                 next,
-                reason,
+                &reason,
             );
         }
     }
