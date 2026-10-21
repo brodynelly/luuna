@@ -194,9 +194,9 @@ async function dismissAlerts() {
   }
 }
 function ticketItem(title) { return page.locator('ul[aria-label="Tickets"] > li').filter({ has: page.locator(".ticket-head strong", { hasText: title }) }); }
-// State badges are capitalised by CSS; compare the lower-cased rendered text.
-async function runStateOf(title) { const span = ticketItem(title).locator(".ticket-actions .state"); return (await span.count()) ? (await span.first().innerText()).trim().toLowerCase() : ""; }
-async function candidateStateOf(title) { const span = ticketItem(title).locator(".candidate-heading .state"); return (await span.count()) ? (await span.first().innerText()).trim().toLowerCase() : ""; }
+// A status badge's rendered text is exactly the runtime value (StatusBadge never transforms case); compare it verbatim.
+async function runStateOf(title) { const span = ticketItem(title).locator(".ticket-actions .state"); return (await span.count()) ? (await span.first().innerText()).trim() : ""; }
+async function candidateStateOf(title) { const span = ticketItem(title).locator(".candidate-heading .state"); return (await span.count()) ? (await span.first().innerText()).trim() : ""; }
 async function waitRunState(title, states, timeoutMs) {
   return waitFor(async () => { const state = await runStateOf(title); return states.includes(state) ? state : null; }, timeoutMs, 400);
 }
@@ -284,7 +284,7 @@ async function runBaseline() {
   return waitFor(async () => {
     const item = page.locator('ul[aria-label="Recorded baselines"] li').first();
     if (!(await item.count())) return null;
-    const state = (await item.locator(".state").first().innerText()).trim().toLowerCase();
+    const state = (await item.locator(".state").first().innerText()).trim();
     return state && state !== "running" ? `${state}: ${(await item.innerText()).replace(/\n/g, " · ")}` : null;
   }, 120_000, 500);
 }
