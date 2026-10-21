@@ -315,3 +315,319 @@ fn concurrent_connections_serialize_events_without_duplicate_sequences() {
         (1..=25).collect::<Vec<_>>()
     );
 }
+
+fn registered_store(path: &std::path::Path) -> Store {
+    let mut store = Store::open(path).unwrap();
+    let observation = luuna_domain::RepositoryObservation {
+        local_path: "/srv/checkouts/app".into(),
+        identity: luuna_domain::RepositoryIdentity {
+            remote: Some("https://example.invalid/app.git".into()),
+            push_remote: None,
+            root_commits: vec!["1".repeat(40)],
+            shallow: false,
+        },
+        head_commit: "2".repeat(40),
+        branch: Some("main".into()),
+        remote_default_branch: None,
+        local_branches: vec!["main".into()],
+        dirty: luuna_domain::DirtyState::default(),
+        git_version: "git version 2.43.0".into(),
+        observed_at: "2026-10-17T00:00:00.000Z".into(),
+    };
+    store
+        .register_project("project", "Project", &[("app".into(), observation)])
+        .unwrap();
+    store
+}
+
+fn run_in(store: &mut Store, id: &str, states: &[RunState]) {
+    let mut run = store.create_run(id, "project", json!({})).unwrap();
+    for state in states {
+        run = store
+            .transition_run(&run.id, run.revision, *state, "run.moved", json!({}))
+            .unwrap();
+    }
+}
+
+fn raw(path: &std::path::Path) -> rusqlite::Connection {
+    rusqlite::Connection::open(path).unwrap()
+}
+
+fn column(path: &std::path::Path, sql: &str, id: &str) -> String {
+    raw(path).query_row(sql, [id], |r| r.get(0)).unwrap()
+}
+
+fn lease_json(run_id: &str, id: &str) -> String {
+    serde_json::to_string(&luuna_domain::WorktreeLease {
+        id: id.into(),
+        run_id: run_id.into(),
+        project_id: "project".into(),
+        repository_id: "app".into(),
+        path: format!("/private/worktrees/{id}"),
+        base_commit: "2".repeat(40),
+        state: luuna_domain::LeaseState::Active,
+        candidate_commit: None,
+        created_at: "2026-10-17T00:00:00.000Z".into(),
+        released_at: None,
+        reason: None,
+    })
+    .unwrap()
+}
+
+#[test]
+fn one_undecodable_record_does_not_block_startup_recovery() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("state.sqlite3");
+    let mut store = registered_store(&path);
+    run_in(
+        &mut store,
+        "settled",
+        &[RunState::Running, RunState::Completed],
+    );
+    run_in(&mut store, "damaged-active", &[RunState::Running]);
+    run_in(&mut store, "active", &[RunState::Running]);
+    run_in(&mut store, "unknown", &[]);
+    drop(store);
+    // Damage that would otherwise abort recovery: metadata, a state no build
+    // knows, and lease, attempt, baseline and candidate payloads.
+    raw(&path)
+        .execute_batch(
+            "UPDATE runs SET metadata='{truncated' WHERE id IN ('settled','damaged-active');
+             UPDATE runs SET state='\"vanished\"' WHERE id='unknown';
+             INSERT INTO worktree_leases(id,run_id,project_id,repository_id,path,base_commit,state,payload,created_at)
+               VALUES ('lease-x','damaged-active','project','app','/private/wt/x','2222222222222222222222222222222222222222','active','{secret prompt','2026-10-17');
+             INSERT INTO attempts(id,run_id,task_id,number,state,payload,started_at)
+               VALUES ('attempt-x','active','implement',1,'running','not json','2026-10-17');
+             INSERT INTO baselines(id,project_id,repository_id,run_id,status,payload,started_at)
+               VALUES ('baseline-x','project','app','active','running','{}','2026-10-17');
+             INSERT INTO candidates(hash,run_id,id,revision,status,payload,created_at)
+               VALUES ('sha256:candidate-x','active','candidate-x',1,'validating','{\"broken\":true}','2026-10-17');",
+        )
+        .unwrap();
+    let mut store = Store::open(&path).unwrap();
+    let report = store.recover_after_restart().unwrap();
+    assert_eq!(report.interrupted_runs, 2);
+    let skipped: Vec<_> = report
+        .skipped
+        .iter()
+        .map(|s| (s.table, s.id.as_str()))
+        .collect();
+    assert_eq!(
+        skipped,
+        vec![
+            ("runs", "unknown"),
+            ("baselines", "baseline-x"),
+            ("candidates", "sha256:candidate-x"),
+            ("worktree_leases", "lease-x"),
+            ("attempts", "attempt-x"),
+        ]
+    );
+    // Reasons name the problem, never the stored content.
+    assert!(report
+        .skipped
+        .iter()
+        .all(|s| s.reason.contains("could not be decoded")
+            && !s.reason.contains("secret")
+            && !s.reason.contains("vanished")));
+    let state = "SELECT state FROM runs WHERE id=?1";
+    assert_eq!(column(&path, state, "damaged-active"), "\"interrupted\"");
+    assert_eq!(
+        store.get_run("active").unwrap().unwrap().state,
+        RunState::Interrupted
+    );
+    assert_eq!(column(&path, state, "settled"), "\"completed\"");
+    assert_eq!(column(&path, state, "unknown"), "\"vanished\"");
+    // Undecodable records still settle where a state column exists.
+    assert_eq!(
+        column(
+            &path,
+            "SELECT state FROM worktree_leases WHERE id=?1",
+            "lease-x"
+        ),
+        "abandoned"
+    );
+    assert!(store.active_worktree_leases().unwrap().is_empty());
+    assert_eq!(
+        column(&path, "SELECT state FROM attempts WHERE id=?1", "attempt-x"),
+        "interrupted"
+    );
+    assert_eq!(
+        column(
+            &path,
+            "SELECT status FROM baselines WHERE id=?1",
+            "baseline-x"
+        ),
+        "interrupted"
+    );
+    assert_eq!(
+        column(
+            &path,
+            "SELECT status FROM candidates WHERE hash=?1",
+            "sha256:candidate-x"
+        ),
+        "interrupted"
+    );
+    let events: Vec<_> = store
+        .events_after("active", 0)
+        .unwrap()
+        .into_iter()
+        .map(|e| e.event_type)
+        .collect();
+    assert!(events.contains(&"attempt.finished".to_owned()));
+    assert!(events.contains(&"candidate.interrupted".to_owned()));
+    // A second restart has nothing left to settle; the unknown run stays reported.
+    let again = store.recover_after_restart().unwrap();
+    assert_eq!(again.interrupted_runs, 0);
+    assert_eq!(again.skipped.len(), 1);
+    assert_eq!(again.skipped[0].id, "unknown");
+}
+
+#[test]
+fn restart_frees_a_lease_its_settled_run_never_released() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("state.sqlite3");
+    let mut store = registered_store(&path);
+    // The writer's terminal transition committed but its lease release and
+    // attempt settlement failed (separate writes), leaving both open.
+    run_in(&mut store, "writer", &[RunState::Running, RunState::Failed]);
+    drop(store);
+    let connection = raw(&path);
+    connection
+        .execute(
+            "INSERT INTO worktree_leases(id,run_id,project_id,repository_id,path,base_commit,state,payload,created_at)
+             VALUES ('lease-1','writer','project','app','/private/worktrees/lease-1',?1,'active',?2,'2026-10-17')",
+            rusqlite::params!["2".repeat(40), lease_json("writer", "lease-1")],
+        )
+        .unwrap();
+    connection
+        .execute(
+            "INSERT INTO attempts(id,run_id,task_id,number,state,payload,started_at)
+             VALUES ('attempt-1','writer','implement',1,'running','{}','2026-10-17')",
+            [],
+        )
+        .unwrap();
+    drop(connection);
+    let mut store = Store::open(&path).unwrap();
+    assert_eq!(store.interrupt_active_runs().unwrap(), 0);
+    assert!(store.active_worktree_leases().unwrap().is_empty());
+    let lease = store.worktree_leases("writer").unwrap().remove(0);
+    assert_eq!(lease.state, luuna_domain::LeaseState::Abandoned);
+    // Recovery does not read the worktree, so it says a commit may be there.
+    let reason = lease.reason.unwrap();
+    assert!(reason.contains("files preserved"), "{reason}");
+    assert!(
+        reason.contains("may exist in the worktree unrecorded"),
+        "{reason}"
+    );
+    assert!(reason.contains("never a candidate"), "{reason}");
+    assert_eq!(
+        store.attempts("writer").unwrap()[0].state,
+        luuna_domain::AttemptState::Interrupted
+    );
+    assert_eq!(
+        store.get_run("writer").unwrap().unwrap().state,
+        RunState::Failed
+    );
+    // The repository's single active-lease slot is free for the next writer.
+    raw(&path)
+        .execute(
+            "INSERT INTO worktree_leases(id,run_id,project_id,repository_id,path,base_commit,state,payload,created_at)
+             VALUES ('lease-2','writer','project','app','/private/worktrees/lease-2',?1,'active',?2,'2026-10-17')",
+            rusqlite::params!["2".repeat(40), lease_json("writer", "lease-2")],
+        )
+        .unwrap();
+}
+
+#[test]
+fn latest_baseline_follows_recording_order_not_the_wall_clock() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("state.sqlite3");
+    let mut store = registered_store(&path);
+    let identity = luuna_domain::BaselineIdentity {
+        manifest_hash: format!("sha256:{}", "a".repeat(64)),
+        repository_id: "app".into(),
+        commit: "2".repeat(40),
+        tree: "3".repeat(40),
+    };
+    // The second baseline started after the clock was stepped back an hour.
+    for (id, started_at, status) in [
+        (
+            "passed-first",
+            "2026-10-17T12:00:00.000Z",
+            luuna_domain::BaselineStatus::Passed,
+        ),
+        (
+            "failed-later",
+            "2026-10-17T11:00:00.000Z",
+            luuna_domain::BaselineStatus::Failed,
+        ),
+    ] {
+        run_in(&mut store, &format!("{id}-run"), &[]);
+        store
+            .start_baseline(&luuna_domain::BaselineEvidence {
+                id: id.into(),
+                run_id: format!("{id}-run"),
+                project_id: "project".into(),
+                manifest_revision: 1,
+                identity: identity.clone(),
+                environment_fingerprint: format!("sha256:{}", "1".repeat(64)),
+                status: luuna_domain::BaselineStatus::Running,
+                required_checks: vec!["unit".into()],
+                results: vec![],
+                started_at: started_at.into(),
+                finished_at: None,
+                reason: None,
+            })
+            .unwrap();
+        store.finish_baseline(id, status, None).unwrap();
+    }
+    let latest = store.latest_baseline("project", "app").unwrap().unwrap();
+    assert_eq!(latest.id, "failed-later");
+    assert_eq!(latest.status, luuna_domain::BaselineStatus::Failed);
+    let listed: Vec<_> = store
+        .baselines("project")
+        .unwrap()
+        .into_iter()
+        .map(|b| b.id)
+        .collect();
+    assert_eq!(listed, vec!["failed-later", "passed-first"]);
+}
+
+#[test]
+fn a_candidate_that_is_not_json_keeps_its_status_and_is_reported() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("state.sqlite3");
+    let mut store = registered_store(&path);
+    run_in(&mut store, "active", &[RunState::Running]);
+    drop(store);
+    raw(&path)
+        .execute_batch(
+            "INSERT INTO candidates(hash,run_id,id,revision,status,payload,created_at)
+               VALUES ('sha256:candidate-y','active','candidate-y',1,'reviewing','not json','2026-10-17');",
+        )
+        .unwrap();
+    let mut store = Store::open(&path).unwrap();
+    let report = store.recover_after_restart().unwrap();
+    assert_eq!(report.interrupted_runs, 1);
+    let skipped: Vec<_> = report
+        .skipped
+        .iter()
+        .map(|s| (s.table, s.id.as_str()))
+        .collect();
+    assert_eq!(skipped, vec![("candidates", "sha256:candidate-y")]);
+    // The identity trigger cannot read the payload, so only the refusal is
+    // tolerated; the gates decode the record and fail closed on it.
+    assert_eq!(
+        column(
+            &path,
+            "SELECT status FROM candidates WHERE hash=?1",
+            "sha256:candidate-y"
+        ),
+        "reviewing"
+    );
+    assert!(!store
+        .events_after("active", 0)
+        .unwrap()
+        .iter()
+        .any(|e| e.event_type == "candidate.interrupted"));
+}

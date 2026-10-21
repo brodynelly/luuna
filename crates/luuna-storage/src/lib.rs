@@ -4,21 +4,26 @@ use luuna_domain::{Approval, DomainError, EventEnvelope, PlanRevision, RunState,
 use rusqlite::{params, Connection, OptionalExtension, Transaction, TransactionBehavior};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
-use std::{fs, path::Path, time::Duration};
+use std::{collections::BTreeSet, fs, path::Path, time::Duration};
 use thiserror::Error;
 
+mod backup;
 mod baselines;
 mod components;
 mod missions;
 mod projects;
 mod validation;
 mod writer;
+pub use backup::{
+    backup_database, inspect_database, restore_database, BackupReport, DatabaseStatus,
+    RestoreReport,
+};
 pub use components::*;
 pub use missions::MissionsBinding;
 pub use projects::*;
 pub use writer::AttemptRecord;
 
-#[derive(Debug, Error)]
+#[derive(Error)]
 pub enum StorageError {
     #[error("SQLite: {0}")]
     Sqlite(#[from] rusqlite::Error),
@@ -38,9 +43,72 @@ pub enum StorageError {
     AlreadyExists(String),
     #[error("invalid input: {0}")]
     Invalid(String),
+    /// Written by a newer Luuna: this build cannot know its invariants.
+    #[error("database {path} has schema version {found}, newer than version {supported} supported by this Luuna build; run the Luuna build that wrote it, or stop the runtime and restore a backup this build can read with `luuna-runtime restore --input <backup>` (see crates/luuna-runtime/README.md)")]
+    SchemaTooNew {
+        path: String,
+        found: u32,
+        supported: u32,
+    },
+    /// The file failed SQLite's structural check; nothing is served or written.
+    #[error("database {path} failed its integrity check ({detail}); stop the runtime and restore a backup with `luuna-runtime restore --input <backup>`; automatic pre-migration backups are kept in the data directory's backups/ folder (see crates/luuna-runtime/README.md)")]
+    Corrupt { path: String, detail: String },
+}
+
+/// The derived form, except that a refused database prints its actionable
+/// message: the service's `main` reports a startup error with `Debug`.
+impl std::fmt::Debug for StorageError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::SchemaTooNew { .. } | Self::Corrupt { .. } => std::fmt::Display::fmt(self, f),
+            Self::Sqlite(error) => f.debug_tuple("Sqlite").field(error).finish(),
+            Self::Io(error) => f.debug_tuple("Io").field(error).finish(),
+            Self::Json(error) => f.debug_tuple("Json").field(error).finish(),
+            Self::Domain(error) => f.debug_tuple("Domain").field(error).finish(),
+            Self::NotFound(id) => f.debug_tuple("NotFound").field(id).finish(),
+            Self::RevisionConflict { expected, actual } => f
+                .debug_struct("RevisionConflict")
+                .field("expected", expected)
+                .field("actual", actual)
+                .finish(),
+            Self::ImmutableRevision => f.write_str("ImmutableRevision"),
+            Self::AlreadyExists(id) => f.debug_tuple("AlreadyExists").field(id).finish(),
+            Self::Invalid(reason) => f.debug_tuple("Invalid").field(reason).finish(),
+        }
+    }
 }
 
 pub type Result<T> = std::result::Result<T, StorageError>;
+
+/// A record that startup recovery could not decode. It is never reported
+/// successful: where its table has an authoritative state column, that column
+/// is settled and a durable event records the reason; otherwise the record is
+/// left unchanged for the developer and only logged.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub struct SkippedRecord {
+    pub table: &'static str,
+    pub id: String,
+    pub reason: String,
+}
+
+/// Outcome of startup recovery.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize)]
+pub struct RecoveryReport {
+    /// Runs moved to `interrupted` by this recovery.
+    pub interrupted_runs: usize,
+    pub skipped: Vec<SkippedRecord>,
+}
+
+/// A decode failure described by category and position only: payloads can
+/// carry prompts and other private text, which must not reach logs or events.
+pub(crate) fn undecodable(error: &serde_json::Error) -> String {
+    format!(
+        "stored record could not be decoded ({:?} error at line {} column {})",
+        error.classify(),
+        error.line(),
+        error.column()
+    )
+}
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct RunRecord {
@@ -58,9 +126,15 @@ pub struct Store {
 }
 
 impl Store {
+    /// Open the database, creating it if needed. A file that fails SQLite's
+    /// quick check or was written by a newer schema is refused before this
+    /// build writes anything to it, not even a checkpoint. Only migrations the
+    /// file lacks are applied, after an automatic backup of an existing
+    /// database under `<directory>/backups/`.
     pub fn open(path: impl AsRef<Path>) -> Result<Self> {
         let path = path.as_ref();
-        if path != Path::new(":memory:") {
+        let memory = path == Path::new(":memory:");
+        if !memory {
             if let Some(parent) = path.parent().filter(|p| !p.as_os_str().is_empty()) {
                 let mut builder = fs::DirBuilder::new();
                 builder.recursive(true);
@@ -83,18 +157,14 @@ impl Store {
                 Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists => (),
                 Err(e) => return Err(e.into()),
             }
+            backup::inspect_read_only(path)?.require_usable()?;
         }
         let connection = Connection::open(path)?;
         connection.busy_timeout(Duration::from_secs(5))?;
         connection.execute_batch(
             "PRAGMA foreign_keys=ON; PRAGMA journal_mode=WAL; PRAGMA synchronous=FULL;",
         )?;
-        connection.execute_batch(MIGRATION_1)?;
-        connection.execute_batch(MIGRATION_2)?;
-        connection.execute_batch(MIGRATION_3)?;
-        connection.execute_batch(MIGRATION_4)?;
-        connection.execute_batch(MIGRATION_5)?;
-        connection.execute_batch(MIGRATION_6)?;
+        migrate(&connection, (!memory).then_some(path))?;
         let store = Self { connection };
         store.initialize_component_state()?;
         Ok(store)
@@ -219,40 +289,80 @@ impl Store {
 
     /// Call at service startup, before accepting work. Both queued and active
     /// attempts are interrupted; they are never silently reported successful.
+    /// Records recovery cannot decode are logged to stderr by table and ID
+    /// (never content) and skipped; see [`Store::recover_after_restart`].
     pub fn interrupt_active_runs(&mut self) -> Result<usize> {
-        let active: Vec<_> = self
-            .runs()?
-            .into_iter()
-            .filter(|run| {
-                matches!(
-                    run.state,
-                    RunState::Queued
-                        | RunState::Running
-                        | RunState::Exploring
-                        | RunState::Implementing
-                        | RunState::Validating
-                        | RunState::Reviewing
-                )
-            })
-            .collect();
+        let report = self.recover_after_restart()?;
+        for skipped in &report.skipped {
+            eprintln!(
+                "luuna-storage: startup recovery skipped {} {}: {}",
+                skipped.table, skipped.id, skipped.reason
+            );
+        }
+        Ok(report.interrupted_runs)
+    }
+
+    /// Startup recovery in one write transaction. Active runs are selected by
+    /// their state column alone, so damaged metadata cannot block recovery of
+    /// every other run; a run whose state cannot be decoded is left unchanged
+    /// and reported, never resumed. Leases, attempts, baselines and candidates
+    /// that cannot be decoded have their state column settled where possible.
+    pub fn recover_after_restart(&mut self) -> Result<RecoveryReport> {
         let tx = self
             .connection
             .transaction_with_behavior(TransactionBehavior::Immediate)?;
-        for run in &active {
+        let mut report = RecoveryReport::default();
+        let runs = tx
+            .prepare("SELECT id,state,revision FROM runs ORDER BY rowid")?
+            .query_map([], |r| {
+                Ok((
+                    r.get::<_, String>(0)?,
+                    r.get::<_, String>(1)?,
+                    r.get::<_, u64>(2)?,
+                ))
+            })?
+            .collect::<std::result::Result<Vec<_>, _>>()?;
+        for (id, state, revision) in runs {
+            let state: RunState = match serde_json::from_str(&state) {
+                Ok(state) => state,
+                Err(error) => {
+                    report.skipped.push(SkippedRecord {
+                        table: "runs",
+                        id,
+                        reason: format!(
+                            "{}; run state unknown, left unchanged",
+                            undecodable(&error)
+                        ),
+                    });
+                    continue;
+                }
+            };
+            if !matches!(
+                state,
+                RunState::Queued
+                    | RunState::Running
+                    | RunState::Exploring
+                    | RunState::Implementing
+                    | RunState::Validating
+                    | RunState::Reviewing
+            ) {
+                continue;
+            }
             transition(
                 &tx,
-                &run.id,
-                run.revision,
+                &id,
+                revision,
                 RunState::Interrupted,
                 "run.interrupted",
                 serde_json::json!({"reason":"runtime restarted before attempt settled"}),
             )?;
+            report.interrupted_runs += 1;
         }
-        baselines::interrupt_running_baselines(&tx)?;
-        validation::interrupt_candidates(&tx)?;
-        writer::abandon_orphaned_work(&tx)?;
+        baselines::interrupt_running_baselines(&tx, &mut report.skipped)?;
+        validation::interrupt_candidates(&tx, &mut report.skipped)?;
+        writer::abandon_orphaned_work(&tx, &mut report.skipped)?;
         tx.commit()?;
-        Ok(active.len())
+        Ok(report)
     }
 
     /// Append-only revisions. Concurrent writers must supply the next revision.
@@ -413,14 +523,21 @@ pub(crate) fn transition(
     kind: &str,
     payload: Value,
 ) -> Result<()> {
-    let run = get_run(tx, id)?.ok_or_else(|| StorageError::NotFound(id.into()))?;
-    if run.revision != expected {
+    // Only the state and revision decide a transition; descriptive metadata
+    // is not decoded, so it cannot block one.
+    let (state, revision): (String, u64) = tx
+        .query_row("SELECT state,revision FROM runs WHERE id=?1", [id], |r| {
+            Ok((r.get(0)?, r.get(1)?))
+        })
+        .optional()?
+        .ok_or_else(|| StorageError::NotFound(id.into()))?;
+    if revision != expected {
         return Err(StorageError::RevisionConflict {
             expected,
-            actual: run.revision,
+            actual: revision,
         });
     }
-    run.state.transition(next)?;
+    serde_json::from_str::<RunState>(&state)?.transition(next)?;
     tx.execute(
         "UPDATE runs SET state=?1,revision=revision+1,updated_at=?2 WHERE id=?3 AND revision=?4",
         params![state_json(next)?, now(), id, expected],
@@ -522,6 +639,84 @@ pub(crate) fn state_json(state: RunState) -> Result<String> {
     Ok(serde_json::to_string(&state)?)
 }
 
+/// Ordered, append-only schema migrations. A shipped migration is never
+/// edited: databases that recorded its version never run it again, so a change
+/// is always a new version. Each script commits its own version row and stays
+/// idempotent, because two processes may race to initialize a new file.
+const MIGRATIONS: &[(u32, &str)] = &[
+    (1, MIGRATION_1),
+    (2, MIGRATION_2),
+    (3, MIGRATION_3),
+    (4, MIGRATION_4),
+    (5, MIGRATION_5),
+    (6, MIGRATION_6),
+    (7, MIGRATION_7),
+];
+
+/// The highest schema version this build creates and understands. A database
+/// that records a higher version is refused.
+pub const DATABASE_SCHEMA_VERSION: u32 = MIGRATIONS[MIGRATIONS.len() - 1].0;
+
+/// The SQL of one shipped migration, for upgrade drills that rebuild a
+/// database at an older schema version.
+#[doc(hidden)]
+pub fn migration_sql(version: u32) -> Option<&'static str> {
+    MIGRATIONS
+        .iter()
+        .find(|(known, _)| *known == version)
+        .map(|(_, sql)| *sql)
+}
+
+/// Versions recorded in `schema_migrations`; empty for a new file.
+pub(crate) fn applied_versions(connection: &Connection) -> Result<BTreeSet<u32>> {
+    let exists: bool = connection.query_row(
+        "SELECT EXISTS(SELECT 1 FROM sqlite_master WHERE type='table' AND name='schema_migrations')",
+        [],
+        |r| r.get(0),
+    )?;
+    if !exists {
+        return Ok(BTreeSet::new());
+    }
+    let mut statement = connection.prepare("SELECT version FROM schema_migrations")?;
+    let versions = statement
+        .query_map([], |r| r.get::<_, u32>(0))?
+        .collect::<std::result::Result<_, _>>()?;
+    Ok(versions)
+}
+
+/// Apply the migrations this database lacks, in order. An existing database
+/// is copied to `<directory>/backups/` first; `path` is `None` in memory.
+fn migrate(connection: &Connection, path: Option<&Path>) -> Result<()> {
+    let applied = applied_versions(connection)?;
+    let current = applied.last().copied().unwrap_or(0);
+    if current > DATABASE_SCHEMA_VERSION {
+        return Err(StorageError::SchemaTooNew {
+            path: path.unwrap_or(Path::new(":memory:")).display().to_string(),
+            found: current,
+            supported: DATABASE_SCHEMA_VERSION,
+        });
+    }
+    let missing: Vec<_> = MIGRATIONS
+        .iter()
+        .filter(|(version, _)| !applied.contains(version))
+        .collect();
+    if missing.is_empty() {
+        return Ok(());
+    }
+    if let (Some(path), true) = (path, current > 0) {
+        backup::pre_migration_backup(connection, path, current)?;
+    }
+    for (version, sql) in missing {
+        connection.execute_batch(sql)?;
+        if !applied_versions(connection)?.contains(version) {
+            return Err(StorageError::Invalid(format!(
+                "migration {version} did not record its schema version"
+            )));
+        }
+    }
+    Ok(())
+}
+
 const MIGRATION_1: &str = "
 BEGIN IMMEDIATE;
 CREATE TABLE IF NOT EXISTS schema_migrations(version INTEGER PRIMARY KEY);
@@ -616,5 +811,18 @@ CREATE TABLE IF NOT EXISTS ticket_sources(
 CREATE TABLE IF NOT EXISTS ticket_delivery_attempts(
  ticket_id TEXT PRIMARY KEY REFERENCES ticket_sources(ticket_id));
 INSERT OR IGNORE INTO schema_migrations(version) VALUES (6);
+COMMIT;
+";
+
+/// Lookup indexes for per-baseline check results, the latest baseline per
+/// repository, a plan's workflow run, a run's leases and the latest discovery.
+const MIGRATION_7: &str = "
+BEGIN IMMEDIATE;
+CREATE INDEX IF NOT EXISTS check_results_baseline ON check_results(baseline_id);
+CREATE INDEX IF NOT EXISTS baselines_repository ON baselines(project_id, repository_id);
+CREATE INDEX IF NOT EXISTS runs_plan ON runs(plan_id, plan_revision);
+CREATE INDEX IF NOT EXISTS worktree_leases_run ON worktree_leases(run_id);
+CREATE INDEX IF NOT EXISTS discoveries_project ON discoveries(project_id);
+INSERT OR IGNORE INTO schema_migrations(version) VALUES (7);
 COMMIT;
 ";

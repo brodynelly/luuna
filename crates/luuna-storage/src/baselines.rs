@@ -180,9 +180,9 @@ impl Store {
     }
 
     pub fn baselines(&self, project_id: &str) -> Result<Vec<BaselineEvidence>> {
-        let mut statement = self.connection.prepare(
-            "SELECT id FROM baselines WHERE project_id=?1 ORDER BY started_at DESC, rowid DESC",
-        )?;
+        let mut statement = self
+            .connection
+            .prepare("SELECT id FROM baselines WHERE project_id=?1 ORDER BY rowid DESC")?;
         let ids = statement
             .query_map([project_id], |r| r.get::<_, String>(0))?
             .collect::<std::result::Result<Vec<_>, _>>()?;
@@ -295,21 +295,55 @@ impl Store {
 /// Called by startup recovery after active runs were interrupted in the same
 /// transaction: a baseline still running when the runtime stopped, or one whose
 /// verdict was written but whose run never settled, can never be reported passed.
-pub(crate) fn interrupt_running_baselines(tx: &rusqlite::Transaction<'_>) -> Result<usize> {
+pub(crate) fn interrupt_running_baselines(
+    tx: &rusqlite::Transaction<'_>,
+    skipped: &mut Vec<crate::SkippedRecord>,
+) -> Result<usize> {
     let mut statement = tx.prepare(
-        "SELECT b.id, b.status FROM baselines b JOIN runs r ON r.id=b.run_id \
+        "SELECT b.id, b.status, b.project_id FROM baselines b JOIN runs r ON r.id=b.run_id \
          WHERE b.status='running' OR (b.status='passed' AND r.state=?1)",
     )?;
     let ids = statement
         .query_map([crate::state_json(RunState::Interrupted)?], |r| {
-            Ok((r.get::<_, String>(0)?, r.get::<_, String>(1)?))
+            Ok((
+                r.get::<_, String>(0)?,
+                r.get::<_, String>(1)?,
+                r.get::<_, String>(2)?,
+            ))
         })?
         .collect::<std::result::Result<Vec<_>, _>>()?;
     drop(statement);
     let finished_at = now();
-    for (id, previous) in &ids {
-        let mut evidence =
-            load_baseline(tx, id)?.ok_or_else(|| StorageError::NotFound(id.clone()))?;
+    for (id, previous, project_id) in &ids {
+        let mut evidence = match load_baseline(tx, id) {
+            Ok(Some(evidence)) => evidence,
+            Ok(None) => return Err(StorageError::NotFound(id.clone())),
+            Err(StorageError::Json(error)) => {
+                // The status column alone is enough: the implementation gate
+                // decodes the record and fails closed on it anyway.
+                let reason = format!(
+                    "runtime restarted before the baseline settled; {}; not evidence",
+                    crate::undecodable(&error)
+                );
+                tx.execute(
+                    "UPDATE baselines SET status='interrupted',finished_at=?1 WHERE id=?2",
+                    params![finished_at, id],
+                )?;
+                append_project_event(
+                    tx,
+                    project_id,
+                    "baseline.finished",
+                    json!({"baseline_id": id, "status": BaselineStatus::Interrupted, "reason": reason}),
+                )?;
+                skipped.push(crate::SkippedRecord {
+                    table: "baselines",
+                    id: id.clone(),
+                    reason,
+                });
+                continue;
+            }
+            Err(error) => return Err(error),
+        };
         evidence.status = BaselineStatus::Interrupted;
         evidence.finished_at = Some(finished_at.clone());
         evidence.reason = Some(if previous == "passed" {
@@ -361,6 +395,10 @@ fn load_baseline(connection: &Connection, id: &str) -> Result<Option<BaselineEvi
     Ok(Some(evidence))
 }
 
+/// The most recently recorded baseline. Insertion order (rowid; baselines are
+/// never deleted and a vacuumed copy keeps their relative order) decides, never
+/// the wall-clock `started_at`, so a clock stepped backwards cannot let an
+/// older passed baseline mask a newer failed one.
 pub(crate) fn latest_baseline(
     connection: &Connection,
     project_id: &str,
@@ -368,7 +406,7 @@ pub(crate) fn latest_baseline(
 ) -> Result<Option<BaselineEvidence>> {
     let id: Option<String> = connection
         .query_row(
-            "SELECT id FROM baselines WHERE project_id=?1 AND repository_id=?2 ORDER BY started_at DESC, rowid DESC LIMIT 1",
+            "SELECT id FROM baselines WHERE project_id=?1 AND repository_id=?2 ORDER BY rowid DESC LIMIT 1",
             params![project_id, repository_id],
             |r| r.get(0),
         )

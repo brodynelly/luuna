@@ -804,7 +804,10 @@ fn candidate_status(state: RunState) -> Result<CandidateStatus> {
     })
 }
 
-pub(crate) fn interrupt_candidates(tx: &Transaction<'_>) -> Result<()> {
+pub(crate) fn interrupt_candidates(
+    tx: &Transaction<'_>,
+    skipped: &mut Vec<crate::SkippedRecord>,
+) -> Result<()> {
     let mut statement = tx.prepare("SELECT c.hash FROM candidates c JOIN runs r ON r.id=c.run_id WHERE r.state=?1 AND c.status IN ('pending','validating','reviewing')")?;
     let hashes = statement
         .query_map([crate::state_json(RunState::Interrupted)?], |r| {
@@ -813,8 +816,15 @@ pub(crate) fn interrupt_candidates(tx: &Transaction<'_>) -> Result<()> {
         .collect::<std::result::Result<Vec<_>, _>>()?;
     drop(statement);
     for hash in hashes {
-        let mut evidence =
-            load_candidate(tx, &hash)?.ok_or_else(|| StorageError::NotFound(hash.clone()))?;
+        let mut evidence = match load_candidate(tx, &hash) {
+            Ok(Some(evidence)) => evidence,
+            Ok(None) => return Err(StorageError::NotFound(hash.clone())),
+            Err(StorageError::Json(error)) => {
+                skipped.push(interrupt_undecodable_candidate(tx, &hash, &error)?);
+                continue;
+            }
+            Err(error) => return Err(error),
+        };
         let was_reviewing = evidence.status == CandidateStatus::Reviewing;
         if let Some(started) = &evidence.stage_started_at {
             let elapsed = chrono::DateTime::parse_from_rfc3339(started)
@@ -854,6 +864,51 @@ pub(crate) fn interrupt_candidates(tx: &Transaction<'_>) -> Result<()> {
         )?;
     }
     Ok(())
+}
+
+/// A candidate record recovery cannot decode is still never resumable: its
+/// status column becomes `interrupted` (the gates decode the record and fail
+/// closed on it anyway). A payload that is not JSON at all trips the identity
+/// trigger, so that candidate keeps its status and is only reported.
+fn interrupt_undecodable_candidate(
+    tx: &Transaction<'_>,
+    hash: &str,
+    error: &serde_json::Error,
+) -> Result<crate::SkippedRecord> {
+    let reason = format!(
+        "runtime restarted before candidate validation settled; {}; fresh evidence and a new plan are required",
+        crate::undecodable(error)
+    );
+    let run_id: String =
+        tx.query_row("SELECT run_id FROM candidates WHERE hash=?1", [hash], |r| {
+            r.get(0)
+        })?;
+    match tx.execute(
+        "UPDATE candidates SET status='interrupted' WHERE hash=?1",
+        [hash],
+    ) {
+        Ok(_) => {
+            append(
+                tx,
+                &run_id,
+                "candidate.interrupted",
+                json!({"candidate_hash": hash, "reason": reason}),
+            )?;
+        }
+        // Only the trigger's refusal is tolerated: an I/O or full-disk error
+        // can end the transaction and must stop recovery.
+        Err(rusqlite::Error::SqliteFailure(error, _))
+            if matches!(
+                error.code,
+                rusqlite::ErrorCode::Unknown | rusqlite::ErrorCode::ConstraintViolation
+            ) => {}
+        Err(error) => return Err(error.into()),
+    }
+    Ok(crate::SkippedRecord {
+        table: "candidates",
+        id: hash.into(),
+        reason,
+    })
 }
 
 /// Raises the candidate's elapsed time to at least what its current stage has

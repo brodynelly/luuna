@@ -4,8 +4,14 @@ use std::{
     path::PathBuf,
 };
 
+mod admin;
+
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
+    // `backup`, `restore` and `check` maintain the data directory and exit.
+    if let Some(outcome) = admin::dispatch(std::env::args_os().skip(1)) {
+        return outcome;
+    }
     let data_dir =
         PathBuf::from(std::env::var("LUUNA_DATA_DIR").unwrap_or_else(|_| ".luuna".into()));
     let data_dir = if data_dir.is_absolute() {

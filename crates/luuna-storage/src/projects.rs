@@ -303,11 +303,12 @@ impl Store {
         Ok(())
     }
 
+    /// The most recently recorded proposal, by insertion order, not wall clock.
     pub fn latest_discovery(&self, project_id: &str) -> Result<Option<Discovery>> {
         let payload: Option<String> = self
             .connection
             .query_row(
-                "SELECT payload FROM discoveries WHERE project_id=?1 ORDER BY created_at DESC, rowid DESC LIMIT 1",
+                "SELECT payload FROM discoveries WHERE project_id=?1 ORDER BY rowid DESC LIMIT 1",
                 [project_id],
                 |r| r.get(0),
             )
