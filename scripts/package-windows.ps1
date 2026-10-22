@@ -47,13 +47,16 @@ if (!$webview) { Write-Warning 'The WebView2 Runtime registration was not found 
 $rustVersion = (& cargo --version)
 $nodeVersion = (& node.exe --version)
 
-Step 'Release runtime (cargo build --locked -p luuna-runtime)'
-$cargoArguments = @('build', '--locked', '-p', 'luuna-runtime')
+Step 'Runtime and Rust terminal (locked workspace toolchain)'
+$cargoArguments = @('build', '--locked', '-p', 'luuna-runtime', '-p', 'luuna-tui')
 if (!$DebugBuild) { $cargoArguments += '--release' }
 & cargo @cargoArguments
 if ($LASTEXITCODE -ne 0) { throw 'The runtime build failed.' }
-$runtime = Join-Path $root ('target\' + $profile + '\luuna-runtime.exe')
+$cargoTarget = if (!$env:CARGO_TARGET_DIR) { Join-Path $root 'target' } elseif ([IO.Path]::IsPathRooted($env:CARGO_TARGET_DIR)) { $env:CARGO_TARGET_DIR } else { Join-Path $root $env:CARGO_TARGET_DIR }
+$runtime = Join-Path $cargoTarget ($profile + '\luuna-runtime.exe')
+$terminal = Join-Path $cargoTarget ($profile + '\luuna-tui.exe')
 if (!(Test-Path -LiteralPath $runtime)) { throw ('Runtime executable missing: ' + $runtime) }
+if (!(Test-Path -LiteralPath $terminal)) { throw ('Rust terminal executable missing: ' + $terminal) }
 
 $piSource = Join-Path $root 'tools\pi'
 if (!$SkipPi) {
@@ -87,6 +90,9 @@ if (!$SkipComponents) {
 } else { $bunVersion = 'skipped' }
 
 Step ('Staging resources in ' + $stage)
+$stage = [IO.Path]::GetFullPath($stage)
+$stageParent = [IO.Path]::GetFullPath((Join-Path $tauriDirectory 'target')) + [IO.Path]::DirectorySeparatorChar
+if (!$stage.StartsWith($stageParent, [StringComparison]::OrdinalIgnoreCase)) { throw 'Refusing to replace a stage outside the desktop target directory.' }
 if (Test-Path -LiteralPath $stage) { Remove-Item -LiteralPath $stage -Recurse -Force }
 New-Item -ItemType Directory -Force -Path (Join-Path $stage 'scripts') | Out-Null
 Copy-Item -LiteralPath $runtime -Destination (Join-Path $stage 'luuna-runtime.exe')
@@ -114,7 +120,7 @@ if (!$SkipComponents) {
     if ($LASTEXITCODE -ne 0) { throw 'The staged component layout did not verify against its distribution manifest.' }
 }
 
-Step 'Terminal client (packages/tui, @luuna/api-client and the capability catalog)'
+Step 'Rust terminal, JSONL bridge, @luuna/api-client and capability catalog'
 # Mirrors the checkout layout so the client resolves its dependency and the
 # catalog exactly as in development: packages/tui/src/catalog.mjs reads
 # ../../../schemas/capability-catalog.json and `@luuna/api-client` resolves
@@ -125,22 +131,8 @@ Step 'Terminal client (packages/tui, @luuna/api-client and the capability catalo
 & npm.cmd run build --workspace @luuna/api-client
 if ($LASTEXITCODE -ne 0) { throw 'Compiling @luuna/api-client failed.' }
 if (-not (Test-Path (Join-Path $root 'packages\api-client\dist\index.js'))) { throw 'The compiled API client is missing packages\api-client\dist\index.js.' }
-foreach ($directory in @('packages\tui\bin', 'packages\tui\src', 'node_modules\@luuna\api-client\dist', 'schemas')) {
-    New-Item -ItemType Directory -Force -Path (Join-Path $stage $directory) | Out-Null
-}
-& robocopy (Join-Path $root 'packages\tui\bin') (Join-Path $stage 'packages\tui\bin') /E /NFL /NDL /NJH /NJS /NP | Out-Null
-if ($LASTEXITCODE -gt 7) { throw 'Copying the terminal client failed.' }
-& robocopy (Join-Path $root 'packages\tui\src') (Join-Path $stage 'packages\tui\src') /E /NFL /NDL /NJH /NJS /NP | Out-Null
-if ($LASTEXITCODE -gt 7) { throw 'Copying the terminal client failed.' }
-& robocopy (Join-Path $root 'packages\api-client\dist') (Join-Path $stage 'node_modules\@luuna\api-client\dist') /E /NFL /NDL /NJH /NJS /NP | Out-Null
-if ($LASTEXITCODE -gt 7) { throw 'Copying the compiled API client failed.' }
-foreach ($file in @('packages\tui\package.json', 'packages\tui\README.md', 'schemas\capability-catalog.json')) {
-    Copy-Item -LiteralPath (Join-Path $root $file) -Destination (Join-Path $stage $file)
-}
-# The staged package manifest exports the compiled entry point only.
-$apiClientManifest = Get-Content -Raw (Join-Path $root 'packages\api-client\package.json') | ConvertFrom-Json
-@{ name = $apiClientManifest.name; version = $apiClientManifest.version; license = $apiClientManifest.license; type = 'module'; exports = @{ '.' = './dist/index.js' } } |
-    ConvertTo-Json -Depth 4 | Set-Content -Encoding UTF8 (Join-Path $stage 'node_modules\@luuna\api-client\package.json')
+& node.exe (Join-Path $root 'scripts\stage-terminal.mjs') --root $root --out $stage --binary $terminal
+if ($LASTEXITCODE -ne 0) { throw 'Staging the Rust terminal payload failed.' }
 # The staged terminal client must start on the host Node without the checkout.
 Push-Location $stage
 try {
@@ -185,7 +177,7 @@ try {
 Step 'Verifying the packaged layout'
 $built = Join-Path $tauriDirectory ('target\' + $profile)
 $copied = Join-Path $built 'luuna'
-foreach ($required in @('luuna-runtime.exe', 'scripts\ensure-windows-runtime.ps1', 'scripts\windows-common.ps1', 'scripts\start-terminal.ps1', 'Configure Luuna.cmd', 'Luuna Terminal.cmd', 'luuna.cmd', 'packages\tui\bin\luuna-tui.mjs', 'packages\tui\src\catalog.mjs', 'node_modules\@luuna\api-client\dist\index.js', 'schemas\capability-catalog.json')) {
+foreach ($required in @('luuna-runtime.exe', 'luuna-tui.exe', 'scripts\ensure-windows-runtime.ps1', 'scripts\windows-common.ps1', 'scripts\start-terminal.ps1', 'Configure Luuna.cmd', 'Luuna Terminal.cmd', 'luuna.cmd', 'packages\tui\bin\luuna-tui.mjs', 'packages\tui\src\bridge.mjs', 'packages\tui\src\catalog.mjs', 'node_modules\@luuna\api-client\dist\index.js', 'schemas\capability-catalog.json')) {
     if (!(Test-Path -LiteralPath (Join-Path $copied $required))) { throw ('Packaged resource missing after build: ' + $required) }
 }
 if (!$SkipPi -and !(Test-Path -LiteralPath (Join-Path $copied 'pi\node_modules\@earendil-works\pi-coding-agent\dist\cli.js'))) { throw 'Packaged Pi tree missing after build.' }
@@ -218,7 +210,8 @@ $report = [ordered]@{
     webview_install_mode = 'downloadBootstrapper'
     prerequisites_on_target = @('WebView2 Runtime (bootstrapped by the installer when absent)', 'Node.js 24.19 or newer on PATH for the pinned Pi engine and the terminal client', 'Git 2.43 or newer on PATH', 'Python 3 for Python check recipes', 'a provider key saved with Configure Luuna.cmd')
     components = $stagedComponents
-    terminal_client = 'Luuna Terminal.cmd (packages/tui on the host Node)'
+    terminal_client = 'Luuna Terminal.cmd (native Rust workbench; Node JSONL bridge and script commands)'
+    terminal_executable = [ordered]@{ path = (Join-Path $copied 'luuna-tui.exe'); sha256 = (Sha256 (Join-Path $copied 'luuna-tui.exe')) }
     clean_machine_test = 'not executed by this script; see docs/PACKAGING.md'
     artifacts = @(
         foreach ($installer in $installers) { [ordered]@{ path = $installer.FullName; sha256 = (Sha256 $installer.FullName); size_bytes = $installer.Length } }

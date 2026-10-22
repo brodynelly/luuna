@@ -4,9 +4,9 @@ Luuna maintains three MIT-licensed distributions with space-themed identities. E
 
 | Component | Responsibility | Primary CLI | Short alias | Origin | Data format |
 | --- | --- | --- | --- | --- | --- |
-| [Luuna Missions](https://github.com/brodynelly/luuna-missions/blob/bda5f31e8e7968af54f0d5f55f60c04dbd823d3e/README.md) | Tickets and structured plans | luuna-missions | lm | Seeds 0.6.0 | .luuna/missions/ |
-| [Luuna Atlas](https://github.com/brodynelly/luuna-atlas/blob/3296243402ec51aa4f21a317c3379b8b8de5e7ca/README.md) | Expertise and project memory | luuna-atlas | la | Mulch 0.11.0 | .luuna/atlas/ |
-| [Luuna Beacon](https://github.com/brodynelly/luuna-beacon/blob/e103e010082afaa3bde00460b5bd4ceae0f0e476/README.md) | Composable prompts and instructions | luuna-beacon | lb | Canopy 0.2.6 | .luuna/beacon/ |
+| [Luuna Missions](https://github.com/brodynelly/luuna-missions/blob/5832801137dc1189915340c1f6076516b34e21b1/README.md) | Tickets and structured plans | luuna-missions | lm | Seeds 0.6.0 | .luuna/missions/ |
+| [Luuna Atlas](https://github.com/brodynelly/luuna-atlas/blob/7c04005c5541e7efdb652d834728602a8dcb4d29/README.md) | Expertise and project memory | luuna-atlas | la | Mulch 0.11.0 | .luuna/atlas/ |
+| [Luuna Beacon](https://github.com/brodynelly/luuna-beacon/blob/ae7741fe84df39c59a0081e8f56b13ef567bcce8/README.md) | Composable prompts and instructions | luuna-beacon | lb | Canopy 0.2.6 | .luuna/beacon/ |
 
 [manifest.json](manifest.json) records package names, versions, entrypoints, and compatible data paths for tooling. Packages are private and unpublished. Source now lives in the public repositories [Luuna Missions](https://github.com/brodynelly/luuna-missions), [Luuna Atlas](https://github.com/brodynelly/luuna-atlas), and [Luuna Beacon](https://github.com/brodynelly/luuna-beacon). These directories are exact-commit Git submodules. The manifest commit and Git gitlink must agree; see [ADR 0012](../docs/decisions/0012-independent-component-repositories.md).
 

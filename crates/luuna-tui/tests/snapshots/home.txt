@@ -1,0 +1,35 @@
+ Home  Projects  Missions  Atlas  Beacon  Runs  Commands  Help
+ LUUNA  / WORKBENCH connected
+╔ LUUNA ══════════════════════╗╔ > Home / workspace health ════════════════════════════════════════════════════════════╗
+║ 1 Home *                    ║║> Demo workspace [1/1]                                                                 ║
+║ 2 Projects                  ║║Up/Down project / Enter opens / PgUp/PgDn details                                      ║
+║ 3 Missions                  ║║YOUR DEVELOPMENT WORKSPACE                                                             ║
+║ 4 Atlas                     ║║Repository health and work waiting for your attention.                                 ║
+║ 5 Beacon                    ║║                                                                                       ║
+║ 6 Runs                      ║║> Demo workspace                                                                       ║
+║ 7 Commands                  ║║Project: demo                                                                          ║
+║ 8 Help                      ║║Manifest revision: 2                                                                   ║
+║                             ║║Manifest hash:                                                                         ║
+║                             ║║Work: 1 tickets / 1 active workflows                                                   ║
+║                             ║║Repository: api                                                                        ║
+║                             ║║Checkout: /fixture/api                                                                 ║
+║                             ║║+ passed                                                                               ║
+║                             ║║Baseline run: baseline-1                                                               ║
+║                             ║║Baseline manifest revision: 2                                                          ║
+║                             ║║Commit: aabbcc                                                                         ║
+║                             ║║                                                                                       ║
+║                             ║║NEEDS ATTENTION                                                                        ║
+║                             ║║Project: demo                                                                          ║
+║                             ║║Greeting                                                                               ║
+║                             ║║? plan_ready                                                                           ║
+║                             ║║Review the immutable plan                                                              ║
+║PROJECT                      ║║                                                                                       ║
+║demo                         ║║                                                                                       ║
+║                             ║║                                                                                       ║
+║UNSENT PLAN CONTEXT          ║║                                                                                       ║
+║0 memory selection(s)        ║║                                                                                       ║
+║No prompt selected           ║║                                                                                       ║
+║F10 menu / Tab focus         ║║Enter project  F3 Projects  F5 refresh                                                 ║
+╚═════════════════════════════╝╚═══════════════════════════════════════════════════════════════════════════════════════╝
+Connecting to the local runtime…
+Enter project  F3 Projects  F5 refresh

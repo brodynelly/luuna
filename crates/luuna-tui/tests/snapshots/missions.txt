@@ -1,0 +1,35 @@
+ Home  Projects  Missions  Atlas  Beacon  Runs  Commands  Help
+ LUUNA  / WORKBENCH connected
+╔ LUUNA ══════════════════════╗╔ > Missions / workflow board ══════════════════════════════════════════════════════════╗
+║ 1 Home                      ║║Read-only runtime projection / columns 1-3 of 8                                        ║
+║ 2 Projects                  ║║Left/Right changes column; Enter inspects the card                                     ║
+║ 3 Missions *                ║║╔ > Backlog (1) ════════════╗╔ Testing prerequisite (0) ═╗╔ Discovery / plan (0) ═════╗║
+║ 4 Atlas                     ║║║>Greeting ticket           ║║                           ║║                           ║║
+║ 5 Beacon                    ║║║ Ticket: ticket-1          ║║ No cards                  ║║ No cards                  ║║
+║ 6 Runs                      ║║║ Revision: 3               ║║                           ║║                           ║║
+║ 7 Commands                  ║║║ ? plan_ready              ║║                           ║║                           ║║
+║ 8 Help                      ║║║ Run: run-1                ║║                           ║║                           ║║
+║                             ║║║ ------------------------  ║║                           ║║                           ║║
+║                             ║║║                           ║║                           ║║                           ║║
+║                             ║║║                           ║║                           ║║                           ║║
+║                             ║║║                           ║║                           ║║                           ║║
+║                             ║║║                           ║║                           ║║                           ║║
+║                             ║║║                           ║║                           ║║                           ║║
+║                             ║║║                           ║║                           ║║                           ║║
+║                             ║║║                           ║║                           ║║                           ║║
+║                             ║║║                           ║║                           ║║                           ║║
+║                             ║║║                           ║║                           ║║                           ║║
+║                             ║║║                           ║║                           ║║                           ║║
+║                             ║║║                           ║║                           ║║                           ║║
+║                             ║║║                           ║║                           ║║                           ║║
+║                             ║║║                           ║║                           ║║                           ║║
+║PROJECT                      ║║║                           ║║                           ║║                           ║║
+║demo                         ║║║                           ║║                           ║║                           ║║
+║                             ║║║                           ║║                           ║║                           ║║
+║UNSENT PLAN CONTEXT          ║║║                           ║║                           ║║                           ║║
+║0 memory selection(s)        ║║║                           ║║                           ║║                           ║║
+║No prompt selected           ║║╚═══════════════════════════╝╚═══════════════════════════╝╚═══════════════════════════╝║
+║F10 menu / Tab focus         ║║←→ columns  Enter ticket  n new  r refresh                                             ║
+╚═════════════════════════════╝╚═══════════════════════════════════════════════════════════════════════════════════════╝
+Connecting to the local runtime…
+←→ columns  Enter ticket  n new  r refresh

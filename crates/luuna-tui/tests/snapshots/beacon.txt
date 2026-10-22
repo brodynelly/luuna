@@ -1,0 +1,35 @@
+ Home  Projects  Missions  Atlas  Beacon  Runs  Commands  Help
+ LUUNA  / WORKBENCH connected
+╔ LUUNA ══════════════════════╗╔ > Beacon / exact preview ═════════════════════════════════════════════════════════════╗
+║ 1 Home                      ║║Unsent context: not selected / s selects                                               ║
+║ 2 Projects                  ║║review                                                                                 ║
+║ 3 Missions                  ║║Version: 2                                                                             ║
+║ 4 Atlas                     ║║Exact hash: sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa    ║
+║ 5 Beacon *                  ║║                                                                                       ║
+║ 6 Runs                      ║║RENDERED BODY                                                                          ║
+║ 7 Commands                  ║║Review the exact candidate.                                                            ║
+║ 8 Help                      ║║Explain every finding.                                                                 ║
+║                             ║║                                                                                       ║
+║                             ║║                                                                                       ║
+║                             ║║                                                                                       ║
+║                             ║║                                                                                       ║
+║                             ║║                                                                                       ║
+║                             ║║                                                                                       ║
+║                             ║║                                                                                       ║
+║                             ║║                                                                                       ║
+║                             ║║                                                                                       ║
+║                             ║║                                                                                       ║
+║                             ║║                                                                                       ║
+║                             ║║                                                                                       ║
+║                             ║║                                                                                       ║
+║                             ║║                                                                                       ║
+║PROJECT                      ║║                                                                                       ║
+║demo                         ║║                                                                                       ║
+║                             ║║                                                                                       ║
+║UNSENT PLAN CONTEXT          ║║                                                                                       ║
+║0 memory selection(s)        ║║                                                                                       ║
+║No prompt selected           ║║                                                                                       ║
+║F10 menu / Tab focus         ║║e update  s select exact prompt                                                        ║
+╚═════════════════════════════╝╚═══════════════════════════════════════════════════════════════════════════════════════╝
+Connecting to the local runtime…
+e update  s select exact prompt
