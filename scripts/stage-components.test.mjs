@@ -65,9 +65,9 @@ test('copying a checkout leaves its Git link behind and nothing else', () => scr
 }));
 
 const pins = {
-  missions: { brand: 'Luuna Missions', version: '0.6.0', entrypoint: 'src/index.ts', short: 'lm', legacy: [] },
-  atlas: { brand: 'Luuna Atlas', version: '0.11.0', entrypoint: 'src/cli.ts', short: 'la', legacy: [] },
-  beacon: { brand: 'Luuna Beacon', version: '0.2.6', entrypoint: 'src/index.ts', short: 'lb', legacy: [] },
+  missions: { brand: 'Luuna Missions', version: '0.6.0', entrypoint: 'src/index.ts', short: 'lms', legacy: [] },
+  atlas: { brand: 'Luuna Atlas', version: '0.11.0', entrypoint: 'src/cli.ts', short: 'lat', legacy: [] },
+  beacon: { brand: 'Luuna Beacon', version: '0.2.6', entrypoint: 'src/index.ts', short: 'lbc', legacy: [] },
 };
 
 /** A synthetic Luuna checkout: three pinned component submodules and a Bun stand-in. */
