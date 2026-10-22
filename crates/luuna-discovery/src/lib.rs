@@ -6,15 +6,19 @@
 //! recipe that the developer confirms, and the M2b executor later runs under
 //! runtime policy. Imported text cannot widen scope or request secrets.
 use luuna_domain::{
-    Confidence, DirtyState, Discovery, DiscoveryQuestion, ExecutionProfile, ManifestCheck,
-    ProjectManifest, ProjectPolicy, ProposedCheck, RepositoryDiscovery, RepositoryManifest,
-    RepositoryObservation, SCHEMA_VERSION,
+    Confidence, DirtyState, Discovery, DiscoveryQuestion, ExecutionProfile, HostCapabilities,
+    ManifestCheck, ProjectManifest, ProjectPolicy, ProposedCheck, RepositoryDiscovery,
+    RepositoryManifest, RepositoryObservation, SCHEMA_VERSION,
 };
 use std::{
     collections::BTreeSet,
     path::{Path, PathBuf},
 };
 use thiserror::Error;
+
+pub mod capabilities;
+pub mod relationships;
+pub mod scaffold;
 
 pub const MAX_MANIFEST_FILE_BYTES: u64 = 1024 * 1024;
 const EVIDENCE_EXCERPT_CHARS: usize = 160;
@@ -41,6 +45,10 @@ pub struct DiscoveryRequest {
     pub manifest_revision: u64,
     pub created_at: String,
     pub repositories: Vec<RepositoryInput>,
+    /// The host's probed toolchain (M5). With it, every proposed check is
+    /// annotated `available` or `missing` and each missing tool is a
+    /// question; without it, nothing is annotated.
+    pub host_capabilities: Option<HostCapabilities>,
 }
 
 /// A proposed command: executable plus argument array, never shell text.
@@ -94,6 +102,8 @@ impl Facts {
             },
             evidence,
             confidence,
+            capability: None,
+            missing_tools: Vec::new(),
         });
     }
 }
@@ -103,12 +113,19 @@ pub fn discover(request: DiscoveryRequest) -> Result<Discovery, DiscoveryError> 
     let mut repositories = Vec::new();
     let mut questions = Vec::new();
     let mut manifests = Vec::new();
+    // Repository roots outlive the per-repository loop: relationships between
+    // registered repositories are proposed from evidence across them (M4).
+    let roots: Vec<(String, PathBuf)> = request
+        .repositories
+        .iter()
+        .map(|input| (input.repository_id.clone(), input.root.clone()))
+        .collect();
     for input in request.repositories {
         let id = input.repository_id;
         if !input.root.is_dir() {
             return Err(DiscoveryError::Unreadable(input.root.display().to_string()));
         }
-        let mut facts = inspect_stack(&input.root, &id);
+        let mut facts = inspect_stack(&input.root, &id, request.host_capabilities.as_ref());
         let observation = input.observation;
         flag_uncommitted_evidence(&id, &observation.dirty, &mut facts);
         if !observation.dirty.is_clean() {
@@ -177,7 +194,7 @@ pub fn discover(request: DiscoveryRequest) -> Result<Discovery, DiscoveryError> 
         name: request.project_name,
         revision: request.manifest_revision,
         repositories: manifests,
-        relationships: Vec::new(),
+        relationships: relationships::propose(&roots),
         policy: ProjectPolicy::v1(1, 1, 2),
     };
     let manifest_problems = match proposed_manifest.validate() {
@@ -193,6 +210,7 @@ pub fn discover(request: DiscoveryRequest) -> Result<Discovery, DiscoveryError> 
         proposed_manifest,
         manifest_problems,
         questions,
+        host_capabilities: request.host_capabilities,
     })
 }
 
@@ -305,7 +323,7 @@ fn excerpt(value: &str) -> String {
     text
 }
 
-fn inspect_stack(root: &Path, id: &str) -> Facts {
+fn inspect_stack(root: &Path, id: &str, host: Option<&HostCapabilities>) -> Facts {
     let mut facts = Facts {
         profiles: Vec::new(),
         evidence: Vec::new(),
@@ -315,10 +333,15 @@ fn inspect_stack(root: &Path, id: &str) -> Facts {
     rust(root, id, &mut facts);
     node(root, id, &mut facts);
     go(root, id, &mut facts);
-    python(root, id, &mut facts);
+    python(root, id, host, &mut facts);
     dart(root, id, &mut facts);
     android(root, id, &mut facts);
     ios(root, id, &mut facts);
+    if let Some(host) = host {
+        let mut questions =
+            capabilities::annotate(id, root, &facts.profiles, &mut facts.checks, host);
+        facts.questions.append(&mut questions);
+    }
     facts
 }
 
@@ -499,6 +522,11 @@ fn node(root: &Path, id: &str, facts: &mut Facts) {
             vec!["run".into(), name.into()]
         }
     };
+    if let Some(runner) = script("test").as_deref().and_then(test_runner) {
+        facts
+            .evidence
+            .push(format!("{id}:package.json#scripts.test runner = {runner}"));
+    }
     for (name, required, capabilities) in [
         ("test", true, "test"),
         ("typecheck", false, "typecheck"),
@@ -534,6 +562,30 @@ fn node(root: &Path, id: &str, facts: &mut Facts) {
     }
 }
 
+/// The test runner a `scripts.test` body names, for evidence only; the
+/// recipe stays `<manager> test`, and the executor parses the runner's summary.
+fn test_runner(body: &str) -> Option<&'static str> {
+    let word = |needle: &str| {
+        body.split(|c: char| !c.is_ascii_alphanumeric() && c != '-' && c != '.')
+            .any(|token| token == needle)
+    };
+    if word("vitest") {
+        Some("vitest")
+    } else if word("jest") {
+        Some("jest")
+    } else if body.contains("node --test") || (word("node") && word("--test")) {
+        Some("node --test")
+    } else if word("mocha") {
+        Some("mocha")
+    } else if word("ava") {
+        Some("ava")
+    } else if word("playwright") {
+        Some("playwright")
+    } else {
+        None
+    }
+}
+
 fn go(root: &Path, id: &str, facts: &mut Facts) {
     if read_bounded(root, "go.mod").is_none() {
         return;
@@ -565,7 +617,7 @@ fn go(root: &Path, id: &str, facts: &mut Facts) {
     );
 }
 
-fn python(root: &Path, id: &str, facts: &mut Facts) {
+fn python(root: &Path, id: &str, host: Option<&HostCapabilities>, facts: &mut Facts) {
     let pyproject = read_bounded(root, "pyproject.toml");
     let setup = exists(root, "setup.py") || exists(root, "setup.cfg");
     let requirements = exists(root, "requirements.txt");
@@ -580,30 +632,114 @@ fn python(root: &Path, id: &str, facts: &mut Facts) {
         "requirements.txt"
     };
     facts.profile("python", format!("{id}:{marker}"));
-    let pytest_configured = pyproject
-        .as_deref()
-        .is_some_and(|p| p.contains("[tool.pytest") || p.contains("pytest"))
+    let project = pyproject.as_deref().unwrap_or("");
+    let interpreter = capabilities::python_executable(host);
+    // pytest is proposed only when the repository configures or depends on
+    // it; a plain `tests/` directory runs under the standard-library runner.
+    let pytest_configured = project.contains("[tool.pytest")
+        || project.contains("\"pytest")
+        || project.contains("'pytest")
         || exists(root, "pytest.ini")
         || exists(root, "conftest.py")
-        || exists(root, "tests");
+        || read_bounded(root, "setup.cfg").is_some_and(|c| c.contains("[tool:pytest]"))
+        || read_bounded(root, "tox.ini").is_some_and(|c| c.contains("[pytest]"))
+        || read_bounded(root, "requirements.txt").is_some_and(|r| {
+            r.lines()
+                .any(|line| line.trim_start().to_ascii_lowercase().starts_with("pytest"))
+        });
+    let unittest_tests = exists(root, "tests") || exists(root, "test");
     if pytest_configured {
+        let evidence = if exists(root, "pytest.ini") {
+            "pytest.ini"
+        } else if exists(root, "conftest.py") {
+            "conftest.py"
+        } else {
+            marker
+        };
         facts.check(
             Recipe {
                 id: "pytest",
-                executable: "pytest",
-                args: &["-q"],
+                executable: interpreter,
+                args: &["-m", "pytest", "-q"],
                 required: true,
                 timeout_seconds: 1800,
                 capabilities: &["python", "pytest"],
             },
-            vec![format!("{id}:{marker}")],
+            vec![format!("{id}:{evidence}#pytest")],
             Confidence::Inferred,
+        );
+    } else if unittest_tests {
+        let directory = if exists(root, "tests") {
+            "tests"
+        } else {
+            "test"
+        };
+        facts.check(
+            Recipe {
+                id: "unittest",
+                executable: interpreter,
+                args: &["-m", "unittest", "-v"],
+                required: true,
+                timeout_seconds: 1800,
+                capabilities: &["python"],
+            },
+            vec![format!("{id}:{directory}/"), format!("{id}:{marker}")],
+            Confidence::Inferred,
+        );
+        facts.question(
+            id,
+            "python-tests",
+            format!(
+                "no pytest configuration was found, so `{interpreter} -m unittest -v` (standard-library discovery of test*.py from the repository root; `{directory}/` must be an importable package) was proposed; confirm it or configure pytest and run discovery again"
+            ),
         );
     } else {
         facts.question(
             id,
             "python-tests",
-            "no pytest configuration or tests directory was found; confirm the test runner",
+            "no pytest configuration or tests directory was found; add tests (tests/test_*.py for `python -m unittest -v`, or configure pytest), commit them and run discovery again",
+        );
+    }
+    if project.contains("[tool.ruff") || exists(root, "ruff.toml") || exists(root, ".ruff.toml") {
+        let evidence = if exists(root, "ruff.toml") {
+            "ruff.toml"
+        } else if exists(root, ".ruff.toml") {
+            ".ruff.toml"
+        } else {
+            "pyproject.toml#[tool.ruff]"
+        };
+        facts.check(
+            Recipe {
+                id: "ruff",
+                executable: "ruff",
+                args: &["check", "."],
+                required: false,
+                timeout_seconds: 600,
+                capabilities: &["python", "ruff", "lint"],
+            },
+            vec![format!("{id}:{evidence}")],
+            Confidence::Observed,
+        );
+    }
+    if project.contains("[tool.mypy") || exists(root, "mypy.ini") || exists(root, ".mypy.ini") {
+        let evidence = if exists(root, "mypy.ini") {
+            "mypy.ini"
+        } else if exists(root, ".mypy.ini") {
+            ".mypy.ini"
+        } else {
+            "pyproject.toml#[tool.mypy]"
+        };
+        facts.check(
+            Recipe {
+                id: "mypy",
+                executable: "mypy",
+                args: &["."],
+                required: false,
+                timeout_seconds: 1200,
+                capabilities: &["python", "mypy", "typecheck"],
+            },
+            vec![format!("{id}:{evidence}")],
+            Confidence::Observed,
         );
     }
     if exists(root, "uv.lock") {
@@ -661,6 +797,7 @@ fn dart(root: &Path, id: &str, facts: &mut Facts) {
 /// Gradle alone means a JVM project; only an Android plugin selects the Android profile.
 fn android(root: &Path, id: &str, facts: &mut Facts) {
     let wrapper = exists(root, "gradlew");
+    let wrapper_bat = exists(root, "gradlew.bat");
     let present: Vec<&str> = [
         "build.gradle",
         "build.gradle.kts",
@@ -670,7 +807,7 @@ fn android(root: &Path, id: &str, facts: &mut Facts) {
     .into_iter()
     .filter(|name| exists(root, name))
     .collect();
-    if !wrapper && present.is_empty() {
+    if !wrapper && !wrapper_bat && present.is_empty() {
         return;
     }
     let android_plugin = present.iter().find(|name| {
@@ -688,33 +825,72 @@ fn android(root: &Path, id: &str, facts: &mut Facts) {
             &["jdk"]
         }
     };
-    if wrapper {
+    // Windows starts the wrapper's batch file; other hosts the shell script.
+    let executable = if cfg!(windows) && wrapper_bat {
+        "./gradlew.bat"
+    } else if wrapper {
+        "./gradlew"
+    } else if wrapper_bat {
+        "./gradlew.bat"
+    } else {
+        ""
+    };
+    if executable.is_empty() {
+        facts.question(
+            id,
+            "gradle-wrapper",
+            "Gradle build files exist without a wrapper; supply the gradle executable and recipe",
+        );
+        return;
+    }
+    let evidence = executable.trim_start_matches("./");
+    if android_plugin.is_some() {
         facts.check(
             Recipe {
-                id: "gradle-test",
-                executable: "./gradlew",
-                args: &["test"],
+                id: "gradle-unit-test",
+                executable,
+                args: &["testDebugUnitTest"],
                 required: true,
                 timeout_seconds: 3600,
                 capabilities,
             },
-            vec![format!("{id}:gradlew")],
+            vec![format!("{id}:{evidence}")],
+            Confidence::Inferred,
+        );
+        facts.check(
+            Recipe {
+                id: "gradle-connected-test",
+                executable,
+                args: &["connectedAndroidTest"],
+                required: false,
+                timeout_seconds: 3600,
+                capabilities: &["jdk", "android-sdk", "android-device"],
+            },
+            vec![format!("{id}:{evidence}")],
             Confidence::Inferred,
         );
         facts.question(
             id,
             "gradle-host",
-            if android_plugin.is_some() {
-                "Gradle tests need a JDK and Android SDK on the execution host; Windows hosts use gradlew.bat"
-            } else {
-                "Gradle tests need a JDK on the execution host; Windows hosts use gradlew.bat"
-            },
+            "Gradle unit tests need a JDK and the Android SDK (ANDROID_HOME) on the execution host; connectedAndroidTest also needs a connected device or running emulator (capability android-device) and stays optional until one is available; Windows hosts use gradlew.bat",
         );
     } else {
+        facts.check(
+            Recipe {
+                id: "gradle-test",
+                executable,
+                args: &["test"],
+                required: true,
+                timeout_seconds: 3600,
+                capabilities,
+            },
+            vec![format!("{id}:{evidence}")],
+            Confidence::Inferred,
+        );
         facts.question(
             id,
-            "gradle-wrapper",
-            "Gradle build files exist without a wrapper; supply the gradle executable and recipe",
+            "gradle-host",
+            "Gradle tests need a JDK on the execution host; Windows hosts use gradlew.bat",
         );
     }
 }
@@ -723,7 +899,7 @@ fn ios(root: &Path, id: &str, facts: &mut Facts) {
     let Ok(entries) = std::fs::read_dir(root) else {
         return;
     };
-    let projects: Vec<String> = entries
+    let mut projects: Vec<String> = entries
         .flatten()
         .filter_map(|entry| entry.file_name().into_string().ok())
         .filter(|name| name.ends_with(".xcodeproj") || name.ends_with(".xcworkspace"))
@@ -732,13 +908,56 @@ fn ios(root: &Path, id: &str, facts: &mut Facts) {
     if projects.is_empty() {
         return;
     }
+    projects.sort();
     for project in &projects {
         facts.profile("ios", format!("{id}:{project}"));
     }
+    // A workspace wraps its projects; prefer it when one exists.
+    let container = projects
+        .iter()
+        .find(|name| name.ends_with(".xcworkspace"))
+        .unwrap_or(&projects[0]);
+    let flag = if container.ends_with(".xcworkspace") {
+        "-workspace"
+    } else {
+        "-project"
+    };
+    let scheme = container
+        .rsplit_once('.')
+        .map(|(stem, _)| stem)
+        .unwrap_or(container)
+        .to_owned();
+    facts.check(
+        Recipe {
+            id: "xcodebuild-test",
+            executable: "xcodebuild",
+            args: &[
+                "test",
+                flag,
+                container,
+                "-scheme",
+                &scheme,
+                "-destination",
+                "platform=iOS Simulator,name=iPhone 16",
+            ],
+            required: true,
+            timeout_seconds: 3600,
+            capabilities: &["xcode"],
+        },
+        vec![format!("{id}:{container}")],
+        Confidence::Inferred,
+    );
     facts.question(
         id,
         "ios-scheme",
-        "xcodebuild requires an explicit scheme, destination and a capable Mac; no recipe was proposed",
+        format!(
+            "`xcodebuild test` needs an explicit shared scheme; `{scheme}` is a placeholder derived from {container}: replace it before confirming"
+        ),
+    );
+    facts.question(
+        id,
+        "ios-destination",
+        "the destination `platform=iOS Simulator,name=iPhone 16` is a placeholder; set a simulator installed on the Mac that runs the checks. The recipe runs only on macOS with Xcode (capability xcode) and is recorded blocked on any other host",
     );
 }
 
@@ -782,6 +1001,7 @@ mod tests {
                 root: root.to_path_buf(),
                 observation,
             }],
+            host_capabilities: None,
         }
     }
 

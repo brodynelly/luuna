@@ -1,6 +1,39 @@
 # Luuna implementation handoff
 
-## Latest PR 11 review follow-up (October 21, 2026)
+## Latest: M4–M8 slices, the Windows recovery drill and client parity (October 21, 2026)
+
+On top of the PR 11 audit branch, this change set lands bounded, tested slices of
+every remaining milestone on the Windows host, each recorded with what it does
+not establish: the MVP gate's backup/migration recovery drill
+(`scripts/backup-recovery-drill.mjs`, 31/31), multi-repository coordination
+([ADR 0017](docs/decisions/0017-multi-repository-coordination.md), three-repository
+fixture, 9 scenarios), GitHub publication with an intent ledger and `luuna-runtime
+doctor` ([ADR 0018](docs/decisions/0018-publication-and-doctor.md), fake-GitHub
+scenarios only), verified stack profiles, host capability probing and approved
+scaffolding ([ADR 0019](docs/decisions/0019-stack-profiles-and-scaffolding.md)),
+the capability catalog, shared failure explanations and the terminal client
+([ADR 0020](docs/decisions/0020-capability-catalog-and-tui.md), `scripts/tui-smoke.mjs`),
+memory promotion and the scope-safe project export
+([ADR 0021](docs/decisions/0021-memory-promotion-and-project-export.md)), an unsigned
+NSIS development installer (`scripts/package-windows.ps1`) and the M8 report
+([RELEASE-EVIDENCE.md](docs/RELEASE-EVIDENCE.md), `scripts/release-evidence.mjs`).
+Read the per-milestone sections at the end of
+[FOUNDATION-STATUS.md](docs/FOUNDATION-STATUS.md) for the exact commands and
+counts on this host. Storage migrations 10 and 11 were added; `reqwest`/`rustls`
+are new runtime dependencies. Nothing was committed, merged, installed or published.
+
+**Next assignment:** evidence on hosts this one is not, never a shortcut around
+them: (1) a Mac run of the native smoke, the drill and the packaging; (2) a
+clean Windows machine installing the produced installer and completing the
+fixture walkthrough with `luuna-runtime doctor`; (3) a real GitHub publication
+with a token the owner supplies (push, linked PRs, CI observation, a human
+merge); (4) capable runners for Go, Flutter, Android and iOS profiles and
+scaffolds; (5) a genuine-provider `m3-smoke` run and a genuine multi-repository
+feature on the current tree; (6) a real-project pilot with the measurements
+`docs/11-acceptance.md` asks for. Keep merging human; keep the v1 label ungranted
+until [RELEASE-EVIDENCE.md](docs/RELEASE-EVIDENCE.md) has no blocking row.
+
+## Earlier: PR 11 review follow-up (October 21, 2026)
 
 The audit branch includes fixes for all 14 confirmed review issues and Windows
 acceptance-harness corrections. Existing main history, component pins, installed

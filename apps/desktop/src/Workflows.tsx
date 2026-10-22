@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState } from "react";
 import type { FormEvent } from "react";
-import type { CandidateDiff, CandidateView, ComponentContext, CreatePlanRequest, LuunaClient, Operation, PlanBudgetRequest, PlanRevision, RunRecord, Ticket, TicketSourceStatus, WorktreeLease } from "@luuna/api-client";
+import type { AttemptRecord, CandidateDiff, CandidateView, ComponentContext, CreatePlanRequest, LuunaClient, Operation, PlanBudgetRequest, PlanRevision, PublicationRecord, RunRecord, TaskRecord, Ticket, TicketSourceStatus, WorktreeLease } from "@luuna/api-client";
 import { DEFAULT_PLAN_BUDGETS, planBudgetProblem } from "@luuna/api-client";
 import { advanceWorkflowReplay, allowedActions, canCancel, planBlocker, planSupersedes, settleAction, workflowNeedsRefresh } from "./workflow-state";
 import { CandidateReview } from "./CandidateReview";
@@ -155,6 +155,9 @@ export function Workflows({ client, projectId, repositoryId, manifestConfirmed, 
   const [runs, setRuns] = useState<RunRecord[]>([]);
   const [snapshots, setSnapshots] = useState<Map<string, RunSnapshot>>(new Map());
   const [diffs, setDiffs] = useState<Record<string, CandidateDiff>>({});
+  const [attemptLists, setAttemptLists] = useState<Record<string, AttemptRecord[]>>({});
+  const [publications, setPublications] = useState<Record<string, PublicationRecord>>({});
+  const [taskLists, setTaskLists] = useState<Record<string, TaskRecord[]>>({});
   const [logs, setLogs] = useState<Record<string, { candidateHash: string; artifactId: string; text: string }>>({});
   const [title, setTitle] = useState("");
   const [intent, setIntent] = useState("");
@@ -206,6 +209,7 @@ export function Workflows({ client, projectId, repositoryId, manifestConfirmed, 
     setRuns([]);
     setSnapshots(new Map());
     setDiffs({});
+    setAttemptLists({});
     setLogs({});
     setError("");
     setLoadError("");
@@ -334,6 +338,32 @@ export function Workflows({ client, projectId, repositoryId, manifestConfirmed, 
       const diff = await client.candidateDiff(run.id, signal);
       if (!signal.aborted) setDiffs((previous) => ({ ...previous, [run.id]: diff }));
     }),
+    publish: (run, view) => guarded("Publication", async (signal) => {
+      if (!client || !view.evidence) return;
+      const hash = view.evidence.candidate.hash;
+      const record = await client.publish(run.id, { expected_hash: hash, idempotency_key: `publish-${run.id}-${hash.slice(7, 31)}` }, signal);
+      if (!signal.aborted) setPublications((previous) => ({ ...previous, [run.id]: record }));
+    }),
+    publication: (run) => guarded("Publication inspection", async (signal) => {
+      if (!client) return;
+      const record = await client.publication(run.id, signal);
+      if (!signal.aborted) setPublications((previous) => ({ ...previous, [run.id]: record }));
+    }),
+    reconcilePublication: (run) => guarded("Publication reconciliation", async (signal) => {
+      if (!client) return;
+      const record = await client.reconcilePublication(run.id, signal);
+      if (!signal.aborted) setPublications((previous) => ({ ...previous, [run.id]: record }));
+    }),
+    tasks: (run) => guarded("Task graph inspection", async (signal) => {
+      if (!client) return;
+      const list = await client.tasks(run.id, signal);
+      if (!signal.aborted) setTaskLists((previous) => ({ ...previous, [run.id]: list }));
+    }),
+    attempts: (run) => guarded("Attempt inspection", async (signal) => {
+      if (!client) return;
+      const list = await client.attempts(run.id, signal);
+      if (!signal.aborted) setAttemptLists((previous) => ({ ...previous, [run.id]: list }));
+    }),
     artifact: (run, view, artifactId) => guarded("Log inspection", async (signal) => {
       if (!client || !view.evidence) return;
       const text = await client.artifact(run.id, artifactId, signal);
@@ -342,7 +372,7 @@ export function Workflows({ client, projectId, repositoryId, manifestConfirmed, 
   };
 
   return <section className="workflows subpanel" aria-labelledby="workflows-heading">
-    <div className="panel-heading"><h3 id="workflows-heading">Tickets, plans and candidates</h3><button type="button" className="text-button" disabled={!client || busy} onClick={reload}>Refresh workflows</button></div>
+    <div className="panel-heading"><h3 id="workflows-heading">Tickets, plans and candidates</h3><button type="button" className="text-button" disabled={!client || busy} data-capability="tickets.list tickets.show tickets.source plans.list runs.candidate runs.worktrees" onClick={reload}>Refresh workflows</button></div>
     <p className="scope">{componentsEnabled ? "Tickets are authoritative in luuna-missions; reconcile external edits before re-planning." : "Tickets use legacy local storage until you enable project components above."} Approve the complete immutable plan, then run the scoped writer in its managed worktree. The runtime binds validation and independent review to the exact candidate hash.</p>
     {(error || loadError) && <div className="error" role="alert">{error || loadError}<button className="text-button" type="button" onClick={() => { setError(""); setLoadError(""); }}>Dismiss</button></div>}
     <form onSubmit={createTicket} className="ticket-form form-group">
@@ -353,7 +383,7 @@ export function Workflows({ client, projectId, repositoryId, manifestConfirmed, 
         <ByteCount id="ticket-intent-bytes" bytes={sizes.intent} limit={TEXT_LIMITS.intent} />
         <label>Acceptance criteria (one per line)<textarea value={criteria} onChange={(event) => setCriteria(event.target.value)} required rows={2} aria-describedby="ticket-criteria-bytes" /></label>
         <ByteCount id="ticket-criteria-bytes" prefix="Longest criterion: " bytes={sizes.criterion} limit={TEXT_LIMITS.criterion} />
-        <div className="form-footer"><small>{!manifestConfirmed ? "Confirm a manifest before creating tickets." : tooLong ? "Shorten the field marked too long: the runtime counts UTF-8 bytes, so accented letters, CJK text and emoji take more than one." : "Tickets are scoped to this project's registered repository."}</small><button className="primary" disabled={!title.trim() || !intent.trim() || !criteria.trim() || tooLong}>Create ticket</button></div>
+        <div className="form-footer"><small>{!manifestConfirmed ? "Confirm a manifest before creating tickets." : tooLong ? "Shorten the field marked too long: the runtime counts UTF-8 bytes, so accented letters, CJK text and emoji take more than one." : "Tickets are scoped to this project's registered repository."}</small><button className="primary" disabled={!title.trim() || !intent.trim() || !criteria.trim() || tooLong} data-capability="tickets.create">Create ticket</button></div>
       </fieldset>
     </form>
     <div className="tray run-settings">
@@ -375,9 +405,9 @@ export function Workflows({ client, projectId, repositoryId, manifestConfirmed, 
       </div>
       <label className="workflow-auto-repair"><input type="checkbox" checked={autoRepair} onChange={(event) => setAutoRepair(event.target.checked)} /> Repair automatically within approved budgets</label>
     </div>
-    {tickets.list.length > 0 && <ul className="tickets record-list" aria-label="Tickets">{tickets.list.map((ticket) => {
+    {tickets.list.length > 0 && <ul className="tickets record-list" aria-label="Tickets" data-capability="tickets.list">{tickets.list.map((ticket) => {
       const revisions = tickets.plans[ticket.id] ?? [];
-      return <TicketCard key={ticket.id} ticket={ticket} source={tickets.sources[ticket.id]} revisions={revisions.map((plan) => ({ plan, run: runFor(plan) }))} snapshots={snapshots} diffs={diffs} logs={logs} busy={busy} connected={client !== null} actions={actions} />;
+      return <TicketCard key={ticket.id} ticket={ticket} source={tickets.sources[ticket.id]} revisions={revisions.map((plan) => ({ plan, run: runFor(plan) }))} snapshots={snapshots} diffs={diffs} attempts={attemptLists} publications={publications} tasks={taskLists} logs={logs} busy={busy} connected={client !== null} actions={actions} />;
     })}</ul>}
   </section>;
 }
@@ -391,16 +421,24 @@ export interface TicketActions {
   validate: (run: RunRecord, view: CandidateView) => void;
   repair: (run: RunRecord, view: CandidateView) => void;
   diff: (run: RunRecord) => void;
+  attempts: (run: RunRecord) => void;
+  tasks: (run: RunRecord) => void;
   artifact: (run: RunRecord, view: CandidateView, artifactId: string) => void;
+  publish: (run: RunRecord, view: CandidateView) => void;
+  publication: (run: RunRecord) => void;
+  reconcilePublication: (run: RunRecord) => void;
 }
 
 /** One ticket: its latest plan revision's workflow, with earlier revisions summarised. */
-export function TicketCard({ ticket, source, revisions, snapshots, diffs, logs, busy, connected, actions }: {
+export function TicketCard({ ticket, source, revisions, snapshots, diffs, attempts = {}, publications = {}, tasks = {}, logs, busy, connected, actions }: {
   ticket: Ticket;
   source?: TicketSourceStatus;
   revisions: { plan: PlanRevision; run?: RunRecord }[];
   snapshots: Map<string, RunSnapshot>;
   diffs: Record<string, CandidateDiff>;
+  attempts?: Record<string, AttemptRecord[]>;
+  publications?: Record<string, PublicationRecord>;
+  tasks?: Record<string, TaskRecord[]>;
   logs: Record<string, { candidateHash: string; artifactId: string; text: string }>;
   busy: boolean;
   connected: boolean;
@@ -426,10 +464,10 @@ export function TicketCard({ ticket, source, revisions, snapshots, diffs, logs, 
     <small className="ticket-intent">{ticket.intent}</small>
     {source?.reconciliation_required && <p className="failure-note" role="status">This ticket changed outside Luuna. Reconcile its current source before creating another plan or starting work.</p>}
     <div className="ticket-actions actions">
-      {ticket.source === "missions" && <button type="button" disabled={busy || !connected} onClick={() => actions.reconcile(ticket)}>Reconcile external changes</button>}
-      <button type="button" disabled={busy || !connected || source?.reconciliation_required || blocker !== "" || !confirmed} onClick={() => actions.plan(ticket, latest?.revision ?? 0)}>{latest ? `Plan r${latest.revision + 1}` : "Plan"}</button>
-      {latest && run && run.state === "approved" && <button type="button" className="primary" disabled={busy || source?.reconciliation_required} onClick={() => actions.implement(run)}>Implement</button>}
-      {writerActive && <button type="button" className="danger" disabled={busy} onClick={() => actions.cancel(run)}>Cancel workflow</button>}
+      {ticket.source === "missions" && <button type="button" disabled={busy || !connected} data-capability="tickets.reconcile" onClick={() => actions.reconcile(ticket)}>Reconcile external changes</button>}
+      <button type="button" disabled={busy || !connected || source?.reconciliation_required || blocker !== "" || !confirmed} data-capability="plans.create" onClick={() => actions.plan(ticket, latest?.revision ?? 0)}>{latest ? `Plan r${latest.revision + 1}` : "Plan"}</button>
+      {latest && run && run.state === "approved" && <button type="button" className="primary" disabled={busy || source?.reconciliation_required} data-capability="runs.implement" onClick={() => actions.implement(run)}>Implement</button>}
+      {writerActive && <button type="button" className="danger" disabled={busy} data-capability="runs.cancel" onClick={() => actions.cancel(run)}>Cancel workflow</button>}
       {run && <StatusBadge tone={runTone[run.state]}>{run.state.replace(/_/g, " ")}</StatusBadge>}
       {blocker && <small className="plan-blocker">{blocker}</small>}
     </div>
@@ -440,8 +478,10 @@ export function TicketCard({ ticket, source, revisions, snapshots, diffs, logs, 
     {latest && <small className="plan-meta meta">plan <code>{latest.id}</code> r{latest.revision} · base <code>{Object.values(latest.base_commits)[0]?.slice(0, 12)}</code> · paths {latest.tasks[0]?.paths.join(", ")} · budget {latest.budgets.max_attempts} attempt(s), {latest.budgets.timeout_seconds}s, ${(latest.budgets.cost_usd_micros / 1_000_000).toFixed(2)}</small>}
     {earlier.length > 0 && <small className="plan-history meta">Earlier revisions: {earlier.map(({ plan, run: earlierRun }, index) => <span key={plan.id}>{index > 0 && " · "}r{plan.revision} <StatusBadge tone={runTone[earlierRun.state]}>{earlierRun.state.replace(/_/g, " ")}</StatusBadge></span>)}</small>}
     {run && reason && <small className="failure-note" data-tone={runTone[run.state]}>{reason}{step && <> <span className="recovery-note">{step}</span></>}</small>}
-    {(snapshot?.leases ?? []).map((lease) => <small key={lease.id} className="worktree-line meta">worktree <code>{lease.path}</code> · {lease.state}{lease.candidate_commit && <> · candidate <code>{lease.candidate_commit.slice(0, 12)}</code></>}{lease.reason && ` · ${lease.reason}`}</small>)}
-    {run && candidate && <CandidateReview run={run} view={candidate} diff={diffs[run.id]} log={logs[run.id]} busy={busy} onValidate={() => actions.validate(run, candidate)} onRepair={() => actions.repair(run, candidate)} onCancel={() => actions.cancel(run)} onDiff={() => actions.diff(run)} onArtifact={(id) => actions.artifact(run, candidate, id)} />}
+    {(snapshot?.leases ?? []).map((lease) => <small key={lease.id} className="worktree-line meta" data-capability="runs.worktrees">worktree <code>{lease.path}</code> · {lease.state}{lease.candidate_commit && <> · candidate <code>{lease.candidate_commit.slice(0, 12)}</code></>}{lease.reason && ` · ${lease.reason}`}</small>)}
+    {run && latest && latest.tasks.length > 1 && <div className="tasks-inspection actions"><button type="button" className="text-button" disabled={busy || !connected} data-capability="runs.tasks" onClick={() => actions.tasks(run)}>Show task graph</button>{tasks[run.id] && <ul className="record-list" aria-label="Task graph">{tasks[run.id].map((task) => <li key={task.task_id}><code>{task.task_id}</code> ({task.repository_id}) · {task.state}{task.depends_on.length ? ` · after ${task.depends_on.join(", ")}` : ""}{task.candidate_commit ? ` · commit ${task.candidate_commit.slice(0, 12)}` : ""}{task.reason ? ` · ${task.reason}` : ""}</li>)}</ul>}</div>}
+    {run && <div className="attempts-inspection actions"><button type="button" className="text-button" disabled={busy || !connected} data-capability="runs.attempts" onClick={() => actions.attempts(run)}>Show writer attempts</button>{attempts[run.id] && <small className="meta" aria-label="Writer attempts">{attempts[run.id].length === 0 ? "No writer attempts recorded." : attempts[run.id].map((attempt) => `attempt ${attempt.number} (${attempt.task_id}): ${attempt.state}`).join(" · ")}</small>}</div>}
+    {run && candidate && <CandidateReview run={run} view={candidate} diff={diffs[run.id]} log={logs[run.id]} busy={busy} onValidate={() => actions.validate(run, candidate)} onRepair={() => actions.repair(run, candidate)} onCancel={() => actions.cancel(run)} onDiff={() => actions.diff(run)} onArtifact={(id) => actions.artifact(run, candidate, id)} publication={publications[run.id]} onPublish={() => actions.publish(run, candidate)} onPublication={() => actions.publication(run)} onReconcilePublication={() => actions.reconcilePublication(run)} />}
   </li>;
 }
 
@@ -449,10 +489,10 @@ export function PlanReview({ plan, canApprove, busy, onApprove }: { plan: PlanRe
   const [reviewed, setReviewed] = useState(false);
   return <div className="plan-review">
     <p className="meta">Immutable plan hash: <code className="plan-hash">{plan.hash}</code></p>
-    <pre className="plan-document" aria-label="Complete immutable plan" tabIndex={0}>{JSON.stringify(plan, null, 2)}</pre>
+    <pre className="plan-document" aria-label="Complete immutable plan" tabIndex={0} data-capability="plans.show">{JSON.stringify(plan, null, 2)}</pre>
     {canApprove && <>
       <label className="plan-acknowledgment"><input type="checkbox" checked={reviewed} onChange={(event) => setReviewed(event.target.checked)} /> I reviewed this complete plan and hash.</label>
-      <button type="button" className="primary" disabled={busy || !reviewed} onClick={() => { if (reviewed) onApprove(); }}>Approve r{plan.revision}</button>
+      <button type="button" className="primary" disabled={busy || !reviewed} data-capability="plans.approve" onClick={() => { if (reviewed) onApprove(); }}>Approve r{plan.revision}</button>
     </>}
   </div>;
 }

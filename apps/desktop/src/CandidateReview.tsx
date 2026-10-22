@@ -1,4 +1,4 @@
-import type { CandidateDiff, CandidateView, RunRecord } from "@luuna/api-client";
+import type { CandidateDiff, CandidateView, PublicationRecord, RunRecord } from "@luuna/api-client";
 import { allowedActions, canCancel, canRepair, canRevalidate, canValidate, usageSummary, validationRefusal } from "./workflow-state";
 import { nextStep } from "./failures";
 import { StatusBadge } from "./design/StatusBadge";
@@ -15,10 +15,35 @@ interface Props {
   onCancel: () => void;
   onDiff: () => void;
   onArtifact: (id: string) => void;
+  publication?: PublicationRecord;
+  onPublish?: () => void;
+  onPublication?: () => void;
+  onReconcilePublication?: () => void;
+}
+
+/** A reviewed candidate with a passed review and no publication in flight may be published; the runtime re-checks every gate. */
+export function canPublish(run: RunRecord, view: CandidateView, publication?: PublicationRecord): boolean {
+  const evidence = view.evidence;
+  if (!evidence || evidence.status !== "reviewed" || view.active || run.state !== "reviewed") return false;
+  if (evidence.review?.candidate_hash !== evidence.candidate.hash || evidence.review.verdict !== "passed") return false;
+  return !publication || publication.candidate_hash !== evidence.candidate.hash;
+}
+
+/** The durable publication record: branches, pull requests, observed CI and merge state. Luuna never merges. */
+export function PublicationSummary({ publication }: { publication: PublicationRecord }) {
+  return <div className="publication subpanel" aria-label="Publication record" data-tone={publication.publication_state === "integrated" ? "success" : publication.publication_state === "failed" ? "danger" : publication.active ? "active" : "neutral"}>
+    <p><strong>Publication</strong> <StatusBadge tone={publication.publication_state === "integrated" ? "success" : publication.publication_state === "failed" ? "danger" : publication.active ? "active" : "neutral"}>{publication.publication_state}</StatusBadge>{publication.active && <small> in progress</small>}</p>
+    {publication.reason && <p className="failure-note" data-tone="danger">{publication.reason}</p>}
+    <ul className="record-list" aria-label="Published repositories">{Object.entries(publication.repositories).map(([id, repository]) => <li key={id}>
+      <strong>{id}</strong> · branch <code>{repository.branch}</code> at <code>{repository.commit.slice(0, 12)}</code> · push {repository.push} · pull request {repository.pull_request ? <a href={repository.pull_request.url} target="_blank" rel="noreferrer">#{repository.pull_request.number}</a> : repository.pull_request_step}
+      <small> · CI {repository.ci.state}{repository.ci.reason ? ` (${repository.ci.reason})` : ""} · {repository.merge.merged ? `merged${repository.merge.merged_by ? ` by ${repository.merge.merged_by}` : ""}` : "not merged; merging stays with you on GitHub"}</small>
+      {repository.reason && <small className="failure-note" data-tone="danger"> · {repository.reason}</small>}
+    </li>)}</ul>
+  </div>;
 }
 
 /** Displays durable runtime evidence; worker prose never decides these controls. */
-export function CandidateReview({ run, view, diff, log, busy, onValidate, onRepair, onCancel, onDiff, onArtifact }: Props) {
+export function CandidateReview({ run, view, diff, log, busy, onValidate, onRepair, onCancel, onDiff, onArtifact, publication, onPublish, onPublication, onReconcilePublication }: Props) {
   const evidence = view.evidence;
   if (!evidence) return null;
   const candidate = evidence.candidate;
@@ -29,7 +54,7 @@ export function CandidateReview({ run, view, diff, log, busy, onValidate, onRepa
   const step = evidence.reason ? nextStep(evidence.reason, allowedActions(run, view)) : "";
   // A pending candidate has no reason of its own, so a refused validation says why here.
   const refusal = step.startsWith("Validation is not available") ? "" : validationRefusal(run, view);
-  return <section className="candidate-review subpanel" aria-label={`Candidate revision ${candidate.revision}`}>
+  return <section className="candidate-review subpanel" aria-label={`Candidate revision ${candidate.revision}`} data-capability="runs.candidate">
     <div className="candidate-heading"><strong>Candidate r{candidate.revision}</strong><StatusBadge tone={candidateTone[evidence.status]}>{evidence.status.replace(/_/g, " ")}</StatusBadge></div>
     <dl className="facts">
       <div><dt>Candidate hash</dt><dd><code>{candidate.hash}</code></dd></div>
@@ -38,11 +63,15 @@ export function CandidateReview({ run, view, diff, log, busy, onValidate, onRepa
       {Object.entries(evidence.repository_trees).map(([id, tree]) => <div key={`${id}-tree`}><dt>{id} tree</dt><dd><code>{tree}</code></dd></div>)}
     </dl>
     <div className="ticket-actions actions">
-      <button type="button" disabled={busy} onClick={onDiff}>Inspect candidate diff</button>
-      {canValidate(run, view) && <button type="button" className="primary" disabled={busy} onClick={onValidate}>{canRevalidate(run, view) ? "Re-validate and review" : "Validate and review"}</button>}
-      {canRepair(view) && <button type="button" disabled={busy} onClick={onRepair}>Repair candidate</button>}
-      {canCancel(run.state, view.active) && <button type="button" className="danger" disabled={busy} onClick={onCancel}>Cancel workflow</button>}
+      <button type="button" disabled={busy} data-capability="runs.diff" onClick={onDiff}>Inspect candidate diff</button>
+      {canValidate(run, view) && <button type="button" className="primary" disabled={busy} data-capability="runs.validate" onClick={onValidate}>{canRevalidate(run, view) ? "Re-validate and review" : "Validate and review"}</button>}
+      {canRepair(view) && <button type="button" disabled={busy} data-capability="runs.repair" onClick={onRepair}>Repair candidate</button>}
+      {canCancel(run.state, view.active) && <button type="button" className="danger" disabled={busy} data-capability="runs.cancel" onClick={onCancel}>Cancel workflow</button>}
+      {onPublish && canPublish(run, view, publication) && <button type="button" disabled={busy} data-capability="runs.publish" onClick={onPublish}>Publish: push and open pull requests</button>}
+      {onPublication && evidence.status === "reviewed" && <button type="button" className="text-button" disabled={busy} data-capability="runs.publication" onClick={onPublication}>Show publication</button>}
+      {onReconcilePublication && publication && publication.candidate_hash === candidate.hash && publication.publication_state === "failed" && !publication.active && <button type="button" disabled={busy} data-capability="runs.publication.reconcile" onClick={onReconcilePublication}>Reconcile publication</button>}
     </div>
+    {publication && publication.candidate_hash === candidate.hash && <PublicationSummary publication={publication} />}
     {view.active && <p className="callout" data-tone="active" role="status">The runtime is {run.state === "implementing" ? "running the scoped writer repair" : evidence.status === "reviewing" ? "running the independent reviewer" : "executing the approved checks"}. Closing this view does not cancel the workflow.</p>}
     {evidence.reason && <p className="failure-note" data-tone={candidateTone[evidence.status]}>{evidence.reason}</p>}
     {evidence.reason && !canRevalidate(run, view) && !view.active && step && <p className="recovery-note">{step}</p>}
@@ -63,7 +92,7 @@ export function CandidateReview({ run, view, diff, log, busy, onValidate, onRepa
           {result.tests_detected !== undefined && <div><dt>Tests detected</dt><dd>{result.tests_detected}</dd></div>}
         </dl>
         {result.reason && <p className="failure-note" data-tone={checkTone[result.status]}>{result.reason}</p>}
-        <div className="check-actions ticket-actions actions">{result.artifact_refs.filter((id) => /^[A-Za-z0-9._-]+\.(stdout|stderr)$/.test(id) && !id.includes("..")).map((id) => <button type="button" key={id} disabled={busy} onClick={() => onArtifact(id)}>View {id.endsWith(".stdout") ? "stdout" : "stderr"}</button>)}</div>
+        <div className="check-actions ticket-actions actions">{result.artifact_refs.filter((id) => /^[A-Za-z0-9._-]+\.(stdout|stderr)$/.test(id) && !id.includes("..")).map((id) => <button type="button" key={id} disabled={busy} data-capability="artifacts.read" onClick={() => onArtifact(id)}>View {id.endsWith(".stdout") ? "stdout" : "stderr"}</button>)}</div>
         <details className="raw-evidence"><summary>Complete check and artifact evidence</summary><pre>{JSON.stringify(result, null, 2)}</pre></details>
       </li>)}</ul>
       {boundLog && <details open className="check-log"><summary>Check log Â· <code>{boundLog.artifactId}</code></summary><pre aria-label="Check log" tabIndex={0}>{boundLog.text || "Empty log."}</pre></details>}

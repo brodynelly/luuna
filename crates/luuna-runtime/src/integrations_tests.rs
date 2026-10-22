@@ -786,3 +786,176 @@ async fn components_real_uncertain_prompt_reconciles_and_memory_edits_stale_cont
         StatusCode::CONFLICT
     );
 }
+#[tokio::test]
+#[ignore = "requires pinned Bun and real component checkouts; run with --ignored"]
+async fn components_real_promotion_widens_scope_and_export_keeps_private_memory_home() {
+    let root = tempfile::tempdir().unwrap();
+    let state = setup(root.path());
+    let _ = enable(State(state.clone()), Path("context-a".into()))
+        .await
+        .unwrap();
+    let process = memory(
+        &state,
+        "context-a",
+        "p1",
+        "process",
+        "process convention worth keeping",
+    )
+    .await;
+    let private = memory(&state, "context-a", "u1", "user", "PRIVATE_USER_ONLY").await;
+    let promote = |id: String, key: &str, hash: String, to_scope: &str| {
+        let state = state.clone();
+        let key = key.to_owned();
+        let to_scope = to_scope.to_owned();
+        async move {
+            promote_memory(
+                State(state),
+                Path(("context-a".into(), id)),
+                Json(PromoteMemory {
+                    idempotency_key: key,
+                    expected_hash: hash,
+                    to_scope,
+                }),
+            )
+            .await
+        }
+    };
+    // Only one widening step at a time, and only from the displayed state.
+    assert_eq!(
+        promote(process.id.clone(), "skip", process.hash.clone(), "user")
+            .await
+            .err()
+            .unwrap()
+            .0,
+        StatusCode::UNPROCESSABLE_ENTITY
+    );
+    let stale =
+        "sha256:0000000000000000000000000000000000000000000000000000000000000000".to_owned();
+    assert_eq!(
+        promote(process.id.clone(), "stale", stale, "project")
+            .await
+            .err()
+            .unwrap()
+            .0,
+        StatusCode::CONFLICT
+    );
+    let first = promote(process.id.clone(), "pr1", process.hash.clone(), "project")
+        .await
+        .unwrap()
+        .0;
+    assert_eq!(first["promoted"]["scope"], "project");
+    assert_eq!(
+        first["promoted"]["content"],
+        "process convention worth keeping"
+    );
+    let provenance = first["promoted"]["provenance"].as_str().unwrap();
+    assert!(
+        provenance.starts_with(&format!("promoted from process memory {}: ", process.id)),
+        "{provenance}"
+    );
+    assert_eq!(first["from"]["id"], process.id);
+    // The same key replays the same answer without a second record.
+    let replay = promote(process.id.clone(), "pr1", process.hash.clone(), "project")
+        .await
+        .unwrap()
+        .0;
+    assert_eq!(replay, first);
+    let listed = list_memory(
+        State(state.clone()),
+        Path("context-a".into()),
+        Query(MemoryQuery {
+            include_user: false,
+            q: None,
+        }),
+    )
+    .await
+    .unwrap()
+    .0;
+    assert_eq!(listed.len(), 1);
+    assert_eq!(listed[0].id, first["promoted"]["id"]);
+    assert_ne!(listed[0].id, process.id);
+    // Project -> user leaves the project list and joins the explicit user view.
+    let promoted_id = first["promoted"]["id"].as_str().unwrap().to_owned();
+    let promoted_hash = first["promoted"]["hash"].as_str().unwrap().to_owned();
+    let second = promote(promoted_id.clone(), "pr2", promoted_hash, "user")
+        .await
+        .unwrap()
+        .0;
+    assert_eq!(second["promoted"]["scope"], "user");
+    let project_only = list_memory(
+        State(state.clone()),
+        Path("context-a".into()),
+        Query(MemoryQuery {
+            include_user: false,
+            q: None,
+        }),
+    )
+    .await
+    .unwrap()
+    .0;
+    assert!(project_only.is_empty());
+    let with_user = list_memory(
+        State(state.clone()),
+        Path("context-a".into()),
+        Query(MemoryQuery {
+            include_user: true,
+            q: Some("worth keeping".into()),
+        }),
+    )
+    .await
+    .unwrap()
+    .0;
+    assert_eq!(with_user.len(), 1);
+    assert_eq!(with_user[0].id, second["promoted"]["id"]);
+    // The export carries project and process memory only, and no path of this host.
+    let project_memory = memory(
+        &state,
+        "context-a",
+        "p2",
+        "project",
+        "exported project convention",
+    )
+    .await;
+    let export = export_project(State(state.clone()), Path("context-a".into()))
+        .await
+        .unwrap()
+        .0;
+    let memories = export["memory"].as_array().unwrap();
+    assert_eq!(memories.len(), 1);
+    assert_eq!(memories[0]["id"], project_memory.id);
+    let text = export.to_string();
+    assert!(!text.contains("PRIVATE_USER_ONLY"));
+    assert!(!text.contains(&private.content));
+    assert!(!text.contains(&root.path().to_string_lossy().replace('\\', "\\\\")));
+    assert!(export["omitted"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .any(|item| item == "user memory"));
+    // Text that would carry a host path is refused rather than exported.
+    let ticket = luuna_domain::Ticket {
+        schema_version: luuna_domain::SCHEMA_VERSION.into(),
+        id: "leaky".into(),
+        project_id: "context-a".into(),
+        revision: 1,
+        source: luuna_domain::TicketSource::LuunaSqliteTemporary,
+        title: "Leaky ticket".into(),
+        intent: format!("Look in {}", root.path().join("context-a").display()),
+        acceptance_criteria: vec!["none".into()],
+        repository_ids: vec!["app".into()],
+        created_at: "2026-10-21T00:00:00.000Z".into(),
+        updated_at: "2026-10-21T00:00:00.000Z".into(),
+    };
+    state
+        .store
+        .lock()
+        .unwrap()
+        .create_ticket(&ticket, "leaky-key")
+        .unwrap();
+    let refused = export_project(State(state.clone()), Path("context-a".into()))
+        .await
+        .err()
+        .unwrap();
+    assert_eq!(refused.0, StatusCode::CONFLICT);
+    assert!(refused.1.contains("Export refused"), "{}", refused.1);
+}

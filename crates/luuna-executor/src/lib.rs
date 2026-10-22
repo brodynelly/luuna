@@ -83,6 +83,10 @@ pub struct CommandSpec {
     /// Private directory that receives the recipe's stdout and stderr logs
     /// (see [`artifact_file_name`]).
     pub artifact_dir: PathBuf,
+    /// Extra variables for the check (M4 dependency bindings such as
+    /// `LUUNA_DEPENDENCY_<REPOSITORY>_PATH`), set after the sanitized host
+    /// environment. Values are runtime facts, never repository text.
+    pub environment: Vec<(String, String)>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -768,6 +772,7 @@ impl Executor {
         sanitized_environment(&mut command)
             .args(&spec.args)
             .current_dir(&cwd)
+            .envs(spec.environment.iter().map(|(name, value)| (name, value)))
             .env("CI", "true")
             .env("LUUNA_CHECK", &spec.recipe_id)
             .env(GROUP_MARKER_VARIABLE, &marker)

@@ -353,3 +353,49 @@ describe("candidate validation and repair (M3)", () => {
     expect(JSON.parse(String(fetcher.mock.calls[0][1]?.body))).toEqual({ candidate_hash, auto_repair: true });
   });
 });
+
+describe("live event following over SSE", () => {
+  const record = (sequence: number, type = "pi.message_update") => ({ schema_version: "0.1", event_id: `e${sequence}`, sequence, timestamp: "2026-10-21T00:00:00Z", project_id: "p", run_id: "run", type, payload: {} });
+  const sse = (events: object[]) => new Response(events.map((event) => `event: run_event\nid: ${(event as { sequence: number }).sequence}\ndata: ${JSON.stringify(event)}\n\n`).join(": keep-alive\n\n"), { status: 200, headers: { "Content-Type": "text/event-stream" } });
+
+  it("streams run events in order with Last-Event-ID resumption and rejects another run's events", async () => {
+    const fetcher = vi.fn<typeof fetch>().mockResolvedValueOnce(sse([record(3), record(4)]));
+    const client = new LuunaClient("http://127.0.0.1:4242", "t", fetcher);
+    const received = [];
+    for await (const event of client.streamEvents("run", 2)) received.push(event.sequence);
+    expect(received).toEqual([3, 4]);
+    const [url, init] = fetcher.mock.calls[0];
+    expect(String(url)).toBe("http://127.0.0.1:4242/api/v1/runs/run/stream?after=2");
+    expect(new Headers(init?.headers).get("Last-Event-ID")).toBe("2");
+    expect(new Headers(init?.headers).get("Accept")).toBe("text/event-stream");
+    fetcher.mockResolvedValueOnce(sse([{ ...record(1), run_id: "other" }]));
+    await expect((async () => { for await (const _event of client.streamEvents("run")) { /* consume */ } })()).rejects.toThrow("different run");
+    fetcher.mockResolvedValueOnce(new Response("", { status: 404 }));
+    await expect((async () => { for await (const _event of client.streamEvents("run")) { /* consume */ } })()).rejects.toMatchObject({ status: 404 });
+  });
+
+  it("follows through an outage from the last received sequence and stops when the run settles", async () => {
+    const fetcher = vi.fn<typeof fetch>()
+      .mockResolvedValueOnce(sse([record(1)]))
+      .mockRejectedValueOnce(new TypeError("fetch failed"))
+      .mockResolvedValueOnce(sse([record(2, "run.completed")]))
+      .mockResolvedValueOnce(new Response(JSON.stringify({ id: "run", state: "completed", metadata: {} })));
+    const client = new LuunaClient("http://127.0.0.1:4242", "t", fetcher);
+    const outages: unknown[] = [];
+    let reconnected = 0;
+    const received = [];
+    for await (const event of client.followEvents("run", 0, undefined, { outage: (failure) => outages.push(failure), reconnected: () => { reconnected += 1; }, wait: async () => undefined })) received.push(event.sequence);
+    expect(received).toEqual([1, 2]);
+    expect(outages).toHaveLength(1);
+    expect(reconnected).toBe(1);
+    expect(new Headers(fetcher.mock.calls[2][1]?.headers).get("Last-Event-ID")).toBe("1");
+    expect(String(fetcher.mock.calls[3][0])).toBe("http://127.0.0.1:4242/api/v1/runs/run");
+  });
+
+  it("ends a follow on a rejected token instead of retrying", async () => {
+    const fetcher = vi.fn<typeof fetch>().mockResolvedValueOnce(new Response("", { status: 401 }));
+    const client = new LuunaClient("http://127.0.0.1:4242", "t", fetcher);
+    await expect((async () => { for await (const _event of client.followEvents("run", 0, undefined, { wait: async () => undefined })) { /* consume */ } })()).rejects.toMatchObject({ status: 401 });
+    expect(fetcher).toHaveBeenCalledTimes(1);
+  });
+});

@@ -149,6 +149,16 @@ export interface ProposedCheck {
   check: ManifestCheck;
   evidence: string[];
   confidence: "observed" | "inferred";
+  /** Whether this host has the check's tools; absent in discoveries stored before probing existed. */
+  capability?: "available" | "missing";
+  missing_tools?: string[];
+}
+
+export interface HostCapabilities {
+  probed_at: string;
+  os: string;
+  arch: string;
+  tools: ToolProbe[];
 }
 
 export interface DiscoveryQuestion {
@@ -167,6 +177,7 @@ export interface Discovery {
   proposed_manifest: ProjectManifest;
   manifest_problems: string[];
   questions: DiscoveryQuestion[];
+  host_capabilities?: HostCapabilities;
 }
 
 export interface ProjectView {
@@ -287,6 +298,105 @@ export interface CreateMemoryRequest {
   provenance: string;
 }
 
+export interface PromoteMemoryRequest {
+  idempotency_key: string;
+  expected_hash: string;
+  to_scope: "project" | "user";
+}
+
+export interface PromotedMemory {
+  promoted: MemoryRecord;
+  from: { id: string; scope: MemoryScope };
+}
+
+export interface ProjectExport {
+  schema_version: string;
+  kind: "luuna-project-export";
+  exported_at: string;
+  project: { id: string; name: string; manifest_revision: number; manifest_hash: string | null };
+  manifest: ProjectManifest | null;
+  tickets: Ticket[];
+  memory: MemoryRecord[];
+  prompts: RenderedPrompt[];
+  omitted: string[];
+}
+
+export type ScaffoldProfile = "node" | "node-typescript" | "react" | "python" | "go" | "rust" | "flutter" | "android" | "ios";
+
+export interface ScaffoldProposalRequest {
+  profile: ScaffoldProfile;
+  name: string;
+  parent_dir: string;
+}
+
+export interface ScaffoldGenerator {
+  id: string;
+  executable: string;
+  args: string[];
+  capabilities: string[];
+  network: boolean;
+  description: string;
+}
+
+export interface ToolProbe {
+  tool: string;
+  status: "available" | "missing";
+  version?: string;
+  detail?: string;
+}
+
+export interface ScaffoldProposal {
+  schema_version: string;
+  profile: ScaffoldProfile;
+  name: string;
+  parent_dir: string;
+  target_dir: string;
+  status: "ready" | "blocked";
+  blocked_reason?: string;
+  files: { path: string; contents: string }[];
+  generator?: ScaffoldGenerator;
+  preparation: ScaffoldGenerator[];
+  network_steps: string[];
+  baseline: ManifestCheck[];
+  required_tools: ToolProbe[];
+  questions: DiscoveryQuestion[];
+  hash: string;
+}
+
+export interface ScaffoldRequest {
+  proposal_hash: string;
+  idempotency_key: string;
+  confirm: true;
+  confirm_network?: boolean;
+}
+
+export interface ScaffoldCheckOutcome {
+  recipe_id: string;
+  status: CheckStatus;
+  exit_code: number | null;
+  reason: string | null;
+  command: string[];
+  tool_version: string | null;
+  tests_detected: number | null;
+  stdout_excerpt: string;
+  stderr_excerpt: string;
+}
+
+export interface ScaffoldResult {
+  proposal_hash: string;
+  idempotency_key: string;
+  profile: ScaffoldProfile;
+  target_dir: string;
+  commit: string;
+  generator?: ScaffoldCheckOutcome;
+  preparation: ScaffoldCheckOutcome[];
+  check: ScaffoldCheckOutcome;
+  baseline_passed: boolean;
+  project: ProjectView;
+  discovery: Discovery;
+  replayed: boolean;
+}
+
 export interface PromptRecord {
   name: string;
   version: number;
@@ -371,14 +481,28 @@ export interface PlanRevision {
 }
 
 export interface PlanBudgetRequest {
+  /** Concurrent writers for a multi-task plan (1 to the number of tasks, at most 4); a single-task plan allows exactly 1. */
+  max_workers?: number;
   max_attempts?: number;
   /** Cumulative across the writer, checks, review and repairs of the workflow. */
   timeout_seconds?: number;
   cost_usd_micros?: number;
 }
 
+export interface PlanTaskRequest {
+  id?: string;
+  repository_id: string;
+  paths: string[];
+  operations: Operation[];
+  acceptance_criteria?: string[];
+  /** Task ids this task waits for; its writer and checks receive the producers' candidate worktrees and commits. */
+  depends_on?: string[];
+}
+
 export interface CreatePlanRequest {
-  task: { id?: string; repository_id: string; paths: string[]; operations: Operation[]; acceptance_criteria?: string[] };
+  /** One task, or `tasks` for a dependency-ordered multi-repository plan (never both). */
+  task?: PlanTaskRequest;
+  tasks?: PlanTaskRequest[];
   permissions?: Record<string, string[]>;
   budgets?: PlanBudgetRequest;
   component_context?: ComponentContext;
@@ -387,10 +511,11 @@ export interface CreatePlanRequest {
 }
 
 /** The runtime's defaults when a plan names no budgets. */
-export const DEFAULT_PLAN_BUDGETS: Required<PlanBudgetRequest> = { max_attempts: 2, timeout_seconds: 600, cost_usd_micros: 1_000_000 };
+export const DEFAULT_PLAN_BUDGETS: Required<PlanBudgetRequest> = { max_workers: 1, max_attempts: 2, timeout_seconds: 600, cost_usd_micros: 1_000_000 };
 
 /** Inclusive bounds the runtime enforces for each plan budget. */
 export const PLAN_BUDGET_LIMITS: Record<keyof PlanBudgetRequest, readonly [number, number]> = {
+  max_workers: [1, 4],
   max_attempts: [1, 10],
   timeout_seconds: [1, 86_400],
   cost_usd_micros: [1, 1_000_000_000],
@@ -445,6 +570,22 @@ export interface ImplementRequest {
 }
 
 /** The runtime's immutable identity for an exact set of repository commits. */
+export type TaskState = "queued" | "running" | "completed" | "failed" | "interrupted" | "blocked" | "cancelled";
+
+/** Durable per-task state of a multi-repository workflow (ADR 0017). */
+export interface TaskRecord {
+  run_id: string;
+  task_id: string;
+  repository_id: string;
+  state: TaskState;
+  attempt_id?: string;
+  candidate_commit?: string;
+  candidate_tree?: string;
+  depends_on: string[];
+  reason?: string;
+  updated_at: string;
+}
+
 export interface CandidateSet {
   schema_version: string;
   id: string;
@@ -533,6 +674,71 @@ export interface CandidateView {
   usage?: WorkflowUsage;
 }
 
+export type PublicationState = "pending" | "pushing" | "pr_open" | "failed" | "integrated";
+export type PublicationStep = "pending" | "done" | "failed";
+
+export interface PublishRequest {
+  expected_hash: string;
+  idempotency_key: string;
+}
+
+export interface CiObservation {
+  state: "pending" | "success" | "failure" | "unknown";
+  observed_at?: string;
+  checks: { name: string; status: string; conclusion?: string }[];
+  reason?: string;
+}
+
+export interface MergeObservation {
+  merged: boolean;
+  merged_at?: string;
+  merged_by?: string;
+  observed_at?: string;
+  reason?: string;
+}
+
+export interface RepositoryPublication {
+  branch: string;
+  commit: string;
+  remote: string;
+  owner: string;
+  repo: string;
+  base_branch: string;
+  push: PublicationStep;
+  pull_request_step: PublicationStep;
+  pull_request?: { number: number; url: string };
+  reason?: string;
+  ci: CiObservation;
+  merge: MergeObservation;
+}
+
+/** Mirrors schemas/publication.schema.json. */
+export interface Publication {
+  schema_version: string;
+  ticket_id: string;
+  candidate_hash: string;
+  per_repository_branch: Record<string, string>;
+  pull_request_urls: Record<string, string>;
+  publication_state: PublicationState;
+}
+
+export interface PublicationRecord {
+  schema_version: string;
+  run_id: string;
+  project_id: string;
+  ticket_id: string;
+  candidate_hash: string;
+  idempotency_key: string;
+  publication_state: PublicationState;
+  repositories: Record<string, RepositoryPublication>;
+  reason?: string;
+  created_at: string;
+  updated_at: string;
+  observed_at?: string;
+  contract: Publication;
+  active: boolean;
+}
+
 export interface CandidateDiff {
   candidate_hash: string;
   repository_id: string;
@@ -605,14 +811,74 @@ export interface PageOptions {
 }
 
 export class ApiError extends Error {
+  readonly status: number;
   /**
    * `fromRuntime` is true when the message is the runtime's own short reason from a JSON
    * `{error}` body, false when the client substituted a generic sentence.
    */
-  constructor(public readonly status: number, message: string, public readonly fromRuntime = false) {
+  readonly fromRuntime: boolean;
+
+  // No parameter properties: Node loads this source directly (type stripping) for the TUI.
+  constructor(status: number, message: string, fromRuntime = false) {
     super(message);
     this.name = "ApiError";
+    this.status = status;
+    this.fromRuntime = fromRuntime;
   }
+}
+
+/** One parsed `text/event-stream` frame. */
+interface SseFrame { event: string; data: string; id: string }
+
+/** Parses SSE frames from a byte stream; a frame is dispatched at each blank line. */
+async function* sseFrames(body: ReadableStream<Uint8Array>): AsyncGenerator<SseFrame, void, undefined> {
+  const reader = body.getReader();
+  const decoder = new TextDecoder();
+  let buffered = "";
+  let frame: SseFrame = { event: "", data: "", id: "" };
+  let lines: string[] = [];
+  try {
+    for (;;) {
+      const { done, value } = await reader.read();
+      buffered += done ? decoder.decode() : decoder.decode(value, { stream: true });
+      const parts = buffered.split(/\r\n|\r|\n/);
+      buffered = done ? "" : parts.pop() ?? "";
+      for (const line of parts) {
+        if (line === "") {
+          if (lines.length) { frame.data = lines.join("\n"); yield frame; }
+          frame = { event: "", data: "", id: "" };
+          lines = [];
+          continue;
+        }
+        if (line.startsWith(":")) continue;
+        const colon = line.indexOf(":");
+        const field = colon === -1 ? line : line.slice(0, colon);
+        const value = colon === -1 ? "" : line.slice(colon + 1).replace(/^ /, "");
+        if (field === "event") frame.event = value;
+        else if (field === "data") lines.push(value);
+        else if (field === "id") frame.id = value;
+      }
+      if (done) return;
+    }
+  } finally {
+    reader.releaseLock();
+  }
+}
+
+function pause(milliseconds: number, signal?: AbortSignal): Promise<void> {
+  return new Promise((resolve, reject) => {
+    if (signal?.aborted) { reject(signal.reason); return; }
+    const aborted = () => { clearTimeout(timer); reject(signal?.reason); };
+    const timer = setTimeout(() => { signal?.removeEventListener("abort", aborted); resolve(); }, milliseconds);
+    signal?.addEventListener("abort", aborted, { once: true });
+  });
+}
+
+/** What a live follower is told while it waits for the runtime to answer again. */
+export interface FollowHooks {
+  outage?: (failure: unknown) => void;
+  reconnected?: () => void;
+  wait?: (milliseconds: number, signal?: AbortSignal) => Promise<void>;
 }
 
 function pageQuery(page: PageOptions, separator: "?" | "&"): string {
@@ -661,14 +927,14 @@ export function awaitsValidation(state: RunState): boolean {
 
 export class LuunaClient {
   readonly baseUrl: string;
+  private readonly token: string;
+  private readonly fetcher: typeof fetch;
 
-  constructor(
-    baseUrl: string,
-    private readonly token: string,
-    private readonly fetcher: typeof fetch = fetch,
-  ) {
+  constructor(baseUrl: string, token: string, fetcher: typeof fetch = fetch) {
     this.baseUrl = loopbackUrl(baseUrl);
     if (!token.trim()) throw new Error("Enter the local service token.");
+    this.token = token;
+    this.fetcher = fetcher;
   }
 
   private async request<T>(path: string, init: RequestInit = {}): Promise<T> {
@@ -683,23 +949,78 @@ export class LuunaClient {
       credentials: "omit",
       redirect: "error",
     });
-    if (!response.ok) {
-      // Do not surface arbitrary server error bodies: they can contain prompts or secrets.
-      // Validation and conflict responses carry short deterministic runtime reasons.
-      const messages: Record<number, string> = {
-        400: "The runtime rejected these settings. Check the prompt, provider and model configuration.",
-        401: "The service rejected this token. Reconnect using its current token.",
-        403: "The runtime denied this action.",
-        409: "The run state changed or another session is active. Refresh and try again.",
-      };
-      const reason = [400, 409, 413, 415, 422, 503].includes(response.status) ? await runtimeReason(response) : undefined;
-      throw new ApiError(response.status, reason ?? messages[response.status] ?? `Runtime request failed (HTTP ${response.status}).`, reason !== undefined);
-    }
+    if (!response.ok) throw await failureOf(response);
     return await response.json() as T;
   }
 
   health(signal?: AbortSignal): Promise<Health> {
     return this.request("/health", { signal });
+  }
+
+  /** Asks the runtime to stop in an orderly way (ADR 0010); it answers 202 and drains. */
+  shutdown(signal?: AbortSignal): Promise<{ status: string }> {
+    return this.request("/shutdown", { method: "POST", signal });
+  }
+
+  /**
+   * One SSE connection to a run's durable event stream, resumed after `after` through
+   * `Last-Event-ID`. It yields every event in sequence order and returns when the runtime closes
+   * the stream: the run settled, or the runtime is shutting down. Transport failures throw.
+   */
+  async *streamEvents(id: string, after = 0, signal?: AbortSignal): AsyncGenerator<EventEnvelope, void, undefined> {
+    if (!Number.isSafeInteger(after) || after < 0) throw new Error("Invalid event cursor.");
+    const headers = new Headers({ Authorization: `Bearer ${this.token}`, Accept: "text/event-stream" });
+    if (after > 0) headers.set("Last-Event-ID", String(after));
+    const response = await this.fetcher.call(globalThis, `${this.baseUrl}/api/v1/runs/${encodeURIComponent(id)}/stream?after=${after}`, {
+      headers,
+      cache: "no-store",
+      credentials: "omit",
+      redirect: "error",
+      signal,
+    });
+    if (!response.ok) throw await failureOf(response);
+    if (!response.body) throw new Error("The runtime returned no event stream.");
+    let cursor = after;
+    for await (const frame of sseFrames(response.body)) {
+      if (frame.event !== "run_event" || !frame.data) continue;
+      const record = JSON.parse(frame.data) as EventEnvelope;
+      if (!record.event_id || record.run_id !== id || !Number.isSafeInteger(record.sequence) || record.sequence <= cursor) {
+        throw new Error("Runtime returned an event for a different run or out of sequence.");
+      }
+      cursor = record.sequence;
+      yield record;
+    }
+  }
+
+  /**
+   * Follows a run's events live until it settles, reconnecting after an outage from the last
+   * received sequence (the runtime comes back by itself). A rejected token, a denied action or a
+   * forgotten run ends the follow with its error; everything else is reported through `hooks.outage`.
+   */
+  async *followEvents(id: string, after = 0, signal?: AbortSignal, hooks: FollowHooks = {}): AsyncGenerator<EventEnvelope, void, undefined> {
+    let cursor = after;
+    let lost = false;
+    const wait = hooks.wait ?? pause;
+    while (!signal?.aborted) {
+      try {
+        for await (const event of this.streamEvents(id, cursor, signal)) {
+          if (lost) { lost = false; hooks.reconnected?.(); }
+          cursor = event.sequence;
+          yield event;
+        }
+        // A closed stream means the run settled, or the runtime is stopping: the run says which.
+        const run = await this.run(id, signal);
+        if (lost) { lost = false; hooks.reconnected?.(); }
+        if (isTerminal(run.state)) return;
+        await wait(1000, signal);
+      } catch (failure) {
+        if (signal?.aborted) return;
+        if (failure instanceof ApiError && [401, 403, 404].includes(failure.status)) throw failure;
+        lost = true;
+        hooks.outage?.(failure);
+        await wait(2500, signal).catch(() => undefined);
+      }
+    }
   }
 
   /** Newest first; `limit` keeps the most recent records. */
@@ -834,6 +1155,28 @@ export class LuunaClient {
     return this.request(`/projects/${encodeURIComponent(projectId)}/memory/${encodeURIComponent(id)}?expected_hash=${encodeURIComponent(expectedHash)}`, { method: "DELETE", signal });
   }
 
+  /** Widens a memory's scope one step (process -> project, project -> user); the narrower record is deleted after the wider one exists. */
+  promoteMemory(projectId: string, id: string, request: PromoteMemoryRequest, signal?: AbortSignal): Promise<PromotedMemory> {
+    if (!request.expected_hash.startsWith("sha256:")) throw new Error("Promote memory by its exact content hash.");
+    return this.request(`/projects/${encodeURIComponent(projectId)}/memory/${encodeURIComponent(id)}/promote`, { method: "POST", body: JSON.stringify(request), signal });
+  }
+
+  /** The scope-safe export: manifest, tickets, project/process memory and prompts; the runtime refuses one that would carry user memory, credentials or host paths. */
+  exportProject(projectId: string, signal?: AbortSignal): Promise<ProjectExport> {
+    return this.request(`/projects/${encodeURIComponent(projectId)}/export`, { signal });
+  }
+
+  /** A deterministic scaffold proposal; nothing is written until it is confirmed by exact hash. */
+  proposeScaffold(request: ScaffoldProposalRequest, signal?: AbortSignal): Promise<ScaffoldProposal> {
+    return this.request(`/projects/scaffold/propose`, { method: "POST", body: JSON.stringify(request), signal });
+  }
+
+  /** Executes a confirmed proposal: files, an initial commit, the real baseline, registration. */
+  scaffold(request: ScaffoldRequest, signal?: AbortSignal): Promise<ScaffoldResult> {
+    if (request.confirm !== true) throw new Error("Scaffolding requires explicit confirmation of the proposal hash.");
+    return this.request(`/projects/scaffold`, { method: "POST", body: JSON.stringify(request), signal });
+  }
+
   listPrompts(projectId: string, signal?: AbortSignal): Promise<PromptRecord[]> {
     return this.request(`/projects/${encodeURIComponent(projectId)}/prompts`, { signal });
   }
@@ -896,6 +1239,27 @@ export class LuunaClient {
     return this.request(`/runs/${encodeURIComponent(runId)}/candidate`, { signal });
   }
 
+  /** Publishes a reviewed candidate: pushes its exact commits and opens linked pull requests, once per idempotency key. */
+  publish(runId: string, request: PublishRequest, signal?: AbortSignal): Promise<PublicationRecord> {
+    if (!request.expected_hash.startsWith("sha256:")) throw new Error("Publish by the exact candidate hash.");
+    return this.request(`/runs/${encodeURIComponent(runId)}/publish`, { method: "POST", body: JSON.stringify(request), signal });
+  }
+
+  /** The durable publication record with CI and merge observation refreshed; merging is never performed. */
+  publication(runId: string, signal?: AbortSignal): Promise<PublicationRecord> {
+    return this.request(`/runs/${encodeURIComponent(runId)}/publication`, { signal });
+  }
+
+  /** Retries only the steps a partial publication still lacks, reconciling what the remote already has. */
+  reconcilePublication(runId: string, signal?: AbortSignal): Promise<PublicationRecord> {
+    return this.request(`/runs/${encodeURIComponent(runId)}/publication/reconcile`, { method: "POST", signal });
+  }
+
+  /** The task graph of a workflow: one durable record per plan task with its state, attempt and exact candidate commit. */
+  tasks(runId: string, signal?: AbortSignal): Promise<TaskRecord[]> {
+    return this.request(`/runs/${encodeURIComponent(runId)}/tasks`, { signal });
+  }
+
   candidateDiff(runId: string, signal?: AbortSignal): Promise<CandidateDiff> {
     return this.request(`/runs/${encodeURIComponent(runId)}/diff`, { signal });
   }
@@ -938,6 +1302,20 @@ export function checkResults(events: EventEnvelope[]): CheckResult[] {
     const result = event.payload.result;
     return result && typeof result === "object" ? [result as CheckResult] : [];
   });
+}
+
+/** The error for a non-2xx response; a raw server body is never surfaced. */
+async function failureOf(response: Response): Promise<ApiError> {
+  // Do not surface arbitrary server error bodies: they can contain prompts or secrets.
+  // Validation and conflict responses carry short deterministic runtime reasons.
+  const messages: Record<number, string> = {
+    400: "The runtime rejected these settings. Check the prompt, provider and model configuration.",
+    401: "The service rejected this token. Reconnect using its current token.",
+    403: "The runtime denied this action.",
+    409: "The run state changed or another session is active. Refresh and try again.",
+  };
+  const reason = [400, 409, 413, 415, 422, 503].includes(response.status) ? await runtimeReason(response) : undefined;
+  return new ApiError(response.status, reason ?? messages[response.status] ?? `Runtime request failed (HTTP ${response.status}).`, reason !== undefined);
 }
 
 async function runtimeReason(response: Response): Promise<string | undefined> {
@@ -1100,3 +1478,5 @@ export function assistantText(events: EventEnvelope[]): string {
   }
   return finalText || deltas;
 }
+
+export * from "./failures.ts";

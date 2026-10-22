@@ -1,0 +1,1577 @@
+{
+  "mode": "fixture",
+  "started_at": "2026-10-22T04:43:17.842Z",
+  "out": "<home>\\AppData\\Local\\Temp\\luuna-m3-fixture-e39b2b5",
+  "runtime_binary": "<home>\\AppData\\Local\\Temp\\luuna-m3-build-ST19Y7\\debug\\luuna-runtime.exe",
+  "port": 4248,
+  "project": "m3-smoke",
+  "scenarios": {
+    "feature": {
+      "ticket": {
+        "id": "ticket-a3749576-4e74-436e-814c-81cdcdee9e74",
+        "title": "Implement the greeting",
+        "intent": "Make src/main.py print the greeting.",
+        "acceptance_criteria": [
+          "fixture:write_in_scope",
+          "main prints the greeting"
+        ],
+        "paths": [
+          "src/main.py"
+        ]
+      },
+      "plan": {
+        "id": "plan-ticket-a3749576-4e74-436e-814c-81cdcdee9e74",
+        "revision": 1,
+        "hash": "sha256:1087c983a22696f5c5559ecc33974e1775a1e1ae56539c0b974a578dcb40ef49",
+        "base_commit": "78338cffe3d5efc3eb2264140af66138073d62e9",
+        "budgets": {
+          "max_workers": 1,
+          "max_attempts": 1,
+          "timeout_seconds": 600,
+          "cost_usd_micros": 300000
+        }
+      },
+      "run_id": "workflow-5da0d404-4c31-453d-9ba4-c3ebce790803",
+      "writer": {
+        "settled_state": "validating",
+        "pi_version": "1.3.0",
+        "tools": [
+          "read",
+          "ls",
+          "edit",
+          "write"
+        ],
+        "scope": {
+          "operations": [
+            "read",
+            "write"
+          ],
+          "paths": [
+            "src/main.py"
+          ],
+          "root": "<home>\\AppData\\Local\\Temp\\luuna-m3-fixture-e39b2b5\\data\\worktrees\\workflow-5da0d404-4c31-453d-9ba4-c3ebce790803\\1\\app"
+        },
+        "provider_credentials": [],
+        "tool_calls": [
+          "write:src/main.py"
+        ],
+        "blocked_tool_calls": [],
+        "summary_text": "synthetic writer finished write_in_scope"
+      },
+      "candidate_r1": {
+        "revision": 1,
+        "hash": "sha256:dd2f5794f8a553c169f643d6b779d2a6dc3b0b711a5bd1be5d275cbf3eac31e5",
+        "commits": {
+          "app": "46200e755ec84212035ffdd5e9c4d893d2490ecb"
+        },
+        "plan_hash": "sha256:1087c983a22696f5c5559ecc33974e1775a1e1ae56539c0b974a578dcb40ef49"
+      },
+      "diff": {
+        "status": 200,
+        "candidate_hash": "sha256:dd2f5794f8a553c169f643d6b779d2a6dc3b0b711a5bd1be5d275cbf3eac31e5",
+        "base_commit": "78338cffe3d5efc3eb2264140af66138073d62e9",
+        "commit": "46200e755ec84212035ffdd5e9c4d893d2490ecb",
+        "bytes": 247,
+        "changed_paths": [
+          "src/main.py"
+        ],
+        "approved_paths": [
+          "src/main.py"
+        ]
+      },
+      "validation": {
+        "status": "reviewed",
+        "active": false,
+        "repair_allowed": false,
+        "revalidate_allowed": false,
+        "candidate": {
+          "revision": 1,
+          "hash": "sha256:dd2f5794f8a553c169f643d6b779d2a6dc3b0b711a5bd1be5d275cbf3eac31e5"
+        },
+        "implementer_session": "attempt-240d7af9-e97e-4f12-8dea-e0802f9b8272",
+        "validation_generation": 1,
+        "elapsed_seconds": 2,
+        "cost_usd_micros": 500,
+        "reason": null,
+        "results": [
+          {
+            "id": "d3a7c633-eb3d-4ebd-ac65-a4feef71b43d",
+            "recipe_id": "unit",
+            "status": "passed",
+            "exit_code": 0,
+            "tests_detected": 1,
+            "reason": null,
+            "artifacts": 2
+          }
+        ],
+        "review": {
+          "id": "review-5d1d5e25-671c-49b5-b6f4-257d4321576b",
+          "reviewer_session": "review-5d1d5e25-671c-49b5-b6f4-257d4321576b",
+          "candidate_hash": "sha256:dd2f5794f8a553c169f643d6b779d2a6dc3b0b711a5bd1be5d275cbf3eac31e5",
+          "verdict": "passed",
+          "findings": [],
+          "evidence": [
+            "candidate diff inspected",
+            "required check evidence inspected"
+          ]
+        },
+        "review_started": {
+          "reviewer_session": "review-5d1d5e25-671c-49b5-b6f4-257d4321576b",
+          "candidate_hash": "sha256:dd2f5794f8a553c169f643d6b779d2a6dc3b0b711a5bd1be5d275cbf3eac31e5"
+        },
+        "event_types": [
+          "run.created",
+          "run.exploring",
+          "plan.ready",
+          "plan.approved",
+          "run.implementing",
+          "attempt.started",
+          "worktree.leased",
+          "worktree.created",
+          "pi.spawned",
+          "pi.fixture_args",
+          "pi.response",
+          "pi.agent_start",
+          "pi.tool_execution_start",
+          "pi.tool_execution_end",
+          "pi.message_update",
+          "pi.message_end",
+          "pi.agent_end",
+          "pi.agent_settled",
+          "worktree.changes",
+          "worktree.released",
+          "attempt.finished",
+          "candidate.recorded",
+          "run.validating",
+          "candidate.validation_started",
+          "candidate.worktree_cleaned",
+          "candidate.usage",
+          "check.spawned",
+          "check.reaped",
+          "candidate.check_finished",
+          "candidate.validation_finished",
+          "review.started",
+          "review.prompt_sent",
+          "candidate.usage",
+          "review.usage_settled",
+          "candidate.usage",
+          "candidate.review_finished"
+        ]
+      }
+    },
+    "repair": {
+      "ticket": {
+        "id": "ticket-9aba8da8-4535-4b24-a42c-03e7e84fa8d7",
+        "title": "Repair the seeded regression",
+        "intent": "Make src/main.py print the greeting.",
+        "acceptance_criteria": [
+          "fixture:repair_in_scope",
+          "main prints the greeting"
+        ],
+        "paths": [
+          "src/main.py"
+        ]
+      },
+      "plan": {
+        "id": "plan-ticket-9aba8da8-4535-4b24-a42c-03e7e84fa8d7",
+        "revision": 1,
+        "hash": "sha256:830705117d856af56864243803a3bd2236a3a1c40786dc249f873093e769e340",
+        "base_commit": "78338cffe3d5efc3eb2264140af66138073d62e9",
+        "budgets": {
+          "max_workers": 1,
+          "max_attempts": 2,
+          "timeout_seconds": 600,
+          "cost_usd_micros": 300000
+        }
+      },
+      "run_id": "workflow-6120fb4e-1744-41e8-8a4f-33677eea4226",
+      "writer": {
+        "settled_state": "validating",
+        "pi_version": "1.3.0",
+        "tools": [
+          "read",
+          "ls",
+          "edit",
+          "write"
+        ],
+        "scope": {
+          "operations": [
+            "read",
+            "write"
+          ],
+          "paths": [
+            "src/main.py"
+          ],
+          "root": "<home>\\AppData\\Local\\Temp\\luuna-m3-fixture-e39b2b5\\data\\worktrees\\workflow-6120fb4e-1744-41e8-8a4f-33677eea4226\\1\\app"
+        },
+        "provider_credentials": [],
+        "tool_calls": [
+          "write:src/main.py"
+        ],
+        "blocked_tool_calls": [],
+        "summary_text": "synthetic writer finished repair_in_scope"
+      },
+      "candidate_r1": {
+        "revision": 1,
+        "hash": "sha256:4d5c857f6611589d4e8c33d463e63c183af4556e0d1c9299135041f9cc38a8e7",
+        "commits": {
+          "app": "31c061c47aff4cfcea037025626cb518caac5820"
+        },
+        "plan_hash": "sha256:830705117d856af56864243803a3bd2236a3a1c40786dc249f873093e769e340"
+      },
+      "validation_r1": {
+        "status": "failed",
+        "active": false,
+        "repair_allowed": true,
+        "revalidate_allowed": false,
+        "candidate": {
+          "revision": 1,
+          "hash": "sha256:4d5c857f6611589d4e8c33d463e63c183af4556e0d1c9299135041f9cc38a8e7"
+        },
+        "implementer_session": "attempt-d45b0fc4-1bbd-41f7-9fce-6809f67eb694",
+        "validation_generation": 1,
+        "elapsed_seconds": 1,
+        "cost_usd_micros": 0,
+        "reason": "required candidate checks failed (app/unit)",
+        "results": [
+          {
+            "id": "5295d23b-4ea3-4327-b05f-9c169553cba7",
+            "recipe_id": "unit",
+            "status": "failed",
+            "exit_code": 1,
+            "tests_detected": 1,
+            "reason": "exit code 1",
+            "artifacts": 2
+          }
+        ],
+        "review": null,
+        "review_started": null,
+        "event_types": [
+          "run.created",
+          "run.exploring",
+          "plan.ready",
+          "plan.approved",
+          "run.implementing",
+          "attempt.started",
+          "worktree.leased",
+          "worktree.created",
+          "pi.spawned",
+          "pi.fixture_args",
+          "pi.response",
+          "pi.agent_start",
+          "pi.tool_execution_start",
+          "pi.tool_execution_end",
+          "pi.message_update",
+          "pi.message_end",
+          "pi.agent_end",
+          "pi.agent_settled",
+          "worktree.changes",
+          "worktree.released",
+          "attempt.finished",
+          "candidate.recorded",
+          "run.validating",
+          "candidate.validation_started",
+          "candidate.worktree_cleaned",
+          "candidate.usage",
+          "check.spawned",
+          "check.reaped",
+          "candidate.check_finished",
+          "candidate.validation_finished"
+        ]
+      },
+      "repair": {
+        "run_state": "validating",
+        "revision": 2,
+        "hash": "sha256:b35ab2e52c000459512269a0b4dc610d9c4d9c6841957f0e2e7ce006cb718900",
+        "repair_started": {
+          "candidate_hash": "sha256:4d5c857f6611589d4e8c33d463e63c183af4556e0d1c9299135041f9cc38a8e7",
+          "revision": 9,
+          "state": "implementing",
+          "usage": {
+            "attempts": 2,
+            "cost_usd_micros": 500,
+            "elapsed_seconds": 2,
+            "workers": 1
+          }
+        },
+        "writer_tool_calls": [
+          "write:src/main.py"
+        ]
+      },
+      "validation_r2": {
+        "status": "reviewed",
+        "active": false,
+        "repair_allowed": false,
+        "revalidate_allowed": false,
+        "candidate": {
+          "revision": 2,
+          "hash": "sha256:b35ab2e52c000459512269a0b4dc610d9c4d9c6841957f0e2e7ce006cb718900"
+        },
+        "implementer_session": "attempt-d1a17e53-efb3-4ce7-9bdb-c613efbb6d2a",
+        "validation_generation": 1,
+        "elapsed_seconds": 2,
+        "cost_usd_micros": 500,
+        "reason": null,
+        "results": [
+          {
+            "id": "d013d5f9-f08f-454b-b142-377b2734ea74",
+            "recipe_id": "unit",
+            "status": "passed",
+            "exit_code": 0,
+            "tests_detected": 1,
+            "reason": null,
+            "artifacts": 2
+          }
+        ],
+        "review": {
+          "id": "review-4aa08c4a-7a97-4eb5-b598-033640cb1876",
+          "reviewer_session": "review-4aa08c4a-7a97-4eb5-b598-033640cb1876",
+          "candidate_hash": "sha256:b35ab2e52c000459512269a0b4dc610d9c4d9c6841957f0e2e7ce006cb718900",
+          "verdict": "passed",
+          "findings": [],
+          "evidence": [
+            "candidate diff inspected",
+            "required check evidence inspected"
+          ]
+        },
+        "review_started": {
+          "reviewer_session": "review-4aa08c4a-7a97-4eb5-b598-033640cb1876",
+          "candidate_hash": "sha256:b35ab2e52c000459512269a0b4dc610d9c4d9c6841957f0e2e7ce006cb718900"
+        },
+        "event_types": [
+          "run.created",
+          "run.exploring",
+          "plan.ready",
+          "plan.approved",
+          "run.implementing",
+          "attempt.started",
+          "worktree.leased",
+          "worktree.created",
+          "pi.spawned",
+          "pi.fixture_args",
+          "pi.response",
+          "pi.agent_start",
+          "pi.tool_execution_start",
+          "pi.tool_execution_end",
+          "pi.message_update",
+          "pi.message_end",
+          "pi.agent_end",
+          "pi.agent_settled",
+          "worktree.changes",
+          "worktree.released",
+          "attempt.finished",
+          "candidate.recorded",
+          "run.validating",
+          "candidate.validation_started",
+          "candidate.worktree_cleaned",
+          "candidate.usage",
+          "check.spawned",
+          "check.reaped",
+          "candidate.check_finished",
+          "candidate.validation_finished",
+          "candidate.repair_started",
+          "attempt.started",
+          "worktree.leased",
+          "worktree.created",
+          "pi.spawned",
+          "pi.fixture_args",
+          "pi.response",
+          "pi.agent_start",
+          "pi.tool_execution_start",
+          "pi.tool_execution_end",
+          "pi.message_update",
+          "pi.message_end",
+          "pi.agent_end",
+          "pi.agent_settled",
+          "worktree.changes",
+          "worktree.released",
+          "attempt.finished",
+          "candidate.recorded",
+          "run.validating",
+          "candidate.validation_started",
+          "candidate.worktree_cleaned",
+          "candidate.usage",
+          "check.spawned",
+          "check.reaped",
+          "candidate.check_finished",
+          "candidate.validation_finished",
+          "review.started",
+          "review.prompt_sent",
+          "candidate.usage",
+          "candidate.usage",
+          "review.usage_settled",
+          "candidate.review_finished"
+        ]
+      },
+      "attempts": [
+        {
+          "number": 1,
+          "state": "completed"
+        },
+        {
+          "number": 2,
+          "state": "completed"
+        }
+      ]
+    },
+    "blocking": {
+      "ticket": {
+        "id": "ticket-33aed97b-ab6d-4f19-832b-f994fdc7044a",
+        "title": "Blocking review probe",
+        "intent": "Make src/main.py print the greeting.",
+        "acceptance_criteria": [
+          "fixture:write_in_scope",
+          "fixture:review_blocking",
+          "main prints the greeting"
+        ],
+        "paths": [
+          "src/main.py"
+        ]
+      },
+      "plan": {
+        "id": "plan-ticket-33aed97b-ab6d-4f19-832b-f994fdc7044a",
+        "revision": 1,
+        "hash": "sha256:ce8bdcb6718ccbb565a9a673ec347bd03fca9dc8a02c8696012f10014cd2700d",
+        "base_commit": "78338cffe3d5efc3eb2264140af66138073d62e9",
+        "budgets": {
+          "max_workers": 1,
+          "max_attempts": 2,
+          "timeout_seconds": 600,
+          "cost_usd_micros": 300000
+        }
+      },
+      "run_id": "workflow-8bcdd4bb-faad-42a9-bdfe-b307781b65ea",
+      "writer": {
+        "settled_state": "validating",
+        "pi_version": "1.3.0",
+        "tools": [
+          "read",
+          "ls",
+          "edit",
+          "write"
+        ],
+        "scope": {
+          "operations": [
+            "read",
+            "write"
+          ],
+          "paths": [
+            "src/main.py"
+          ],
+          "root": "<home>\\AppData\\Local\\Temp\\luuna-m3-fixture-e39b2b5\\data\\worktrees\\workflow-8bcdd4bb-faad-42a9-bdfe-b307781b65ea\\1\\app"
+        },
+        "provider_credentials": [],
+        "tool_calls": [
+          "write:src/main.py"
+        ],
+        "blocked_tool_calls": [],
+        "summary_text": "synthetic writer finished write_in_scope"
+      },
+      "candidate_r1": {
+        "revision": 1,
+        "hash": "sha256:6909b3b9941722affb50cec7af71cf3eea0dff8914c47c27940991ed0b98b2f5",
+        "commits": {
+          "app": "baf09a13c661e6d04fc7fb0eac7b46820123aa74"
+        },
+        "plan_hash": "sha256:ce8bdcb6718ccbb565a9a673ec347bd03fca9dc8a02c8696012f10014cd2700d"
+      },
+      "outcome": {
+        "status": "paused",
+        "active": false,
+        "repair_allowed": false,
+        "revalidate_allowed": false,
+        "candidate": {
+          "revision": 2,
+          "hash": "sha256:4906944cd100669a607ac70c39c7f52f383024d245f7130e6c2178652ade0a87"
+        },
+        "implementer_session": "attempt-db5819ec-3657-4d98-8ea4-d082f74c7618",
+        "validation_generation": 1,
+        "elapsed_seconds": 2,
+        "cost_usd_micros": 500,
+        "reason": "automatic repair stopped: budget exceeded: attempt 3 exceeds max_attempts 2; inspect evidence or re-plan",
+        "results": [
+          {
+            "id": "8a1765f1-cdb3-4e8e-b4da-1e08d12a168e",
+            "recipe_id": "unit",
+            "status": "passed",
+            "exit_code": 0,
+            "tests_detected": 1,
+            "reason": null,
+            "artifacts": 2
+          }
+        ],
+        "review": {
+          "id": "review-79f046d9-817b-4305-8705-4f0db79ba554",
+          "reviewer_session": "review-79f046d9-817b-4305-8705-4f0db79ba554",
+          "candidate_hash": "sha256:4906944cd100669a607ac70c39c7f52f383024d245f7130e6c2178652ade0a87",
+          "verdict": "changes_required",
+          "findings": [
+            {
+              "severity": "blocking",
+              "path": "src/main.py",
+              "line": 1,
+              "explanation": "seeded issue"
+            }
+          ],
+          "evidence": [
+            "candidate diff inspected",
+            "required check evidence inspected"
+          ]
+        },
+        "review_started": {
+          "reviewer_session": "review-70955853-b8bf-46c4-8dad-398399dd2a63",
+          "candidate_hash": "sha256:6909b3b9941722affb50cec7af71cf3eea0dff8914c47c27940991ed0b98b2f5"
+        },
+        "event_types": [
+          "run.created",
+          "run.exploring",
+          "plan.ready",
+          "plan.approved",
+          "run.implementing",
+          "attempt.started",
+          "worktree.leased",
+          "worktree.created",
+          "pi.spawned",
+          "pi.fixture_args",
+          "pi.response",
+          "pi.agent_start",
+          "pi.tool_execution_start",
+          "pi.tool_execution_end",
+          "pi.message_update",
+          "pi.message_end",
+          "pi.agent_end",
+          "pi.agent_settled",
+          "worktree.changes",
+          "worktree.released",
+          "attempt.finished",
+          "candidate.recorded",
+          "run.validating",
+          "candidate.validation_started",
+          "candidate.worktree_cleaned",
+          "candidate.usage",
+          "check.spawned",
+          "check.reaped",
+          "candidate.check_finished",
+          "candidate.validation_finished",
+          "review.started",
+          "review.prompt_sent",
+          "candidate.usage",
+          "review.usage_settled",
+          "candidate.usage",
+          "candidate.review_finished",
+          "candidate.repair_started",
+          "attempt.started",
+          "worktree.leased",
+          "worktree.created",
+          "pi.spawned",
+          "pi.fixture_args",
+          "pi.response",
+          "pi.agent_start",
+          "pi.tool_execution_start",
+          "pi.tool_execution_end",
+          "pi.message_update",
+          "pi.message_end",
+          "pi.agent_end",
+          "pi.agent_settled",
+          "worktree.changes",
+          "worktree.released",
+          "attempt.finished",
+          "candidate.recorded",
+          "run.validating",
+          "candidate.validation_started",
+          "candidate.worktree_cleaned",
+          "candidate.usage",
+          "check.spawned",
+          "check.reaped",
+          "candidate.check_finished",
+          "candidate.validation_finished",
+          "review.started",
+          "review.prompt_sent",
+          "candidate.usage",
+          "review.usage_settled",
+          "candidate.usage",
+          "candidate.review_finished",
+          "candidate.stage_failed"
+        ],
+        "reviews_finished": 2,
+        "automatic_repairs": 1,
+        "run_state": "paused"
+      }
+    },
+    "cancel": {
+      "ticket": {
+        "id": "ticket-19827152-e9fd-4cc0-be9b-e5a787c8d728",
+        "title": "Cancellation probe",
+        "intent": "Make src/main.py print the greeting.",
+        "acceptance_criteria": [
+          "fixture:review_hold",
+          "main prints the greeting"
+        ],
+        "paths": [
+          "src/main.py"
+        ]
+      },
+      "plan": {
+        "id": "plan-ticket-19827152-e9fd-4cc0-be9b-e5a787c8d728",
+        "revision": 1,
+        "hash": "sha256:a0fd10be4324ab8446b6d0e99a61c9e77c844e0af05818c32371d080e294487c",
+        "base_commit": "78338cffe3d5efc3eb2264140af66138073d62e9",
+        "budgets": {
+          "max_workers": 1,
+          "max_attempts": 1,
+          "timeout_seconds": 600,
+          "cost_usd_micros": 300000
+        }
+      },
+      "run_id": "workflow-e5501349-c498-47fb-88dc-70212591a8e2",
+      "writer": {
+        "settled_state": "validating",
+        "pi_version": "1.3.0",
+        "tools": [
+          "read",
+          "ls",
+          "edit",
+          "write"
+        ],
+        "scope": {
+          "operations": [
+            "read",
+            "write"
+          ],
+          "paths": [
+            "src/main.py"
+          ],
+          "root": "<home>\\AppData\\Local\\Temp\\luuna-m3-fixture-e39b2b5\\data\\worktrees\\workflow-e5501349-c498-47fb-88dc-70212591a8e2\\1\\app"
+        },
+        "provider_credentials": [],
+        "tool_calls": [
+          "write:src/main.py"
+        ],
+        "blocked_tool_calls": [],
+        "summary_text": "synthetic writer finished review_hold"
+      },
+      "candidate_r1": {
+        "revision": 1,
+        "hash": "sha256:dd2706828edd267e5cf16e25a6d977ea3948dc608f8e0c802d372fd9db5a1eac",
+        "commits": {
+          "app": "b041917e6efb072f61a46dcdc1306acbfe597bbd"
+        },
+        "plan_hash": "sha256:a0fd10be4324ab8446b6d0e99a61c9e77c844e0af05818c32371d080e294487c"
+      },
+      "cancellation": {
+        "status": "cancelled",
+        "active": false,
+        "repair_allowed": false,
+        "revalidate_allowed": false,
+        "candidate": {
+          "revision": 1,
+          "hash": "sha256:dd2706828edd267e5cf16e25a6d977ea3948dc608f8e0c802d372fd9db5a1eac"
+        },
+        "implementer_session": "attempt-9626ebe3-c7dd-465e-80eb-1133726f5265",
+        "validation_generation": 1,
+        "elapsed_seconds": 2,
+        "cost_usd_micros": 0,
+        "reason": "cancelled before reviewer verdict",
+        "results": [
+          {
+            "id": "0c855ba9-2111-4ecf-84f8-3bfa4ed37567",
+            "recipe_id": "unit",
+            "status": "passed",
+            "exit_code": 0,
+            "tests_detected": 1,
+            "reason": null,
+            "artifacts": 2
+          }
+        ],
+        "review": null,
+        "review_started": {
+          "reviewer_session": "review-aab639c1-2a6d-464f-a19d-17c1e8af4deb",
+          "candidate_hash": "sha256:dd2706828edd267e5cf16e25a6d977ea3948dc608f8e0c802d372fd9db5a1eac"
+        },
+        "event_types": [
+          "run.created",
+          "run.exploring",
+          "plan.ready",
+          "plan.approved",
+          "run.implementing",
+          "attempt.started",
+          "worktree.leased",
+          "worktree.created",
+          "pi.spawned",
+          "pi.fixture_args",
+          "pi.response",
+          "pi.agent_start",
+          "pi.tool_execution_start",
+          "pi.tool_execution_end",
+          "pi.message_update",
+          "pi.message_end",
+          "pi.agent_end",
+          "pi.agent_settled",
+          "worktree.changes",
+          "worktree.released",
+          "attempt.finished",
+          "candidate.recorded",
+          "run.validating",
+          "candidate.validation_started",
+          "candidate.worktree_cleaned",
+          "candidate.usage",
+          "check.spawned",
+          "check.reaped",
+          "candidate.check_finished",
+          "candidate.validation_finished",
+          "candidate.usage",
+          "review.started",
+          "candidate.stage_failed"
+        ],
+        "reviewer_pid": 62040,
+        "status_when_cancelled": "reviewing",
+        "active_when_cancelled": true,
+        "cancel_status": 202,
+        "reviewer_alive_before": true,
+        "reviewer_alive_after": false
+      }
+    },
+    "restart": {
+      "ticket": {
+        "id": "ticket-f076e8a8-864f-4ebc-9527-f83633b68f03",
+        "title": "Restart probe",
+        "intent": "Make src/main.py print the greeting.",
+        "acceptance_criteria": [
+          "fixture:review_hold",
+          "main prints the greeting"
+        ],
+        "paths": [
+          "src/main.py"
+        ]
+      },
+      "plan": {
+        "id": "plan-ticket-f076e8a8-864f-4ebc-9527-f83633b68f03",
+        "revision": 1,
+        "hash": "sha256:04ab21c2d66f786100725ee05fcb1f96a7b7f24793c6f8ae2d38a0319970b15d",
+        "base_commit": "78338cffe3d5efc3eb2264140af66138073d62e9",
+        "budgets": {
+          "max_workers": 1,
+          "max_attempts": 1,
+          "timeout_seconds": 600,
+          "cost_usd_micros": 300000
+        }
+      },
+      "run_id": "workflow-7ec178c3-29c7-4acb-95af-2c6865cd10fc",
+      "writer": {
+        "settled_state": "validating",
+        "pi_version": "1.3.0",
+        "tools": [
+          "read",
+          "ls",
+          "edit",
+          "write"
+        ],
+        "scope": {
+          "operations": [
+            "read",
+            "write"
+          ],
+          "paths": [
+            "src/main.py"
+          ],
+          "root": "<home>\\AppData\\Local\\Temp\\luuna-m3-fixture-e39b2b5\\data\\worktrees\\workflow-7ec178c3-29c7-4acb-95af-2c6865cd10fc\\1\\app"
+        },
+        "provider_credentials": [],
+        "tool_calls": [
+          "write:src/main.py"
+        ],
+        "blocked_tool_calls": [],
+        "summary_text": "synthetic writer finished review_hold"
+      },
+      "candidate_r1": {
+        "revision": 1,
+        "hash": "sha256:756a5b9e055dcc6619d7890702086c28b6317ef0d628d80942244176227d6b68",
+        "commits": {
+          "app": "1371cebec560c8b4af666913218037e9f6de5846"
+        },
+        "plan_hash": "sha256:04ab21c2d66f786100725ee05fcb1f96a7b7f24793c6f8ae2d38a0319970b15d"
+      },
+      "restart": {
+        "status": "interrupted",
+        "active": false,
+        "repair_allowed": false,
+        "revalidate_allowed": false,
+        "candidate": {
+          "revision": 1,
+          "hash": "sha256:756a5b9e055dcc6619d7890702086c28b6317ef0d628d80942244176227d6b68"
+        },
+        "implementer_session": "attempt-6caf3db9-56f2-477b-938e-925df0949b4f",
+        "validation_generation": 1,
+        "elapsed_seconds": 6,
+        "cost_usd_micros": 299500,
+        "reason": "runtime restarted during independent review; unreported provider spend reserved the remaining approved cost budget; re-plan required",
+        "results": [
+          {
+            "id": "756023b2-298c-4eff-889b-8a77f6dcd2c2",
+            "recipe_id": "unit",
+            "status": "passed",
+            "exit_code": 0,
+            "tests_detected": 1,
+            "reason": null,
+            "artifacts": 2
+          }
+        ],
+        "review": null,
+        "review_started": {
+          "reviewer_session": "review-8841a054-be17-4615-a8f8-d91282a9f7f6",
+          "candidate_hash": "sha256:756a5b9e055dcc6619d7890702086c28b6317ef0d628d80942244176227d6b68"
+        },
+        "event_types": [
+          "run.created",
+          "run.exploring",
+          "plan.ready",
+          "plan.approved",
+          "run.implementing",
+          "attempt.started",
+          "worktree.leased",
+          "worktree.created",
+          "pi.spawned",
+          "pi.fixture_args",
+          "pi.response",
+          "pi.agent_start",
+          "pi.tool_execution_start",
+          "pi.tool_execution_end",
+          "pi.message_update",
+          "pi.message_end",
+          "pi.agent_end",
+          "pi.agent_settled",
+          "worktree.changes",
+          "worktree.released",
+          "attempt.finished",
+          "candidate.recorded",
+          "run.validating",
+          "candidate.validation_started",
+          "candidate.worktree_cleaned",
+          "candidate.usage",
+          "check.spawned",
+          "check.reaped",
+          "candidate.check_finished",
+          "candidate.validation_finished",
+          "review.started",
+          "review.prompt_sent",
+          "run.interrupted",
+          "candidate.interrupted"
+        ],
+        "reviewer_pid": 36272,
+        "status_before_kill": "reviewing",
+        "cost_usd_micros_before_kill": 0,
+        "reviewer_exited_after_ms": 59952,
+        "reviewer_orphaned": false,
+        "earlier_candidates_compared": 4,
+        "approved_cost_budget": 300000
+      }
+    },
+    "revalidate": {
+      "ticket": {
+        "id": "ticket-338f1149-c903-4f69-bbed-a446b5ac5f41",
+        "title": "Re-validation probe",
+        "intent": "Make src/main.py print the greeting.",
+        "acceptance_criteria": [
+          "fixture:write_in_scope",
+          "fixture:review_malformed_once",
+          "main prints the greeting"
+        ],
+        "paths": [
+          "src/main.py"
+        ]
+      },
+      "plan": {
+        "id": "plan-ticket-338f1149-c903-4f69-bbed-a446b5ac5f41",
+        "revision": 1,
+        "hash": "sha256:5f69f7a32228f527d1835291d31749ed3aacbe9d96f81cb705a1553fd37e68bd",
+        "base_commit": "78338cffe3d5efc3eb2264140af66138073d62e9",
+        "budgets": {
+          "max_workers": 1,
+          "max_attempts": 1,
+          "timeout_seconds": 600,
+          "cost_usd_micros": 300000
+        }
+      },
+      "run_id": "workflow-0f0f7a68-7e30-4674-af23-8f83aa87bc6e",
+      "writer": {
+        "settled_state": "validating",
+        "pi_version": "1.3.0",
+        "tools": [
+          "read",
+          "ls",
+          "edit",
+          "write"
+        ],
+        "scope": {
+          "operations": [
+            "read",
+            "write"
+          ],
+          "paths": [
+            "src/main.py"
+          ],
+          "root": "<home>\\AppData\\Local\\Temp\\luuna-m3-fixture-e39b2b5\\data\\worktrees\\workflow-0f0f7a68-7e30-4674-af23-8f83aa87bc6e\\1\\app"
+        },
+        "provider_credentials": [],
+        "tool_calls": [
+          "write:src/main.py"
+        ],
+        "blocked_tool_calls": [],
+        "summary_text": "synthetic writer finished write_in_scope"
+      },
+      "candidate_r1": {
+        "revision": 1,
+        "hash": "sha256:5648dcd0e1e941ca20535d524fe6a60b81f7c27704c8176d6a7bb1f059e3d38b",
+        "commits": {
+          "app": "3248f9908e5940bb49ae88eba7b18c207a0283c6"
+        },
+        "plan_hash": "sha256:5f69f7a32228f527d1835291d31749ed3aacbe9d96f81cb705a1553fd37e68bd"
+      },
+      "validation_g1": {
+        "status": "failed",
+        "active": false,
+        "repair_allowed": false,
+        "revalidate_allowed": true,
+        "candidate": {
+          "revision": 1,
+          "hash": "sha256:5648dcd0e1e941ca20535d524fe6a60b81f7c27704c8176d6a7bb1f059e3d38b"
+        },
+        "implementer_session": "attempt-a62fa3f7-1f37-4ea8-bcec-40e607c8b8e5",
+        "validation_generation": 1,
+        "elapsed_seconds": 2,
+        "cost_usd_micros": 500,
+        "reason": "invalid structured reviewer response: expected ident at line 1 column 2; the raw output is kept as private artifact review-f9a60cc2-c3ad-4340-a704-4f40abe0affb.stdout (sha256:sha256:6ce32131037f10a9bb2527b7a100cc97a4279bd7850e4f8aa3d48bce6cd60140)",
+        "results": [
+          {
+            "id": "7c6fa0cb-ecb0-4350-9bb1-a216d16c9fb8",
+            "recipe_id": "unit",
+            "status": "passed",
+            "exit_code": 0,
+            "tests_detected": 1,
+            "reason": null,
+            "artifacts": 2
+          }
+        ],
+        "review": null,
+        "review_started": {
+          "reviewer_session": "review-f9a60cc2-c3ad-4340-a704-4f40abe0affb",
+          "candidate_hash": "sha256:5648dcd0e1e941ca20535d524fe6a60b81f7c27704c8176d6a7bb1f059e3d38b"
+        },
+        "event_types": [
+          "run.created",
+          "run.exploring",
+          "plan.ready",
+          "plan.approved",
+          "run.implementing",
+          "attempt.started",
+          "worktree.leased",
+          "worktree.created",
+          "pi.spawned",
+          "pi.fixture_args",
+          "pi.response",
+          "pi.agent_start",
+          "pi.tool_execution_start",
+          "pi.tool_execution_end",
+          "pi.message_update",
+          "pi.message_end",
+          "pi.agent_end",
+          "pi.agent_settled",
+          "worktree.changes",
+          "worktree.released",
+          "attempt.finished",
+          "candidate.recorded",
+          "run.validating",
+          "candidate.validation_started",
+          "candidate.worktree_cleaned",
+          "candidate.usage",
+          "check.spawned",
+          "check.reaped",
+          "candidate.check_finished",
+          "candidate.validation_finished",
+          "review.started",
+          "review.prompt_sent",
+          "candidate.usage",
+          "review.usage_settled",
+          "candidate.usage",
+          "candidate.stage_failed"
+        ]
+      },
+      "validation_g2": {
+        "status": "reviewed",
+        "active": false,
+        "repair_allowed": false,
+        "revalidate_allowed": false,
+        "candidate": {
+          "revision": 1,
+          "hash": "sha256:5648dcd0e1e941ca20535d524fe6a60b81f7c27704c8176d6a7bb1f059e3d38b"
+        },
+        "implementer_session": "attempt-a62fa3f7-1f37-4ea8-bcec-40e607c8b8e5",
+        "validation_generation": 2,
+        "elapsed_seconds": 4,
+        "cost_usd_micros": 1000,
+        "reason": null,
+        "results": [
+          {
+            "id": "1d482ef7-bfd9-421c-a4c1-bdbfcf98ccab",
+            "recipe_id": "unit",
+            "status": "passed",
+            "exit_code": 0,
+            "tests_detected": 1,
+            "reason": null,
+            "artifacts": 2
+          }
+        ],
+        "review": {
+          "id": "review-e42a4f47-7f81-41f6-afcf-37a39ebb714e",
+          "reviewer_session": "review-e42a4f47-7f81-41f6-afcf-37a39ebb714e",
+          "candidate_hash": "sha256:5648dcd0e1e941ca20535d524fe6a60b81f7c27704c8176d6a7bb1f059e3d38b",
+          "verdict": "passed",
+          "findings": [],
+          "evidence": [
+            "candidate diff inspected",
+            "required check evidence inspected"
+          ]
+        },
+        "review_started": {
+          "reviewer_session": "review-e42a4f47-7f81-41f6-afcf-37a39ebb714e",
+          "candidate_hash": "sha256:5648dcd0e1e941ca20535d524fe6a60b81f7c27704c8176d6a7bb1f059e3d38b"
+        },
+        "event_types": [
+          "run.created",
+          "run.exploring",
+          "plan.ready",
+          "plan.approved",
+          "run.implementing",
+          "attempt.started",
+          "worktree.leased",
+          "worktree.created",
+          "pi.spawned",
+          "pi.fixture_args",
+          "pi.response",
+          "pi.agent_start",
+          "pi.tool_execution_start",
+          "pi.tool_execution_end",
+          "pi.message_update",
+          "pi.message_end",
+          "pi.agent_end",
+          "pi.agent_settled",
+          "worktree.changes",
+          "worktree.released",
+          "attempt.finished",
+          "candidate.recorded",
+          "run.validating",
+          "candidate.validation_started",
+          "candidate.worktree_cleaned",
+          "candidate.usage",
+          "check.spawned",
+          "check.reaped",
+          "candidate.check_finished",
+          "candidate.validation_finished",
+          "review.started",
+          "review.prompt_sent",
+          "candidate.usage",
+          "review.usage_settled",
+          "candidate.usage",
+          "candidate.stage_failed",
+          "candidate.validation_started",
+          "candidate.worktree_cleaned",
+          "candidate.usage",
+          "check.spawned",
+          "check.reaped",
+          "candidate.check_finished",
+          "candidate.validation_finished",
+          "review.started",
+          "review.prompt_sent",
+          "candidate.usage",
+          "review.usage_settled",
+          "candidate.usage",
+          "candidate.review_finished"
+        ]
+      }
+    }
+  },
+  "pre_build": {
+    "git_revision": "e39b2b52ded451950044d9094c7a6ea20e4c84a7",
+    "git_dirty": false,
+    "cargo_config_overrides": []
+  },
+  "runtime_build": {
+    "command": "cargo build --locked -p luuna-runtime",
+    "cargo": {
+      "path": "<home>\\.rustup\\toolchains\\1.90.0-x86_64-pc-windows-msvc\\bin\\cargo.exe",
+      "sha256": "5615085f39570e13b4abd6f23e3302521a0ec570b2dd5182e39a98a87e5e9584"
+    },
+    "target_dir": "<home>\\AppData\\Local\\Temp\\luuna-m3-build-ST19Y7",
+    "environment": [
+      "APPDATA",
+      "CARGO_TARGET_DIR",
+      "HOME",
+      "LOCALAPPDATA",
+      "PATH",
+      "PATHEXT",
+      "RUSTC",
+      "RUSTUP_TOOLCHAIN",
+      "SYSTEMROOT",
+      "TEMP",
+      "TERM",
+      "TMP",
+      "USERPROFILE"
+    ],
+    "seconds": 48
+  },
+  "subreaper": {
+    "mechanism": "Windows Job Object",
+    "interpreter": "<home>\\AppData\\Local\\Programs\\Python\\Python311\\python.exe",
+    "pid": 1588,
+    "helper_sha256": "436d6a376e2a944a84bf1e60632948ecb13dd23a3ab37c6b947622c19e8bd2d0"
+  },
+  "environment": {
+    "platform": "win32 10.0.26300 x64",
+    "node": "v26.10.0",
+    "pi_launcher": "python",
+    "pi_launcher_args": [
+      "<home>\\github\\luuna\\.claude\\worktrees\\mvp-usability-gate-39a7a8\\fixtures\\pi-rpc\\mock_pi.py"
+    ],
+    "provider": "test",
+    "model": "synthetic",
+    "required_check": [
+      "python -c import pathlib,sys; t=pathlib.Path('src/\u2026"
+    ],
+    "git_revision": "e39b2b52ded451950044d9094c7a6ea20e4c84a7",
+    "git_dirty": false,
+    "git_metadata_digest": "sha256:e17ba6836b3e44376ec5604b0976c9667ce7e57fae75c1e428c74e14f837e437",
+    "git_objects_digest": "sha256:508fa51da03c0cb4cb8aa60d6bd2720c3471f5b98b5d4b336b95f92740467293",
+    "ignored_digest": "sha256:321a7a9e6d300625aa939ab4ef42178fa67d12917494cd534c0b37ef0ea87da7",
+    "ignored_files": 1,
+    "python_version": "Python 3.11.9",
+    "pi_version": "synthetic fixture reporting 1.3.0",
+    "provider_credentials_present": [],
+    "runtime_binary_sha256": "a68885c57ae25991b60011ea5d36fabaa9cc2f3abeacfc9cd5a90b5361ddb296",
+    "cargo_dependency_overrides": [],
+    "expected_build_identity": "sha256:809ca6d7deae5cf9c8079ac0d14f1a8a107836921bc53c3f85b4f3f3b1fcd48f",
+    "runtime_sources_dirty": false,
+    "runtime_build_identity": "sha256:809ca6d7deae5cf9c8079ac0d14f1a8a107836921bc53c3f85b4f3f3b1fcd48f",
+    "runtime_build_rustc": "1.90.0 (1159e78c4747b02ef996e55082b704c09b970588)",
+    "runtime_build_rustc_wrapper": "none",
+    "runtime_build_rustc_sha256": "1a9f8c489a90009ce5db828d0a7436a1354789c42590d73ff5cc8b4e53695612",
+    "runtime_build_flags": "profile=debug opt-level=0 debug=true rustflags=none overrides=none config-overrides=none",
+    "runtime_running_sha256": "unavailable on this platform",
+    "pinned_rustc_sha256": "1a9f8c489a90009ce5db828d0a7436a1354789c42590d73ff5cc8b4e53695612"
+  },
+  "baseline": {
+    "id": "753e4a0c-ed94-4176-8322-18256cdb93e5",
+    "status": "passed",
+    "reason": null,
+    "results": [
+      {
+        "id": "5ebc319a-d1ae-481c-9cb2-ea6c39fe54e9",
+        "recipe_id": "unit",
+        "status": "passed",
+        "exit_code": 0,
+        "tests_detected": 1,
+        "reason": null,
+        "artifacts": 2
+      }
+    ]
+  },
+  "developer_checkout": {
+    "head_before": "78338cffe3d5efc3eb2264140af66138073d62e9",
+    "head_after": "78338cffe3d5efc3eb2264140af66138073d62e9",
+    "tracked_changes": "",
+    "untracked_after_baseline": [],
+    "untracked_after_runs": [],
+    "metadata_after_baseline": "sha256:9bb720a1960dfae856b98ba69dc617f57787ac1c1eabd3a32ba5d2a1209010ce",
+    "metadata_after_runs": "sha256:9bb720a1960dfae856b98ba69dc617f57787ac1c1eabd3a32ba5d2a1209010ce",
+    "ignored_after_baseline": "sha256:e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+    "ignored_after_runs": "sha256:e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+    "runs": 6
+  },
+  "finished_at": "2026-10-22T04:45:31.834Z",
+  "checks": [
+    {
+      "name": "the Pi tree is byte-identical to a fresh install of tools/pi/package-lock.json (every tarball integrity-checked by npm)",
+      "ok": true,
+      "detail": "synthetic fixture tracked in the clean checkout; not provider evidence"
+    },
+    {
+      "name": "runtime initial start",
+      "ok": true,
+      "detail": "health {\"build_flags\":\"profile=debug opt-level=0 debug=true rustflags=none overrides=none config-overrides=none\",\"build_identity\":\"sha256:809ca6d7deae5cf9c8079ac0d14f1a8a107836921bc53c3f85b4f3f3b1fcd48f\",\"build_rustc\":\"1.90.0 (1159e78c4747b02ef996e55082b704c09b970588)\",\"build_rustc_sha256\":\"1a9f8c489a90009ce5db828d0a7436a1354789c42590d73ff5cc8b4e53695612\",\"build_rustc_wrapper\":\"none\",\"native_execution\":true,\"pi_version\":\"1.3.0\",\"pi_version_status\":\"required; checked on every run\",\"status\":\"ok\"}"
+    },
+    {
+      "name": "runtime initial process executes the hashed binary (running process image)",
+      "ok": true,
+      "detail": "process image not readable on win32; pre-spawn hash a68885c57ae25991\u2026"
+    },
+    {
+      "name": "the Luuna checkout (harness included) matched the recorded revision: no modified or untracked file",
+      "ok": true,
+      "detail": "revision e39b2b52ded451950044d9094c7a6ea20e4c84a7, clean"
+    },
+    {
+      "name": "the runtime binary was built from the recorded revision's build inputs (embedded content digest)",
+      "ok": true,
+      "detail": "revision e39b2b52ded451950044d9094c7a6ea20e4c84a7, build inputs clean, binary reports sha256:809ca6d7deae5cf9\u2026, checkout sha256:809ca6d7deae5cf9\u2026"
+    },
+    {
+      "name": "the runtime binary was compiled with the toolchain pinned in rust-toolchain.toml (the compiler executable's bytes, not its self-report), no compiler wrapper, no RUSTFLAGS, no profile overrides and no Cargo config overrides",
+      "ok": true,
+      "detail": "pinned 1.90.0, binary built by rustc 1.90.0 (1159e78c4747b02ef996e55082b704c09b970588) (sha256 1a9f8c489a90009c\u2026, pinned toolchain rustc 1a9f8c489a90009c\u2026), wrapper none, profile=debug opt-level=0 debug=true rustflags=none overrides=none config-overrides=none, Cargo config overrides now: none"
+    },
+    {
+      "name": "runtime credentialed start",
+      "ok": true,
+      "detail": "health {\"build_flags\":\"profile=debug opt-level=0 debug=true rustflags=none overrides=none config-overrides=none\",\"build_identity\":\"sha256:809ca6d7deae5cf9c8079ac0d14f1a8a107836921bc53c3f85b4f3f3b1fcd48f\",\"build_rustc\":\"1.90.0 (1159e78c4747b02ef996e55082b704c09b970588)\",\"build_rustc_sha256\":\"1a9f8c489a90009ce5db828d0a7436a1354789c42590d73ff5cc8b4e53695612\",\"build_rustc_wrapper\":\"none\",\"native_execution\":true,\"pi_version\":\"1.3.0\",\"pi_version_status\":\"required; checked on every run\",\"status\":\"ok\"}"
+    },
+    {
+      "name": "runtime credentialed is the same revision-bound binary as the initial start",
+      "ok": true,
+      "detail": "pre-spawn sha256 a68885c57ae25991\u2026 (initial a68885c57ae25991\u2026), identity matches, rustc 1.90.0 (1159e78c4747b02ef996e55082b704c09b970588)"
+    },
+    {
+      "name": "fixture repository registers as a project",
+      "ok": true,
+      "detail": "status 201"
+    },
+    {
+      "name": "manifest with one required host check is confirmed",
+      "ok": true,
+      "detail": "status 200 "
+    },
+    {
+      "name": "baseline ran every configured required check on the fixture repository (real host commands) and passed",
+      "ok": true,
+      "detail": "status=passed results=[{\"id\":\"5ebc319a-d1ae-481c-9cb2-ea6c39fe54e9\",\"recipe_id\":\"unit\",\"status\":\"passed\",\"exit_code\":0,\"tests_detected\":1,\"reason\":null,\"artifacts\":2}]"
+    },
+    {
+      "name": "feature: exact-hash approval admits one scoped writer",
+      "ok": true,
+      "detail": "approve=201 implement=202 state=implementing"
+    },
+    {
+      "name": "feature: writer settled in validating with a frozen candidate bound to the approved plan",
+      "ok": true,
+      "detail": "state=validating revision=1 status=pending"
+    },
+    {
+      "name": "feature: candidate diff is bound to the exact candidate hash and changes exactly the approved paths",
+      "ok": true,
+      "detail": "status=200 bytes=247 changed=[\"src/main.py\"]"
+    },
+    {
+      "name": "feature: validation names the exact candidate; a stale hash is refused",
+      "ok": true,
+      "detail": "status 409 {\"error\":\"candidate hash changed; reload\"}"
+    },
+    {
+      "name": "feature: validation of the exact candidate is accepted",
+      "ok": true,
+      "detail": "status 202 "
+    },
+    {
+      "name": "feature: every configured required check ran in the owned worktree and passed before any review",
+      "ok": true,
+      "detail": "required=[\"unit\"] [{\"id\":\"d3a7c633-eb3d-4ebd-ac65-a4feef71b43d\",\"recipe_id\":\"unit\",\"status\":\"passed\",\"exit_code\":0,\"tests_detected\":1,\"reason\":null,\"artifacts\":2}]"
+    },
+    {
+      "name": "feature: a fresh independent reviewer session reviewed the exact candidate",
+      "ok": true,
+      "detail": "reviewer=review-5d1d5e25-671c-49b5-b6f4-257d4321576b implementer=attempt-240d7af9-e97e-4f12-8dea-e0802f9b8272 verdict=passed"
+    },
+    {
+      "name": "feature: candidate reached reviewed with evidence generation 1 and durable usage",
+      "ok": true,
+      "detail": "status=reviewed generation=1 cost_usd_micros=500 elapsed_seconds=2 reason="
+    },
+    {
+      "name": "feature: a reviewed candidate is not re-validated in place",
+      "ok": true,
+      "detail": "status 422 revalidate_allowed=false"
+    },
+    {
+      "name": "repair: exact-hash approval admits one scoped writer",
+      "ok": true,
+      "detail": "approve=201 implement=202 state=implementing"
+    },
+    {
+      "name": "repair: writer settled in validating with a frozen candidate bound to the approved plan",
+      "ok": true,
+      "detail": "state=validating revision=1 status=pending"
+    },
+    {
+      "name": "repair: validation of the first candidate is accepted",
+      "ok": true,
+      "detail": "status 202"
+    },
+    {
+      "name": "repair: a failing required check fails the candidate before any review and keeps the run repairable",
+      "ok": true,
+      "detail": "status=failed results=[{\"id\":\"5295d23b-4ea3-4327-b05f-9c169553cba7\",\"recipe_id\":\"unit\",\"status\":\"failed\",\"exit_code\":1,\"tests_detected\":1,\"reason\":\"exit code 1\",\"artifacts\":2}] repair_allowed=true"
+    },
+    {
+      "name": "repair: a candidate with a failed required check cannot be re-validated; a new revision is required",
+      "ok": true,
+      "detail": "status 422 revalidate_allowed=false"
+    },
+    {
+      "name": "repair: manual repair of the exact failed candidate is admitted through the approval gate",
+      "ok": true,
+      "detail": "status 202 "
+    },
+    {
+      "name": "repair: repair produced candidate revision 2 with a new hash and pending evidence",
+      "ok": true,
+      "detail": "state=validating revision=2 status=pending"
+    },
+    {
+      "name": "repair: the superseded revision's hash no longer validates",
+      "ok": true,
+      "detail": "status 409"
+    },
+    {
+      "name": "repair: validation of revision 2 is accepted",
+      "ok": true,
+      "detail": "status 202"
+    },
+    {
+      "name": "repair: revision 2 earned fresh evidence for every required check plus a fresh review and reached reviewed",
+      "ok": true,
+      "detail": "status=reviewed verdict=passed results=[{\"id\":\"d013d5f9-f08f-454b-b142-377b2734ea74\",\"recipe_id\":\"unit\",\"status\":\"passed\",\"exit_code\":0,\"tests_detected\":1,\"reason\":null,\"artifacts\":2}] reason="
+    },
+    {
+      "name": "repair: two writer attempts are durably recorded against the shared budget",
+      "ok": true,
+      "detail": "attempts=[{\"number\":1,\"state\":\"completed\"},{\"number\":2,\"state\":\"completed\"}]"
+    },
+    {
+      "name": "blocking: exact-hash approval admits one scoped writer",
+      "ok": true,
+      "detail": "approve=201 implement=202 state=implementing"
+    },
+    {
+      "name": "blocking: writer settled in validating with a frozen candidate bound to the approved plan",
+      "ok": true,
+      "detail": "state=validating revision=1 status=pending"
+    },
+    {
+      "name": "blocking: validation with bounded automatic repair is accepted",
+      "ok": true,
+      "detail": "status 202"
+    },
+    {
+      "name": "blocking: blocking findings never pass; automatic repair stops at the attempt budget and pauses with evidence",
+      "ok": true,
+      "detail": "status=paused revision=2 verdict=changes_required repairs=1 reviews=2 reason=automatic repair stopped: budget exceeded: attempt 3 exceeds max_attempts 2; inspect evidence or re-plan"
+    },
+    {
+      "name": "cancel: exact-hash approval admits one scoped writer",
+      "ok": true,
+      "detail": "approve=201 implement=202 state=implementing"
+    },
+    {
+      "name": "cancel: writer settled in validating with a frozen candidate bound to the approved plan",
+      "ok": true,
+      "detail": "state=validating revision=1 status=pending"
+    },
+    {
+      "name": "cancel: validation is accepted",
+      "ok": true,
+      "detail": "status 202"
+    },
+    {
+      "name": "cancel: cancel reached an in-flight independent review",
+      "ok": true,
+      "detail": "status_when_cancelled=reviewing active=true cancel=202"
+    },
+    {
+      "name": "cancel: cancelled candidate keeps its identity and every passed required check, has no review and is not repairable",
+      "ok": true,
+      "detail": "status=cancelled reason=cancelled before reviewer verdict repair_allowed=false"
+    },
+    {
+      "name": "cancel: owned reviewer child was alive before cancel and reaped before the candidate settled",
+      "ok": true,
+      "detail": "pid=62040 alive_before=true alive_after=false"
+    },
+    {
+      "name": "cancel: a cancelled candidate is not re-validated",
+      "ok": true,
+      "detail": "status 422"
+    },
+    {
+      "name": "restart: exact-hash approval admits one scoped writer",
+      "ok": true,
+      "detail": "approve=201 implement=202 state=implementing"
+    },
+    {
+      "name": "restart: writer settled in validating with a frozen candidate bound to the approved plan",
+      "ok": true,
+      "detail": "state=validating revision=1 status=pending"
+    },
+    {
+      "name": "restart: validation is accepted",
+      "ok": true,
+      "detail": "status 202"
+    },
+    {
+      "name": "restart: the hard-killed runtime exited before the restart",
+      "ok": true,
+      "detail": "{\"exit_observed\":true,\"exit_code\":null,\"signal\":\"SIGKILL\",\"stdio_closed\":false}"
+    },
+    {
+      "name": "restart: the old runtime log drained after reviewer reconciliation",
+      "ok": true
+    },
+    {
+      "name": "runtime restarted start",
+      "ok": true,
+      "detail": "health {\"build_flags\":\"profile=debug opt-level=0 debug=true rustflags=none overrides=none config-overrides=none\",\"build_identity\":\"sha256:809ca6d7deae5cf9c8079ac0d14f1a8a107836921bc53c3f85b4f3f3b1fcd48f\",\"build_rustc\":\"1.90.0 (1159e78c4747b02ef996e55082b704c09b970588)\",\"build_rustc_sha256\":\"1a9f8c489a90009ce5db828d0a7436a1354789c42590d73ff5cc8b4e53695612\",\"build_rustc_wrapper\":\"none\",\"native_execution\":true,\"pi_version\":\"1.3.0\",\"pi_version_status\":\"required; checked on every run\",\"status\":\"ok\"}"
+    },
+    {
+      "name": "runtime restarted is the same revision-bound binary as the initial start",
+      "ok": true,
+      "detail": "pre-spawn sha256 a68885c57ae25991\u2026 (initial a68885c57ae25991\u2026), identity matches, rustc 1.90.0 (1159e78c4747b02ef996e55082b704c09b970588)"
+    },
+    {
+      "name": "restart: restart marks the in-flight review interrupted and preserves the frozen candidate and every passed required check",
+      "ok": true,
+      "detail": "before=reviewing after=interrupted generation=1"
+    },
+    {
+      "name": "restart: unknown provider spend is reserved against the approved cost budget and re-validation is refused",
+      "ok": true,
+      "detail": "cost_before=0 cost_after=299500 budget=300000 reason=runtime restarted during independent review; unreported provider spend reserved the remaining approved cost budget; re-plan required"
+    },
+    {
+      "name": "restart: reviewer child exits after the runtime is hard-killed (stdin closed)",
+      "ok": true,
+      "detail": "pid=36272 exited_after_ms=59952 observed_exit=true orphaned=false"
+    },
+    {
+      "name": "restart: earlier candidate evidence survives the restart byte-for-byte",
+      "ok": true,
+      "detail": "earlier_candidates_compared=4"
+    },
+    {
+      "name": "revalidate: exact-hash approval admits one scoped writer",
+      "ok": true,
+      "detail": "approve=201 implement=202 state=implementing"
+    },
+    {
+      "name": "revalidate: writer settled in validating with a frozen candidate bound to the approved plan",
+      "ok": true,
+      "detail": "state=validating revision=1 status=pending"
+    },
+    {
+      "name": "revalidate: a pending candidate is validated, not re-validated",
+      "ok": true,
+      "detail": "revalidate_allowed=false"
+    },
+    {
+      "name": "revalidate: validation of the exact candidate is accepted",
+      "ok": true,
+      "detail": "status 202"
+    },
+    {
+      "name": "revalidate: invalid reviewer output after passed checks fails the candidate without a verdict, leaves repair closed at max_attempts=1 and opens re-validation",
+      "ok": true,
+      "detail": "status=failed generation=1 repair_allowed=false revalidate_allowed=true reason=invalid structured reviewer response: expected ident at line 1 column 2; the raw output is kept as private artifact review-f9a60cc2-c3ad-4340-a704-4f40abe0affb.\u2026"
+    },
+    {
+      "name": "revalidate: re-validation names the exact candidate; a stale hash is refused and the exact hash is accepted",
+      "ok": true,
+      "detail": "stale=409 exact=202 "
+    },
+    {
+      "name": "revalidate: generation 2 of the same revision 1 ran fresh checks and a fresh reviewer and reached reviewed without a writer attempt",
+      "ok": true,
+      "detail": "status=reviewed revision=1 generation=2 verdict=passed starts=2 reviewers=2 attempts=1 revalidate_allowed=false"
+    },
+    {
+      "name": "the verified Pi tree and launcher were unchanged after every scenario",
+      "ok": true,
+      "detail": "synthetic fixture; not provider evidence"
+    },
+    {
+      "name": "developer checkout HEAD, tracked content, untracked and ignored files and Git metadata are untouched by every writer, check, repair and review",
+      "ok": true,
+      "detail": "head=78338cffe3d5 tracked_changes=\"\" untracked_after_baseline=[] untracked_after_runs=[] Git metadata unchanged, ignored files unchanged (0), untracked contents unchanged (0)"
+    },
+    {
+      "name": "authenticated API performs an orderly Windows shutdown",
+      "ok": true,
+      "detail": "status=202 exited=true code=0 after 64ms"
+    },
+    {
+      "name": "the runtime exited before the leak scan",
+      "ok": true,
+      "detail": "exit observed"
+    },
+    {
+      "name": "the developer checkout was still untouched once every process of the run had stopped",
+      "ok": true,
+      "detail": "head=78338cffe3d5 tracked_changes=\"\" untracked=[], Git metadata unchanged, ignored files unchanged (0), untracked contents unchanged (0)"
+    },
+    {
+      "name": "the Luuna checkout was still the recorded revision, clean, with the same build inputs, Git metadata, history and ignored files once every process of the run had stopped",
+      "ok": true,
+      "detail": "revision e39b2b52ded451950044d9094c7a6ea20e4c84a7, clean, build inputs unchanged, Git metadata (config, HEAD, refs, reflogs, hooks, info, alternates, index) unchanged, objects reachable from every ref unchanged and intact (fsck --full), ignored files outside target/node_modules/dist unchanged (1)"
+    },
+    {
+      "name": "no process of the run outlived it before the leak scan (owned descendants; survivors killed)",
+      "ok": true,
+      "detail": "1 surviving process(es) killed and reaped; Windows Job Object"
+    },
+    {
+      "name": "the leak scan and quarantine resolved paths through held directory handles where the platform provides them",
+      "ok": true,
+      "detail": "unavailable on win32: pinned-root path checks only, recursive cleanup refused"
+    },
+    {
+      "name": "no credential value appears in the report, runtime logs or durable state",
+      "ok": true,
+      "detail": "182 files scanned against 1 configured values"
+    }
+  ],
+  "notes": [],
+  "stray_processes": {
+    "contained": true,
+    "killed": 1,
+    "mechanism": "Windows Job Object"
+  },
+  "checkout_after_run": {
+    "git_revision": "e39b2b52ded451950044d9094c7a6ea20e4c84a7",
+    "git_dirty": false,
+    "git_metadata_digest": "sha256:e17ba6836b3e44376ec5604b0976c9667ce7e57fae75c1e428c74e14f837e437",
+    "git_objects_digest": "sha256:508fa51da03c0cb4cb8aa60d6bd2720c3471f5b98b5d4b336b95f92740467293",
+    "ignored_digest": "sha256:321a7a9e6d300625aa939ab4ef42178fa67d12917494cd534c0b37ef0ea87da7",
+    "ignored_files": 1,
+    "build_identity": "sha256:809ca6d7deae5cf9c8079ac0d14f1a8a107836921bc53c3f85b4f3f3b1fcd48f"
+  },
+  "developer_checkout_after_run": {
+    "head": "78338cffe3d5efc3eb2264140af66138073d62e9",
+    "tracked": "",
+    "untracked": [],
+    "metadata_digest": "sha256:9bb720a1960dfae856b98ba69dc617f57787ac1c1eabd3a32ba5d2a1209010ce",
+    "untracked_digest": "sha256:e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+    "untracked_files": 0,
+    "ignored_digest": "sha256:e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+    "ignored_files": 0
+  },
+  "leak_scan": {
+    "values_checked": 1,
+    "held_handles": false,
+    "entries_visited": 312,
+    "traversal_incomplete": false,
+    "files_scanned": 182,
+    "scanned_bytes": 784533,
+    "unreadable_files": [],
+    "leaks": 0,
+    "report_leaks": false,
+    "leaking_files": [],
+    "removed": [],
+    "not_removed": []
+  },
+  "verdict": "SYNTHETIC fixture run passed: harness/protocol evidence only, never provider or M3 success",
+  "note": "Sanitized copy (personal paths replaced). Synthetic Pi fixture: harness and protocol evidence only, never provider or M3 success."
+}

@@ -13,6 +13,7 @@ mod components;
 mod history;
 mod missions;
 mod projects;
+mod publication;
 mod validation;
 mod writer;
 pub use backup::{
@@ -22,10 +23,11 @@ pub use backup::{
 pub use components::*;
 pub use missions::MissionsBinding;
 pub use projects::*;
+pub use publication::*;
 pub use validation::{
     TicketUsage, WorkflowUsageView, COST_UNREPORTED_EVENT, STAGE_HEARTBEAT_SECONDS,
 };
-pub use writer::{AttemptRecord, PlanOpening};
+pub use writer::{AttemptRecord, PlanOpening, TaskRecord};
 
 #[derive(Error)]
 pub enum StorageError {
@@ -708,6 +710,8 @@ const MIGRATIONS: &[(u32, &str)] = &[
     (7, MIGRATION_7),
     (8, MIGRATION_8),
     (9, MIGRATION_9),
+    (10, MIGRATION_10),
+    (11, MIGRATION_11),
 ];
 
 /// The highest schema version this build creates and understands. A database
@@ -901,5 +905,35 @@ BEGIN IMMEDIATE;
 CREATE INDEX IF NOT EXISTS runs_history ON runs(created_at DESC,id);
 CREATE INDEX IF NOT EXISTS runs_project_history ON runs(project_id,created_at DESC,id);
 INSERT OR IGNORE INTO schema_migrations(version) VALUES (9);
+COMMIT;
+";
+
+/// Per-task workflow state of a run's plan task graph (M4, ADR 0017): one
+/// row per plan task, settled transactionally with the attempt that ran it
+/// and queried by run. Events `task.scheduled`, `task.completed`,
+/// `task.failed`, `task.interrupted`, `task.blocked` and `task.cancelled`
+/// carry the reason in the run's stream.
+const MIGRATION_10: &str = "
+BEGIN IMMEDIATE;
+CREATE TABLE IF NOT EXISTS run_tasks(run_id TEXT NOT NULL REFERENCES runs(id), task_id TEXT NOT NULL, repository_id TEXT NOT NULL,
+ state TEXT NOT NULL, attempt_id TEXT, candidate_commit TEXT, candidate_tree TEXT, depends_on TEXT NOT NULL, reason TEXT,
+ updated_at TEXT NOT NULL, PRIMARY KEY(run_id, task_id));
+INSERT OR IGNORE INTO schema_migrations(version) VALUES (10);
+COMMIT;
+";
+
+/// Publication records (one per run and candidate hash) and the intent
+/// ledger of their external side effects (ADR 0018). Outcomes are recorded in
+/// the payload; `state` columns are indexes for recovery and display.
+const MIGRATION_11: &str = "
+BEGIN IMMEDIATE;
+CREATE TABLE IF NOT EXISTS publications(run_id TEXT NOT NULL REFERENCES runs(id), candidate_hash TEXT NOT NULL, ticket_id TEXT NOT NULL,
+ idempotency_key TEXT NOT NULL, state TEXT NOT NULL, payload TEXT NOT NULL, created_at TEXT NOT NULL, updated_at TEXT NOT NULL,
+ PRIMARY KEY(run_id,candidate_hash));
+CREATE TABLE IF NOT EXISTS publication_intents(key TEXT PRIMARY KEY, run_id TEXT NOT NULL REFERENCES runs(id), candidate_hash TEXT NOT NULL,
+ repository_id TEXT NOT NULL, step TEXT NOT NULL, state TEXT NOT NULL, payload TEXT NOT NULL, created_at TEXT NOT NULL, updated_at TEXT NOT NULL,
+ FOREIGN KEY(run_id,candidate_hash) REFERENCES publications(run_id,candidate_hash));
+CREATE INDEX IF NOT EXISTS publication_intents_publication ON publication_intents(run_id,candidate_hash);
+INSERT OR IGNORE INTO schema_migrations(version) VALUES (11);
 COMMIT;
 ";

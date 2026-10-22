@@ -312,6 +312,23 @@ impl Store {
         Ok(())
     }
 
+    /// Append a project-scoped fact (for example `project.scaffolded`) to the
+    /// durable project event stream. The project must exist.
+    pub fn record_project_event(
+        &mut self,
+        project_id: &str,
+        event_type: &str,
+        payload: Value,
+    ) -> Result<EventEnvelope> {
+        let tx = self
+            .connection
+            .transaction_with_behavior(TransactionBehavior::Immediate)?;
+        get_project(&tx, project_id)?.ok_or_else(|| StorageError::NotFound(project_id.into()))?;
+        let event = append_project_event(&tx, project_id, event_type, payload)?;
+        tx.commit()?;
+        Ok(event)
+    }
+
     /// The most recently recorded proposal, by insertion order, not wall clock.
     pub fn latest_discovery(&self, project_id: &str) -> Result<Option<Discovery>> {
         let payload: Option<String> = self
@@ -362,6 +379,22 @@ impl Store {
             return Err(StorageError::Invalid(
                 "manifest ID must equal the project ID".into(),
             ));
+        }
+        // Discovery proposes relationships with `confirmed: false`; the
+        // developer confirms each one (set `confirmed: true`) or removes it
+        // before the manifest is confirmed, so the runtime never schedules
+        // against a graph nobody vouched for (ADR 0017).
+        let unconfirmed = manifest.unconfirmed_relationships();
+        if !unconfirmed.is_empty() {
+            let named: Vec<String> = unconfirmed
+                .iter()
+                .map(|r| format!("{} -> {} ({})", r.producer, r.consumer, r.contract))
+                .collect();
+            return Err(StorageError::Invalid(format!(
+                "manifest lists {} proposed relationship(s) that are not confirmed: {}; set confirmed to true for each relationship you vouch for, or remove it, before confirming the manifest",
+                unconfirmed.len(),
+                named.join(", ")
+            )));
         }
         let tx = self
             .connection

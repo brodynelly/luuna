@@ -13,7 +13,7 @@ use crate::{
     StorageError, Store,
 };
 use luuna_domain::{
-    AttemptState, DomainError, LeaseState, PlanRevision, RunState, Ticket, WorktreeLease,
+    AttemptState, DomainError, LeaseState, PlanRevision, RunState, TaskState, Ticket, WorktreeLease,
 };
 use rusqlite::{params, Connection, OptionalExtension, Transaction};
 use serde::{Deserialize, Serialize};
@@ -40,6 +40,26 @@ pub struct PlanOpening {
     pub plan: PlanRevision,
     pub run: crate::RunRecord,
     pub created: bool,
+}
+
+/// Durable state of one plan task inside a workflow run (M4, migration 10).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct TaskRecord {
+    pub run_id: String,
+    pub task_id: String,
+    pub repository_id: String,
+    pub state: TaskState,
+    /// The attempt that ran (or runs) this task, once scheduled.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub attempt_id: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub candidate_commit: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub candidate_tree: Option<String>,
+    pub depends_on: Vec<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub reason: Option<String>,
+    pub updated_at: String,
 }
 
 fn text<T: Serialize>(value: T) -> Result<String> {
@@ -567,15 +587,18 @@ impl Store {
                 "attempt {number} exceeds max_attempts {max_attempts}"
             ))));
         }
+        // One running attempt per task: a plan's task graph (M4) runs several
+        // tasks at once, each in its own repository worktree, but never the
+        // same task twice.
         let running: u32 = tx.query_row(
-            "SELECT COUNT(*) FROM attempts WHERE run_id=?1 AND state='running'",
-            [run_id],
+            "SELECT COUNT(*) FROM attempts WHERE run_id=?1 AND state='running' AND task_id=?2",
+            params![run_id, task_id],
             |r| r.get(0),
         )?;
         if running > 0 {
-            return Err(StorageError::AlreadyExists(
-                "an attempt is already running for this run".into(),
-            ));
+            return Err(StorageError::AlreadyExists(format!(
+                "an attempt is already running for task {task_id} of this run"
+            )));
         }
         let record = AttemptRecord {
             id: id.into(),
@@ -899,7 +922,360 @@ pub(crate) fn abandon_orphaned_work(
             json!({"attempt_id": id, "task_id": task_id, "number": number, "state": AttemptState::Interrupted, "payload": payload}),
         )?;
     }
-    Ok(leases.len() + attempts.len())
+    // Tasks of a plan graph whose writer was running are interrupted too, so
+    // the graph remains visible after the restart and resumable by task ID;
+    // completed tasks keep their commits, worktrees and evidence.
+    let mut statement =
+        tx.prepare("SELECT run_id,task_id FROM run_tasks WHERE state='running' ORDER BY rowid")?;
+    let tasks = statement
+        .query_map([], |r| Ok((r.get::<_, String>(0)?, r.get::<_, String>(1)?)))?
+        .collect::<std::result::Result<Vec<_>, _>>()?;
+    drop(statement);
+    for (run_id, task_id) in &tasks {
+        settle_task_in(
+            tx,
+            run_id,
+            task_id,
+            TaskState::Interrupted,
+            Some("runtime restarted while the task's writer was running; resume with POST /api/v1/runs/{id}/implement naming task_id"),
+            None,
+        )?;
+    }
+    Ok(leases.len() + attempts.len() + tasks.len())
+}
+
+impl Store {
+    /// Every task of the run's plan graph with its durable state, in plan order.
+    pub fn run_tasks(&self, run_id: &str) -> Result<Vec<TaskRecord>> {
+        run_tasks_in(&self.connection, run_id)
+    }
+
+    /// Enter `Implementing` for a plan's task graph (M4), or resume one. The
+    /// gate is `begin_implementation`'s (approval, ticket, manifest and base
+    /// binding, a passed baseline per repository, free repositories) with one
+    /// environment fingerprint per repository, since each repository's
+    /// required recipes fingerprint its own tools. A fresh start requires an
+    /// `approved` workflow and records every task `queued`; a resume names
+    /// a task that is `interrupted`, `failed` or `blocked` on an
+    /// `interrupted` or `failed` workflow, requeues every task that did not
+    /// complete, and keeps completed tasks' commits. Attempts still count
+    /// against the plan budget, which `start_attempt` enforces.
+    pub fn begin_graph_implementation(
+        &mut self,
+        run_id: &str,
+        expected_revision: u64,
+        environment_fingerprints: &BTreeMap<String, String>,
+        resume_task: Option<&str>,
+    ) -> Result<(crate::RunRecord, Vec<TaskRecord>)> {
+        let tx = self
+            .connection
+            .transaction_with_behavior(rusqlite::TransactionBehavior::Immediate)?;
+        let run =
+            crate::get_run(&tx, run_id)?.ok_or_else(|| StorageError::NotFound(run_id.into()))?;
+        let existing = run_tasks_in(&tx, run_id)?;
+        match (run.state, resume_task) {
+            (RunState::Approved, _) if existing.is_empty() => {}
+            (RunState::Interrupted | RunState::Failed, Some(task_id)) => {
+                let task = existing
+                    .iter()
+                    .find(|task| task.task_id == task_id)
+                    .ok_or_else(|| {
+                        StorageError::Invalid(format!(
+                            "task {task_id} has no recorded state in this workflow; only a workflow whose task graph was interrupted or failed can be resumed"
+                        ))
+                    })?;
+                if !matches!(
+                    task.state,
+                    TaskState::Interrupted | TaskState::Failed | TaskState::Blocked
+                ) {
+                    return Err(StorageError::Invalid(format!(
+                        "task {task_id} is {:?}; only an interrupted, failed or blocked task can be resumed",
+                        task.state
+                    )));
+                }
+                if existing.iter().any(|task| task.state == TaskState::Running) {
+                    return Err(StorageError::AlreadyExists(
+                        "a task of this workflow is still recorded running".into(),
+                    ));
+                }
+            }
+            (state, _) => {
+                return Err(StorageError::Invalid(format!(
+                    "workflow is {state:?}; implementation requires an approved workflow, and resumption an interrupted or failed one with the task to resume named"
+                )));
+            }
+        }
+        crate::authorize_run(&tx, run_id)?;
+        let plan = crate::validation::bound_plan(&tx, run_id)?;
+        check_ticket_binding(&tx, &plan)?;
+        check_manifest_binding(&tx, &plan)?;
+        let mut baselines = BTreeMap::new();
+        for repository_id in plan.base_commits.keys() {
+            let fingerprint = environment_fingerprints
+                .get(repository_id)
+                .filter(|f| !f.is_empty())
+                .ok_or_else(|| {
+                    StorageError::Invalid(format!(
+                        "environment fingerprint for repository {repository_id} is required"
+                    ))
+                })?;
+            let evidence = crate::baselines::latest_baseline(&tx, &plan.project_id, repository_id)?
+                .ok_or_else(|| {
+                    StorageError::Domain(DomainError::BaselineRequired(format!(
+                        "no baseline has been recorded for repository {repository_id}"
+                    )))
+                })?;
+            evidence.authorizes(&plan, repository_id, fingerprint)?;
+            let baseline_run = crate::get_run(&tx, &evidence.run_id)?
+                .ok_or_else(|| StorageError::NotFound(evidence.run_id.clone()))?;
+            if baseline_run.state != RunState::Completed {
+                return Err(StorageError::Domain(DomainError::BaselineRequired(
+                    format!(
+                        "baseline {} belongs to run {} which settled as {:?}, not completed",
+                        evidence.id, evidence.run_id, baseline_run.state
+                    ),
+                )));
+            }
+            baselines.insert(repository_id.clone(), evidence.id.clone());
+        }
+        require_repositories_free(&tx, run_id, &plan)?;
+        let updated_at = now();
+        let mut requeued = Vec::new();
+        if existing.is_empty() {
+            for task in &plan.tasks {
+                tx.execute(
+                    "INSERT INTO run_tasks(run_id,task_id,repository_id,state,depends_on,updated_at) VALUES (?1,?2,?3,?4,?5,?6)",
+                    params![
+                        run_id,
+                        task.id,
+                        task.repository_id,
+                        text(TaskState::Queued)?,
+                        serde_json::to_string(&task.depends_on)?,
+                        updated_at
+                    ],
+                )?;
+            }
+        } else {
+            for task in &existing {
+                if task.state != TaskState::Completed {
+                    tx.execute(
+                        "UPDATE run_tasks SET state=?1,attempt_id=NULL,candidate_commit=NULL,candidate_tree=NULL,reason=NULL,updated_at=?2 WHERE run_id=?3 AND task_id=?4",
+                        params![text(TaskState::Queued)?, updated_at, run_id, task.task_id],
+                    )?;
+                    requeued.push(task.task_id.clone());
+                }
+            }
+        }
+        transition(
+            &tx,
+            run_id,
+            expected_revision,
+            RunState::Implementing,
+            "run.implementing",
+            json!({
+                "plan_id": plan.id,
+                "plan_revision": plan.revision,
+                "plan_hash": plan.hash,
+                "manifest_hash": plan.manifest_hash,
+                "baselines": baselines,
+                "environment_fingerprints": environment_fingerprints,
+                "tasks": plan.tasks.iter().map(|t| t.id.clone()).collect::<Vec<_>>(),
+                "max_workers": plan.budgets.max_workers,
+                "resumed_task": resume_task,
+                "requeued": requeued,
+            }),
+        )?;
+        let tasks = run_tasks_in(&tx, run_id)?;
+        tx.commit()?;
+        Ok((
+            self.get_run(run_id)?
+                .ok_or_else(|| StorageError::NotFound(run_id.into()))?,
+            tasks,
+        ))
+    }
+
+    /// A queued task starts running under the given attempt (`task.scheduled`).
+    pub fn schedule_task(
+        &mut self,
+        run_id: &str,
+        task_id: &str,
+        attempt_id: &str,
+    ) -> Result<TaskRecord> {
+        let tx = self
+            .connection
+            .transaction_with_behavior(rusqlite::TransactionBehavior::Immediate)?;
+        let task = load_task(&tx, run_id, task_id)?
+            .ok_or_else(|| StorageError::NotFound(format!("{run_id}/{task_id}")))?;
+        if task.state != TaskState::Queued {
+            return Err(StorageError::Invalid(format!(
+                "task {task_id} is {:?}, not queued",
+                task.state
+            )));
+        }
+        tx.execute(
+            "UPDATE run_tasks SET state=?1,attempt_id=?2,updated_at=?3 WHERE run_id=?4 AND task_id=?5",
+            params![text(TaskState::Running)?, attempt_id, now(), run_id, task_id],
+        )?;
+        append(
+            &tx,
+            run_id,
+            "task.scheduled",
+            json!({"task_id": task_id, "repository_id": task.repository_id, "attempt_id": attempt_id, "depends_on": task.depends_on}),
+        )?;
+        let task = load_task(&tx, run_id, task_id)?
+            .ok_or_else(|| StorageError::NotFound(format!("{run_id}/{task_id}")))?;
+        tx.commit()?;
+        Ok(task)
+    }
+
+    /// Settle a task: `completed` with its candidate commit and tree, or
+    /// `failed`, `interrupted`, `blocked` or `cancelled` with the reason. A
+    /// running task settles any way; a queued task may only be blocked,
+    /// cancelled or interrupted (it never ran). The event is `task.<state>`.
+    pub fn settle_task(
+        &mut self,
+        run_id: &str,
+        task_id: &str,
+        state: TaskState,
+        reason: Option<&str>,
+        candidate: Option<(&str, &str)>,
+    ) -> Result<TaskRecord> {
+        let tx = self
+            .connection
+            .transaction_with_behavior(rusqlite::TransactionBehavior::Immediate)?;
+        let task = settle_task_in(&tx, run_id, task_id, state, reason, candidate)?;
+        tx.commit()?;
+        Ok(task)
+    }
+}
+
+fn settle_task_in(
+    tx: &Transaction<'_>,
+    run_id: &str,
+    task_id: &str,
+    state: TaskState,
+    reason: Option<&str>,
+    candidate: Option<(&str, &str)>,
+) -> Result<TaskRecord> {
+    if !state.is_terminal() {
+        return Err(StorageError::Invalid(
+            "a settled task needs a terminal state".into(),
+        ));
+    }
+    let task = load_task(tx, run_id, task_id)?
+        .ok_or_else(|| StorageError::NotFound(format!("{run_id}/{task_id}")))?;
+    let admissible = match task.state {
+        TaskState::Running => true,
+        TaskState::Queued => matches!(
+            state,
+            TaskState::Blocked | TaskState::Cancelled | TaskState::Interrupted
+        ),
+        _ => false,
+    };
+    if !admissible {
+        return Err(StorageError::Invalid(format!(
+            "task {task_id} is {:?} and cannot settle as {state:?}",
+            task.state
+        )));
+    }
+    if state == TaskState::Completed {
+        let Some((commit, tree)) = candidate else {
+            return Err(StorageError::Invalid(
+                "a completed task records its candidate commit and tree".into(),
+            ));
+        };
+        if !luuna_domain::is_commit_id(commit) || !luuna_domain::is_commit_id(tree) {
+            return Err(StorageError::Invalid(
+                "a completed task needs exact commit and tree identities".into(),
+            ));
+        }
+    }
+    let (commit, tree) = candidate.unzip();
+    tx.execute(
+        "UPDATE run_tasks SET state=?1,candidate_commit=?2,candidate_tree=?3,reason=?4,updated_at=?5 WHERE run_id=?6 AND task_id=?7",
+        params![text(state)?, commit, tree, reason, now(), run_id, task_id],
+    )?;
+    let kind = format!("task.{}", text(state)?);
+    append(
+        tx,
+        run_id,
+        &kind,
+        json!({"task_id": task_id, "repository_id": task.repository_id, "attempt_id": task.attempt_id, "state": state, "reason": reason, "candidate_commit": commit, "candidate_tree": tree, "depends_on": task.depends_on}),
+    )?;
+    load_task(tx, run_id, task_id)?
+        .ok_or_else(|| StorageError::NotFound(format!("{run_id}/{task_id}")))
+}
+
+fn run_tasks_in(connection: &Connection, run_id: &str) -> Result<Vec<TaskRecord>> {
+    let mut statement =
+        connection.prepare("SELECT task_id FROM run_tasks WHERE run_id=?1 ORDER BY rowid")?;
+    let ids = statement
+        .query_map([run_id], |r| r.get::<_, String>(0))?
+        .collect::<std::result::Result<Vec<_>, _>>()?;
+    ids.into_iter()
+        .map(|task_id| {
+            load_task(connection, run_id, &task_id)?
+                .ok_or_else(|| StorageError::NotFound(format!("{run_id}/{task_id}")))
+        })
+        .collect()
+}
+
+type TaskRow = (
+    String,
+    String,
+    Option<String>,
+    Option<String>,
+    Option<String>,
+    String,
+    Option<String>,
+    String,
+);
+
+fn load_task(connection: &Connection, run_id: &str, task_id: &str) -> Result<Option<TaskRecord>> {
+    let row: Option<TaskRow> = connection
+        .query_row(
+            "SELECT repository_id,state,attempt_id,candidate_commit,candidate_tree,depends_on,reason,updated_at FROM run_tasks WHERE run_id=?1 AND task_id=?2",
+            params![run_id, task_id],
+            |r| {
+                Ok((
+                    r.get(0)?,
+                    r.get(1)?,
+                    r.get(2)?,
+                    r.get(3)?,
+                    r.get(4)?,
+                    r.get(5)?,
+                    r.get(6)?,
+                    r.get(7)?,
+                ))
+            },
+        )
+        .optional()?;
+    row.map(
+        |(
+            repository_id,
+            state,
+            attempt_id,
+            candidate_commit,
+            candidate_tree,
+            depends_on,
+            reason,
+            updated_at,
+        )| {
+            Ok(TaskRecord {
+                run_id: run_id.into(),
+                task_id: task_id.into(),
+                repository_id,
+                state: serde_json::from_value(Value::String(state))?,
+                attempt_id,
+                candidate_commit,
+                candidate_tree,
+                depends_on: serde_json::from_str(&depends_on)?,
+                reason,
+                updated_at,
+            })
+        },
+    )
+    .transpose()
 }
 
 /// An attempt lost to a restart reported neither its final time nor its

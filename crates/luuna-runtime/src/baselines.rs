@@ -219,6 +219,7 @@ pub(crate) fn recipe_spec(
         budget: None,
         capabilities: recipe.capabilities.clone(),
         artifact_dir: artifact_dir.to_path_buf(),
+        environment: Vec::new(),
     }
 }
 

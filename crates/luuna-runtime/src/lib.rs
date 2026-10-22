@@ -58,6 +58,8 @@ pub struct RuntimeConfig {
 pub struct ServiceSettings {
     pub runtime: RuntimeConfig,
     pub port: u16,
+    /// GitHub publication (ADR 0018): token presence and API base URL.
+    pub publication: PublicationSettings,
 }
 
 /// A startup failure whose message names the setting at fault and the form it
@@ -130,6 +132,7 @@ impl ServiceSettings {
             })?,
             None => 4242,
         };
+        let publication = PublicationSettings::from_env(&var)?;
         let max_run_seconds = match text("LUUNA_RUN_TIMEOUT_SECONDS")? {
             Some(raw) => raw
                 .parse::<u64>()
@@ -156,6 +159,7 @@ impl ServiceSettings {
                 max_run_seconds,
             },
             port,
+            publication,
         })
     }
 }
@@ -165,6 +169,7 @@ pub struct AppState {
     store: Arc<Mutex<Store>>,
     active: Arc<Mutex<HashMap<String, watch::Sender<bool>>>>,
     config: Arc<RuntimeConfig>,
+    publication: Arc<PublicationSettings>,
     git: Arc<GitInspector>,
     executor: Arc<Executor>,
     components: Option<Arc<luuna_components::Components>>,
@@ -215,12 +220,16 @@ fn restrict_to_owner(directory: &std::path::Path) -> Result<(), Box<dyn std::err
 mod baselines;
 mod candidates;
 mod dispatch;
+mod graph;
 mod integrations;
 mod missions;
 mod projects;
+mod publication;
+mod scaffold;
 mod writer;
 pub use baselines::{ArtifactId, StartBaseline};
 pub use projects::{ConfirmManifest, ProjectView, RegisterProject, RegisterRepository};
+pub use publication::{PublicationSettings, PublishRequest, DEFAULT_GITHUB_API_URL};
 pub use writer::{
     ApprovePlan, BudgetRequest, CreatePlan, CreateTicket, Implement, PlanApproved, PlanOpened,
     PlanTaskRequest,
@@ -290,6 +299,7 @@ impl AppState {
             store: Arc::new(Mutex::new(store)),
             active: Arc::new(Mutex::new(HashMap::new())),
             config: Arc::new(config),
+            publication: Arc::new(PublicationSettings::default()),
             git: Arc::new(git),
             executor: Arc::new(Executor::default()),
             components: discovered_components(),
@@ -301,6 +311,13 @@ impl AppState {
             stream_slots: Arc::new(tokio::sync::Semaphore::new(16)),
             _owner_lock: Arc::new(owner_lock),
         })
+    }
+
+    /// Publication settings (GitHub token presence, API base URL, deadlines);
+    /// the service binary passes what `ServiceSettings::from_env` read.
+    pub fn with_publication(mut self, settings: PublicationSettings) -> Self {
+        self.publication = Arc::new(settings);
+        self
     }
 
     /// Override the component toolchain in isolated adapter tests.
@@ -609,6 +626,14 @@ pub fn router(state: AppState) -> Router {
             axum::routing::delete(integrations::delete_memory),
         )
         .route(
+            "/api/v1/projects/{id}/memory/{memory_id}/promote",
+            post(integrations::promote_memory),
+        )
+        .route(
+            "/api/v1/projects/{id}/export",
+            get(integrations::export_project),
+        )
+        .route(
             "/api/v1/projects/{id}/prompts",
             get(integrations::list_prompts).post(integrations::create_prompt),
         )
@@ -632,8 +657,15 @@ pub fn router(state: AppState) -> Router {
         .route("/api/v1/runs/{id}/diff", get(candidates::diff))
         .route("/api/v1/runs/{id}/validate", post(candidates::validate))
         .route("/api/v1/runs/{id}/repair", post(writer::repair))
+        .route("/api/v1/runs/{id}/publish", post(publication::publish))
+        .route("/api/v1/runs/{id}/publication", get(publication::get))
+        .route(
+            "/api/v1/runs/{id}/publication/reconcile",
+            post(publication::reconcile),
+        )
         .route("/api/v1/runs/{id}/worktrees", get(writer::list_worktrees))
         .route("/api/v1/runs/{id}/attempts", get(writer::list_attempts))
+        .route("/api/v1/runs/{id}/tasks", get(graph::list_tasks))
         .route(
             "/api/v1/projects/{id}/tickets",
             get(writer::list_tickets).post(writer::create_ticket),
@@ -650,6 +682,14 @@ pub fn router(state: AppState) -> Router {
             get(projects::list_projects).post(projects::register_project),
         )
         .route("/api/v1/projects/{id}", get(projects::get_project))
+        .route(
+            "/api/v1/projects/scaffold/propose",
+            post(scaffold::propose_scaffold),
+        )
+        .route(
+            "/api/v1/projects/scaffold",
+            post(scaffold::execute_scaffold),
+        )
         .route("/api/v1/projects/{id}/discover", post(projects::discover))
         .route(
             "/api/v1/projects/{id}/repositories/{repository_id}/rebind",

@@ -19,6 +19,7 @@ fn spec(root: &std::path::Path, args: &[&str], timeout_seconds: u64) -> CommandS
         budget: None,
         capabilities: vec!["python".into()],
         artifact_dir: root.join(".luuna-artifacts"),
+        environment: Vec::new(),
     }
 }
 

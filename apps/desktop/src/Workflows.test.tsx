@@ -31,7 +31,7 @@ test("workflow reasons come from the latest durable reason event", () => {
 const ticket: Ticket = { schema_version: "0.1", id: "ticket-1", project_id: "p", revision: 1, source: "luuna_sqlite_temporary", title: "Implement the greeting", intent: "Print it", acceptance_criteria: ["prints"], repository_ids: ["app"], created_at: "", updated_at: "" };
 const planOf = (revision: number) => ({ id: "plan-1", revision, hash: `sha256:${String(revision).repeat(64)}`, base_commits: { app: "c".repeat(40) }, tasks: [{ paths: ["src"] }], budgets: { max_workers: 1, max_attempts: 2, timeout_seconds: 600, cost_usd_micros: 1_000_000 } }) as unknown as PlanRevision;
 const runOf = (id: string, state: RunState, revision = 1, planRevision = 1): RunRecord => ({ id, project_id: "p", state, revision, metadata: { kind: "workflow", plan_id: "plan-1", plan_revision: planRevision }, created_at: "", updated_at: `t${revision}` });
-const noActions: TicketActions = { reconcile() {}, plan() {}, approve() {}, implement() {}, cancel() {}, validate() {}, repair() {}, diff() {}, artifact() {} };
+const noActions: TicketActions = { reconcile() {}, plan() {}, approve() {}, implement() {}, cancel() {}, validate() {}, repair() {}, diff() {}, attempts() {}, tasks() {}, artifact() {}, publish() {}, publication() {}, reconcilePublication() {} };
 
 test("workflow replay reduces each page before fetching the next and stops on an invalid page", async () => {
   let reduced = 0;

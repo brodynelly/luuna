@@ -133,6 +133,29 @@ failed, never with payloads or credentials.
   provenance. User memory retrieval needs `include_user=true`; creation requires
   `{ "idempotency_key", "scope": "project|process|user", "content", "provenance" }`.
   `DELETE /api/v1/projects/{id}/memory/{memory_id}?expected_hash=...` checks the displayed hash.
+  `POST /api/v1/projects/{id}/memory/{memory_id}/promote` with `{ "idempotency_key", "expected_hash", "to_scope": "project|user" }`
+  widens a memory one step (process to project, project to user), creating the wider record with
+  provenance naming its origin and deleting the narrower one under the intent ledger (ADR 0021).
+- `GET /api/v1/projects/{id}/export`: the confirmed manifest, ticket projections, project and
+  process memory and current prompts, with `omitted` naming what never leaves this host. The
+  export is refused (409) rather than redacted when any string would carry user memory, a
+  credential value, the data directory, a registered checkout path, the home directory or an
+  absolute path of this host's shapes.
+- `POST /api/v1/projects/scaffold/propose`: `{ "profile", "name", "parent_dir" }` returns a hashed
+  `ScaffoldProposal` (files, baseline recipes, generator and network steps, tool probes,
+  `ready|blocked`) and writes nothing. `POST /api/v1/projects/scaffold` with
+  `{ "proposal_hash", "idempotency_key", "confirm": true, "confirm_network"? }` writes the files,
+  commits, runs the baseline recipe through the supervised executor, registers the project, runs
+  discovery and records `project.scaffolded`; a failing baseline is returned as such (ADR 0019).
+  Discovery responses carry `host_capabilities` and each proposed check its `capability` and
+  `missing_tools`.
+- `POST /api/v1/runs/{id}/publish`: `{ "expected_hash", "idempotency_key" }` publishes a `reviewed`
+  candidate with a `passed` review to GitHub (push of the exact commit to
+  `luuna/<ticket>/<hash prefix>`, one linked pull request per repository), once per key, under a
+  durable intent ledger. `GET /api/v1/runs/{id}/publication` returns the record with CI and merge
+  observation refreshed; `POST /api/v1/runs/{id}/publication/reconcile` retries only missing
+  steps. There is no merge operation (ADR 0018). Needs `LUUNA_GITHUB_TOKEN`; `LUUNA_GITHUB_API_URL`
+  selects the REST base for tests.
 - `GET/POST /api/v1/projects/{id}/prompts` lists/creates Beacon prompts. Creation/update requires
   `{ "idempotency_key", "name", "body", "expected_version"? }`; an existing name needs its current
   expected version. `GET /api/v1/projects/{id}/prompts/{name}/render?version=...` previews exact
@@ -254,3 +277,7 @@ What a snapshot covers: the database snapshot holds projects, manifests, plans, 
 Schema compatibility: at startup the runtime refuses a database that fails `quick_check` or that was written by a newer schema. The message names the file and `luuna-runtime restore`. Before migrating an existing database to a newer schema, the runtime saves `<data>/backups/pre-migration-v<old>-<timestamp>.sqlite3`. These snapshots are never deleted automatically. To step back to the build that wrote one, stop the runtime, run `luuna-runtime restore --input <snapshot>`, then start that older build.
 
 Startup recovery skips a record it cannot decode instead of refusing to start. It logs the table and ID to stderr, never the content. Where the record has a state column, that column is settled: the record is interrupted or abandoned, never resumed.
+
+## Diagnostics
+
+`luuna-runtime doctor [--data-dir <dir>] [--json]` reports the host prerequisites (Git, Python, Node, the pinned Pi probe without a model call), the data directory and database, `LUUNA_API_TOKEN` and `LUUNA_GITHUB_TOKEN` presence, configured provider credential names, the service port and the component toolchain. It exits 1 when Git, Pi or a writable data directory is missing or an existing database is unusable, and never prints a credential value (ADR 0018).

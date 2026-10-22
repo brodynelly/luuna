@@ -335,46 +335,72 @@ pub async fn create_memory(
     Json(request): Json<CreateMemory>,
 ) -> Result<Json<MemoryRecord>, ApiError> {
     require_enabled(&state, &id)?;
-    if !matches!(request.scope.as_str(), "project" | "process" | "user")
-        || request.content.trim().is_empty()
-        || request.content.len() > 16_000
-        || request.provenance.trim().is_empty()
-        || request.provenance.len() > 1000
+    validate_memory_request(&request.scope, &request.content, &request.provenance)?;
+    let _guard = state.component_locks.lock().await;
+    Ok(Json(
+        create_memory_locked(
+            &state,
+            &id,
+            &request.idempotency_key,
+            &request.scope,
+            &request.content,
+            &request.provenance,
+        )
+        .await?,
+    ))
+}
+fn validate_memory_request(scope: &str, content: &str, provenance: &str) -> Result<(), ApiError> {
+    if !matches!(scope, "project" | "process" | "user")
+        || content.trim().is_empty()
+        || content.len() > 16_000
+        || provenance.trim().is_empty()
+        || provenance.len() > 1000
     {
         return Err(invalid(
             "Memory requires a valid scope, bounded content and explicit provenance",
         ));
     }
-    let _guard = state.component_locks.lock().await;
-    let request_value =
-        json!({"scope":request.scope,"content":request.content,"provenance":request.provenance});
+    Ok(())
+}
+/// Creates one memory under the caller's component lock. Durable intent is
+/// recorded before the Atlas write and reconciled by identity on retry.
+async fn create_memory_locked(
+    state: &AppState,
+    id: &str,
+    idempotency_key: &str,
+    scope: &str,
+    content: &str,
+    provenance: &str,
+) -> Result<MemoryRecord, ApiError> {
+    let request_value = json!({"scope":scope,"content":content,"provenance":provenance});
     let operation = state
         .store
         .lock()
         .map_err(internal)?
         .begin_component_operation(
-            &id,
-            &request.idempotency_key,
+            id,
+            idempotency_key,
             "memory.create",
             &request_value,
             &format!("mem-{}", uuid::Uuid::new_v4()),
         )
         .map_err(|_| conflict("Memory idempotency key conflicts with a previous request"))?;
     if let Some(response) = operation.response {
-        return Ok(Json(serde_json::from_value(response).map_err(internal)?));
+        return serde_json::from_value(response).map_err(internal);
     }
-    let directory = if request.scope == "user" {
+    let directory = if scope == "user" {
         state.config.data_dir.join("components/user")
     } else {
-        workspace(&state, &id)?
+        workspace(state, id)?
     };
     private_directory(&directory, &state.config.data_dir)?;
     if !directory.join(".mulch/mulch.config.yaml").exists() {
-        call(&state, "atlas", &directory, vec!["init".into()]).await?;
+        call(state, "atlas", &directory, vec!["init".into()]).await?;
     }
-    let domain = format!("luuna-{}", request.scope);
-    let payload = json!({"id":operation.record_id,"scope":request.scope,"content":request.content,"provenance":request.provenance});
-    let rows = atlas_records(&state, &directory).await?;
+    let domain = format!("luuna-{scope}");
+    let payload =
+        json!({"id":operation.record_id,"scope":scope,"content":content,"provenance":provenance});
+    let rows = atlas_records(state, &directory).await?;
     let matching: Vec<_> = rows
         .iter()
         .filter(|row| {
@@ -406,10 +432,10 @@ pub async fn create_memory(
             .store
             .lock()
             .map_err(internal)?
-            .mark_component_operation_attempted(&id, &request.idempotency_key)
+            .mark_component_operation_attempted(id, idempotency_key)
             .map_err(internal)?;
         let response = call(
-            &state,
+            state,
             "atlas",
             &directory,
             vec![
@@ -431,8 +457,8 @@ pub async fn create_memory(
     let created = chrono::Utc::now().to_rfc3339();
     let binding = MemoryBinding {
         id: operation.record_id,
-        project_id: id.clone(),
-        scope: request.scope,
+        project_id: id.into(),
+        scope: scope.into(),
         source_id: source_id.into(),
         domain,
         created_at: created,
@@ -444,18 +470,18 @@ pub async fn create_memory(
         .map_err(internal)?
         .record_memory_binding(&binding)
         .map_err(internal)?;
-    let result = resolved_memory(&state, &binding).await?;
+    let result = resolved_memory(state, &binding).await?;
     state
         .store
         .lock()
         .map_err(internal)?
         .complete_component_operation(
-            &id,
-            &request.idempotency_key,
+            id,
+            idempotency_key,
             &serde_json::to_value(&result).map_err(internal)?,
         )
         .map_err(internal)?;
-    Ok(Json(result))
+    Ok(result)
 }
 #[derive(Deserialize)]
 pub struct DeleteMemoryQuery {
@@ -468,46 +494,58 @@ pub async fn delete_memory(
 ) -> Result<Json<Value>, ApiError> {
     require_enabled(&state, &project_id)?;
     let _guard = state.component_locks.lock().await;
+    Ok(Json(
+        delete_memory_locked(&state, &project_id, &id, &query.expected_hash).await?,
+    ))
+}
+fn valid_memory_hash(hash: &str) -> bool {
+    hash.starts_with("sha256:")
+        && hash.len() == 71
+        && hash[7..].bytes().all(|byte| byte.is_ascii_hexdigit())
+}
+/// Deletes one memory under the caller's component lock; repeated calls with
+/// the same displayed hash are idempotent even after the binding is tombstoned.
+async fn delete_memory_locked(
+    state: &AppState,
+    project_id: &str,
+    id: &str,
+    expected_hash: &str,
+) -> Result<Value, ApiError> {
     let binding = state
         .store
         .lock()
         .map_err(internal)?
-        .memory_binding(&project_id, &id)
+        .memory_binding(project_id, id)
         .map_err(internal)?
         .ok_or_else(not_found)?;
-    if !query.expected_hash.starts_with("sha256:")
-        || query.expected_hash.len() != 71
-        || !query.expected_hash[7..]
-            .bytes()
-            .all(|byte| byte.is_ascii_hexdigit())
-    {
+    if !valid_memory_hash(expected_hash) {
         return Err(invalid("A valid displayed memory hash is required"));
     }
-    let key = format!("memory-delete:{id}:{}", query.expected_hash);
+    let key = format!("memory-delete:{id}:{expected_hash}");
     let operation = state
         .store
         .lock()
         .map_err(internal)?
         .begin_component_operation(
-            &project_id,
+            project_id,
             &key,
             "memory.delete",
-            &json!({"id":id,"expected_hash":query.expected_hash}),
-            &id,
+            &json!({"id":id,"expected_hash":expected_hash}),
+            id,
         )
         .map_err(internal)?;
     if let Some(response) = operation.response {
-        return Ok(Json(response));
+        return Ok(response);
     }
-    let directory = memory_workspace(&state, &binding)?;
-    let rows = atlas_records(&state, &directory).await?;
+    let directory = memory_workspace(state, &binding)?;
+    let rows = atlas_records(state, &directory).await?;
     let present = rows.iter().any(|row| {
         row["record"]["id"].as_str() == Some(&binding.source_id)
             && row["domain"].as_str() == Some(&binding.domain)
     });
     if present {
-        let current = resolved_memory(&state, &binding).await?;
-        if current.hash != query.expected_hash {
+        let current = resolved_memory(state, &binding).await?;
+        if current.hash != expected_hash {
             return Err(conflict(
                 "Memory changed since it was displayed; refresh before deleting",
             ));
@@ -516,10 +554,10 @@ pub async fn delete_memory(
             .store
             .lock()
             .map_err(internal)?
-            .mark_component_operation_attempted(&project_id, &key)
+            .mark_component_operation_attempted(project_id, &key)
             .map_err(internal)?;
         call(
-            &state,
+            state,
             "atlas",
             &directory,
             vec!["delete".into(), binding.domain, binding.source_id],
@@ -532,16 +570,340 @@ pub async fn delete_memory(
         .store
         .lock()
         .map_err(internal)?
-        .delete_memory_binding(&id)
+        .delete_memory_binding(id)
         .map_err(internal)?;
     let result = json!({"deleted":true,"id":id});
     state
         .store
         .lock()
         .map_err(internal)?
-        .complete_component_operation(&project_id, &key, &result)
+        .complete_component_operation(project_id, &key, &result)
+        .map_err(internal)?;
+    Ok(result)
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct PromoteMemory {
+    pub idempotency_key: String,
+    /// The hash the client displayed; a changed memory is not promoted blindly.
+    pub expected_hash: String,
+    /// `project` for a process memory, `user` for a project memory.
+    pub to_scope: String,
+}
+/// Promotion widens a memory's scope one step (process -> project -> user) by
+/// creating the record in the wider store with provenance naming its origin,
+/// then deleting the narrower record. Both steps are reconciled through the
+/// durable intent ledger, so a retry after a crash finishes rather than
+/// duplicates. Demotion does not exist: narrowing is a delete and a new record.
+pub async fn promote_memory(
+    State(state): State<AppState>,
+    Path((project_id, id)): Path<(String, String)>,
+    Json(request): Json<PromoteMemory>,
+) -> Result<Json<Value>, ApiError> {
+    require_enabled(&state, &project_id)?;
+    if !valid_memory_hash(&request.expected_hash) {
+        return Err(invalid("A valid displayed memory hash is required"));
+    }
+    let _guard = state.component_locks.lock().await;
+    let binding = state
+        .store
+        .lock()
+        .map_err(internal)?
+        .memory_binding(&project_id, &id)
+        .map_err(internal)?
+        .ok_or_else(not_found)?;
+    let allowed = matches!(
+        (binding.scope.as_str(), request.to_scope.as_str()),
+        ("process", "project") | ("project", "user")
+    );
+    if !allowed {
+        return Err(invalid(format!(
+            "Memory promotes one step at a time: process to project, or project to user; {} memory cannot be promoted to {}",
+            binding.scope, request.to_scope
+        )));
+    }
+    let request_value =
+        json!({"id":id,"expected_hash":request.expected_hash,"to_scope":request.to_scope});
+    let operation = state
+        .store
+        .lock()
+        .map_err(internal)?
+        .begin_component_operation(
+            &project_id,
+            &request.idempotency_key,
+            "memory.promote",
+            &request_value,
+            &id,
+        )
+        .map_err(|_| conflict("Memory idempotency key conflicts with a previous request"))?;
+    if let Some(response) = operation.response {
+        return Ok(Json(response));
+    }
+    // A tombstoned source with an unfinished promotion is a crashed promotion
+    // being resumed: the wider record already exists under the derived key.
+    let current = if binding.deleted {
+        if !operation.attempted {
+            return Err(not_found());
+        }
+        None
+    } else {
+        let current = resolved_memory(&state, &binding).await?;
+        if current.hash != request.expected_hash {
+            return Err(conflict(
+                "Memory changed since it was displayed; refresh before promoting",
+            ));
+        }
+        Some(current)
+    };
+    state
+        .store
+        .lock()
+        .map_err(internal)?
+        .mark_component_operation_attempted(&project_id, &request.idempotency_key)
+        .map_err(internal)?;
+    let create_key = format!("{}:promote-create", request.idempotency_key);
+    let promoted = match current {
+        Some(current) => {
+            let origin = format!(
+                "promoted from {} memory {}: {}",
+                binding.scope, binding.id, current.provenance
+            );
+            create_memory_locked(
+                &state,
+                &project_id,
+                &create_key,
+                &request.to_scope,
+                &current.content,
+                &clip_provenance(&origin),
+            )
+            .await?
+        }
+        None => {
+            // The source is gone: only a recorded create can finish this promotion.
+            let finished = state
+                .store
+                .lock()
+                .map_err(internal)?
+                .component_operation_response(&project_id, &create_key)
+                .map_err(internal)?;
+            match finished {
+                Some(response) => serde_json::from_value(response).map_err(internal)?,
+                None => {
+                    return Err(conflict(
+                        "Promotion cannot be reconciled: the source memory is gone and no promoted record was recorded; create the memory again in the wider scope",
+                    ))
+                }
+            }
+        }
+    };
+    if !binding.deleted {
+        delete_memory_locked(&state, &project_id, &id, &request.expected_hash).await?;
+    }
+    let result = json!({"promoted":promoted,"from":{"id":id,"scope":binding.scope}});
+    state
+        .store
+        .lock()
+        .map_err(internal)?
+        .complete_component_operation(&project_id, &request.idempotency_key, &result)
         .map_err(internal)?;
     Ok(Json(result))
+}
+fn clip_provenance(text: &str) -> String {
+    if text.len() <= 1000 {
+        return text.to_owned();
+    }
+    let mut end = 997;
+    while !text.is_char_boundary(end) {
+        end -= 1;
+    }
+    format!("{}...", &text[..end])
+}
+
+/// A project export carries what another machine or a teammate may receive:
+/// the confirmed machine-independent manifest, ticket projections, project and
+/// process memory and the current prompts. It never carries user memory,
+/// credentials or this host's absolute paths; an export that would is refused
+/// rather than redacted.
+pub async fn export_project(
+    State(state): State<AppState>,
+    Path(id): Path<String>,
+) -> Result<Json<Value>, ApiError> {
+    project(&state, &id)?;
+    let (record, manifest, tickets, local_paths) = {
+        let store = state.store.lock().map_err(internal)?;
+        let record = store
+            .get_project(&id)
+            .map_err(internal)?
+            .ok_or_else(not_found)?;
+        let manifest = store.current_manifest(&id).map_err(internal)?;
+        let tickets = store.tickets(&id).map_err(internal)?;
+        let local_paths: Vec<String> = store
+            .repositories(&id)
+            .map_err(internal)?
+            .into_iter()
+            .map(|registration| registration.local_path)
+            .collect();
+        (record, manifest, tickets, local_paths)
+    };
+    let components_enabled = enabled(&state, &id)? && state.components.is_some();
+    let (memory, prompts) = if components_enabled {
+        let _guard = state.component_locks.lock().await;
+        let mut memory = memory_records(&state, &id, false).await?;
+        memory.retain(|record| record.scope != "user");
+        let names: Vec<String> = prompt_records(&state, &id)
+            .await?
+            .iter()
+            .filter_map(|value| value["name"].as_str().map(str::to_owned))
+            .take(64)
+            .collect();
+        let mut prompts = Vec::new();
+        for name in names {
+            prompts.push(render(&state, &id, &name, None).await?);
+        }
+        (memory, prompts)
+    } else {
+        (Vec::new(), Vec::new())
+    };
+    let export = json!({
+        "schema_version": luuna_domain::SCHEMA_VERSION,
+        "kind": "luuna-project-export",
+        "exported_at": chrono::Utc::now().to_rfc3339(),
+        "project": {"id": record.id, "name": record.name, "manifest_revision": record.revision, "manifest_hash": record.manifest_hash},
+        "manifest": manifest.map(|m| m.manifest),
+        "tickets": tickets,
+        "memory": memory,
+        "prompts": prompts,
+        "omitted": ["user memory", "credentials", "machine registry paths", "worktrees and private artifacts"],
+    });
+    let mut forbidden: Vec<(String, &str)> = crate::writer::known_secrets(&state)
+        .into_iter()
+        .map(|secret| (secret, "a credential value"))
+        .collect();
+    forbidden.push((
+        state.config.data_dir.to_string_lossy().into_owned(),
+        "the runtime data directory path",
+    ));
+    forbidden.extend(
+        local_paths
+            .into_iter()
+            .map(|path| (path, "a registered checkout path")),
+    );
+    for name in ["HOME", "USERPROFILE"] {
+        if let Some(home) = std::env::var_os(name) {
+            forbidden.push((
+                home.to_string_lossy().into_owned(),
+                "the home directory path",
+            ));
+        }
+    }
+    export_guard(&export, &forbidden).map_err(|what| {
+        conflict(format!(
+            "Export refused: it would include {what}; remove it from the ticket or memory text first"
+        ))
+    })?;
+    Ok(Json(export))
+}
+
+/// Fails closed on any string that carries a forbidden exact value, an
+/// absolute path of this host's shapes, or a user-scoped memory.
+pub(crate) fn export_guard(value: &Value, forbidden: &[(String, &str)]) -> Result<(), String> {
+    fn absolute_path(text: &str) -> bool {
+        let bytes = text.as_bytes();
+        let drive = bytes.len() >= 3
+            && bytes[0].is_ascii_alphabetic()
+            && bytes[1] == b':'
+            && (bytes[2] == b'\\' || bytes[2] == b'/');
+        drive
+            || text.starts_with("\\\\")
+            || [
+                "/home/",
+                "/Users/",
+                "/root/",
+                "/tmp/",
+                "/var/",
+                "/mnt/",
+                "/workspace/",
+            ]
+            .iter()
+            .any(|prefix| text.starts_with(prefix))
+    }
+    fn walk(value: &Value, forbidden: &[(String, &str)], under_scope: bool) -> Result<(), String> {
+        match value {
+            Value::String(text) => {
+                for (needle, label) in forbidden {
+                    if !needle.is_empty() && text.contains(needle.as_str()) {
+                        return Err((*label).to_owned());
+                    }
+                }
+                if under_scope && text == "user" {
+                    return Err("user memory".to_owned());
+                }
+                for token in
+                    text.split(|c: char| c.is_whitespace() || c == '"' || c == '\'' || c == '`')
+                {
+                    if absolute_path(token) {
+                        return Err("an absolute path".to_owned());
+                    }
+                }
+                Ok(())
+            }
+            Value::Array(items) => items
+                .iter()
+                .try_for_each(|item| walk(item, forbidden, false)),
+            Value::Object(fields) => fields
+                .iter()
+                .try_for_each(|(key, item)| walk(item, forbidden, key == "scope")),
+            _ => Ok(()),
+        }
+    }
+    walk(value, forbidden, false)
+}
+
+#[cfg(test)]
+mod export_tests {
+    use super::export_guard;
+    use serde_json::json;
+
+    #[test]
+    fn export_guard_refuses_user_memory_paths_and_secrets() {
+        let forbidden = vec![
+            ("super-secret-token-value".to_owned(), "a credential value"),
+            (
+                "C:\\Users\\dev\\repo".to_owned(),
+                "a registered checkout path",
+            ),
+        ];
+        let clean = json!({"memory":[{"scope":"project","content":"use the shared logger","provenance":"team convention"}],"tickets":[{"intent":"relative paths like src/main.py are fine"}]});
+        assert!(export_guard(&clean, &forbidden).is_ok());
+        let user = json!({"memory":[{"scope":"user","content":"private"}]});
+        assert_eq!(export_guard(&user, &forbidden).unwrap_err(), "user memory");
+        let secret = json!({"tickets":[{"intent":"key super-secret-token-value leaked"}]});
+        assert_eq!(
+            export_guard(&secret, &forbidden).unwrap_err(),
+            "a credential value"
+        );
+        let registered = json!({"note":"see C:\\Users\\dev\\repo\\x"});
+        assert_eq!(
+            export_guard(&registered, &forbidden).unwrap_err(),
+            "a registered checkout path"
+        );
+        for text in [
+            "D:\\other\\place",
+            "/home/dev/other",
+            "/Users/dev/x",
+            "\\\\server\\share",
+        ] {
+            let value = json!({"tickets":[{"intent":format!("look in {text}")}]});
+            assert_eq!(
+                export_guard(&value, &forbidden).unwrap_err(),
+                "an absolute path",
+                "{text}"
+            );
+        }
+        // Only a `scope` field says "user" about a memory; the word elsewhere is text.
+        assert!(export_guard(&json!({"tags":["user"]}), &forbidden).is_ok());
+    }
 }
 
 #[derive(Deserialize)]

@@ -1,6 +1,6 @@
 import { execFileSync, spawnSync } from 'node:child_process';
 import { readFileSync, existsSync } from 'node:fs';
-import { dirname, resolve, join } from 'node:path';
+import { delimiter, dirname, isAbsolute, resolve, join } from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 
 export const repositoryRoot = resolve(dirname(fileURLToPath(import.meta.url)), '..');
@@ -65,6 +65,16 @@ export function bunExecutable(root = repositoryRoot) {
     version = execFileSync(bun, ['--version'], { encoding: 'utf8', timeout: 10_000 }).trim();
   }
   if (version !== manifest(root).runtime.version) throw new Error(`Use Bun ${manifest(root).runtime.version}; found ${version}`);
+  // The runtime resolves a bare name on PATH without PATHEXT, so hand it the absolute executable.
+  if (!isAbsolute(bun)) {
+    const extensions = process.platform === 'win32' ? (process.env.PATHEXT ?? '.EXE;.CMD;.BAT').split(';').map((e) => e.toLowerCase()) : [''];
+    for (const dir of (process.env.PATH ?? '').split(delimiter)) {
+      for (const ext of [''].concat(extensions)) {
+        const candidate = join(dir, bun + ext);
+        if (dir && existsSync(candidate)) return candidate;
+      }
+    }
+  }
   return bun;
 }
 export function runComponent(name, args, options = {}) {

@@ -175,6 +175,27 @@ impl Store {
         Ok(rows.collect::<std::result::Result<Vec<_>, _>>()?)
     }
 
+    /// The recorded response of a finished component operation, if any; used to
+    /// resume a multi-step operation whose later step died before completion.
+    pub fn component_operation_response(
+        &self,
+        project_id: &str,
+        key: &str,
+    ) -> Result<Option<Value>> {
+        let response: Option<Option<String>> = self
+            .connection
+            .query_row(
+                "SELECT response FROM component_operations WHERE project_id=?1 AND operation_key=?2",
+                params![project_id, key],
+                |row| row.get(0),
+            )
+            .optional()?;
+        Ok(response
+            .flatten()
+            .map(|text| serde_json::from_str(&text))
+            .transpose()?)
+    }
+
     pub fn delete_memory_binding(&self, id: &str) -> Result<()> {
         self.connection
             .execute("UPDATE component_memories SET deleted=1 WHERE id=?1", [id])?;

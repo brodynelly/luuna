@@ -6,7 +6,10 @@ Import-Module (Join-Path $PSHOME 'Modules\Microsoft.PowerShell.Security\Microsof
 . (Join-Path $PSScriptRoot 'windows-common.ps1')
 $paths = Get-LuunaWindowsPaths
 $root = Split-Path -Parent $PSScriptRoot
-$runtime = Join-Path $root 'target\debug\luuna-runtime.exe'
+# A packaged installation (scripts/package-windows.ps1) places the runtime and the
+# pinned Pi tree beside this helper; a development checkout uses its build outputs.
+$installed = Test-Path -LiteralPath (Join-Path $root 'luuna-runtime.exe')
+$runtime = if ($installed) { Join-Path $root 'luuna-runtime.exe' } else { Join-Path $root 'target\debug\luuna-runtime.exe' }
 $connectionFile = Join-Path $paths.Credentials 'connection.json'
 $mutex = New-Object Threading.Mutex($false, ('Local\LuunaRuntime-' + [Security.Principal.WindowsIdentity]::GetCurrent().User.Value))
 $locked = $false
@@ -72,7 +75,7 @@ try {
         $record = Get-Content -LiteralPath $providerFile -Raw | ConvertFrom-Json
         if ($record.provider -notin @('openrouter','openai','anthropic')) { throw 'Unsupported saved provider.' }
         $node = (Get-Command node.exe -ErrorAction Stop).Source
-        $pi = Join-Path $root 'tools\pi\node_modules\@earendil-works\pi-coding-agent\dist\cli.js'
+        $pi = if ($installed) { Join-Path $root 'pi\node_modules\@earendil-works\pi-coding-agent\dist\cli.js' } else { Join-Path $root 'tools\pi\node_modules\@earendil-works\pi-coding-agent\dist\cli.js' }
         if (!(Test-Path -LiteralPath $pi)) { throw 'Install the pinned tools/pi dependencies first.' }
         $keyName = 'LUUNA_PI_' + $record.provider.ToUpperInvariant() + '_API_KEY'
         $settings = @{}

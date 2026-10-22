@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState } from "react";
 import type { FormEvent } from "react";
-import type { BaselineEvidence, CheckResult, ComponentContext, ComponentStatus, Discovery, EventEnvelope, LuunaClient, ProjectRecord, ProjectView } from "@luuna/api-client";
+import type { BaselineEvidence, CheckResult, ComponentContext, ComponentStatus, Discovery, EventEnvelope, LuunaClient, ProjectExport, ProjectRecord, ProjectView, ScaffoldProfile, ScaffoldProposal, ScaffoldResult } from "@luuna/api-client";
 import { ApiError, isTerminal, mergeEvents, readEventPages } from "@luuna/api-client";
 import { Workflows } from "./Workflows";
 import { ProjectComponents } from "./ProjectComponents";
@@ -42,14 +42,14 @@ export function baselineRunFailure(state: string, reason: string): string {
 /** Recorded baselines with each recipe's result, the recorded reason and its logs. */
 export function BaselineList({ baselines, busy, onLog }: { baselines: BaselineEvidence[]; busy: boolean; onLog: (runId: string, artifactId: string) => void }) {
   if (baselines.length === 0) return null;
-  return <ul className="baselines record-list" aria-label="Recorded baselines">{baselines.map((baseline) => {
+  return <ul className="baselines record-list" aria-label="Recorded baselines" data-capability="baselines.list">{baselines.map((baseline) => {
     const step = baseline.reason ? baselineStep(baseline.status, baseline.reason) : "";
     return <li key={baseline.id} className="record record-headed baseline-record" data-tone={baselineTone[baseline.status]}>
       <StatusBadge tone={baselineTone[baseline.status]}>{baseline.status}</StatusBadge>
       <span className="baseline-summary meta">manifest r{baseline.manifest_revision} · commit <code>{baseline.identity.commit.slice(0, 12)}</code> · {baseline.results.length}/{baseline.required_checks.length} required results</span>
       {baseline.reason && <small className="failure-note" data-tone={baselineTone[baseline.status]}>{baseline.reason}{step && <> <span className="recovery-note">{step}</span></>}</small>}
       <small className="baseline-results meta">{baseline.results.map((result) => `${result.recipe_id}: ${result.status}${result.exit_code === null || result.exit_code === undefined ? "" : ` (exit ${result.exit_code})`}`).join(" · ")}</small>
-      {baseline.results.length > 0 && <div className="baseline-logs actions">{baseline.results.flatMap((result) => baselineArtifacts(result).map((id) => <button type="button" key={`${result.id}-${id}`} disabled={busy} onClick={() => onLog(baseline.run_id, id)}>View {result.recipe_id} {id.endsWith(".stdout") ? "stdout" : "stderr"}</button>))}</div>}
+      {baseline.results.length > 0 && <div className="baseline-logs actions">{baseline.results.flatMap((result) => baselineArtifacts(result).map((id) => <button type="button" key={`${result.id}-${id}`} disabled={busy} data-capability="artifacts.read" onClick={() => onLog(baseline.run_id, id)}>View {result.recipe_id} {id.endsWith(".stdout") ? "stdout" : "stderr"}</button>))}</div>}
     </li>;
   })}</ul>;
 }
@@ -81,6 +81,13 @@ export function Projects({ client, connectionEpoch = 0 }: { client: LuunaClient 
   const [baselineLog, setBaselineLog] = useState<{ runId: string; artifactId: string; text: string } | null>(null);
   const [rebindPath, setRebindPath] = useState("");
   const [rebindConfirmed, setRebindConfirmed] = useState(false);
+  const [exported, setExported] = useState<ProjectExport | null>(null);
+  const [scaffoldProfile, setScaffoldProfile] = useState<ScaffoldProfile>("python");
+  const [scaffoldName, setScaffoldName] = useState("");
+  const [scaffoldParent, setScaffoldParent] = useState("");
+  const [proposal, setProposal] = useState<ScaffoldProposal | null>(null);
+  const [proposalAcknowledged, setProposalAcknowledged] = useState(false);
+  const [scaffoldResult, setScaffoldResult] = useState<ScaffoldResult | null>(null);
   const operation = useRef<AbortController | null>(null);
   // Closures created for an earlier connection (an action's late onChanged) compare against this.
   const currentClient = useRef(client);
@@ -292,6 +299,42 @@ export function Projects({ client, connectionEpoch = 0 }: { client: LuunaClient 
     });
   }
 
+  function exportProject() {
+    if (!selected) return;
+    void guarded("Project export", async (signal) => {
+      if (!client) return;
+      const value = await client.exportProject(selected, signal);
+      if (!signal.aborted) setExported(value);
+    });
+  }
+
+  function proposeScaffold(event: FormEvent) {
+    event.preventDefault();
+    void guarded("Scaffold proposal", async (signal) => {
+      if (!client) return;
+      setScaffoldResult(null);
+      setProposalAcknowledged(false);
+      const value = await client.proposeScaffold({ profile: scaffoldProfile, name: scaffoldName.trim(), parent_dir: scaffoldParent.trim() }, signal);
+      if (!signal.aborted) setProposal(value);
+    });
+  }
+
+  function confirmScaffold() {
+    if (!proposal || !proposalAcknowledged) return;
+    const hash = proposal.hash;
+    const network = proposal.network_steps.length > 0;
+    void guarded("Scaffolding", async (signal) => {
+      if (!client) return;
+      const result = await client.scaffold({ proposal_hash: hash, idempotency_key: `scaffold-${hash.slice(7, 31)}`, confirm: true, ...(network && { confirm_network: true }) }, signal);
+      if (signal.aborted) return;
+      setScaffoldResult(result);
+      setProposal(null);
+      setProposalAcknowledged(false);
+      setScaffoldName("");
+      await refresh(result.project.project.id, signal);
+    });
+  }
+
   function discover() {
     if (!selected) return;
     void guarded("Discovery", async (signal) => {
@@ -357,11 +400,36 @@ export function Projects({ client, connectionEpoch = 0 }: { client: LuunaClient 
             <label>Project ID<input value={projectId} onChange={(event) => setProjectId(event.target.value)} placeholder="derived from the name" spellCheck={false} pattern="[a-z][a-z0-9\-]{0,63}" /></label>
             <label>Repository ID<input value={repositoryId} onChange={(event) => setRepositoryId(event.target.value)} required spellCheck={false} pattern="[a-z][a-z0-9\-]{0,63}" /></label>
             <label>Repository root path<input value={path} onChange={(event) => setPath(event.target.value)} required spellCheck={false} placeholder="/absolute/path/to/checkout" /></label>
-            <div className="form-footer"><small>Paths stay in the local machine registry; the manifest never contains them.</small><button className="primary" disabled={!name.trim() || !path.trim()}>Register repository</button></div>
+            <div className="form-footer"><small>Paths stay in the local machine registry; the manifest never contains them.</small><button className="primary" disabled={!name.trim() || !path.trim()} data-capability="projects.register">Register repository</button></div>
           </fieldset>
         </form>
-        {projects.length > 0 && <ul className="project-list" aria-label="Registered projects">{projects.map((project) => <li key={project.id}>
-          <button type="button" className={`run-card ${selected === project.id ? "selected" : ""}`} aria-pressed={selected === project.id} onClick={() => selectProject(project.id)}>
+        <details className="scaffold section"><summary>Create a new project from a stack profile</summary>
+          <form onSubmit={proposeScaffold} className="form-group">
+            <fieldset disabled={!client || busy}>
+              <label>Stack profile<select aria-label="Stack profile" value={scaffoldProfile} onChange={(event) => setScaffoldProfile(event.target.value as ScaffoldProfile)}>
+                {(["python", "node", "node-typescript", "react", "rust", "go", "flutter", "android", "ios"] as ScaffoldProfile[]).map((profile) => <option key={profile} value={profile}>{profile}</option>)}
+              </select></label>
+              <label>New project name<input value={scaffoldName} onChange={(event) => setScaffoldName(event.target.value)} required spellCheck={false} pattern="[a-z][a-z0-9\-]{0,63}" /></label>
+              <label>Parent directory<input value={scaffoldParent} onChange={(event) => setScaffoldParent(event.target.value)} required spellCheck={false} placeholder="/absolute/existing/directory" /></label>
+              <div className="form-footer"><small>A proposal lists every file, the baseline command and the tools this host lacks. Nothing is written until you confirm its exact hash.</small><button className="primary" disabled={!scaffoldName.trim() || !scaffoldParent.trim()} data-capability="projects.scaffold.propose">Propose scaffold</button></div>
+            </fieldset>
+          </form>
+          {proposal && <div className="scaffold-proposal" aria-label="Scaffold proposal">
+            <p><strong>{proposal.profile}</strong> in <code>{proposal.target_dir}</code> · <StatusBadge tone={proposal.status === "ready" ? "neutral" : "attention"}>{proposal.status}</StatusBadge></p>
+            {proposal.blocked_reason && <p className="reason">{proposal.blocked_reason}</p>}
+            <ul className="record-list" aria-label="Files the scaffold writes">{proposal.files.map((file) => <li key={file.path}><code>{file.path}</code></li>)}</ul>
+            <p>Baseline: {proposal.baseline.map((check) => <code key={check.id}>{[check.executable, ...check.args].join(" ")}</code>)}</p>
+            {proposal.required_tools.some((tool) => tool.status === "missing") && <p className="reason">Missing on this host: {proposal.required_tools.filter((tool) => tool.status === "missing").map((tool) => tool.tool).join(", ")}</p>}
+            {proposal.network_steps.length > 0 && <p className="reason">Network steps you confirm with the hash: {proposal.network_steps.join("; ")}</p>}
+            {proposal.questions.map((question, index) => <p key={index} className="reason">{question.topic}: {question.detail}</p>)}
+            <p>Exact proposal hash: <code>{proposal.hash}</code></p>
+            <label className="acknowledgment"><input type="checkbox" checked={proposalAcknowledged} disabled={busy || proposal.status !== "ready"} onChange={(event) => setProposalAcknowledged(event.target.checked)} /> I reviewed the files, baseline and hash above</label>
+            <button type="button" className="primary" disabled={busy || proposal.status !== "ready" || !proposalAcknowledged} data-capability="projects.scaffold" onClick={confirmScaffold}>Create project and run its baseline</button>
+          </div>}
+          {scaffoldResult && <p className="reason" role="status">Scaffolded <code>{scaffoldResult.target_dir}</code> at commit <code>{scaffoldResult.commit.slice(0, 12)}</code>; baseline {scaffoldResult.check.status}{scaffoldResult.check.tests_detected !== null ? ` (${scaffoldResult.check.tests_detected} tests detected)` : ""}{scaffoldResult.replayed ? " (replayed)" : ""}.</p>}
+        </details>
+        {projects.length > 0 && <ul className="project-list" aria-label="Registered projects" data-capability="projects.list">{projects.map((project) => <li key={project.id}>
+          <button type="button" className={`run-card ${selected === project.id ? "selected" : ""}`} aria-pressed={selected === project.id} data-capability="projects.show" onClick={() => selectProject(project.id)}>
             <span className="run-prompt">{project.name}</span>
             <span className="run-meta"><StatusBadge tone={manifestTone(project.revision)}>{project.revision > 0 ? `manifest r${project.revision}` : "unconfirmed"}</StatusBadge><code>{project.id}</code></span>
           </button>
@@ -382,16 +450,21 @@ export function Projects({ client, connectionEpoch = 0 }: { client: LuunaClient 
               <fieldset disabled={busy}>
                 <label>New repository root path (empty re-inspects the registered path)<input value={rebindPath} onChange={(event) => setRebindPath(event.target.value)} spellCheck={false} placeholder={registration.local_path} /></label>
                 <label className="checkbox"><input type="checkbox" checked={rebindConfirmed} onChange={(event) => setRebindConfirmed(event.target.checked)} /> I moved this checkout or changed its remote on purpose; bind {registration.repository_id} to it.</label>
-                <div className="form-footer"><small>The runtime inspects the checkout read-only and records the old and new identity. Plans, baselines and approvals stay bound to exact commits; a manifest whose remote no longer matches must be confirmed again.</small><button className="primary" disabled={!rebindConfirmed}>Rebind repository</button></div>
+                <div className="form-footer"><small>The runtime inspects the checkout read-only and records the old and new identity. Plans, baselines and approvals stay bound to exact commits; a manifest whose remote no longer matches must be confirmed again.</small><button className="primary" disabled={!rebindConfirmed} data-capability="projects.repositories.rebind">Rebind repository</button></div>
               </fieldset>
             </form>
           </details>
           <div className="project-actions actions">
-            <button type="button" disabled={busy} onClick={discover}>Discover proposed map</button>
-            <button type="button" disabled={busy || !view.manifest || baselineInFlight} onClick={runBaseline}>Run baseline</button>
-            {runningBaseline && <button type="button" className="danger" disabled={busy} onClick={() => cancelBaseline(runningBaseline)}>Cancel baseline</button>}
+            <button type="button" disabled={busy} data-capability="projects.discover" onClick={discover}>Discover proposed map</button>
+            <button type="button" disabled={busy} data-capability="projects.export" onClick={exportProject}>Export project</button>
+            <button type="button" disabled={busy || !view.manifest || baselineInFlight} data-capability="baselines.start" onClick={runBaseline}>Run baseline</button>
+            {runningBaseline && <button type="button" className="danger" disabled={busy} data-capability="runs.cancel" onClick={() => cancelBaseline(runningBaseline)}>Cancel baseline</button>}
             <small>Discovery reads manifests and lockfiles; it never runs repository commands. A baseline runs the confirmed required recipes on a clean checkout and records exact evidence.</small>
           </div>
+          {exported && exported.project.id === selected && <details open className="project-export section"><summary>Project export · omits {exported.omitted.join(", ")}</summary>
+            <p><a href={`data:application/json;charset=utf-8,${encodeURIComponent(JSON.stringify(exported, null, 2))}`} download={`luuna-${exported.project.id}-export.json`}>Save export JSON</a> · {exported.tickets.length} tickets, {exported.memory.length} memories, {exported.prompts.length} prompts</p>
+            <pre aria-label="Project export" tabIndex={0}>{JSON.stringify(exported, null, 2)}</pre>
+          </details>}
           <BaselineList baselines={baselines} busy={busy} onLog={viewBaselineLog} />
           {shownLog && <details open className="baseline-log section"><summary>Baseline log · <code>{shownLog.artifactId}</code></summary><pre aria-label="Baseline log" tabIndex={0}>{shownLog.text || "Empty log."}</pre></details>}
           {discovery && <>
@@ -405,13 +478,13 @@ export function Projects({ client, connectionEpoch = 0 }: { client: LuunaClient 
             <form onSubmit={confirm} className="manifest-form">
               <fieldset disabled={busy}>
                 <label>Manifest to confirm (revision {view.project.revision + 1})<textarea value={draft} onChange={(event) => setDraft(event.target.value)} rows={14} spellCheck={false} /></label>
-                <div className="form-footer"><small>Confirmation re-checks identity, remote and default branch against the live checkout and records the exact base commit.</small><button className="primary">Confirm manifest</button></div>
+                <div className="form-footer"><small>Confirmation re-checks identity, remote and default branch against the live checkout and records the exact base commit.</small><button className="primary" data-capability="projects.manifest.confirm">Confirm manifest</button></div>
               </fieldset>
             </form>
           </>}
           <ProjectComponents key={view.project.id} client={client} projectId={view.project.id} connectionEpoch={connectionEpoch} onContextChange={setComponentContext} onStatusChange={setComponentStatus} onChanged={() => setComponentEpoch((value) => value + 1)} />
           <Workflows client={client} projectId={view.project.id} repositoryId={registration.repository_id} manifestConfirmed={view.manifest !== null && view.manifest !== undefined} connectionEpoch={connectionEpoch} componentContext={componentContext} componentsEnabled={componentStatus?.enabled ?? false} componentEpoch={componentEpoch} onChanged={() => { if (selected) void guarded("Refresh", (signal) => refresh(selected, signal)); }} />
-          <details className="project-events section"><summary>Project event record ({events.length})</summary>
+          <details className="project-events section" data-capability="projects.events"><summary>Project event record ({events.length})</summary>
             <ol className="events" aria-label="Durable project events" tabIndex={0}>{events.map((event) => <li key={event.event_id}><details><summary><span className="event-number">{event.sequence}</span><span>{event.type}</span></summary><pre>{JSON.stringify(event.payload, null, 2)}</pre></details></li>)}</ol>
           </details>
         </> : <p className="empty empty-box">{client ? "Register a repository or select a project." : "Connect to the runtime to import a repository."}</p>}

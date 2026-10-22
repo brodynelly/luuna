@@ -2,7 +2,7 @@
 
 Date: 2026-10-21. This names what the usable single-repository MVP demonstrates against the binding requirements in [02-requirements.md](02-requirements.md), where the evidence is, and what the MVP deliberately omits. It is the report the roadmap's MVP gate asks for; it does not call anything full v1. Evidence lines point at [FOUNDATION-STATUS.md](FOUNDATION-STATUS.md) sections and the committed harnesses; a fixture result is labelled synthetic wherever it appears.
 
-Platform of every recorded result: Linux cloud container (Rust 1.90.0, Node 24.19.0, Python 3.13, Git 2.43, Pi 1.3.0). No Mac or Windows result exists yet.
+Platform of the results recorded in the original report below: Linux cloud container (Rust 1.90.0, Node 24.19.0, Python 3.13, Git 2.43, Pi 1.3.0). **Update, October 21, 2026 (Windows 11 x64):** the Windows native lifecycle smoke passed in PR 11 (62/62 bundled WebView2), the backup/migration recovery drill is scripted and passed 31/31 (`scripts/backup-recovery-drill.mjs`, walkthrough step 7b), and the later milestone slices (M4–M8) are recorded in [FOUNDATION-STATUS.md](FOUNDATION-STATUS.md) and [RELEASE-EVIDENCE.md](RELEASE-EVIDENCE.md); the omissions below describe the MVP as it was demonstrated and remain true of the single-repository MVP demo. No Mac result exists.
 
 ## Coverage by requirement
 
@@ -32,7 +32,7 @@ Import a repository, confirm its checks, prove a baseline, write a ticket, appro
 
 ## What the MVP omits, explicitly
 
-- Native Mac and Windows operation, packaging and service supervision (R01). The last M3 exit; it needs a capable host.
+- Native Mac operation (R01): no Mac host has run anything. Windows: the native smoke, the recovery drill and an unsigned development installer exist (see the update above); a clean-machine installation has not run.
 - Publication: no push, no pull request, no CI observation (R11).
 - Multi-repository projects, relationships and roles (R05, R06).
 - Project scaffolding and the stack-profile matrix (R04 creation, R13).
@@ -48,4 +48,4 @@ Import a repository, confirm its checks, prove a baseline, write a ticket, appro
 - Lifecycle harnesses, synthetic: `node scripts/m1-smoke.mjs --mode fixture`, `node scripts/m3-smoke.mjs --mode fixture`, `node scripts/mvp-ui-smoke.mjs`.
 - Client presentation: `apps/desktop/src/design/design-system.test.ts` under `npm test` (token-only stylesheets, contrast of every semantic pair in both schemes, tone taxonomy, screen structure) and the desktop smoke's presentation audit (rendered contrast in the dark and light schemes, no horizontal scroll at 760 px). See [DESIGN-SYSTEM.md](DESIGN-SYSTEM.md).
 - Genuine provider: `node scripts/m1-smoke.mjs --mode real …` and `node scripts/m3-smoke.mjs --mode real …` with a configured credential; results are tabulated in the status report and never inferred from fixtures.
-- Native hosts: none yet.
+- Native hosts: Windows only (PR 11 native lifecycle smoke; `scripts/backup-recovery-drill.mjs` 31/31; `scripts/package-windows.ps1`). Mac: none.

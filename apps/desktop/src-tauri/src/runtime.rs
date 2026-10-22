@@ -27,10 +27,7 @@ fn bootstrap() -> Result<LocalConnection, String> {
         process::{Command, Stdio},
         time::{Duration, Instant},
     };
-    let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
-        .ancestors()
-        .nth(3)
-        .ok_or("Cannot locate the development checkout.")?;
+    let root = install_root()?;
     let powershell = std::path::PathBuf::from(
         std::env::var_os("SystemRoot").ok_or("Windows directory unavailable.")?,
     )
@@ -83,6 +80,33 @@ fn bootstrap() -> Result<LocalConnection, String> {
         .map_err(|_| "The startup helper did not return its connection in time.".to_owned())?
         .map_err(|_| "Could not read the local connection.".to_owned())?;
     validate_connection(&bytes)
+}
+
+/// Where the fixed startup helper lives. A packaged installation
+/// (`scripts/package-windows.ps1`) carries the helper, the runtime and the
+/// pinned Pi tree in a `luuna` folder beside the executable; a development
+/// executable uses its own checkout. Nothing from the view or the environment
+/// chooses between them: the installed layout wins whenever it is present.
+#[cfg(target_os = "windows")]
+fn install_root() -> Result<std::path::PathBuf, String> {
+    if let Ok(executable) = std::env::current_exe() {
+        if let Some(directory) = executable.parent() {
+            let installed = directory.join("luuna");
+            if installed
+                .join("scripts")
+                .join("ensure-windows-runtime.ps1")
+                .is_file()
+                && installed.join("luuna-runtime.exe").is_file()
+            {
+                return Ok(installed);
+            }
+        }
+    }
+    std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+        .ancestors()
+        .nth(3)
+        .map(std::path::Path::to_path_buf)
+        .ok_or_else(|| "Cannot locate the development checkout.".to_owned())
 }
 
 #[cfg(not(target_os = "windows"))]

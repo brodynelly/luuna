@@ -90,7 +90,7 @@ const EventList = memo(function EventList({ events, client, runId }: { events: E
       <button className="text-button" disabled={page === null} onClick={() => { operation.current?.abort(); setLoading(false); setPage(null); }}>Latest events</button>
     </div>}
     {error && <p role="alert">{error}<button className="text-button" onClick={() => setError("")}>Dismiss</button></p>}
-    <ol className="events" aria-label="Durable session events" tabIndex={0}>{shown.map((event) => <EventRow key={event.event_id} event={event} />)}</ol>
+    <ol className="events" aria-label="Durable session events" tabIndex={0} data-capability="runs.events runs.stream">{shown.map((event) => <EventRow key={event.event_id} event={event} />)}</ol>
   </>;
 });
 
@@ -318,6 +318,22 @@ export function App() {
     }
   }
 
+  /** An orderly stop (ADR 0010): runs, candidates and worktrees stay durable; this panel reconnects when it is started again. */
+  async function stopRuntime() {
+    if (!client) return;
+    const controller = new AbortController();
+    operation.current = controller;
+    setBusy(true);
+    setError("");
+    try {
+      await client.shutdown(controller.signal);
+    } catch (failure) {
+      if (!controller.signal.aborted) setError(actionFailure("Shutdown", failure));
+    } finally {
+      if (!controller.signal.aborted) setBusy(false);
+    }
+  }
+
   async function cancel() {
     if (!client || !active) return;
     const controller = new AbortController();
@@ -349,10 +365,10 @@ export function App() {
 
       <section className="panel connection-panel" aria-labelledby="runtime-heading">
         <div className="connection-summary"><h2 id="runtime-heading">Runtime connection</h2><p className="meta">{client ? `${client.baseUrl} · Required Pi version ${health?.pi_version ?? "unknown"}` : native ? "Luuna starts your local runtime and connects automatically. Closing the app leaves your runtime running." : "Start the Rust service separately, then enter its local address and token."}</p></div>
-        {client ? <button onClick={disconnect}>Disconnect</button> : <form onSubmit={(event) => void connect(event)} className="connection-form">
+        {client ? <div className="actions"><button onClick={disconnect}>Disconnect</button><button type="button" className="danger" disabled={busy} data-capability="shutdown" onClick={() => void stopRuntime()}>Stop runtime</button></div> : <form onSubmit={(event) => void connect(event)} className="connection-form">
           <label>Service URL<input type="url" value={url} onChange={(event) => setUrl(event.target.value)} required spellCheck={false} /></label>
           <label>Service token<input type="password" value={token} onChange={(event) => setToken(event.target.value)} autoComplete="off" required placeholder="Session token" /></label>
-          <button className="primary" disabled={busy}>{busy ? "Connecting…" : "Connect"}</button>
+          <button className="primary" disabled={busy} data-capability="health">{busy ? "Connecting…" : "Connect"}</button>
           <small>The token stays in memory and is cleared when you disconnect or reload.</small>
           {native && <button type="button" disabled={busy} onClick={() => setNativeStartup((value) => value + 1)}>{busy ? "Starting local runtime…" : "Connect automatically"}</button>}
         </form>}
@@ -363,8 +379,8 @@ export function App() {
 
       <div className="workspace">
         <aside className="panel history" aria-labelledby="history-heading">
-          <div className="panel-heading"><h2 id="history-heading">Session history</h2><button className="text-button" disabled={!client} onClick={() => setRefresh((value) => value + 1)}>Refresh</button></div>
-          {runs.length ? <ul className="history-list">{runs.map((run) => <li key={run.id}><button className={`run-card ${selected === run.id ? "selected" : ""}`} onClick={() => setSelected(run.id)} aria-pressed={selected === run.id}>
+          <div className="panel-heading"><h2 id="history-heading">Session history</h2><button className="text-button" disabled={!client} data-capability="runs.list" onClick={() => setRefresh((value) => value + 1)}>Refresh</button></div>
+          {runs.length ? <ul className="history-list">{runs.map((run) => <li key={run.id}><button className={`run-card ${selected === run.id ? "selected" : ""}`} data-capability="runs.show" onClick={() => setSelected(run.id)} aria-pressed={selected === run.id}>
             <span className="run-prompt">{run.metadata.kind === "baseline" ? `Baseline · ${String(run.metadata.repository_id ?? "")} · manifest r${String(run.metadata.manifest_revision ?? "?")}` : run.metadata.kind === "workflow" ? `Workflow · ${String(run.metadata.plan_id ?? "")} r${String(run.metadata.plan_revision ?? "?")}` : typeof run.metadata.prompt === "string" ? run.metadata.prompt : run.id}</span>
             <span className="run-meta"><StatusBadge tone={runTone[run.state]}>{run.state}</StatusBadge><time dateTime={run.created_at}>{date(run.created_at)}</time></span>
           </button></li>)}</ul> : <p className="empty">{client ? "No sessions yet. Start one to create a durable run record." : "Connect to see sessions saved by your runtime."}</p>}
@@ -379,7 +395,7 @@ export function App() {
               <fieldset disabled={!client || busy}>
                 <div className="model-fields field-row"><label>Provider<input value={provider} onChange={(event) => setProvider(event.target.value)} placeholder="Runtime default" spellCheck={false} /></label><label>Model<input value={model} onChange={(event) => setModel(event.target.value)} placeholder="Runtime default" spellCheck={false} /></label></div>
                 <label>Prompt<textarea value={prompt} onChange={(event) => setPrompt(event.target.value)} placeholder="Describe a question for this session…" rows={4} maxLength={32000} required /></label>
-                <div className="form-footer"><small>Uses the runtime’s configured model credentials.</small><button className="primary" disabled={!prompt.trim()}>Start session <span aria-hidden="true">↗</span></button></div>
+                <div className="form-footer"><small>Uses the runtime’s configured model credentials.</small><button className="primary" disabled={!prompt.trim()} data-capability="runs.start">Start session <span aria-hidden="true">↗</span></button></div>
               </fieldset>
             </form>
           </section>
@@ -387,7 +403,7 @@ export function App() {
           <section className="panel event-panel" aria-labelledby="events-heading">
             <div className="panel-heading"><h2 id="events-heading">{active ? "Session events" : "Live activity"}</h2>{active && <StatusBadge tone={runTone[active.state]}>{active.state}</StatusBadge>}</div>
             {active ? <>
-              <div className="run-detail meta"><code>{active.id}</code><span role="status">{sessionStatus(live, active.state)}</span><span>event replay from sequence {events.at(-1)?.sequence ?? 0}</span>{canCancel(active.state, candidateActive) && <button className="danger" disabled={busy} onClick={() => void cancel()}>Cancel session</button>}</div>
+              <div className="run-detail meta"><code>{active.id}</code><span role="status">{sessionStatus(live, active.state)}</span><span>event replay from sequence {events.at(-1)?.sequence ?? 0}</span>{canCancel(active.state, candidateActive) && <button className="danger" disabled={busy} data-capability="runs.cancel" onClick={() => void cancel()}>Cancel session</button>}</div>
               {active.state === "failed" && <p className="failure-note" data-tone="danger">This session failed. Open the final events below for the runtime’s recorded reason.</p>}
               {output && <div className="assistant-output"><h3>Pi response</h3><pre>{output}</pre></div>}
               <EventList key={selected} events={events} client={client!} runId={active.id} />
