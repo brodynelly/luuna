@@ -27,7 +27,7 @@ The bundle's `luuna/` folder beside `luuna-desktop.exe` contains:
 | `components\missions`, `components\atlas`, `components\beacon` | frozen, script-free Bun install in the pinned checkouts, copied without `.git` | the component CLIs with their dependencies |
 | `bun\bun.exe` | `npm install bun@1.4.3` into `.tools\bun` (as `scripts/setup-cloud.sh`) | the pinned Bun 1.4.3 |
 | `packages\tui`, `node_modules\@luuna\api-client`, `schemas\capability-catalog.json` | repository | the terminal client and its only dependency, laid out as in the checkout |
-| `Luuna Terminal.cmd`, `scripts\start-terminal.ps1` | repository / generated | opens `luuna-tui` against the local runtime with the connection obtained in memory from the fixed helper |
+| `Luuna Terminal.cmd`, `luuna.cmd`, `scripts\start-terminal.ps1` | repository / generated | opens `luuna-tui` against the local runtime with the connection obtained in memory from the fixed helper |
 
 Host prerequisites on the target (reported by `luuna-runtime doctor`):
 WebView2 (bootstrapped by the installer), Node.js 24.19 or newer on `PATH`

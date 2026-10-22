@@ -7,7 +7,9 @@
 # @luuna/api-client dependency and the capability catalog beside this script.
 # Node.js 24.19 or newer on PATH is a host prerequisite; it runs the
 # TypeScript client through its built-in type stripping.
-[CmdletBinding()]
+# -DataDirectory is accepted only by name: every positional word belongs to the
+# client, so `luuna projects` never selects a data directory named "projects".
+[CmdletBinding(PositionalBinding = $false)]
 param([string]$DataDirectory, [Parameter(ValueFromRemainingArguments = $true)][string[]]$Arguments)
 $ErrorActionPreference = 'Stop'
 $root = Split-Path -Parent $PSScriptRoot
