@@ -13,7 +13,8 @@ use crate::{
     StorageError, Store,
 };
 use luuna_domain::{
-    AttemptState, DomainError, LeaseState, PlanRevision, RunState, TaskState, Ticket, WorktreeLease,
+    AdvisoryResult, AttemptState, DependencyOverride, DomainError, LeaseState, PlanRevision,
+    RunState, TaskRole, TaskState, Ticket, WorktreeLease,
 };
 use rusqlite::{params, Connection, OptionalExtension, Transaction};
 use serde::{Deserialize, Serialize};
@@ -42,12 +43,16 @@ pub struct PlanOpening {
     pub created: bool,
 }
 
-/// Durable state of one plan task inside a workflow run (M4, migration 10).
+/// Durable state of one plan task inside a workflow run (M4, migration 10),
+/// with its assignment trace and role (ADR 0023, migration 12).
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct TaskRecord {
     pub run_id: String,
     pub task_id: String,
     pub repository_id: String,
+    /// `implementer`, `repository_lead` or `project_orchestrator`.
+    #[serde(default = "default_role")]
+    pub role: String,
     pub state: TaskState,
     /// The attempt that ran (or runs) this task, once scheduled.
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -59,7 +64,45 @@ pub struct TaskRecord {
     pub depends_on: Vec<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub reason: Option<String>,
+    /// Who assigned the task: the approval of the exact plan revision
+    /// (`approved_by`, `approval_id`, `plan_id`, `plan_revision`, `plan_hash`).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub assigned_by: Option<Value>,
+    /// The advisory task of an earlier plan revision whose proposal this task
+    /// was copied from, as the plan recorded it.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub derived_from_task: Option<String>,
+    /// The plan's dependency overrides that name this task as consumer or
+    /// producer.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub dependency_overrides: Vec<DependencyOverride>,
+    /// An advisory task's structured result (findings, proposed tasks,
+    /// risks) once it completed; never set for an implementer.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub advisory_result: Option<Value>,
     pub updated_at: String,
+}
+
+fn default_role() -> String {
+    TaskRole::Implementer.as_str().to_owned()
+}
+
+/// The trace fields every `task.*` event repeats, so a task's role and
+/// parentage are readable from any of its events.
+fn trace_json(task: &TaskRecord) -> Value {
+    json!({
+        "role": task.role,
+        "assigned_by": task.assigned_by,
+        "derived_from_task": task.derived_from_task,
+        "dependency_overrides": task.dependency_overrides,
+    })
+}
+
+fn with_trace(mut payload: Value, task: &TaskRecord) -> Value {
+    if let (Value::Object(target), Value::Object(trace)) = (&mut payload, trace_json(task)) {
+        target.extend(trace);
+    }
+    payload
 }
 
 fn text<T: Serialize>(value: T) -> Result<String> {
@@ -939,6 +982,7 @@ pub(crate) fn abandon_orphaned_work(
             TaskState::Interrupted,
             Some("runtime restarted while the task's writer was running; resume with POST /api/v1/runs/{id}/implement naming task_id"),
             None,
+            None,
         )?;
     }
     Ok(leases.len() + attempts.len() + tasks.len())
@@ -1005,7 +1049,7 @@ impl Store {
                 )));
             }
         }
-        crate::authorize_run(&tx, run_id)?;
+        let approval = crate::authorized_approval(&tx, run_id)?;
         let plan = crate::validation::bound_plan(&tx, run_id)?;
         check_ticket_binding(&tx, &plan)?;
         check_manifest_binding(&tx, &plan)?;
@@ -1042,24 +1086,55 @@ impl Store {
         let updated_at = now();
         let mut requeued = Vec::new();
         if existing.is_empty() {
+            // The assignment trace (R06): every task of the graph is assigned
+            // by the developer's approval of this exact plan revision; the
+            // runtime never adds a task of its own.
+            let assigned_by = json!({
+                "approved_by": approval.approved_by,
+                "approval_id": approval.id,
+                "approved_at": approval.approved_at,
+                "plan_id": plan.id,
+                "plan_revision": plan.revision,
+                "plan_hash": plan.hash,
+            });
             for task in &plan.tasks {
+                let overrides: Vec<&DependencyOverride> = plan
+                    .dependency_overrides
+                    .iter()
+                    .filter(|o| o.consumer == task.id || o.producer == task.id)
+                    .collect();
                 tx.execute(
-                    "INSERT INTO run_tasks(run_id,task_id,repository_id,state,depends_on,updated_at) VALUES (?1,?2,?3,?4,?5,?6)",
+                    "INSERT INTO run_tasks(run_id,task_id,repository_id,state,depends_on,updated_at,role,assigned_by,derived_from_task,dependency_overrides) VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9,?10)",
                     params![
                         run_id,
                         task.id,
                         task.repository_id,
                         text(TaskState::Queued)?,
                         serde_json::to_string(&task.depends_on)?,
-                        updated_at
+                        updated_at,
+                        task.role,
+                        assigned_by.to_string(),
+                        task.derived_from_task,
+                        serde_json::to_string(&overrides)?,
                     ],
+                )?;
+                let record = load_task(&tx, run_id, &task.id)?
+                    .ok_or_else(|| StorageError::NotFound(format!("{run_id}/{}", task.id)))?;
+                append(
+                    &tx,
+                    run_id,
+                    "task.assigned",
+                    with_trace(
+                        json!({"task_id": task.id, "repository_id": task.repository_id, "depends_on": task.depends_on, "plan_hash": plan.hash}),
+                        &record,
+                    ),
                 )?;
             }
         } else {
             for task in &existing {
                 if task.state != TaskState::Completed {
                     tx.execute(
-                        "UPDATE run_tasks SET state=?1,attempt_id=NULL,candidate_commit=NULL,candidate_tree=NULL,reason=NULL,updated_at=?2 WHERE run_id=?3 AND task_id=?4",
+                        "UPDATE run_tasks SET state=?1,attempt_id=NULL,candidate_commit=NULL,candidate_tree=NULL,reason=NULL,advisory_result=NULL,updated_at=?2 WHERE run_id=?3 AND task_id=?4",
                         params![text(TaskState::Queued)?, updated_at, run_id, task.task_id],
                     )?;
                     requeued.push(task.task_id.clone());
@@ -1120,7 +1195,10 @@ impl Store {
             &tx,
             run_id,
             "task.scheduled",
-            json!({"task_id": task_id, "repository_id": task.repository_id, "attempt_id": attempt_id, "depends_on": task.depends_on}),
+            with_trace(
+                json!({"task_id": task_id, "repository_id": task.repository_id, "attempt_id": attempt_id, "depends_on": task.depends_on}),
+                &task,
+            ),
         )?;
         let task = load_task(&tx, run_id, task_id)?
             .ok_or_else(|| StorageError::NotFound(format!("{run_id}/{task_id}")))?;
@@ -1143,7 +1221,32 @@ impl Store {
         let tx = self
             .connection
             .transaction_with_behavior(rusqlite::TransactionBehavior::Immediate)?;
-        let task = settle_task_in(&tx, run_id, task_id, state, reason, candidate)?;
+        let task = settle_task_in(&tx, run_id, task_id, state, reason, candidate, None)?;
+        tx.commit()?;
+        Ok(task)
+    }
+
+    /// Complete an advisory task (ADR 0023): its worktree is unchanged, no
+    /// commit exists, and its validated structured result is the record.
+    pub fn settle_advisory_task(
+        &mut self,
+        run_id: &str,
+        task_id: &str,
+        result: &AdvisoryResult,
+    ) -> Result<TaskRecord> {
+        result.validate()?;
+        let tx = self
+            .connection
+            .transaction_with_behavior(rusqlite::TransactionBehavior::Immediate)?;
+        let task = settle_task_in(
+            &tx,
+            run_id,
+            task_id,
+            TaskState::Completed,
+            None,
+            None,
+            Some(&serde_json::to_value(result)?),
+        )?;
         tx.commit()?;
         Ok(task)
     }
@@ -1156,6 +1259,7 @@ fn settle_task_in(
     state: TaskState,
     reason: Option<&str>,
     candidate: Option<(&str, &str)>,
+    advisory: Option<&Value>,
 ) -> Result<TaskRecord> {
     if !state.is_terminal() {
         return Err(StorageError::Invalid(
@@ -1178,29 +1282,47 @@ fn settle_task_in(
             task.state
         )));
     }
+    let advisory_role = TaskRole::parse(&task.role).is_some_and(TaskRole::is_advisory);
     if state == TaskState::Completed {
-        let Some((commit, tree)) = candidate else {
-            return Err(StorageError::Invalid(
-                "a completed task records its candidate commit and tree".into(),
-            ));
-        };
-        if !luuna_domain::is_commit_id(commit) || !luuna_domain::is_commit_id(tree) {
-            return Err(StorageError::Invalid(
-                "a completed task needs exact commit and tree identities".into(),
-            ));
+        // An implementer completes with its exact commit; an advisory role
+        // completes with its structured result and never with a commit.
+        match (advisory_role, candidate, advisory) {
+            (false, Some((commit, tree)), None) => {
+                if !luuna_domain::is_commit_id(commit) || !luuna_domain::is_commit_id(tree) {
+                    return Err(StorageError::Invalid(
+                        "a completed task needs exact commit and tree identities".into(),
+                    ));
+                }
+            }
+            (false, _, _) => {
+                return Err(StorageError::Invalid(
+                    "a completed task records its candidate commit and tree".into(),
+                ))
+            }
+            (true, None, Some(_)) => {}
+            (true, _, _) => {
+                return Err(StorageError::Invalid(format!(
+                    "task {task_id} has advisory role {} and completes with an advisory result, never a commit",
+                    task.role
+                )))
+            }
         }
     }
     let (commit, tree) = candidate.unzip();
+    let advisory_text = advisory.map(Value::to_string);
     tx.execute(
-        "UPDATE run_tasks SET state=?1,candidate_commit=?2,candidate_tree=?3,reason=?4,updated_at=?5 WHERE run_id=?6 AND task_id=?7",
-        params![text(state)?, commit, tree, reason, now(), run_id, task_id],
+        "UPDATE run_tasks SET state=?1,candidate_commit=?2,candidate_tree=?3,reason=?4,updated_at=?5,advisory_result=?6 WHERE run_id=?7 AND task_id=?8",
+        params![text(state)?, commit, tree, reason, now(), advisory_text, run_id, task_id],
     )?;
     let kind = format!("task.{}", text(state)?);
     append(
         tx,
         run_id,
         &kind,
-        json!({"task_id": task_id, "repository_id": task.repository_id, "attempt_id": task.attempt_id, "state": state, "reason": reason, "candidate_commit": commit, "candidate_tree": tree, "depends_on": task.depends_on}),
+        with_trace(
+            json!({"task_id": task_id, "repository_id": task.repository_id, "attempt_id": task.attempt_id, "state": state, "reason": reason, "candidate_commit": commit, "candidate_tree": tree, "depends_on": task.depends_on, "advisory_result": advisory}),
+            &task,
+        ),
     )?;
     load_task(tx, run_id, task_id)?
         .ok_or_else(|| StorageError::NotFound(format!("{run_id}/{task_id}")))
@@ -1220,61 +1342,78 @@ fn run_tasks_in(connection: &Connection, run_id: &str) -> Result<Vec<TaskRecord>
         .collect()
 }
 
-type TaskRow = (
-    String,
-    String,
-    Option<String>,
-    Option<String>,
-    Option<String>,
-    String,
-    Option<String>,
-    String,
-);
+struct TaskRow {
+    repository_id: String,
+    state: String,
+    attempt_id: Option<String>,
+    candidate_commit: Option<String>,
+    candidate_tree: Option<String>,
+    depends_on: String,
+    reason: Option<String>,
+    updated_at: String,
+    role: String,
+    assigned_by: Option<String>,
+    derived_from_task: Option<String>,
+    dependency_overrides: Option<String>,
+    advisory_result: Option<String>,
+}
 
 fn load_task(connection: &Connection, run_id: &str, task_id: &str) -> Result<Option<TaskRecord>> {
     let row: Option<TaskRow> = connection
         .query_row(
-            "SELECT repository_id,state,attempt_id,candidate_commit,candidate_tree,depends_on,reason,updated_at FROM run_tasks WHERE run_id=?1 AND task_id=?2",
+            "SELECT repository_id,state,attempt_id,candidate_commit,candidate_tree,depends_on,reason,updated_at,role,assigned_by,derived_from_task,dependency_overrides,advisory_result FROM run_tasks WHERE run_id=?1 AND task_id=?2",
             params![run_id, task_id],
             |r| {
-                Ok((
-                    r.get(0)?,
-                    r.get(1)?,
-                    r.get(2)?,
-                    r.get(3)?,
-                    r.get(4)?,
-                    r.get(5)?,
-                    r.get(6)?,
-                    r.get(7)?,
-                ))
+                Ok(TaskRow {
+                    repository_id: r.get(0)?,
+                    state: r.get(1)?,
+                    attempt_id: r.get(2)?,
+                    candidate_commit: r.get(3)?,
+                    candidate_tree: r.get(4)?,
+                    depends_on: r.get(5)?,
+                    reason: r.get(6)?,
+                    updated_at: r.get(7)?,
+                    role: r.get(8)?,
+                    assigned_by: r.get(9)?,
+                    derived_from_task: r.get(10)?,
+                    dependency_overrides: r.get(11)?,
+                    advisory_result: r.get(12)?,
+                })
             },
         )
         .optional()?;
-    row.map(
-        |(
-            repository_id,
-            state,
-            attempt_id,
-            candidate_commit,
-            candidate_tree,
-            depends_on,
-            reason,
-            updated_at,
-        )| {
-            Ok(TaskRecord {
-                run_id: run_id.into(),
-                task_id: task_id.into(),
-                repository_id,
-                state: serde_json::from_value(Value::String(state))?,
-                attempt_id,
-                candidate_commit,
-                candidate_tree,
-                depends_on: serde_json::from_str(&depends_on)?,
-                reason,
-                updated_at,
-            })
-        },
-    )
+    row.map(|row| {
+        Ok(TaskRecord {
+            run_id: run_id.into(),
+            task_id: task_id.into(),
+            repository_id: row.repository_id,
+            role: row.role,
+            state: serde_json::from_value(Value::String(row.state))?,
+            attempt_id: row.attempt_id,
+            candidate_commit: row.candidate_commit,
+            candidate_tree: row.candidate_tree,
+            depends_on: serde_json::from_str(&row.depends_on)?,
+            reason: row.reason,
+            assigned_by: row
+                .assigned_by
+                .as_deref()
+                .map(serde_json::from_str)
+                .transpose()?,
+            derived_from_task: row.derived_from_task,
+            dependency_overrides: row
+                .dependency_overrides
+                .as_deref()
+                .map(serde_json::from_str)
+                .transpose()?
+                .unwrap_or_default(),
+            advisory_result: row
+                .advisory_result
+                .as_deref()
+                .map(serde_json::from_str)
+                .transpose()?,
+            updated_at: row.updated_at,
+        })
+    })
     .transpose()
 }
 

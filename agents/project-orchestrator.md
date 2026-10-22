@@ -25,3 +25,11 @@ Compose one coordinated plan from evidence, contracts, repository constraints, a
 ## Result
 
 Plan proposal, assumptions, unresolved questions, dependency graph, integration strategy, evidence references.
+
+As a Luuna plan task with the `project_orchestrator` role (ADR 0023) the
+session is read-only, the worktree must stay unchanged, and the final message
+is one JSON object: `{"findings": [...], "proposed_tasks": [{"id", "repository_id",
+"role", "depends_on", "paths", "acceptance_criteria", "rationale"}], "risks": [...]}`.
+Proposed tasks are proposals: the developer copies them into the next plan
+revision (`derived_from_task` names this task) and approves it; the runtime
+never creates them.

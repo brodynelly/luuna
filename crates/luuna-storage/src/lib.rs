@@ -657,11 +657,17 @@ fn latest_plan(tx: &Transaction<'_>, id: &str) -> Result<PlanRevision> {
 }
 
 pub(crate) fn authorize_run(tx: &Transaction<'_>, run_id: &str) -> Result<()> {
+    authorized_approval(tx, run_id).map(|_| ())
+}
+
+/// The durably stored approval that authorizes the run's exact plan revision:
+/// the developer's assignment of every task of that plan (R06).
+pub(crate) fn authorized_approval(tx: &Transaction<'_>, run_id: &str) -> Result<Approval> {
     let payload: String = tx.query_row("SELECT a.payload FROM runs r JOIN approvals a ON r.approval_id=a.id AND r.plan_id=a.plan_id AND r.plan_revision=a.plan_revision WHERE r.id=?1", [run_id], |r| r.get(0))
         .optional()?.ok_or_else(|| StorageError::Invalid("implementation requires a durably stored approval".into()))?;
     let approval: Approval = serde_json::from_str(&payload)?;
     approval.authorize(&latest_plan(tx, &approval.plan_id)?)?;
-    Ok(())
+    Ok(approval)
 }
 
 /// Build one durable envelope. `stream_id` is a run ID or a project stream ID.
@@ -712,6 +718,7 @@ const MIGRATIONS: &[(u32, &str)] = &[
     (9, MIGRATION_9),
     (10, MIGRATION_10),
     (11, MIGRATION_11),
+    (12, MIGRATION_12),
 ];
 
 /// The highest schema version this build creates and understands. A database
@@ -925,6 +932,20 @@ COMMIT;
 /// Publication records (one per run and candidate hash) and the intent
 /// ledger of their external side effects (ADR 0018). Outcomes are recorded in
 /// the payload; `state` columns are indexes for recovery and display.
+/// ADR 0023: delegated roles and assignment traces on the task graph. Each
+/// task records its role, who assigned it (the approval of the exact plan),
+/// the advisory task it was derived from, the dependency overrides that
+/// name it and, for an advisory role, its structured result.
+const MIGRATION_12: &str = "
+BEGIN IMMEDIATE;
+ALTER TABLE run_tasks ADD COLUMN role TEXT NOT NULL DEFAULT 'implementer';
+ALTER TABLE run_tasks ADD COLUMN assigned_by TEXT;
+ALTER TABLE run_tasks ADD COLUMN derived_from_task TEXT;
+ALTER TABLE run_tasks ADD COLUMN dependency_overrides TEXT;
+ALTER TABLE run_tasks ADD COLUMN advisory_result TEXT;
+INSERT OR IGNORE INTO schema_migrations(version) VALUES (12);
+COMMIT;
+";
 const MIGRATION_11: &str = "
 BEGIN IMMEDIATE;
 CREATE TABLE IF NOT EXISTS publications(run_id TEXT NOT NULL REFERENCES runs(id), candidate_hash TEXT NOT NULL, ticket_id TEXT NOT NULL,

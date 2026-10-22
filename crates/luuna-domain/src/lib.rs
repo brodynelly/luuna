@@ -111,6 +111,11 @@ impl RunState {
                 // under the original approval (M4); completed tasks keep
                 // their commits and worktrees.
                 | (Interrupted, Implementing)
+                // Structural only: storage admits `Implementing -> Completed`
+                // solely for a plan whose every task is advisory (ADR 0023):
+                // no candidate exists, so nothing validates; the next plan
+                // revision carries the proposals.
+                | (Implementing, Completed)
                 | (Failed | TestingBlocked, Paused)
                 | (Failed, Cancelled)
                 // Structural only: storage admits `Reviewed -> Failed` solely to
@@ -159,17 +164,215 @@ pub struct Budgets {
     pub cost_usd_micros: u64,
 }
 
+/// The process roles a plan task may carry (ADR 0023). The runtime, not the
+/// role prompt, decides what a task may do: an advisory role runs read-only
+/// and records a structured advisory result instead of a candidate commit.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum TaskRole {
+    /// The writer: one bounded change in one repository worktree.
+    Implementer,
+    /// Advises on one repository: affected modules, local commands, task
+    /// boundaries and check coverage. Never approves scope or publishes.
+    RepositoryLead,
+    /// Advises on the project: acceptance criteria, cross-repository
+    /// contracts, dependency order, risk and integration.
+    ProjectOrchestrator,
+    /// The testing prerequisite specialist (ADR 0022): a writer that
+    /// establishes a repository's test harness under a `testing_setup` plan.
+    /// Only the plan's purpose, never this role name, admits a plan without a
+    /// passing baseline.
+    TestingSetup,
+}
+
+impl TaskRole {
+    pub const ALL: [TaskRole; 4] = [
+        TaskRole::Implementer,
+        TaskRole::RepositoryLead,
+        TaskRole::ProjectOrchestrator,
+        TaskRole::TestingSetup,
+    ];
+
+    pub fn parse(role: &str) -> Option<Self> {
+        Self::ALL.into_iter().find(|r| r.as_str() == role)
+    }
+
+    pub fn as_str(self) -> &'static str {
+        match self {
+            TaskRole::Implementer => "implementer",
+            TaskRole::RepositoryLead => "repository_lead",
+            TaskRole::ProjectOrchestrator => "project_orchestrator",
+            TaskRole::TestingSetup => "testing-setup",
+        }
+    }
+
+    /// Advisory roles produce findings, proposed task boundaries and risks,
+    /// never a candidate commit; their worktree must be unchanged afterwards.
+    /// Writers (the implementer and the testing-setup specialist) commit.
+    pub fn is_advisory(self) -> bool {
+        !matches!(self, TaskRole::Implementer | TaskRole::TestingSetup)
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct PlanTask {
     pub id: String,
     pub repository_id: String,
+    /// One of [`TaskRole`]; the contract keeps the string so earlier plans
+    /// hash unchanged.
     pub role: String,
     pub depends_on: Vec<String>,
     pub paths: Vec<String>,
     pub operations: Vec<Operation>,
     pub acceptance_criteria: Vec<String>,
     pub execution_profile: String,
+    /// The advisory task (of an earlier revision of this plan) whose proposal
+    /// the developer copied into this task: the parent of the assignment
+    /// trace (R06). Absent for a task the developer wrote directly.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub derived_from_task: Option<String>,
+}
+
+impl PlanTask {
+    pub fn role(&self) -> Option<TaskRole> {
+        TaskRole::parse(&self.role)
+    }
+
+    pub fn is_advisory(&self) -> bool {
+        self.role().is_some_and(TaskRole::is_advisory)
+    }
+}
+
+/// How a plan departs from the project's confirmed repository relationships
+/// (P44, ADR 0023). Part of the immutable, hashed plan.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct DependencyOverride {
+    /// The consumer task (the one that would, or does, depend on `producer`).
+    pub consumer: String,
+    /// The producer task.
+    pub producer: String,
+    pub action: OverrideAction,
+    /// Why the developer departs from the confirmed graph; never empty.
+    pub justification: String,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum OverrideAction {
+    /// The consumer does not depend on the producer although a confirmed
+    /// relationship between their repositories implies it.
+    Waive,
+    /// The consumer depends on the producer although no confirmed
+    /// relationship between their repositories exists.
+    Add,
+}
+
+impl OverrideAction {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            OverrideAction::Waive => "waive",
+            OverrideAction::Add => "add",
+        }
+    }
+}
+
+/// Most entries an advisory result may carry in each of its lists, and the
+/// most bytes its JSON may occupy.
+pub const MAX_ADVISORY_ENTRIES: usize = 64;
+pub const MAX_ADVISORY_BYTES: usize = 64_000;
+
+/// What an advisory task (a project orchestrator or repository lead) returns
+/// instead of a candidate commit (ADR 0023): findings, proposed task
+/// boundaries and risks. A proposal becomes a task only through a new plan
+/// revision the developer creates and approves, naming the advisory task in
+/// `derived_from_task`; the runtime never creates tasks from it.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Default)]
+#[serde(deny_unknown_fields)]
+pub struct AdvisoryResult {
+    #[serde(default)]
+    pub findings: Vec<String>,
+    #[serde(default)]
+    pub proposed_tasks: Vec<ProposedTask>,
+    #[serde(default)]
+    pub risks: Vec<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct ProposedTask {
+    pub id: String,
+    pub repository_id: String,
+    #[serde(default = "default_proposed_role")]
+    pub role: String,
+    #[serde(default)]
+    pub depends_on: Vec<String>,
+    #[serde(default)]
+    pub paths: Vec<String>,
+    #[serde(default)]
+    pub acceptance_criteria: Vec<String>,
+    #[serde(default)]
+    pub rationale: String,
+}
+
+fn default_proposed_role() -> String {
+    TaskRole::Implementer.as_str().to_owned()
+}
+
+impl AdvisoryResult {
+    /// Parse the advisory JSON object from a worker's final message. The
+    /// message may surround the object with prose or a code fence; the text
+    /// between its first `{` and last `}` must be the object. The worker's
+    /// output is data: nothing here grants it authority.
+    pub fn parse(text: &str) -> Result<Self, DomainError> {
+        let trimmed = text.trim();
+        let candidate =
+            match (trimmed.find('{'), trimmed.rfind('}')) {
+                (Some(start), Some(end)) if start < end => &trimmed[start..=end],
+                _ => return invalid(
+                    "advisory result must be a JSON object with findings, proposed_tasks and risks",
+                ),
+            };
+        let result: AdvisoryResult = serde_json::from_str(candidate).map_err(|error| {
+            DomainError::Invalid(format!(
+                "advisory result must be a JSON object with findings, proposed_tasks and risks: {error}"
+            ))
+        })?;
+        result.validate()?;
+        Ok(result)
+    }
+
+    pub fn validate(&self) -> Result<(), DomainError> {
+        let text = |values: &[String]| {
+            values.len() <= MAX_ADVISORY_ENTRIES && values.iter().all(|v| !v.trim().is_empty())
+        };
+        if !text(&self.findings) || !text(&self.risks) {
+            return invalid("advisory findings and risks are non-empty strings, at most 64 each");
+        }
+        if self.proposed_tasks.len() > MAX_ADVISORY_ENTRIES {
+            return invalid("an advisory result proposes at most 64 tasks");
+        }
+        let mut ids = BTreeSet::new();
+        for task in &self.proposed_tasks {
+            if task.id.trim().is_empty()
+                || !ids.insert(task.id.as_str())
+                || task.repository_id.trim().is_empty()
+                || TaskRole::parse(&task.role).is_none()
+                || task.depends_on.iter().any(|d| d.trim().is_empty())
+                || task.paths.iter().any(|p| scope_path_problem(p).is_some())
+                || task.acceptance_criteria.iter().any(|c| c.trim().is_empty())
+            {
+                return invalid(
+                    "a proposed task needs a unique id, a repository, a known role and well-formed dependencies, paths and criteria",
+                );
+            }
+        }
+        if serde_json::to_vec(self)?.len() > MAX_ADVISORY_BYTES {
+            return invalid("advisory result exceeds 64000 bytes");
+        }
+        Ok(())
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -204,6 +407,10 @@ pub struct PlanRevision {
     pub tasks: Vec<PlanTask>,
     pub required_checks: Vec<CheckRecipe>,
     pub budgets: Budgets,
+    /// Departures from the confirmed repository relationships, each with a
+    /// justification (P44). Absence preserves old plan hashes.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub dependency_overrides: Vec<DependencyOverride>,
     /// Explicit, hash-bound component references. Absence preserves old plan hashes.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub component_context: Option<ComponentContext>,
@@ -397,6 +604,41 @@ impl PlanRevision {
             let Some(allowed_paths) = self.permissions.repositories.get(&task.repository_id) else {
                 return invalid("task references unknown repository");
             };
+            let Some(role) = task.role() else {
+                return Err(DomainError::Invalid(format!(
+                    "task {} role {:?} is not one of implementer, repository_lead, project_orchestrator",
+                    task.id, task.role
+                )));
+            };
+            // An advisory task reads; the runtime's scope judgement then
+            // treats any change it leaves as out of scope.
+            if role.is_advisory() && task.operations != [Operation::Read] {
+                return Err(DomainError::Invalid(format!(
+                    "task {} has advisory role {} and must carry exactly the read operation",
+                    task.id,
+                    role.as_str()
+                )));
+            }
+            if let Some(parent) = &task.derived_from_task {
+                if parent.is_empty() {
+                    return Err(DomainError::Invalid(format!(
+                        "task {} derived_from_task must name a task",
+                        task.id
+                    )));
+                }
+                if parent == &task.id {
+                    return Err(DomainError::Invalid(format!(
+                        "task {} derives from itself",
+                        task.id
+                    )));
+                }
+                if self.tasks.iter().any(|t| &t.id == parent) {
+                    return Err(DomainError::Invalid(format!(
+                        "task {} derives from task {parent} of the same plan; a proposal becomes a task only in a later plan revision",
+                        task.id
+                    )));
+                }
+            }
             if task.role.is_empty()
                 || task.execution_profile.is_empty()
                 || task.acceptance_criteria.is_empty()
@@ -417,6 +659,7 @@ impl PlanRevision {
             }
         }
         self.validate_task_graph()?;
+        self.validate_overrides()?;
         if self.required_checks.is_empty() || !self.required_checks.iter().any(|c| c.required) {
             return invalid("at least one required check is necessary");
         }
@@ -514,6 +757,147 @@ impl PlanRevision {
                 cycle.join(" -> ")
             ))),
         }
+    }
+
+    /// The override list itself (P44): each names two distinct implementer
+    /// tasks of this plan, carries a justification and appears once per
+    /// consumer/producer pair. Whether an override applies is decided
+    /// against the confirmed relationships by [`Self::check_relationships`].
+    fn validate_overrides(&self) -> Result<(), DomainError> {
+        let mut pairs = BTreeSet::new();
+        for entry in &self.dependency_overrides {
+            let label = format!(
+                "dependency override {} {} <- {}",
+                entry.action.as_str(),
+                entry.consumer,
+                entry.producer
+            );
+            let named = |id: &str| -> Result<&PlanTask, DomainError> {
+                let task = self.tasks.iter().find(|t| t.id == id).ok_or_else(|| {
+                    DomainError::Invalid(format!("{label} names unknown task {id}"))
+                })?;
+                if task.is_advisory() {
+                    return Err(DomainError::Invalid(format!(
+                        "{label} names advisory task {id}; overrides apply to implementer tasks only"
+                    )));
+                }
+                Ok(task)
+            };
+            let consumer = named(&entry.consumer)?;
+            let producer = named(&entry.producer)?;
+            if consumer.id == producer.id || consumer.repository_id == producer.repository_id {
+                return Err(DomainError::Invalid(format!(
+                    "{label} must name two tasks in different repositories"
+                )));
+            }
+            if entry.justification.trim().is_empty() || entry.justification.len() > 1000 {
+                return Err(DomainError::Invalid(format!(
+                    "{label} needs a justification (1 to 1000 bytes)"
+                )));
+            }
+            if !pairs.insert((entry.consumer.as_str(), entry.producer.as_str())) {
+                return Err(DomainError::Invalid(format!(
+                    "dependency override for {} <- {} is listed more than once",
+                    entry.consumer, entry.producer
+                )));
+            }
+        }
+        Ok(())
+    }
+
+    /// The task graph against the project's confirmed repository relationships
+    /// (P44, ADR 0023). Advisory tasks change nothing, so only implementer
+    /// tasks take part. For every confirmed `producer -> consumer`
+    /// relationship whose two repositories both carry an implementer task,
+    /// the consumer task depends on the producer task unless a `waive`
+    /// override names the pair; a dependency between implementer tasks whose
+    /// repositories have no confirmed relationship needs an `add` override;
+    /// an override that applies to nothing is refused, so every recorded
+    /// override is a real departure. Proposed (unconfirmed) relationships do
+    /// not count. A refusal names the relationship and the override that
+    /// would allow the plan.
+    pub fn check_relationships(&self, relationships: &[Relationship]) -> Result<(), DomainError> {
+        let implementers: BTreeMap<&str, &PlanTask> = self
+            .tasks
+            .iter()
+            .filter(|task| !task.is_advisory())
+            .map(|task| (task.repository_id.as_str(), task))
+            .collect();
+        let confirmed: Vec<&Relationship> = relationships.iter().filter(|r| r.confirmed).collect();
+        let mut used: BTreeSet<(&str, &str)> = BTreeSet::new();
+        let has_override = |consumer: &str, producer: &str, action: OverrideAction| {
+            self.dependency_overrides
+                .iter()
+                .any(|o| o.consumer == consumer && o.producer == producer && o.action == action)
+        };
+        for relationship in &confirmed {
+            let (Some(producer), Some(consumer)) = (
+                implementers.get(relationship.producer.as_str()),
+                implementers.get(relationship.consumer.as_str()),
+            ) else {
+                continue;
+            };
+            if consumer.depends_on.contains(&producer.id) {
+                continue;
+            }
+            if has_override(&consumer.id, &producer.id, OverrideAction::Waive) {
+                used.insert((consumer.id.as_str(), producer.id.as_str()));
+                continue;
+            }
+            let kind = serde_json::to_value(relationship.kind)
+                .ok()
+                .and_then(|v| v.as_str().map(ToOwned::to_owned))
+                .unwrap_or_default();
+            return Err(DomainError::Invalid(format!(
+                "task {consumer} in repository {consumer_repo} must depend on task {producer} in repository {producer_repo}: confirmed relationship {producer_repo} -> {consumer_repo} ({kind} {contract}); add the dependency, or waive it with dependency_overrides [{{\"consumer\": \"{consumer}\", \"producer\": \"{producer}\", \"action\": \"waive\", \"justification\": \"...\"}}]",
+                consumer = consumer.id,
+                consumer_repo = relationship.consumer,
+                producer = producer.id,
+                producer_repo = relationship.producer,
+                contract = relationship.contract,
+            )));
+        }
+        for consumer in implementers.values() {
+            for dependency in &consumer.depends_on {
+                let Some(producer) = implementers.values().find(|t| &t.id == dependency) else {
+                    // An advisory dependency orders work; it binds nothing.
+                    continue;
+                };
+                if confirmed.iter().any(|r| {
+                    r.producer == producer.repository_id && r.consumer == consumer.repository_id
+                }) {
+                    continue;
+                }
+                if has_override(&consumer.id, &producer.id, OverrideAction::Add) {
+                    used.insert((consumer.id.as_str(), producer.id.as_str()));
+                    continue;
+                }
+                return Err(DomainError::Invalid(format!(
+                    "task {consumer} in repository {consumer_repo} depends on task {producer} in repository {producer_repo}, but no confirmed relationship {producer_repo} -> {consumer_repo} exists; record it with dependency_overrides [{{\"consumer\": \"{consumer}\", \"producer\": \"{producer}\", \"action\": \"add\", \"justification\": \"...\"}}]",
+                    consumer = consumer.id,
+                    consumer_repo = consumer.repository_id,
+                    producer = producer.id,
+                    producer_repo = producer.repository_id,
+                )));
+            }
+        }
+        if let Some(unused) = self
+            .dependency_overrides
+            .iter()
+            .find(|o| !used.contains(&(o.consumer.as_str(), o.producer.as_str())))
+        {
+            let why = match unused.action {
+                OverrideAction::Waive => "the consumer already depends on the producer, or no confirmed relationship between their repositories implies the dependency",
+                OverrideAction::Add => "the consumer does not depend on the producer, or a confirmed relationship between their repositories already covers the dependency",
+            };
+            return Err(DomainError::Invalid(format!(
+                "dependency override {} {} <- {} does not apply: {why}",
+                unused.action.as_str(),
+                unused.consumer,
+                unused.producer
+            )));
+        }
+        Ok(())
     }
 
     /// Tasks in an order that runs every dependency before its dependents,
@@ -1495,6 +1879,347 @@ mod task_graph_tests {
         assert_eq!(
             dependency_variable("api", "COMMIT"),
             "LUUNA_DEPENDENCY_API_COMMIT"
+        );
+    }
+}
+
+#[cfg(test)]
+mod role_and_override_tests {
+    use super::*;
+
+    fn plan() -> PlanRevision {
+        serde_json::from_str(include_str!("../../../fixtures/domain/plan.valid.json")).unwrap()
+    }
+
+    /// `(id, repository, role, depends_on)` tasks over repositories `app`,
+    /// `lib` and `web`.
+    fn graph(tasks: &[(&str, &str, &str, &[&str])]) -> PlanRevision {
+        let mut plan = plan();
+        let template = plan.tasks[0].clone();
+        for repository in ["lib", "web"] {
+            plan.base_commits.insert(repository.into(), "b".repeat(40));
+            plan.permissions
+                .repositories
+                .insert(repository.into(), vec!["src".into()]);
+        }
+        plan.tasks = tasks
+            .iter()
+            .map(|(id, repository, role, depends_on)| PlanTask {
+                id: (*id).to_owned(),
+                repository_id: (*repository).to_owned(),
+                role: (*role).to_owned(),
+                operations: if TaskRole::parse(role).is_some_and(TaskRole::is_advisory) {
+                    vec![Operation::Read]
+                } else {
+                    template.operations.clone()
+                },
+                depends_on: depends_on.iter().map(|d| (*d).to_owned()).collect(),
+                ..template.clone()
+            })
+            .collect();
+        plan
+    }
+
+    fn relationship(producer: &str, consumer: &str, confirmed: bool) -> Relationship {
+        Relationship {
+            producer: producer.into(),
+            consumer: consumer.into(),
+            kind: RelationshipKind::Package,
+            contract: format!("npm:@fixture/{producer}"),
+            confirmed,
+            evidence: vec![],
+        }
+    }
+
+    fn waive(consumer: &str, producer: &str) -> DependencyOverride {
+        DependencyOverride {
+            consumer: consumer.into(),
+            producer: producer.into(),
+            action: OverrideAction::Waive,
+            justification: "independent this time".into(),
+        }
+    }
+
+    fn add(consumer: &str, producer: &str) -> DependencyOverride {
+        DependencyOverride {
+            consumer: consumer.into(),
+            producer: producer.into(),
+            action: OverrideAction::Add,
+            justification: "shares a generated schema".into(),
+        }
+    }
+
+    #[test]
+    fn a_default_role_task_serializes_exactly_as_before() {
+        // The fixture already names `implementer`; the new optional fields
+        // stay absent, so the sealed hash is the one the fixture records.
+        let plan = plan();
+        plan.validate().unwrap();
+        let value = serde_json::to_value(&plan).unwrap();
+        assert!(value.get("dependency_overrides").is_none());
+        assert!(value["tasks"][0].get("derived_from_task").is_none());
+        assert_eq!(plan.computed_hash().unwrap(), plan.hash);
+        assert_eq!(plan.tasks[0].role(), Some(TaskRole::Implementer));
+        assert!(!plan.tasks[0].is_advisory());
+    }
+
+    #[test]
+    fn roles_are_explicit_and_advisory_roles_read_only() {
+        let error = graph(&[("a", "app", "wizard", &[])])
+            .seal()
+            .unwrap_err()
+            .to_string();
+        assert!(error.contains("role \"wizard\" is not one of"), "{error}");
+        let mut writing = graph(&[("a", "app", "project_orchestrator", &[])]);
+        writing.tasks[0].operations = vec![Operation::Read, Operation::Write];
+        let error = writing.seal().unwrap_err().to_string();
+        assert!(
+            error.contains(
+                "advisory role project_orchestrator and must carry exactly the read operation"
+            ),
+            "{error}"
+        );
+        let sealed = graph(&[
+            ("plan", "app", "project_orchestrator", &[]),
+            ("lead", "lib", "repository_lead", &["plan"]),
+            ("a", "app", "implementer", &["plan"]),
+            ("b", "lib", "implementer", &["lead", "a"]),
+        ])
+        .seal()
+        .unwrap();
+        assert!(sealed.tasks[0].is_advisory() && sealed.tasks[1].is_advisory());
+        let value = serde_json::to_value(&sealed).unwrap();
+        assert_eq!(value["tasks"][0]["role"], "project_orchestrator");
+        assert_eq!(
+            TaskRole::parse("repository_lead"),
+            Some(TaskRole::RepositoryLead)
+        );
+        assert_eq!(TaskRole::parse("Implementer"), None);
+    }
+
+    #[test]
+    fn a_task_never_derives_from_itself_or_from_a_task_of_the_same_plan() {
+        let mut own = graph(&[("a", "app", "implementer", &[])]);
+        own.tasks[0].derived_from_task = Some("a".into());
+        let error = own.seal().unwrap_err().to_string();
+        assert!(error.contains("task a derives from itself"), "{error}");
+        let mut same = graph(&[
+            ("plan", "app", "project_orchestrator", &[]),
+            ("b", "lib", "implementer", &["plan"]),
+        ]);
+        same.tasks[1].derived_from_task = Some("plan".into());
+        let error = same.seal().unwrap_err().to_string();
+        assert!(
+            error.contains("derives from task plan of the same plan"),
+            "{error}"
+        );
+        let mut empty = graph(&[("a", "app", "implementer", &[])]);
+        empty.tasks[0].derived_from_task = Some(String::new());
+        assert!(empty.seal().is_err());
+        // Deriving from an earlier revision's advisory task is the trace.
+        let mut earlier = graph(&[("a", "app", "implementer", &[])]);
+        earlier.tasks[0].derived_from_task = Some("orchestrate".into());
+        let sealed = earlier.seal().unwrap();
+        let value = serde_json::to_value(&sealed).unwrap();
+        assert_eq!(value["tasks"][0]["derived_from_task"], "orchestrate");
+        let reread: PlanRevision = serde_json::from_value(value).unwrap();
+        reread.validate().unwrap();
+    }
+
+    #[test]
+    fn override_entries_name_implementer_tasks_once_with_a_justification() {
+        let base = graph(&[
+            ("a", "app", "implementer", &[]),
+            ("b", "lib", "implementer", &[]),
+            ("lead", "web", "repository_lead", &[]),
+        ]);
+        let cases: Vec<(Vec<DependencyOverride>, &str)> = vec![
+            (vec![waive("b", "zzz")], "names unknown task zzz"),
+            (vec![waive("b", "lead")], "names advisory task lead"),
+            (vec![waive("b", "b")], "two tasks in different repositories"),
+            (
+                vec![DependencyOverride {
+                    justification: "  ".into(),
+                    ..waive("b", "a")
+                }],
+                "needs a justification",
+            ),
+            (
+                vec![waive("b", "a"), add("b", "a")],
+                "listed more than once",
+            ),
+        ];
+        for (overrides, expected) in cases {
+            let mut plan = base.clone();
+            plan.dependency_overrides = overrides;
+            let error = plan.seal().unwrap_err().to_string();
+            assert!(error.contains(expected), "{expected}: {error}");
+        }
+        let mut plan = base.clone();
+        plan.dependency_overrides = vec![waive("b", "a")];
+        let sealed = plan.seal().unwrap();
+        let value = serde_json::to_value(&sealed).unwrap();
+        assert_eq!(value["dependency_overrides"][0]["action"], "waive");
+        // The overrides are part of the hashed plan.
+        let mut changed = sealed.clone();
+        changed.dependency_overrides[0].justification = "another reason".into();
+        assert_ne!(changed.computed_hash().unwrap(), sealed.hash);
+        assert!(changed.validate().is_err());
+    }
+
+    #[test]
+    fn confirmed_relationships_require_the_dependency_unless_waived() {
+        let relationships = [
+            relationship("app", "lib", true),
+            relationship("lib", "web", false),
+        ];
+        let missing = graph(&[
+            ("a", "app", "implementer", &[]),
+            ("b", "lib", "implementer", &[]),
+        ])
+        .seal()
+        .unwrap();
+        let error = missing
+            .check_relationships(&relationships)
+            .unwrap_err()
+            .to_string();
+        assert!(
+            error.contains("task b in repository lib must depend on task a in repository app"),
+            "{error}"
+        );
+        assert!(
+            error.contains("confirmed relationship app -> lib (package npm:@fixture/app)"),
+            "{error}"
+        );
+        assert!(error.contains("\"action\": \"waive\""), "{error}");
+        let mut waived = missing.clone();
+        waived.dependency_overrides = vec![waive("b", "a")];
+        waived
+            .seal()
+            .unwrap()
+            .check_relationships(&relationships)
+            .unwrap();
+        let with_edge = graph(&[
+            ("a", "app", "implementer", &[]),
+            ("b", "lib", "implementer", &["a"]),
+        ])
+        .seal()
+        .unwrap();
+        with_edge.check_relationships(&relationships).unwrap();
+        // A waive that applies to nothing is refused rather than recorded.
+        let mut idle = with_edge.clone();
+        idle.dependency_overrides = vec![waive("b", "a")];
+        let error = idle
+            .seal()
+            .unwrap()
+            .check_relationships(&relationships)
+            .unwrap_err()
+            .to_string();
+        assert!(
+            error.contains("dependency override waive b <- a does not apply"),
+            "{error}"
+        );
+        // An unconfirmed relationship implies nothing.
+        graph(&[
+            ("b", "lib", "implementer", &[]),
+            ("c", "web", "implementer", &[]),
+        ])
+        .seal()
+        .unwrap()
+        .check_relationships(&relationships)
+        .unwrap();
+        // Advisory tasks take no part: an orchestrator in the producer's
+        // repository implies no dependency, and depending on it needs no override.
+        graph(&[
+            ("plan", "app", "project_orchestrator", &[]),
+            ("b", "lib", "implementer", &["plan"]),
+        ])
+        .seal()
+        .unwrap()
+        .check_relationships(&relationships)
+        .unwrap();
+    }
+
+    #[test]
+    fn a_dependency_without_a_confirmed_relationship_needs_an_add_override() {
+        let relationships = [relationship("app", "lib", true)];
+        let unrelated = graph(&[
+            ("a", "app", "implementer", &[]),
+            ("b", "lib", "implementer", &["a"]),
+            ("c", "web", "implementer", &["a"]),
+        ])
+        .seal()
+        .unwrap();
+        let error = unrelated
+            .check_relationships(&relationships)
+            .unwrap_err()
+            .to_string();
+        assert!(
+            error.contains("task c in repository web depends on task a in repository app, but no confirmed relationship app -> web exists"),
+            "{error}"
+        );
+        assert!(error.contains("\"action\": \"add\""), "{error}");
+        let mut added = unrelated.clone();
+        added.dependency_overrides = vec![add("c", "a")];
+        added
+            .seal()
+            .unwrap()
+            .check_relationships(&relationships)
+            .unwrap();
+        // An add override for a pair the confirmed graph already covers does
+        // not apply.
+        let mut covered = unrelated.clone();
+        covered.dependency_overrides = vec![add("b", "a"), add("c", "a")];
+        let error = covered
+            .seal()
+            .unwrap()
+            .check_relationships(&relationships)
+            .unwrap_err()
+            .to_string();
+        assert!(
+            error.contains("dependency override add b <- a does not apply"),
+            "{error}"
+        );
+    }
+
+    #[test]
+    fn advisory_results_are_bounded_structured_data() {
+        let parsed = AdvisoryResult::parse(
+            "Here is my advice:\n```json\n{\"findings\": [\"the consumer imports helper\"], \"proposed_tasks\": [{\"id\": \"api\", \"repository_id\": \"api\", \"paths\": [\"src\"], \"acceptance_criteria\": [\"tests pass\"], \"rationale\": \"first\"}], \"risks\": [\"rename breaks consumer\"]}\n```\n",
+        )
+        .unwrap();
+        assert_eq!(parsed.findings.len(), 1);
+        assert_eq!(parsed.proposed_tasks[0].role, "implementer");
+        assert_eq!(parsed.risks[0], "rename breaks consumer");
+        for text in [
+            "no object here",
+            "{\"findings\": [\"\"]}",
+            "{\"proposed_tasks\": [{\"id\": \"\", \"repository_id\": \"api\"}]}",
+            "{\"proposed_tasks\": [{\"id\": \"a\", \"repository_id\": \"api\", \"role\": \"wizard\"}]}",
+            "{\"proposed_tasks\": [{\"id\": \"a\", \"repository_id\": \"api\", \"paths\": [\"../x\"]}]}",
+            "{\"findings\": [], \"other\": 1}",
+        ] {
+            let error = AdvisoryResult::parse(text).unwrap_err().to_string();
+            assert!(error.contains("advisory") || error.contains("proposed task"), "{text}: {error}");
+        }
+        let huge = AdvisoryResult {
+            findings: vec!["x".repeat(MAX_ADVISORY_BYTES)],
+            ..Default::default()
+        };
+        assert!(huge.validate().unwrap_err().to_string().contains("64000"));
+        assert_eq!(
+            serde_json::to_value(AdvisoryResult::default()).unwrap(),
+            serde_json::json!({"findings": [], "proposed_tasks": [], "risks": []})
+        );
+    }
+
+    #[test]
+    fn an_advisory_only_plan_may_complete_without_a_candidate() {
+        assert_eq!(
+            RunState::Implementing
+                .transition(RunState::Completed)
+                .unwrap(),
+            RunState::Completed
         );
     }
 }

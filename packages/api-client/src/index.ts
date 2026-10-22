@@ -431,15 +431,27 @@ export interface ComponentContextSnapshot {
 
 export type Operation = "read" | "write" | "shell" | "network" | "publish";
 
+export type TaskRole = "implementer" | "repository_lead" | "project_orchestrator";
+
+/** A justified departure from the confirmed repository relationships (ADR 0023). */
+export interface DependencyOverride {
+  consumer: string;
+  producer: string;
+  action: "waive" | "add";
+  justification: string;
+}
+
 export interface PlanTask {
   id: string;
   repository_id: string;
-  role: string;
+  role: TaskRole | string;
   depends_on: string[];
   paths: string[];
   operations: Operation[];
   acceptance_criteria: string[];
   execution_profile: string;
+  /** The advisory task of an earlier plan revision this task was copied from. */
+  derived_from_task?: string;
 }
 
 export interface CheckRecipe {
@@ -497,6 +509,10 @@ export interface PlanTaskRequest {
   acceptance_criteria?: string[];
   /** Task ids this task waits for; its writer and checks receive the producers' candidate worktrees and commits. */
   depends_on?: string[];
+  /** Defaults to `implementer`; an advisory role reads only and records an advisory result. */
+  role?: TaskRole;
+  /** The advisory task of an earlier plan revision whose proposal this task copies. */
+  derived_from_task?: string;
 }
 
 export interface CreatePlanRequest {
@@ -504,6 +520,8 @@ export interface CreatePlanRequest {
   task?: PlanTaskRequest;
   tasks?: PlanTaskRequest[];
   permissions?: Record<string, string[]>;
+  /** Justified departures from the confirmed repository relationships (ADR 0023). */
+  dependency_overrides?: DependencyOverride[];
   budgets?: PlanBudgetRequest;
   component_context?: ComponentContext;
   /** Repeating a delivery with the same key and request returns the plan it created. */
@@ -577,12 +595,19 @@ export interface TaskRecord {
   run_id: string;
   task_id: string;
   repository_id: string;
+  role?: TaskRole | string;
   state: TaskState;
   attempt_id?: string;
   candidate_commit?: string;
   candidate_tree?: string;
   depends_on: string[];
   reason?: string;
+  /** Who assigned the task: the approval of the exact plan revision (ADR 0023). */
+  assigned_by?: Record<string, unknown>;
+  derived_from_task?: string;
+  dependency_overrides?: DependencyOverride[];
+  /** An advisory task's structured result once it completed. */
+  advisory_result?: Record<string, unknown>;
   updated_at: string;
 }
 
