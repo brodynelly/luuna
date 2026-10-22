@@ -1,5 +1,5 @@
 import { describe, expect, test } from "vitest";
-import { fillProblems, filterProblems, keyframeProblems, opacityProblems, splitAtRules, timingProblems, willChangeProblems } from "./lint";
+import { fillProblems, filterProblems, keyframeProblems, opacityProblems, splitAtRules, timingProblems, tsxStyleProblems, willChangeProblems } from "./lint";
 
 // A rule that cannot fail is not evidence: each rule is shown to accept and to reject (ADR 0032).
 describe("lint rules", () => {
@@ -59,5 +59,33 @@ describe("lint rules", () => {
     expect(filterProblems(".x { -webkit-backdrop-filter: blur(4px) }")).toHaveLength(1);
     expect(willChangeProblems(".x { transform: none }")).toEqual([]);
     expect(willChangeProblems(".x { will-change: transform }")).toHaveLength(1);
+  });
+});
+
+describe("tsx utilities", () => {
+  test("token-bound layout utilities and plain text pass", () => {
+    expect(tsxStyleProblems('<div className="flex items-center gap-2 text-sm bg-surface rounded-card p-4 hover:bg-accent-tint md:grid transition-none shadow-none" />')).toEqual([]);
+    expect(tsxStyleProblems('<div className="w-[var(--menu-w)] shadow-[var(--shadow-card)]" />')).toEqual([]);
+    expect(tsxStyleProblems("const message = 'Ease of use: one opacity of effort'; // opacity-50 in a comment")).toEqual([]);
+    expect(tsxStyleProblems('const x = PATHS[name]; /* duration-300 */')).toEqual([]);
+  });
+
+  test("motion and effect utilities are rejected, with variants and importance", () => {
+    for (const bad of ["opacity-50", "transition", "transition-all", "transition-colors", "animate-spin", "duration-300", "ease-in-out", "delay-150", "will-change-transform", "blur-sm", "backdrop-blur-md", "shadow-lg", "hover:opacity-80", "md:hover:-translate-y-1 transition-all", "!opacity-0"]) {
+      expect(tsxStyleProblems('<div className="flex ' + bad + '" />'), bad).not.toEqual([]);
+    }
+    expect(tsxStyleProblems("const c = `flex ${on ? 'opacity-0' : ''}`;")).toHaveLength(1);
+  });
+
+  test("arbitrary values with literal colours, lengths or durations are rejected", () => {
+    for (const bad of ["w-[300px]", "bg-[#635bff]", "text-[rgb(0,0,0)]", "[transition:opacity_200ms]", "gap-[0.5rem]", "[animation-duration:2s]"]) {
+      expect(tsxStyleProblems('<div className="' + bad + '" />'), bad).not.toEqual([]);
+    }
+  });
+
+  test("inline CSS declarations in strings are rejected", () => {
+    expect(tsxStyleProblems('el.setAttribute("style", "opacity: 0")')).toHaveLength(1);
+    expect(tsxStyleProblems("const s = 'transition: transform 200ms'")).toHaveLength(1);
+    expect(tsxStyleProblems('el.style.setProperty("--menu-x", "4px")')).toEqual([]);
   });
 });

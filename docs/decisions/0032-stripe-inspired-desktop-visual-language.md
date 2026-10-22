@@ -41,4 +41,5 @@ Several accepted rules block the restyle:
 
 - Tokens are split into `tokens.css` (colour, tone, type, layout), `tokens-depth.css` (shape, shadows, gradients) and `tokens-motion.css` (easings, durations, distances, component sizes), plus `fonts.css` from F1. The final stylesheet manifest is pre-registered so parallel items only replace stub content.
 - The design lint is revised to enforce decisions 3, 4 and 6 (opacity, keyframe properties, fill modes, filters, `will-change`, duration and easing tokens, reduced-motion coverage derived from the token sheets).
+- The design lint also covers TSX: `tsxStyleProblems` (checked by `design/components.test.ts`) rejects Tailwind motion and effect utilities (`opacity-*`, `transition`, `animate-*`, `duration-*`, `ease-*`, `delay-*`, `will-change-*`, `blur-*`, `backdrop-blur-*`, `shadow-*`), arbitrary `[...]` values holding literal colours, lengths or durations, and inline CSS declarations in strings. Token-bound layout utilities stay allowed.
 - Unit tests and lint are not rendering evidence. Item Q owns visual verification in real WebViews, both schemes and reduced motion.

@@ -1,5 +1,6 @@
 import { readdirSync, readFileSync } from "node:fs";
 import { describe, expect, test } from "vitest";
+import { tsxStyleProblems } from "./lint";
 
 // The structure the template, the smokes and the accessibility audit depend on (ADR 0030):
 // every view renders through the component library in src/ui, every file stays small enough to
@@ -58,5 +59,12 @@ describe("components and templates", () => {
   test("headings come from the library alone, so the outline is the same on every view", () => {
     const headings = components.filter((file) => /<h[1-6]\b/.test(source(file)));
     expect(headings.every((file) => file.startsWith("ui/")), headings.join(", ")).toBe(true);
+  });
+});
+
+describe("ADR 0032 in TSX", () => {
+  test("no utility or inline string bypasses the CSS lint", () => {
+    const found = components.flatMap((file) => tsxStyleProblems(source(file)).map((problem) => file + ": " + problem));
+    expect(found).toEqual([]);
   });
 });
