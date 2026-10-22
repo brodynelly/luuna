@@ -122,3 +122,30 @@ export function willChangeProblems(css: string): string[] {
 export function motionProblems(css: string): string[] {
   return [...opacityProblems(css), ...timingProblems(css), ...keyframeProblems(css), ...fillProblems(css), ...filterProblems(css), ...willChangeProblems(css)];
 }
+
+/** Quoted string literals in a TSX file, with comments and template holes removed. */
+export function stringLiterals(tsx: string): string[] {
+  const code = tsx.replace(/\/\*[\s\S]*?\*\//g, "").replace(/(^|[^:])\/\/.*$/gm, "$1");
+  return [...code.matchAll(/"((?:[^"\\\n]|\\.)*)"|'((?:[^'\\\n]|\\.)*)'|`((?:[^`\\]|\\.)*)`/g)].flatMap((match) => {
+    const text = match[1] ?? match[2] ?? match[3] ?? "";
+    return [text.replace(/\$\{[^}]*\}/g, " "), ...[...text.matchAll(/\$\{([^}]*)\}/g)].flatMap((hole) => stringLiterals(hole[1] ?? ""))];
+  });
+}
+
+const TW_BANNED = /^(?:opacity|animate|duration|ease|delay|will-change|blur|backdrop-blur|backdrop-opacity|shadow(?!-none$))-|^transition(?:-(?!none$)|$)/;
+const TW_LITERAL = /#[0-9a-f]{3,8}\b|\b(?:rgb|rgba|hsl|hsla|hwb|lab|lch|oklab|oklch|color-mix)\(|-?\d*\.?\d+(?:px|ms|s|rem|em)\b/i;
+const DECLARATION = /(?:^|[\s;"'])(?:opacity|transition(?:-[a-z]+)?|animation(?:-[a-z]+)?|will-change|filter|backdrop-filter)\s*:/;
+
+/** ADR 0032 for TSX: Tailwind utilities may not bypass the CSS lint (motion, effects, arbitrary literal values), and strings hold no CSS declarations. */
+export function tsxStyleProblems(tsx: string): string[] {
+  const problems: string[] = [];
+  for (const text of stringLiterals(tsx)) {
+    if (DECLARATION.test(text)) problems.push(`inline CSS declaration belongs in a token-based stylesheet: "${text.trim()}"`);
+    for (const word of text.split(/\s+/).filter(Boolean)) {
+      const utility = word.replace(/^(?:\[[^\]]*\]:|[a-z0-9_*&>-]+:)*/i, "").replace(/^!/, "").replace(/^-/, "").replace(/!$/, "");
+      if (TW_BANNED.test(utility) && !/^shadow-\[var\(--[\w-]+\)\]$/.test(utility)) problems.push(`utility bypasses the motion and effect tokens: ${word}`);
+      else if (/\[[^\]]*\]/.test(utility) && TW_LITERAL.test(utility.slice(utility.indexOf("[")))) problems.push(`arbitrary value holds a literal colour, length or duration: ${word}`);
+    }
+  }
+  return problems;
+}

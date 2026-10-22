@@ -1,6 +1,7 @@
 /*
- * Luuna design tokens, colour, tone, type and layout. With tokens-depth.css and tokens-motion.css
- * (and F1's fonts.css) these are the only stylesheets that may contain literal colours, lengths or durations.
+ * Luuna design tokens, colour, tone, type and layout. With tokens-depth.css and tokens-motion.css,
+ * these are the only stylesheets that may contain literal colours, lengths or durations. fonts.css is linted by
+ * the tokens-only test like any other sheet, so it holds no such literals.
  * Dark is the default look; the light block redefines every colour for prefers-color-scheme: light.
  * Reference: docs/DESIGN-SYSTEM.md, ADR 0032. Before changing anything here:
  *   1. A new colour role is defined in both schemes and added to the contrast pairs in

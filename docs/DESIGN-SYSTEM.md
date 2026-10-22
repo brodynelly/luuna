@@ -31,6 +31,10 @@ apps/desktop/src/
   design/tone.ts             Tone type and exhaustive maps from runtime unions to tones
   ui/                        the component library every view composes (ADR 0030 amendment):
                              controls, layout (Page, Section), content, selection, shell
+                             stats.tsx (StatGrid, StatTile: dl.stat-grid > div.stat-tile > dt + dd with a CountUp; a count is a projection, so a tile is untoned),
+                             docs.tsx (Kbd: a key cap), reveal-list.tsx (RevealList: a staggered ul named by aria-labelledby, used by the Board),
+                             motion.tsx (Reveal, useReveal, CountUp, CheckDraw), surfaces.tsx (GlowSurface, Aurora), tabs.tsx (Tabs, TabPanel),
+                             table.tsx (Table), feedback.tsx (ProgressBar, StreamingDots), menus.tsx (context menus; sized from offsetWidth and offsetHeight)
   content/views.ts           the views' titles and descriptions, the sidebar order and shortcuts
   design/components.test.ts  enforcement: 300-line files, no raw elements in views, Page on every view
   design/StatusBadge.tsx     the one status chip
@@ -114,21 +118,31 @@ Every component below is rendered by `src/ui`. A view never writes the element i
 | Subpanel | `.subpanel` | Top rule and a 12 px grid rhythm for a section inside a panel or card (`.workflows`, `.candidate-review`). |
 | Tray | `.tray` | A raised group of related settings inside a panel (the workflow run settings). |
 | Meta line | `.meta` | A muted evidence sentence (run detail, plan meta, worktree, usage, diff meta); its `code` identities stay at full contrast, figures are tabular. |
-| Button | `button` (secondary), `.primary`, `.danger`, `.text-button` | One `.primary` per action group. `.danger` and `.text-button` are small. Hover lifts 1 px (`--lift-y`) and press scales to `--press-scale`, gated by `(hover: hover) and (pointer: fine)`. Disabled uses the disabled colour tokens, never opacity. |
+| Button | `<Button variant>`: `secondary` (default), `primary`, `quiet`, `danger`, `text` (`.primary`, `.quiet`, `.danger`, `.text-button`) | One `.primary` per action group. `.danger` and `.text-button` are small. Hover lifts 1 px (`--lift-y`) and press scales to `--press-scale`, gated by `(hover: hover) and (pointer: fine)`. Disabled uses the disabled colour tokens, never opacity. |
 | Field | `label` wrapping `input`/`textarea` | Label text above the field. `spellCheck={false}` fields render monospace. A checkbox label is an inline row. |
 | Field row | `.field-row` | Side-by-side fields that share the row and wrap one per line below 2 × 14 rem; a trailing `small` takes the full row. |
 | Form footer | `.form-footer` > `small` + primary | Hint left, primary right even when it wraps. |
 | Form group | `.form-group` | A bordered, unfilled group around a form (register, ticket). |
 | Action row | `.actions` | Wrapping row; a trailing `small` takes the full row; `.danger` goes to the end. |
 | Facts | `dl.facts` > `div` > `dt` + `dd` | Full identities in `dd code`. Term column 150 px, one column at 680 px (at 920 px inside a candidate, where every value is a full hash). |
-| Record list | `ul.record-list` > `li.record` | Bordered rows: baselines, recipes, tickets, checks, findings. A nested record alternates its surface. `data-tone` on a leaf record (baseline, check, finding) adds a toned rule on its leading edge; a ticket card carries its state in its run badge, not a page-length rule. `.record-headed` puts the title and badge on the first line and every later child on its own full-width line. |
+| Record list | `<RecordList variant="cards"|"rows" reveal>`: `ul.record-list` (`.record-rows` for the compact variant, `.reveal` for a one-time staggered entrance) > `li.record` | Bordered rows: baselines, recipes, tickets, checks, findings. A nested record alternates its surface. `data-tone` on a leaf record (baseline, check, finding) adds a toned rule on its leading edge; a ticket card carries its state in its run badge, not a page-length rule. `.record-headed` puts the title and badge on the first line and every later child on its own full-width line. |
 | Selectable card | `button.run-card[aria-pressed]` > `.run-prompt` + `.run-meta` | Selection shows by fill, border and an accent inset rule, not colour alone. `.run-prompt` may clamp prose to two lines, never identities. |
 | Reason and next step | `.failure-note[data-tone]` then `.recovery-note` | The reason carries an 8 px-inset rule and text in the tone of the state it explains; the next step follows flush under it, ruled in the accent, whether nested in the reason or its next sibling. |
 | Callout | `.callout[data-tone]` | Toned box for outages, open questions and the runtime's activity status. |
 | Alert banner | `.error[role=alert]` with a Dismiss `.text-button` | Refused actions and failed loads only; always dismissible. Outages are `role=status`, not alerts. |
 | Disclosure | `details` > `summary`; `details.section` for a section heading (diff, check evidence, event record) | CSS caret, never text, so it adds nothing to the accessible name; the caret aligns with the content edge. |
 | Scroll region | `ol.events`, `pre[aria-label][tabIndex=0]` | The only elements that scroll; bounded by `--scroll-max` (`--plan-max` for the plan). Focusable, with an inset focus ring. Has `scrollbar-gutter: stable` and `contain: content`. The Pi response (`LiveOutput`) and the session event list (`ScrollList follow`) follow new content. |
-| Empty state | `.empty` (inline text), `.empty-box` (dashed box), `.activity-empty` | Muted text; the glyph is `aria-hidden`. |
+| Empty state | `<EmptyState boxed wash title action>`: `.empty` (inline text), `.empty-box` (dashed box), `.empty-state` with a title and action, `.activity-empty` | Muted text; the glyph is `aria-hidden`. `wash` adds a decorative `Aurora` behind a boxed or titled state; text never sits on it as the only contrast source. |
+| Stat tiles | `<StatGrid label>` > `<StatTile term value>`: `dl.stat-grid` > `div.stat-tile` > `dt` + `dd` | A short row of counts; the markup holds the final number and `CountUp` only animates the first paint. Never toned, never in `.facts` (that class is read as exact identities). |
+| Tabs | `<Tabs label tabs selected onSelect idPrefix>` + `<TabPanel id idPrefix selected>` | `role=tablist` with one roving tab stop. The indicator is one measured element moved by transform; it gets `data-measured` after the first measurement and is a static underline before that. |
+| Table | `<Table label columns rows rowKey>`; a column is `{ id, header, cell, numeric? }` | A real `table` with `scope=col` headers; `numeric` columns align and use tabular figures. |
+| Switch | `<Switch label>` | A checkbox with `role=switch` for a setting that applies at once; a Checkbox is for a choice submitted with a form. |
+| Progress and streaming | `<ProgressBar label>` (`role=progressbar`), `<StreamingDots label?>` | Decorative motion that signals work, never evidence. Dots are `aria-hidden` unless labelled. |
+| Key cap | `<Kbd>` renders `kbd.kbd` | Help's shortcuts topic. |
+| Check draw | `<CheckDraw size="sm"|"md"|"lg" label?>` | A check mark drawn once with `stroke-dashoffset`. Only beside a result that is already recorded (doctor ok, a passed verdict). |
+| Reveal | `<Reveal label?>` and `useReveal()` | Children rise in one after another once per mount (stagger capped at 10); `data-revealed` is set afterwards so later children never animate. |
+| Glow and aurora | `<GlowSurface>`, `<Aurora intensity="subtle"|"vivid">` | A pointer-following glow on a card (fine pointers only) and a decorative, `aria-hidden` gradient wash. Neither carries meaning, and neither is used on evidence. |
+| Icon | `<Icon name className?>` | `className` is appended to `icon`; still decorative and `aria-hidden`. |
 
 ## Screens
 
@@ -139,6 +153,9 @@ Every component below is rendered by `src/ui`. A view never writes the element i
 - **Projects** (`Projects.tsx`, `screens/projects.css`): a rail with the project cards, then the "Add a project" disclosure (the register form; open while no project exists), "Import from another machine" and "Create from a stack profile", and a detail card: the project header (h3 name, manifest chip, id), facts (the first `.facts` on the page), the "Rebind repository" disclosure, the action row (a running baseline adds its `.danger` cancel), baselines (each with its reason and next step and a log button per recipe stream, then the opened log), discovery (questions callout, problems, recipes, the manifest form), the Workflows subpanel, then the project event record.
 - **Workflows** (`Workflows.tsx`, `screens/workflows.css`): the testing-setup offers (headed records in the attention tone, the reason ruled and the runtime's next step under it, a `Create the testing-setup ticket` control), the ticket form (each field followed by its UTF-8 byte count), the run settings (paths, writes, approver, plan budgets, provider and model, automatic repair), then ticket cards. A ticket card holds its head, intent, actions with the run badge (the first writer's `.danger` cancel sits before the badge; a held-back "Plan r{n+1}" names its reason on its own line), the confirmation checkbox when the next revision would leave a pending, approved or reviewed revision behind, the writer's activity callout, the plan review with the complete plan in a bounded region, plan meta, earlier revisions with their badges, the reason and next step, worktree lines and the candidate.
 - **Candidate review** (`CandidateReview.tsx`, `screens/candidate-review.css`): heading with badge, full identities, the action row, the publication record, a setup workflow's handoff callout (attention: the proposed checks and the runtime's next step), the editor handoff (`data-surface="editor-handoff"`: each worktree path whole in `code` with a `Copy path` text button), the runtime's activity callout, reason and next step, the diff, check evidence with logs, the independent review with findings, and usage.
+
+- **Screen details (item D).** Home: an `Aurora` hero, a stat tile row and `GlowSurface` project cards. Board: raised cards in a `RevealList` whose only hover effect is a shadow and lift on the selectable card. Settings: one drawn `CheckDraw` beside the doctor verdict when it is ok. Help: a shortcuts topic of `Kbd` key caps. Projects, Workflows, Candidate review and Project components: row styling through `RecordList` rows and washed empty states (Project components also carries an `Aurora`); a passed verdict draws one check. Sessions: a lifted history rail, a live output card kept static, and `StreamingDots` while the active run is not terminal.
+- **Static depth on evidence.** Evidence, approval, baseline, candidate and verdict blocks (and `.facts`, `.state`, `.callout`, notes, records, `ol.events`, `pre`) get static depth only (a resting shadow, border or radius): no transition, animation, opacity or transform. `design/screens-motion.test.ts` guards this per screen sheet with fixtures that prove a hover lift, a transition and a fade on those selectors fail.
 
 ### Following live output
 
@@ -153,6 +170,15 @@ Presentation only; the runtime still decides every state.
 ### Motion
 
 ADR 0032 decisions 4 to 7 in short. Hover lifts 1 px and press scales to 0.98; entrances play once through a keyframe with `backwards` fill and end at full opacity; opacity appears only in `@keyframes` or as an exact 0/1 toggle on a decorative pseudo-element. Only `transform`, `opacity`, `background-position`, `clip-path` and `stroke-dashoffset` animate. The active chip and the live connection mark may pulse through a CSS `::after` ring; evidence, the tail caret and approvals never pulse, fade out or auto-dismiss. Optional features (view transitions, `@starting-style`, `backdrop-filter`) are gated by `@supports` with a complete static fallback, and hover effects by `(hover: hover) and (pointer: fine)`. No `will-change`.
+
+- **Active chip pulse.** A CSS-only ring on `.state[data-tone="active"]::after` that loops forever. It is hidden under reduced motion and forced colours and never encodes evidence or approval state.
+- **Buttons.** Hover lifts `translateY(-1px)` (`--lift-y`) and press scales to `.98`: integer pixel, interaction-only, gated by `(hover: hover) and (pointer: fine)`. `.nav-item` is excluded.
+- **Measuring.** `menus.tsx` sizes a menu with `offsetWidth` and `offsetHeight`, not `getBoundingClientRect`, because the entrance scales it. Markers: `data-measured` (Tabs indicator measured), `data-pill="ready"` (nav pill measured), `data-revealed` (Reveal has played), `data-entering` (a view that just became current).
+- **Shell.** One measured nav pill moved by transform only. A view change uses View Transitions where `document.startViewTransition` exists; otherwise a CSS enter plays from `data-entering` (`data-view-motion="css"`). Under reduced motion every one of these is instant.
+
+### Fonts
+
+Apple platforms use the system stack (SF Pro). Other platforms use bundled Söhne, selected by `data-platform` and served from `'self'` (`design/fonts.css`, token-layer, linted by the tokens-only test). Nothing is fetched remotely. Söhne is a commercial face bundled at the sole user's direction; see [THIRD-PARTY-NOTICES.md](../THIRD-PARTY-NOTICES.md) before any distribution.
 
 ## Accessibility
 
