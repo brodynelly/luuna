@@ -14,7 +14,7 @@
       "package": "@luuna/missions-cli",
       "cli": {
         "primary": "luuna-missions",
-        "short": "lm",
+        "short": "lms",
         "legacy": [],
         "entrypoint": "src/index.ts"
       },
@@ -26,7 +26,7 @@
       "license": "MIT",
       "published": false,
       "repository": "https://github.com/brodynelly/luuna-missions.git",
-      "commit": "5832801137dc1189915340c1f6076516b34e21b1",
+      "commit": "6a4a3c3fb80679a77bbf1d7d2da05033fc15460c",
       "licenseSha256": "9d36b754124311e7363b9f800e147f95b4dcaea008aa3565b70e15b8a7462f0a"
     },
     {
@@ -41,7 +41,7 @@
       "package": "@luuna/atlas-cli",
       "cli": {
         "primary": "luuna-atlas",
-        "short": "la",
+        "short": "lat",
         "legacy": [],
         "entrypoint": "src/cli.ts"
       },
@@ -54,7 +54,7 @@
       "license": "MIT",
       "published": false,
       "repository": "https://github.com/brodynelly/luuna-atlas.git",
-      "commit": "7c04005c5541e7efdb652d834728602a8dcb4d29",
+      "commit": "27477c313a3049b1579dfdc32c39da600726721f",
       "licenseSha256": "fe1956a36381a8ac9e13e229247eb1f05f951bb6a96153773025d03a0fd62519"
     },
     {
@@ -69,7 +69,7 @@
       "package": "@luuna/beacon-cli",
       "cli": {
         "primary": "luuna-beacon",
-        "short": "lb",
+        "short": "lbc",
         "legacy": [],
         "entrypoint": "src/index.ts"
       },
@@ -81,7 +81,7 @@
       "license": "MIT",
       "published": false,
       "repository": "https://github.com/brodynelly/luuna-beacon.git",
-      "commit": "ae7741fe84df39c59a0081e8f56b13ef567bcce8",
+      "commit": "4b01d37522ef448ada78be08cc7a24f7808dfbbb",
       "licenseSha256": "fe1956a36381a8ac9e13e229247eb1f05f951bb6a96153773025d03a0fd62519"
     }
   ],

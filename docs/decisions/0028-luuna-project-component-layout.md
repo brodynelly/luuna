@@ -62,3 +62,12 @@ identities in the product surface without serving a Luuna user.
   are changed separately from this record.
 - Integration snippets using the removed aliases or variables must be
   updated; there is no compatibility alias.
+
+## Preferred short aliases (2026-10-22 amendment)
+
+The preferred short commands are now `lms` for Missions, `lat` for Atlas and
+`lbc` for Beacon. Their package binaries retain `lm`, `la` and `lb` for
+compatibility with Luuna installations created before this preference change.
+The manifest `cli.short` records the preferred alias, while `cli.legacy`
+continues to describe removed upstream identities rather than these Luuna
+compatibility aliases.
