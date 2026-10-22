@@ -124,3 +124,5 @@ checkout-based verification already recorded; both remain required.
   manual `LUUNA_COMPONENTS_ROOT` test, but no evidence exists.
 - Signing, a host update policy and service supervision are unchanged
   (ADR 0018).
+
+The API client is compiled before staging (`npm run build --workspace @luuna/api-client`, `packages/api-client/tsconfig.build.json`): Node refuses to strip types from files under `node_modules`, so the staged `@luuna/api-client` package exports `dist/index.js`, and the packager starts the staged terminal client once (`luuna-tui.mjs --help`) before building the installer.

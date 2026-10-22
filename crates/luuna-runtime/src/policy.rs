@@ -339,8 +339,18 @@ fn added_lines(text: &str) -> Vec<(String, usize, String)> {
     let mut lines = Vec::new();
     let mut path: Option<String> = None;
     let mut line_number = 0usize;
+    // File headers (`--- a/…`, `+++ b/…`) occur only between a `diff --git`
+    // line and the first hunk; inside a hunk, `+++ ` and `--- ` are content
+    // (an added line beginning with `++ `, a removed line beginning with
+    // `-- `) and must be scanned like any other line.
+    let mut in_hunk = false;
     for line in text.lines() {
-        if let Some(header) = line.strip_prefix("+++ ") {
+        if line.starts_with("diff --git ") {
+            in_hunk = false;
+            path = None;
+            continue;
+        }
+        if let Some(header) = line.strip_prefix("+++ ").filter(|_| !in_hunk) {
             // Git quotes a path with unusual bytes (`+++ "b/caf\303\251"`);
             // decoded, it names the same file as `diff.files`.
             let header = unquote_git_path(header);
@@ -351,10 +361,11 @@ fn added_lines(text: &str) -> Vec<(String, usize, String)> {
             line_number = 0;
             continue;
         }
-        if line.starts_with("--- ") || line.starts_with("diff --git ") {
+        if !in_hunk && line.starts_with("--- ") {
             continue;
         }
         if let Some(hunk) = line.strip_prefix("@@ ") {
+            in_hunk = true;
             // `@@ -a,b +c,d @@`: the new-side start line.
             if let Some(plus) = hunk.split_whitespace().nth(1) {
                 line_number = plus
@@ -449,10 +460,13 @@ pub fn scan_repository(
     let mut findings = Vec::new();
     // Approved scope: the same rule the writer's post-session judgement
     // applies, re-checked against the exact patch that will be pushed.
+    // The writer task of the repository: an advisory task (ADR 0023) may share
+    // the repository with the implementer it advises and holds no write
+    // scope, so it never judges the implementer's patch.
     if let Some(task) = plan
         .tasks
         .iter()
-        .find(|task| task.repository_id == repository_id)
+        .find(|task| task.repository_id == repository_id && !task.is_advisory())
     {
         let changes: Vec<ChangedPath> = diff.files.iter().map(changed_path).collect();
         if let Err(violation) = check_scope(&changes, task, &plan.permissions) {
@@ -708,5 +722,40 @@ mod tests {
                 ("src/a.py".to_owned(), 3, "new two".to_owned())
             ]
         );
+        // Inside a hunk, `+++ ` and `--- ` are content, not headers.
+        let text = "diff --git a/src/c.c b/src/c.c\n--- a/src/c.c\n+++ b/src/c.c\n@@ -1,2 +1,4 @@\n keep\n-- x;\n+++ counter;\n+token = 'ghp_0123456789abcdefghijklmnopqrstuvwxyz0123'\n+--- not a header\n";
+        let lines = added_lines(text);
+        assert_eq!(lines.len(), 3, "{lines:?}");
+        assert_eq!(
+            lines[0],
+            ("src/c.c".to_owned(), 2, "++ counter;".to_owned())
+        );
+        assert!(line_finding(&lines[1].2, &[]).is_some());
+        assert_eq!(lines[2].2, "--- not a header");
+    }
+
+    #[test]
+    fn the_scope_check_uses_the_writer_task_not_an_advisory_one_on_the_same_repository() {
+        let mut plan: PlanRevision =
+            serde_json::from_str(include_str!("../../../fixtures/domain/plan.valid.json")).unwrap();
+        let writer = plan.tasks[0].clone();
+        let mut lead = writer.clone();
+        lead.id = "lead".into();
+        lead.role = "repository_lead".into();
+        lead.operations = vec![luuna_domain::Operation::Read];
+        plan.tasks.insert(0, lead);
+        let diff = ReviewDiff {
+            text: String::new(),
+            files: vec![DiffFile {
+                path: writer.paths[0].clone(),
+                status: "M".into(),
+                old_blob: "0".repeat(40),
+                new_blob: "1".repeat(40),
+                shown: DiffShown::Text,
+            }],
+            truncated: false,
+        };
+        let findings = scan_repository(&writer.repository_id, &plan, &diff, &[], &[]);
+        assert!(findings.iter().all(|f| f.rule != "scope"), "{findings:?}");
     }
 }

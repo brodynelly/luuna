@@ -118,21 +118,35 @@ Step 'Terminal client (packages/tui, @luuna/api-client and the capability catalo
 # Mirrors the checkout layout so the client resolves its dependency and the
 # catalog exactly as in development: packages/tui/src/catalog.mjs reads
 # ../../../schemas/capability-catalog.json and `@luuna/api-client` resolves
-# through node_modules. Nothing is bundled or transpiled; the host Node runs
-# the TypeScript client with its built-in type stripping.
-foreach ($directory in @('packages\tui\bin', 'packages\tui\src', 'node_modules\@luuna\api-client\src', 'schemas')) {
+# through node_modules. The API client is compiled to JavaScript first
+# (`npm run build --workspace @luuna/api-client`, tsconfig.build.json): Node
+# refuses to strip types from files under node_modules, so the staged package
+# exports dist/index.js rather than the TypeScript source.
+& npm.cmd run build --workspace @luuna/api-client
+if ($LASTEXITCODE -ne 0) { throw 'Compiling @luuna/api-client failed.' }
+if (-not (Test-Path (Join-Path $root 'packages\api-client\dist\index.js'))) { throw 'The compiled API client is missing packages\api-client\dist\index.js.' }
+foreach ($directory in @('packages\tui\bin', 'packages\tui\src', 'node_modules\@luuna\api-client\dist', 'schemas')) {
     New-Item -ItemType Directory -Force -Path (Join-Path $stage $directory) | Out-Null
 }
 & robocopy (Join-Path $root 'packages\tui\bin') (Join-Path $stage 'packages\tui\bin') /E /NFL /NDL /NJH /NJS /NP | Out-Null
 if ($LASTEXITCODE -gt 7) { throw 'Copying the terminal client failed.' }
 & robocopy (Join-Path $root 'packages\tui\src') (Join-Path $stage 'packages\tui\src') /E /NFL /NDL /NJH /NJS /NP | Out-Null
 if ($LASTEXITCODE -gt 7) { throw 'Copying the terminal client failed.' }
-& robocopy (Join-Path $root 'packages\api-client\src') (Join-Path $stage 'node_modules\@luuna\api-client\src') /E /NFL /NDL /NJH /NJS /NP | Out-Null
-if ($LASTEXITCODE -gt 7) { throw 'Copying the API client failed.' }
+& robocopy (Join-Path $root 'packages\api-client\dist') (Join-Path $stage 'node_modules\@luuna\api-client\dist') /E /NFL /NDL /NJH /NJS /NP | Out-Null
+if ($LASTEXITCODE -gt 7) { throw 'Copying the compiled API client failed.' }
 foreach ($file in @('packages\tui\package.json', 'packages\tui\README.md', 'schemas\capability-catalog.json')) {
     Copy-Item -LiteralPath (Join-Path $root $file) -Destination (Join-Path $stage $file)
 }
-Copy-Item -LiteralPath (Join-Path $root 'packages\api-client\package.json') -Destination (Join-Path $stage 'node_modules\@luuna\api-client\package.json')
+# The staged package manifest exports the compiled entry point only.
+$apiClientManifest = Get-Content -Raw (Join-Path $root 'packages\api-client\package.json') | ConvertFrom-Json
+@{ name = $apiClientManifest.name; version = $apiClientManifest.version; license = $apiClientManifest.license; type = 'module'; exports = @{ '.' = './dist/index.js' } } |
+    ConvertTo-Json -Depth 4 | Set-Content -Encoding UTF8 (Join-Path $stage 'node_modules\@luuna\api-client\package.json')
+# The staged terminal client must start on the host Node without the checkout.
+Push-Location $stage
+try {
+    & node.exe 'packages\tui\bin\luuna-tui.mjs' --help | Out-Null
+    if ($LASTEXITCODE -ne 0) { throw 'The staged terminal client did not start (node packages\tui\bin\luuna-tui.mjs --help failed).' }
+} finally { Pop-Location }
 $terminalLauncher = @(
     '@echo off',
     'rem Opens the Luuna terminal client against the local runtime. Node.js 24.19 or newer must be on PATH.',
@@ -169,7 +183,7 @@ try {
 Step 'Verifying the packaged layout'
 $built = Join-Path $tauriDirectory ('target\' + $profile)
 $copied = Join-Path $built 'luuna'
-foreach ($required in @('luuna-runtime.exe', 'scripts\ensure-windows-runtime.ps1', 'scripts\windows-common.ps1', 'scripts\start-terminal.ps1', 'Configure Luuna.cmd', 'Luuna Terminal.cmd', 'packages\tui\bin\luuna-tui.mjs', 'packages\tui\src\catalog.mjs', 'node_modules\@luuna\api-client\src\index.ts', 'schemas\capability-catalog.json')) {
+foreach ($required in @('luuna-runtime.exe', 'scripts\ensure-windows-runtime.ps1', 'scripts\windows-common.ps1', 'scripts\start-terminal.ps1', 'Configure Luuna.cmd', 'Luuna Terminal.cmd', 'packages\tui\bin\luuna-tui.mjs', 'packages\tui\src\catalog.mjs', 'node_modules\@luuna\api-client\dist\index.js', 'schemas\capability-catalog.json')) {
     if (!(Test-Path -LiteralPath (Join-Path $copied $required))) { throw ('Packaged resource missing after build: ' + $required) }
 }
 if (!$SkipPi -and !(Test-Path -LiteralPath (Join-Path $copied 'pi\node_modules\@earendil-works\pi-coding-agent\dist\cli.js'))) { throw 'Packaged Pi tree missing after build.' }
