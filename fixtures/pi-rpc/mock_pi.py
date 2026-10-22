@@ -219,7 +219,12 @@ def run_writer(request_id, kind, scenario, prompt):
         # the system prompt stated them.
         "dependency_env": {name: value for name, value in sorted(os.environ.items())
                            if name.startswith("LUUNA_DEPENDENCY_")},
-        "dependencies_stated": "LUUNA_DEPENDENCY_" in (flag("--system-prompt") or "")})
+        "dependencies_stated": "LUUNA_DEPENDENCY_" in (flag("--system-prompt") or ""),
+        # ADR 0022: whether the testing-setup role contract and the recipes the
+        # runtime will execute reached a testing-setup writer's system prompt.
+        "role_contract_stated": "<<<ROLE_CONTRACT>>>" in (flag("--system-prompt") or "")
+            and "Testing prerequisite specialist" in (flag("--system-prompt") or ""),
+        "recipes_stated": "-m unittest discover" in (flag("--system-prompt") or "")})
     send({"type": "response", "id": request_id, "command": kind,
           "success": True, "data": {"disposition": "started"}})
     send({"type": "agent_start"})
@@ -260,6 +265,25 @@ def run_writer(request_id, kind, scenario, prompt):
         # the same task then writes in scope.
         if os.path.exists(os.path.join(os.getcwd(), os.pardir, os.pardir, "RELEASE")):
             write_file("src/main.py", "print('implemented by the synthetic writer after release')\n")
+    elif scenario == "write_testing_setup":
+        # ADR 0022: the testing-setup prerequisite writer adds a real unittest
+        # harness for existing behavior; the runtime then executes the plan's
+        # recipe (`python -B -m unittest discover -s tests -v`) in the worktree.
+        write_file("tests/test_main.py",
+                   "import os\nimport unittest\n\n\n"
+                   "class MainModuleTests(unittest.TestCase):\n"
+                   "    def test_main_module_prints(self):\n"
+                   "        with open(os.path.join('src', 'main.py'), encoding='utf-8') as handle:\n"
+                   "            self.assertIn('print(', handle.read())\n")
+    elif scenario == "write_testing_setup_without_tests":
+        # A setup writer that adds a harness whose only test is skipped: the
+        # recipe exits 0 while the runner executes nothing.
+        write_file("tests/test_main.py",
+                   "import unittest\n\n\n"
+                   "class MainModuleTests(unittest.TestCase):\n"
+                   "    @unittest.skip('needs a device')\n"
+                   "    def test_main_module_prints(self):\n"
+                   "        pass\n")
     elif scenario == "write_rename_function":
         # M4 integration: an incompatible producer change that renames the
         # function its consumers import; the producer's own check still passes.

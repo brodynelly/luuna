@@ -437,6 +437,7 @@ mod tests {
             intent: "Implement the test feature".into(),
             acceptance_criteria: vec!["The isolated check passes".into()],
             repository_ids: vec!["app".into()],
+            purpose: luuna_domain::TicketPurpose::Feature,
             created_at: "2026-10-21T00:00:00.000Z".into(),
             updated_at: "2026-10-21T00:00:00.000Z".into(),
         }

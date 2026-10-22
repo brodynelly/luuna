@@ -11,7 +11,8 @@ use axum::{
 use chrono::{SecondsFormat, Utc};
 use luuna_discovery::{DiscoveryRequest, RepositoryInput};
 use luuna_domain::{
-    valid_project_id, Discovery, DomainError, EventEnvelope, ProjectManifest, RepositoryObservation,
+    valid_project_id, Discovery, DomainError, EventEnvelope, ProjectManifest,
+    RepositoryObservation, TestingPrerequisite,
 };
 use luuna_git::{strip_verbatim_prefix, GitError};
 use luuna_storage::{ManifestRecord, ProjectRecord, RepositoryRegistration, StorageError};
@@ -63,6 +64,9 @@ pub struct ProjectView {
     pub repositories: Vec<RepositoryRegistration>,
     pub manifest: Option<ManifestRecord>,
     pub discovery: Option<Discovery>,
+    /// One offer per registered repository whose latest baseline shows no
+    /// usable testing setup (ADR 0022); empty otherwise.
+    pub prerequisites: Vec<TestingPrerequisite>,
 }
 
 fn bad_request(message: impl Into<String>) -> ApiError {
@@ -209,10 +213,22 @@ fn view(state: &AppState, id: &str) -> Result<ProjectView, ApiError> {
         .get_project(id)
         .map_err(internal)?
         .ok_or_else(|| ApiError(StatusCode::NOT_FOUND, "project not found".into()))?;
+    let repositories = store.repositories(id).map_err(internal)?;
+    let prerequisites = repositories
+        .iter()
+        .filter_map(|registration| {
+            store
+                .latest_baseline(id, &registration.repository_id)
+                .ok()
+                .flatten()
+                .and_then(|evidence| evidence.testing_prerequisite())
+        })
+        .collect();
     Ok(ProjectView {
-        repositories: store.repositories(id).map_err(internal)?,
+        repositories,
         manifest: store.current_manifest(id).map_err(internal)?,
         discovery: store.latest_discovery(id).map_err(internal)?,
+        prerequisites,
         project,
     })
 }

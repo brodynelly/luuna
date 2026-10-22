@@ -303,6 +303,10 @@
       "type": "string",
       "minLength": 1
     },
+    "purpose": {
+      "enum": ["feature", "testing_setup"],
+      "description": "Copied from the ticket and part of the hash; absent means feature. A testing_setup plan carries the testing-setup role and the recipes that will become the repository's baseline, and is the only plan admitted to implementation without a passing baseline (ADR 0022)."
+    },
     "component_context": {
       "anyOf": [
         {

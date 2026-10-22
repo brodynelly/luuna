@@ -5,6 +5,7 @@ use crate::{
 use luuna_domain::{
     BudgetUsage, CandidateEvidence, CandidateSet, CandidateStatus, CheckResult, CheckStatus,
     DomainError, PlanRevision, ProjectManifest, ReviewResult, ReviewVerdict, RunState,
+    TicketPurpose,
 };
 use rusqlite::{params, Connection, OptionalExtension, Transaction, TransactionBehavior};
 use serde::Serialize;
@@ -320,6 +321,33 @@ impl Store {
             "required candidate checks could not run meaningfully{}",
             named(CheckStatus::Blocked)
         );
+        // A testing-setup candidate exists to make tests run: besides every
+        // required check passing, at least one of them must have executed a
+        // test its recognised runner counted. A check that merely exits 0, or
+        // whose runner the executor does not recognise, is not evidence that a
+        // suite exists (ADR 0022); the executor already blocks empty and
+        // skip-only suites, which the rule above turns into `testing_blocked`.
+        let setup_without_tests = plan.purpose == TicketPurpose::TestingSetup
+            && !statuses.contains(&None)
+            && statuses
+                .iter()
+                .all(|status| *status == Some(CheckStatus::Passed))
+            && !required.iter().any(|recipe| {
+                evidence.results.iter().any(|r| {
+                    r.recipe_id == recipe.id
+                        && r.repository_id == recipe.repository_id
+                        && r.status == CheckStatus::Passed
+                        && r.tests_detected.is_some_and(|count| count > 0)
+                })
+            });
+        let setup_reason = format!(
+            "testing setup candidate executed no recognised test: every required check passed without a test runner summary counting at least one executed test ({}); the setup must make real tests run",
+            required
+                .iter()
+                .map(|recipe| format!("{}/{}", recipe.repository_id, recipe.id))
+                .collect::<Vec<_>>()
+                .join(", ")
+        );
         let (mut next, mut status, mut reason) = if statuses.contains(&None) {
             (
                 RunState::Failed,
@@ -349,6 +377,12 @@ impl Store {
                 RunState::Failed,
                 CandidateStatus::Failed,
                 Some(failed_reason.as_str()),
+            )
+        } else if setup_without_tests {
+            (
+                RunState::TestingBlocked,
+                CandidateStatus::TestingBlocked,
+                Some(setup_reason.as_str()),
             )
         } else {
             (RunState::Reviewing, CandidateStatus::Reviewing, None)
@@ -792,7 +826,12 @@ impl Store {
         if environment_fingerprint.is_empty() {
             return invalid("repair requires the current host fingerprint");
         }
+        // A testing-setup candidate is repaired under the same admission that
+        // scheduled it: there is no baseline yet by definition (ADR 0022).
         for repository_id in plan.base_commits.keys() {
+            if plan.purpose == TicketPurpose::TestingSetup {
+                break;
+            }
             let evidence = crate::baselines::latest_baseline(&tx, &plan.project_id, repository_id)?
                 .ok_or_else(|| {
                     StorageError::Domain(DomainError::BaselineRequired(
