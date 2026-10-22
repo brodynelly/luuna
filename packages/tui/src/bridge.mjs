@@ -74,8 +74,24 @@ export function createBridge({ send, env = process.env, fetcher = globalThis.fet
     healthController?.abort();
     for (const task of active.values()) task.controller.abort();
   }
+  async function fetchResponse(url, init) {
+    const response = await fetcher(url, init);
+    if (response.ok) {
+      const decode = response.json.bind(response);
+      response.json = async () => {
+        try { return await decode(); }
+        catch (failure) {
+          if (failure.name === "AbortError") throw failure;
+          // JSON parser messages can contain raw response bytes. A successful HTTP
+          // status does not establish whether the command's complete result is usable.
+          throw protocolError("invalid_response", "The runtime returned an unreadable response. Inspect authoritative state before repeating an action.");
+        }
+      };
+    }
+    return response;
+  }
   async function getClient() {
-    if (!client) client = await connect(env, { fetcher });
+    if (!client) client = await connect(env, { fetcher: fetchResponse });
     return client;
   }
   async function health() {
@@ -96,12 +112,25 @@ export function createBridge({ send, env = process.env, fetcher = globalThis.fet
   healthTimer.unref?.();
 
   function output(task, kind, text) {
-    const clean = plain(text);
+    // Redact before splitting: per-frame redaction cannot recognize a credential
+    // divided across chunks that the terminal subsequently joins for display.
+    const clean = redact(plain(text));
     if (task.command.name === "approve" && Buffer.byteLength(clean) > LIMITS.display) throw protocolError("plan_too_large", "The complete plan cannot fit in the review window. Approval is disabled.");
-    // Small chunks also bound JSON escaping expansion to less than 64 KiB.
+    // Count the complete serialized envelope, including UTF-8 and JSON escaping.
+    // Filling frames prevents an otherwise displayable plan from exhausting the
+    // synchronous producer's queue before the draining microtask can run.
     for (let offset = 0; offset < clean.length;) {
-      let end = Math.min(offset + 8000, clean.length);
-      if (end < clean.length && /[\uD800-\uDBFF]/.test(clean[end - 1])) end--;
+      let low = offset + 1;
+      let high = Math.min(offset + LIMITS.text, clean.length);
+      let end = offset;
+      while (low <= high) {
+        const midpoint = Math.floor((low + high) / 2);
+        let candidate = midpoint;
+        if (candidate < clean.length && /[\uD800-\uDBFF]/.test(clean[candidate - 1]) && /[\uDC00-\uDFFF]/.test(clean[candidate])) candidate--;
+        const bytes = Buffer.byteLength(JSON.stringify(frame(task.id, "output", { kind, text: clean.slice(offset, candidate) })));
+        if (bytes < LIMITS.text) { end = candidate; low = midpoint + 1; }
+        else high = midpoint - 1;
+      }
       emit(task.id, "output", { kind, text: clean.slice(offset, end) });
       offset = end;
     }
@@ -194,7 +223,7 @@ export function createBridge({ send, env = process.env, fetcher = globalThis.fet
         describe: describeFailure,
         emit: (record) => emit(id, "event", { record }),
       };
-      const api = await connect(env, { fetcher: (url, init = {}) => { if ((init.method ?? "GET") !== "GET") task.mutationSent = true; return fetcher(url, init); } });
+      const api = await connect(env, { fetcher: (url, init = {}) => { if ((init.method ?? "GET") !== "GET") task.mutationSent = true; return fetchResponse(url, init); } });
       if (task.controller.signal.aborted) throw abortError();
       code = await runCommand(adapted, { args, flags }, api, io);
       if (task.controller.signal.aborted) throw abortError();
@@ -205,7 +234,7 @@ export function createBridge({ send, env = process.env, fetcher = globalThis.fet
       emit(id, "result", { value: value ?? null, formatted, code: 0 }, true);
     } catch (failure) {
       if (failure.code === "output_backpressure") task?.controller.abort();
-      const outcome = task?.completed ? "completed" : task?.mutationSent && (failure instanceof TypeError || failure.name === "AbortError" || failure.code === "output_backpressure") ? "unknown" : task?.controller.signal.aborted ? "aborted" : task?.executed ? "refused" : "not_executed";
+      const outcome = task?.completed ? "completed" : task?.mutationSent && (failure instanceof TypeError || failure.name === "AbortError" || ["output_backpressure", "invalid_response"].includes(failure.code)) ? "unknown" : task?.controller.signal.aborted ? "aborted" : task?.executed ? "refused" : "not_executed";
       try { error(id, { code: typeof failure.code === "string" ? failure.code : failure.name === "AbortError" ? "aborted" : code === 2 ? "usage" : "command_failed", message: failure.bridgeMessage || describeFailure(failure) }, outcome, failure.name === "AbortError" ? 1 : code === 2 ? 2 : 1); }
       catch { close(); }
     } finally {

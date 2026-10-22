@@ -128,6 +128,85 @@ test("oversized plans disable approval before a hash prompt", async (t) => {
   assert.ok(!frames.some((frame) => frame.event === "prompt"));
 });
 
+const reviewText = (plan) => `Plan ${plan.id} revision ${plan.revision}\nImmutable plan hash: ${plan.hash}\n${JSON.stringify(plan, null, 2)}`;
+
+test("complete near-256 KiB plans reach approval with immediately draining output", async (t) => {
+  for (const pattern of ["x", '"\\\n', "\u{1f319}"]) {
+    const empty = { ...PLAN, description: "" };
+    const overhead = Buffer.byteLength(reviewText(empty));
+    const unit = Buffer.byteLength(JSON.stringify(pattern).slice(1, -1));
+    const plan = { ...empty, description: pattern.repeat(Math.floor((LIMITS.display - overhead) / unit)) };
+    const expected = reviewText(plan);
+    assert.ok(Buffer.byteLength(expected) <= LIMITS.display);
+    assert.ok(Buffer.byteLength(expected) > LIMITS.display - 16);
+    let approvals = 0;
+    const { run, bridge } = harness(t, { fetcher: async (_url, init) => {
+      if (init.method === "POST") {
+        approvals++;
+        return json({ approval: { plan_id: PLAN.id, plan_revision: 1, plan_hash: HASH, approved_by: "developer" }, run: RUN });
+      }
+      return json(plan);
+    } });
+    const frames = await run({ name: "approve", args: [PLAN.id] });
+    assert.equal(frames.at(-1).event, "result", JSON.stringify(frames.at(-1)));
+    const output = frames.filter((frame) => frame.event === "output");
+    assert.equal(output.map((frame) => frame.text).join(""), expected);
+    assert.ok(output.every((frame) => Buffer.byteLength(JSON.stringify(frame)) < LIMITS.text && frame.text.isWellFormed()));
+    assert.ok(frames.find((frame) => frame.event === "prompt" && frame.kind === "hash"));
+    assert.equal(approvals, 1);
+    bridge.close();
+  }
+});
+
+test("credentials crossing old and serialized output chunk boundaries cannot reassemble", async (t) => {
+  const token = "test-secret";
+  let plan = { ...PLAN, description: "x".repeat(2 * LIMITS.text) };
+  const { run, bridge } = harness(t, { env: { LUUNA_API_TOKEN: token }, answer: () => "", fetcher: async () => json(plan) });
+  const baseline = await run({ id: "baseline", name: "approve", args: [PLAN.id] });
+  const output = baseline.filter((frame) => frame.event === "output");
+  const boundaries = [8000];
+  let position = 0;
+  for (const frame of output.slice(0, -1)) { position += frame.text.length; boundaries.push(position); }
+  const prefix = reviewText(plan).indexOf('"description": "') + '"description": "'.length;
+  for (const boundary of boundaries) {
+    for (let split = 1; split < token.length; split++) {
+      const before = boundary - prefix - split;
+      plan = { ...PLAN, description: "x".repeat(before) + token + "x".repeat(2 * LIMITS.text - before - token.length) };
+      const frames = await run({ id: `boundary-${boundary}-${split}`, name: "approve", args: [PLAN.id] });
+      const reconstructed = frames.filter((frame) => frame.event === "output").map((frame) => frame.text).join("");
+      assert.equal(reconstructed, reviewText(plan).replaceAll(token, "[redacted]"));
+      assert.ok(!reconstructed.includes(token));
+    }
+  }
+  bridge.close();
+});
+
+test("malformed successful responses hide body diagnostics and preserve uncertain mutations", async (t) => {
+  for (const name of ["cancel", "health"]) {
+    const requests = [];
+    const bodyMarker = "private-response-fragment";
+    const { run } = harness(t, { fetcher: async (_url, init) => {
+      requests.push(init.method ?? "GET");
+      return new Response(`{${bodyMarker}`, { headers: { "Content-Type": "application/json" } });
+    } });
+    const frames = await run({ name, args: name === "cancel" ? [RUN.id] : [] });
+    const failure = frames.at(-1);
+    assert.equal(failure.code, "invalid_response");
+    assert.equal(failure.outcome, name === "cancel" ? "unknown" : "refused");
+    assert.equal(failure.exit_code, 1);
+    assert.ok(!JSON.stringify(frames).includes(bodyMarker));
+    assert.match(failure.message, /unreadable response/);
+    assert.deepEqual(requests, [name === "cancel" ? "POST" : "GET"]);
+  }
+});
+
+test("authoritative mutation refusals keep their reason and refused outcome", async (t) => {
+  const { run } = harness(t, { fetcher: async () => new Response(JSON.stringify({ error: "revision conflict" }), { status: 409, headers: { "Content-Type": "application/json" } }) });
+  const frames = await run({ name: "cancel", args: [RUN.id] });
+  assert.equal(frames.at(-1).outcome, "refused");
+  assert.match(frames.at(-1).message, /revision conflict/);
+});
+
 test("document prompts and explicit stdin documents preserve exact prompt bodies", async (t) => {
   for (const explicit of [true, false]) {
     const text = "line one\nline two\t☾";
@@ -167,7 +246,7 @@ test("memory correction and scope retention preserve exact hash and null semanti
 });
 
 test("plan output chunks preserve Unicode scalar boundaries and stay below 64 KiB", async (t) => {
-  const plan = { ...PLAN, description: "🌙".repeat(12000) };
+  const plan = { ...PLAN, description: "🌙".repeat(24000) };
   const { run } = harness(t, { answer: () => "", fetcher: async () => json(plan) });
   const frames = await run({ name: "approve", args: ["plan-1"] });
   const output = frames.filter((frame) => frame.event === "output");
