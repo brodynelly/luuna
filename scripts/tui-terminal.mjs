@@ -172,7 +172,7 @@ export function terminalSnapshotHtml(snapshot, title = "Luuna reconstructed term
     let column = 0;
     return `<div class="row">${[...line].map((char) => { const cells = width(char); const style = css(snapshot.colors[y]?.[column] ?? "0"); column += cells; return `<span style="${style}display:inline-block;width:${cells}ch">${escape(char)}</span>`; }).join("")}</div>`;
   }).join("");
-  return `<!doctype html><meta charset="utf-8"><title>${escape(title)}</title><style>body{margin:0;background:#181818;color:#eee}header{font:12px system-ui;padding:8px}main{font:16px/20px Consolas,"Courier New",monospace;width:${snapshot.columns}ch;background:#000}.row{height:20px;white-space:pre}</style><header>${escape(title)} · ${snapshot.columns}×${snapshot.rows} · reconstructed from real ConPTY cells</header><main>${rows}</main>`;
+  return `<!doctype html><meta charset="utf-8"><title>${escape(title)}</title><style>body{margin:0;background:#181818;color:#eee}header{font:12px system-ui;padding:8px}main{font:16px/20px Consolas,"Courier New",monospace;width:${snapshot.columns}ch;background:#000}.row{height:20px;white-space:pre}</style><header>${escape(title)} · ${snapshot.columns}×${snapshot.rows} · reconstructed from real terminal cells</header><main>${rows}</main>`;
 }
 
 export class ConptyTerminal {

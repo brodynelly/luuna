@@ -82,5 +82,13 @@ helpers and tone tables (`test/text.test.mjs`, `test/format.test.mjs`). The end-
 synthetic runtime). Pass `--runtime <binary> --components-root <checkout> --out <new-directory>`.
 The Windows harness uses real ConPTY input, resize, terminal cells and SGR colors;
 HTML captures reconstruct those cells and are not operating-system screenshots.
+Native Unix runs use an isolated tmux server (`--tmux <executable>`); a Windows
+ConPTY result does not verify that Unix adapter. CI runs each native host separately.
 Reports distinguish passed, failed and not-run requirements. No provider is called.
 `npm run test:tui-terminal` verifies the driver, screen parser and console restoration.
+
+The npm wrapper's console-mode changes are measured with a separate no-op script
+before comparing npm launches. Direct launches must restore their exact initial
+input/output modes; both routes must restore the main screen and cursor and reap
+their native process and bridge. Launcher shutdown signals request native cleanup
+through a private empty marker, with bounded termination only as a last resort.

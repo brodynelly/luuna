@@ -39,6 +39,48 @@ jobs:
       - run: node scripts/check-hygiene.mjs
       - run: npm run typecheck
       - run: npm run build
+  terminal-native:
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: windows-latest
+            runtime: target/debug/luuna-runtime.exe
+          - os: ubuntu-latest
+            runtime: target/debug/luuna-runtime
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          submodules: true
+          persist-credentials: false
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24.19.0
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: 1.4.3
+      - uses: dtolnay/rust-toolchain@1.90.0
+      - uses: Swatinem/rust-cache@v2
+      - if: runner.os == 'Linux'
+        run: sudo apt-get update && sudo apt-get install -y tmux
+      - run: npm ci --ignore-scripts
+      - run: npm run components:setup
+      - run: npm run build --workspace @luuna/api-client
+      - run: cargo build --locked -p luuna-runtime -p luuna-tui
+      - run: npm run test:tui-terminal
+      - run: node scripts/tui-interactive-audit.mjs --runtime "${{ matrix.runtime }}" --components-root . --out "${{ runner.temp }}/luuna-native-audit"
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: terminal-native-${{ runner.os }}
+          path: |
+            ${{ runner.temp }}/luuna-native-audit/report.json
+            ${{ runner.temp }}/luuna-native-audit/report.md
+            ${{ runner.temp }}/luuna-native-audit/captures/
   components:
     strategy:
       fail-fast: false

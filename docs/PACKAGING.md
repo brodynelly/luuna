@@ -34,6 +34,7 @@ The bundle's `luuna/` folder beside `luuna-desktop.exe` contains:
 | Path | Origin | Purpose |
 | --- | --- | --- |
 | `luuna-runtime.exe` | `cargo build --locked --release -p luuna-runtime` | the service |
+| `luuna-tui.exe` | `cargo build --locked --release -p luuna-tui` | the native terminal workbench |
 | `scripts\*.ps1`, `Configure Luuna.cmd`, `Stop Luuna.cmd` | repository | fixed bootstrap and helpers (ADR 0011) |
 | `pi\` | `npm ci --ignore-scripts --omit=dev` in `tools/pi` | the pinned Pi engine |
 | `components\manifest.json` | byte copy of the repository manifest | the pins (ADR 0012) |
