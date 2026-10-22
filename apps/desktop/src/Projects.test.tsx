@@ -1,7 +1,7 @@
 import { expect, test } from "vitest";
 import { renderToStaticMarkup } from "react-dom/server";
 import type { BaselineEvidence, CheckResult, ProjectView } from "@luuna/api-client";
-import { BaselineList, baselineArtifacts, baselineRunFailure, currentProposal } from "./Projects";
+import { BaselineList, RepositoryBaselines, baselineArtifacts, baselineRunFailure, currentProposal, latestBaselines, registrationRequest } from "./Projects";
 
 const result = (recipe_id: string, status: CheckResult["status"], artifact_refs: string[]): CheckResult => ({ schema_version: "0.1", id: `${recipe_id}-result`, run_id: "baseline-run", repository_id: "app", recipe_id, candidate_hash: "", commit: "c".repeat(40), environment_fingerprint: "sha256:e", command: ["python", "-m", "unittest"], status, exit_code: status === "passed" ? 0 : 1, artifact_refs });
 const baseline = (status: BaselineEvidence["status"], results: CheckResult[], reason?: string): BaselineEvidence => ({ id: `b-${status}`, run_id: "baseline-run", project_id: "p", manifest_revision: 1, identity: { manifest_hash: "sha256:m", repository_id: "app", commit: "c".repeat(40), tree: "t".repeat(40) }, environment_fingerprint: "sha256:e", status, required_checks: results.map((item) => item.recipe_id), results, started_at: "", ...(reason && { reason }) });
@@ -35,4 +35,33 @@ test("a baseline run that settles before any record shows the reason its termina
   expect(identity).toContain("Rebind repository");
   expect(baselineRunFailure("interrupted", "interrupted by runtime shutdown")).toContain("Run the baseline again");
   expect(baselineRunFailure("failed", "")).toContain("before a baseline was recorded");
+});
+
+test("registration sends every repository row the developer added, through the builder the TUI shares", () => {
+  expect(registrationRequest("Walkthrough", "walkthrough", [{ id: "app", path: "/srv/app" }, { id: "web", path: "/srv/web" }])).toEqual({ name: "Walkthrough", id: "walkthrough", repositories: [{ id: "app", path: "/srv/app" }, { id: "web", path: "/srv/web" }] });
+  expect(registrationRequest("One", "", [{ id: "app", path: "/srv/app" }])).toEqual({ name: "One", repositories: [{ id: "app", path: "/srv/app" }] });
+  expect(() => registrationRequest("One", "", [{ id: "app", path: "/srv/app" }, { id: "app", path: "/srv/other" }])).toThrow("unique");
+  expect(() => registrationRequest("One", "", [{ id: "app", path: "" }])).toThrow("absolute root path");
+});
+
+test("every registered repository gets its own baseline control and shows its own latest status", () => {
+  const app = { ...baseline("passed", [result("unit", "passed", ["unit.stdout"])]), id: "b-app-1", run_id: "run-app-1", identity: { manifest_hash: "sha256:m", repository_id: "app", commit: "a".repeat(40), tree: "t".repeat(40) } };
+  const appLater = { ...app, id: "b-app-2", run_id: "run-app-2", status: "failed" as const, reason: "required check unit failed" };
+  const web = { ...app, id: "b-web", run_id: "run-web", identity: { ...app.identity, repository_id: "web", commit: "b".repeat(40) } };
+  const latest = latestBaselines([app, web, appLater], ["app", "web", "shared"]);
+  expect(latest.app?.id).toBe("b-app-2");
+  expect(latest.web?.id).toBe("b-web");
+  expect(latest.shared).toBeUndefined();
+  const started: string[] = [];
+  const html = renderToStaticMarkup(<RepositoryBaselines repositoryIds={["app", "web", "shared"]} baselines={[app, web, appLater]} running={{ web: "run-web-live" }} busy={false} manifestConfirmed onRun={(id) => started.push(id)} onCancel={() => {}} />);
+  expect(html.match(/data-capability="baselines.start"/g)).toHaveLength(3);
+  for (const label of ["Run baseline for app", "Run baseline for web", "Run baseline for shared"]) expect(html).toContain(label);
+  expect(html).toContain("Cancel baseline for web");
+  expect(html).not.toContain("Cancel baseline for app");
+  expect(html).toMatch(/<code>app<\/code><span class="state" data-tone="danger">failed<\/span>/);
+  expect(html).toMatch(/<code>web<\/code><span class="state" data-tone="success">passed<\/span>/);
+  expect(html).toMatch(/<code>shared<\/code><span class="state" data-tone="attention">no baseline<\/span>/);
+  // A running baseline disables only its own repository's control.
+  expect(html).toMatch(/<button type="button" disabled="" data-capability="baselines.start">Run baseline for web/);
+  expect(html).toMatch(/<button type="button" data-capability="baselines.start">Run baseline for app/);
 });

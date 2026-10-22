@@ -1,9 +1,10 @@
 import { expect, test, vi } from "vitest";
 import { renderToStaticMarkup } from "react-dom/server";
-import { ByteCount, boundedMap, PlanReview, TEXT_LIMITS, TicketCard, Workflows, parseBudgets, planRetryIdentity, readWorkflowReplay, readWorkflows, ticketTextSizes } from "./Workflows";
+import { ByteCount, boundedMap, PlanReview, TEXT_LIMITS, TaskGraph, TicketCard, TicketEditor, Workflows, parseBudgets, planRequestFromRows, planRetryIdentity, readWorkflowReplay, readWorkflows, taskResumable, ticketEditRequest, ticketTextSizes } from "./Workflows";
 import type { RunSnapshot, TicketActions } from "./Workflows";
 import { planBudgetProblem } from "@luuna/api-client";
-import type { CandidateView, EventEnvelope, LuunaClient, PlanRevision, RunRecord, RunState, Ticket } from "@luuna/api-client";
+import type { CandidateView, EventEnvelope, LuunaClient, PlanRevision, RunRecord, RunState, TaskRecord, TaskState, Ticket } from "@luuna/api-client";
+import { planRequestForTasks } from "@luuna/api-client";
 import { advanceWorkflowReplay, canCancel, planBlocker, planSupersedes, settleAction, workflowReason } from "./workflow-state";
 
 test("approval presents every immutable field and full hash before acknowledgment", () => {
@@ -31,7 +32,7 @@ test("workflow reasons come from the latest durable reason event", () => {
 const ticket: Ticket = { schema_version: "0.1", id: "ticket-1", project_id: "p", revision: 1, source: "luuna_sqlite_temporary", title: "Implement the greeting", intent: "Print it", acceptance_criteria: ["prints"], repository_ids: ["app"], created_at: "", updated_at: "" };
 const planOf = (revision: number) => ({ id: "plan-1", revision, hash: `sha256:${String(revision).repeat(64)}`, base_commits: { app: "c".repeat(40) }, tasks: [{ paths: ["src"] }], budgets: { max_workers: 1, max_attempts: 2, timeout_seconds: 600, cost_usd_micros: 1_000_000 } }) as unknown as PlanRevision;
 const runOf = (id: string, state: RunState, revision = 1, planRevision = 1): RunRecord => ({ id, project_id: "p", state, revision, metadata: { kind: "workflow", plan_id: "plan-1", plan_revision: planRevision }, created_at: "", updated_at: `t${revision}` });
-const noActions: TicketActions = { reconcile() {}, plan() {}, approve() {}, implement() {}, cancel() {}, validate() {}, repair() {}, diff() {}, attempts() {}, tasks() {}, artifact() {}, publish() {}, publication() {}, reconcilePublication() {} };
+const noActions: TicketActions = { reconcile() {}, update() {}, plan() {}, approve() {}, implement() {}, cancel() {}, validate() {}, repair() {}, diff() {}, attempts() {}, tasks() {}, artifact() {}, publish() {}, publication() {}, reconcilePublication() {} };
 
 test("workflow replay reduces each page before fetching the next and stops on an invalid page", async () => {
   let reduced = 0;
@@ -234,4 +235,84 @@ test("the approver sees cumulative usage including unpriced provider work", () =
   expect(html).toContain("$0.2500 recorded or reserved");
   expect(html).toContain("Some provider usage has no reported price");
   expect(html.indexOf("Cumulative ticket usage")).toBeLessThan(html.indexOf("Approve r2"));
+});
+
+// ---- Behaviour-level parity (R02, A33): the desktop sends what the TUI sends for the same input. ----
+
+test("the plan form sends one task in its pre-M4 shape and a task graph with dependencies and workers through the shared builder", () => {
+  const budgets = parseBudgets("2", "600", "1.00");
+  // One row: exactly the single-task body the panel sent before M4 (no id, no tasks, no max_workers).
+  expect(planRequestFromRows([{ repository_id: "app", paths: "src, lib", write: true, depends_on: [] }], { ...budgets, max_workers: 1 })).toEqual({ task: { repository_id: "app", paths: ["src", "lib"], operations: ["read", "write"] }, budgets: { max_attempts: 2, timeout_seconds: 600, cost_usd_micros: 1_000_000 } });
+  expect(planRequestFromRows([{ repository_id: "app", paths: "src", write: false, depends_on: [] }], budgets, { memory_ids: [], prompt: null })).not.toHaveProperty("component_context");
+  expect(planRequestFromRows([{ repository_id: "app", paths: "src", write: false, depends_on: [] }], budgets, { memory_ids: ["mem-1"], prompt: null })).toMatchObject({ task: { operations: ["read"] }, component_context: { memory_ids: ["mem-1"] } });
+  // Three rows: the body the TUI sends for `--task shared=lib --task api=src>shared --task consumer=src,tests>shared,api --workers 2 --attempts 3`.
+  const graph = planRequestFromRows([
+    { repository_id: "shared", paths: "lib", write: true, depends_on: [] },
+    { repository_id: "api", paths: "src", write: true, depends_on: ["shared"] },
+    { repository_id: "consumer", paths: "src,tests", write: true, depends_on: ["shared", "api"] },
+  ], { max_attempts: 3, max_workers: 2 });
+  expect(graph).toEqual({
+    tasks: [
+      { id: "shared", repository_id: "shared", paths: ["lib"], operations: ["read", "write"] },
+      { id: "api", repository_id: "api", paths: ["src"], operations: ["read", "write"], depends_on: ["shared"] },
+      { id: "consumer", repository_id: "consumer", paths: ["src", "tests"], operations: ["read", "write"], depends_on: ["shared", "api"] },
+    ],
+    budgets: { max_attempts: 3, max_workers: 2 },
+  });
+  expect(graph).toEqual(planRequestForTasks([
+    { id: "shared", repository_id: "shared", paths: ["lib"], operations: ["read", "write"], depends_on: [] },
+    { id: "api", repository_id: "api", paths: ["src"], operations: ["read", "write"], depends_on: ["shared"] },
+    { id: "consumer", repository_id: "consumer", paths: ["src", "tests"], operations: ["read", "write"], depends_on: ["shared", "api"] },
+  ], { max_attempts: 3, max_workers: 2 }));
+  // What no runtime would accept is refused before any request.
+  expect(() => planRequestFromRows([{ repository_id: "a", paths: "src", write: true, depends_on: [] }, { repository_id: "a", paths: "src", write: true, depends_on: [] }], budgets)).toThrow("distinct repository");
+  expect(() => planRequestFromRows([{ repository_id: "a", paths: "src", write: true, depends_on: [] }, { repository_id: "b", paths: "src", write: true, depends_on: [] }], { ...budgets, max_workers: 3 })).toThrow("between 1 and 2");
+});
+
+test("the task-graph editor and the ticket scope appear only for a multi-repository project; the single-task form stays the default", () => {
+  const single = renderToStaticMarkup(<Workflows client={null} projectId="p" repositoryId="app" manifestConfirmed onChanged={() => {}} />);
+  expect(single).toContain("Writer paths (comma separated)");
+  expect(single).not.toContain("Plan a task graph across repositories");
+  expect(single).not.toContain("Repositories the ticket may touch");
+  const multi = renderToStaticMarkup(<Workflows client={null} projectId="p" repositoryId="app" repositoryIds={["app", "web"]} manifestConfirmed onChanged={() => {}} />);
+  expect(multi).toContain("Writer paths (comma separated)");
+  expect(multi).toContain("Plan a task graph across repositories");
+  expect(multi).toContain('aria-label="Repositories the ticket may touch"');
+  expect(multi).toMatch(/<input type="checkbox" checked=""\/> app/);
+  expect(multi).toMatch(/<input type="checkbox"\/> web/);
+});
+
+test("a task of a settled graph resumes by task_id only in the resumable states, with the implement capability", () => {
+  const task = (task_id: string, state: TaskState, depends_on: string[] = []): TaskRecord => ({ run_id: "run-1", task_id, repository_id: task_id, state, depends_on, updated_at: "" });
+  for (const state of ["failed", "blocked", "interrupted"] as TaskState[]) {
+    expect(taskResumable(runOf("run-1", "failed"), task("t", state))).toBe(true);
+    expect(taskResumable(runOf("run-1", "interrupted"), task("t", state))).toBe(true);
+    for (const runState of ["implementing", "approved", "validating", "cancelled", "reviewed", "completed"] as RunState[]) expect(taskResumable(runOf("run-1", runState), task("t", state)), `${runState}/${state}`).toBe(false);
+  }
+  for (const state of ["queued", "running", "completed", "cancelled"] as TaskState[]) expect(taskResumable(runOf("run-1", "failed"), task("t", state))).toBe(false);
+  const resumed: string[] = [];
+  const html = renderToStaticMarkup(<TaskGraph run={runOf("run-1", "failed")} tasks={[task("shared", "completed"), task("api", "failed", ["shared"]), task("consumer", "blocked", ["shared", "api"])]} busy={false} onResume={(id) => resumed.push(id)} />);
+  expect(html).toContain("Resume task api");
+  expect(html).toContain("Resume task consumer");
+  expect(html).not.toContain("Resume task shared");
+  expect(html.match(/data-capability="runs.implement"/g)).toHaveLength(2);
+  const settled = renderToStaticMarkup(<TaskGraph run={runOf("run-1", "validating")} tasks={[task("shared", "completed"), task("api", "completed")]} busy={false} onResume={() => {}} />);
+  expect(settled).not.toContain("Resume task");
+  expect(settled).not.toContain('data-capability="runs.implement"');
+});
+
+test("a ticket edit sends only the changed fields at the displayed revision, and the editor names the plans it stales", () => {
+  expect(ticketEditRequest(ticket, { title: ticket.title, intent: ticket.intent, criteria: "prints", repositoryIds: ["app"] })).toBeNull();
+  expect(ticketEditRequest(ticket, { title: " Edited ", intent: ticket.intent, criteria: "prints", repositoryIds: ["app"] })).toEqual({ expected_revision: 1, title: "Edited" });
+  expect(ticketEditRequest({ ...ticket, revision: 3 }, { title: ticket.title, intent: "Print it twice", criteria: "prints\n\n twice ", repositoryIds: ["app", "web"] })).toEqual({ expected_revision: 3, intent: "Print it twice", acceptance_criteria: ["prints", "twice"], repository_ids: ["app", "web"] });
+  expect(ticketEditRequest(ticket, { title: "", intent: "", criteria: "", repositoryIds: [] })).toBeNull();
+  const html = renderToStaticMarkup(<TicketEditor ticket={ticket} repositoryIds={["app", "web"]} busy={false} latestRevision={2} onSave={() => { throw new Error("no unchanged save"); }} />);
+  expect(html).toContain("Edit ticket r1");
+  expect(html).toContain('data-capability="tickets.update"');
+  expect(html).toMatch(/<button class="primary" disabled=""[^>]*>Save ticket r2<\/button>/);
+  expect(html).toContain("plan r2 was made for r1 and must be re-planned");
+  expect(html).toMatch(/<input type="checkbox" checked=""\/> app/);
+  expect(html).toMatch(/<input type="checkbox"\/> web/);
+  const card = renderToStaticMarkup(<TicketCard ticket={ticket} revisions={[]} snapshots={new Map()} diffs={{}} logs={{}} busy={false} connected actions={noActions} />);
+  expect(card).toContain('data-capability="tickets.update"');
 });

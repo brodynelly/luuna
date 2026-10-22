@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState } from "react";
 import type { FormEvent } from "react";
 import type { BaselineEvidence, CheckResult, ComponentContext, ComponentStatus, Discovery, EventEnvelope, LuunaClient, ProjectExport, ProjectRecord, ProjectView, ScaffoldProfile, ScaffoldProposal, ScaffoldResult } from "@luuna/api-client";
-import { ApiError, isTerminal, mergeEvents, readEventPages } from "@luuna/api-client";
+import { ApiError, isTerminal, mergeEvents, readEventPages, registerProjectRequest } from "@luuna/api-client";
 import { Workflows } from "./Workflows";
 import { ProjectComponents } from "./ProjectComponents";
 import { StatusBadge } from "./design/StatusBadge";
@@ -30,6 +30,42 @@ export function baselineArtifacts(result: CheckResult): string[] {
   const recorded = result.artifact_refs.filter((id) => ARTIFACT_ID.test(id) && !id.includes(".."));
   if (recorded.length > 0) return recorded;
   return ["stdout", "stderr"].map((stream) => `${result.recipe_id}.${stream}`).filter((id) => ARTIFACT_ID.test(id) && !id.includes(".."));
+}
+
+/** One row of the registration form; a project registers several repositories at once (R05). */
+export interface RepositoryRow { id: string; path: string }
+
+/** The registration the desktop sends: every row, through the builder the TUI shares (R02). */
+export function registrationRequest(name: string, projectId: string, rows: RepositoryRow[]) {
+  return registerProjectRequest(name, rows, projectId);
+}
+
+/** The latest recorded baseline of each registered repository, by record order (newest last). */
+export function latestBaselines(baselines: BaselineEvidence[], repositoryIds: string[]): Record<string, BaselineEvidence | undefined> {
+  return Object.fromEntries(repositoryIds.map((id) => [id, baselines.filter((baseline) => baseline.identity.repository_id === id).at(-1)]));
+}
+
+/**
+ * One baseline control per registered repository with that repository's latest status: a
+ * multi-repository feature needs every repository's passing baseline, and one baseline per
+ * repository runs at a time.
+ */
+export function RepositoryBaselines({ repositoryIds, baselines, running, busy, manifestConfirmed, onRun, onCancel }: {
+  repositoryIds: string[]; baselines: BaselineEvidence[]; running: Record<string, string | undefined>; busy: boolean; manifestConfirmed: boolean;
+  onRun: (repositoryId: string) => void; onCancel: (runId: string) => void;
+}) {
+  const latest = latestBaselines(baselines, repositoryIds);
+  return <ul className="repository-baselines record-list" aria-label="Baseline per repository">{repositoryIds.map((id) => {
+    const record = latest[id];
+    const active = running[id];
+    return <li key={id} className="record repository-baseline">
+      <code>{id}</code>
+      {record ? <StatusBadge tone={baselineTone[record.status]}>{record.status}</StatusBadge> : <StatusBadge tone="attention">no baseline</StatusBadge>}
+      {record && <span className="meta">manifest r{record.manifest_revision} · commit <code>{record.identity.commit.slice(0, 12)}</code></span>}
+      <button type="button" disabled={busy || !manifestConfirmed || active !== undefined} data-capability="baselines.start" onClick={() => onRun(id)}>Run baseline for {id}</button>
+      {active && <button type="button" className="danger" disabled={busy} data-capability="runs.cancel" onClick={() => onCancel(active)}>Cancel baseline for {id}</button>}
+    </li>;
+  })}</ul>;
 }
 
 /** The message for a baseline run that settled before any baseline record existed. */
@@ -66,12 +102,13 @@ export function Projects({ client, connectionEpoch = 0 }: { client: LuunaClient 
   const [events, setEvents] = useState<EventEnvelope[]>([]);
   const [name, setName] = useState("");
   const [projectId, setProjectId] = useState("");
-  const [repositoryId, setRepositoryId] = useState("app");
-  const [path, setPath] = useState("");
+  const [rows, setRows] = useState<RepositoryRow[]>([{ id: "app", path: "" }]);
   const [draft, setDraft] = useState("");
   const [discovery, setDiscovery] = useState<Discovery | null>(null);
   const [baselines, setBaselines] = useState<BaselineEvidence[]>([]);
-  const [pendingBaselineRun, setPendingBaselineRun] = useState<string | null>(null);
+  // Baseline runs accepted by the runtime and not yet settled, by repository.
+  const [pendingBaselineRuns, setPendingBaselineRuns] = useState<Record<string, string>>({});
+  const [rebindRepository, setRebindRepository] = useState("");
   const [pollTick, setPollTick] = useState(0);
   const [error, setError] = useState("");
   const [busy, setBusy] = useState(false);
@@ -142,9 +179,10 @@ export function Projects({ client, connectionEpoch = 0 }: { client: LuunaClient 
     setDiscovery(null);
     setDraft("");
     setBaselines([]);
-    setPendingBaselineRun(null);
+    setPendingBaselineRuns({});
     setBaselineLog(null);
     setRebindPath("");
+    setRebindRepository("");
     setRebindConfirmed(false);
     setComponentContext({ memory_ids: [] });
     setComponentStatus(null);
@@ -201,33 +239,36 @@ export function Projects({ client, connectionEpoch = 0 }: { client: LuunaClient 
 
   // A baseline advances on the runtime: poll its durable record from the moment the
   // run is accepted (its record appears after inspection and probing) until it settles.
-  const baselineInFlight = pendingBaselineRun !== null || baselines.some((baseline) => baseline.status === "running");
+  const pendingList = Object.values(pendingBaselineRuns);
+  const baselineInFlight = pendingList.length > 0 || baselines.some((baseline) => baseline.status === "running");
   useEffect(() => {
     if (!client || !selected || !baselineInFlight) return;
     const controller = new AbortController();
-    const pending = pendingBaselineRun;
+    const pending = pendingList;
     const timer = setTimeout(() => {
       // A run can settle before any baseline record exists (inspection or identity
-      // failure), so the run itself is polled too; otherwise the button never returns.
+      // failure), so each pending run itself is polled too; otherwise its button never returns.
       Promise.all([
         client.listBaselines(selected, controller.signal),
-        pending ? client.run(pending, controller.signal) : Promise.resolve(null),
-      ]).then(async ([recorded, run]) => {
+        Promise.all(pending.map((runId) => client.run(runId, controller.signal))),
+      ]).then(async ([recorded, runs]) => {
         if (controller.signal.aborted) return;
-        if (!pending) { setBaselines(recorded); return; }
-        const recordSettled = recorded.some((baseline) => baseline.run_id === pending && baseline.status !== "running");
-        const runSettled = run !== null && isTerminal(run.state);
-        if (recordSettled || runSettled) {
-          if (!recordSettled && run !== null) {
-            // Without a record, the run's terminal event carries the reason.
-            const reason = workflowReason(await client.events(pending, 0, controller.signal));
-            if (controller.signal.aborted) return;
-            setError(baselineRunFailure(run.state, reason));
+        const settled: string[] = [];
+        for (const run of runs) {
+          const recordSettled = recorded.some((baseline) => baseline.run_id === run.id && baseline.status !== "running");
+          if (recordSettled || isTerminal(run.state)) {
+            if (!recordSettled) {
+              // Without a record, the run's terminal event carries the reason.
+              const reason = workflowReason(await client.events(run.id, 0, controller.signal));
+              if (controller.signal.aborted) return;
+              setError(baselineRunFailure(run.state, reason));
+            }
+            settled.push(run.id);
           }
-          setPendingBaselineRun(null);
         }
+        if (settled.length) setPendingBaselineRuns((current) => Object.fromEntries(Object.entries(current).filter(([, runId]) => !settled.includes(runId))));
         // Updating an effect dependency aborts this request. Do it only after
-        // the terminal reason has been read, otherwise polling livelocks.
+        // the terminal reasons have been read, otherwise polling livelocks.
         setBaselines(recorded);
       }).catch(() => {
         // A poll that fails (the runtime restarting, for example) is retried;
@@ -236,17 +277,18 @@ export function Projects({ client, connectionEpoch = 0 }: { client: LuunaClient 
       });
     }, 1500);
     return () => { controller.abort(); clearTimeout(timer); };
-  }, [client, selected, baselines, baselineInFlight, pendingBaselineRun, pollTick]);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [client, selected, baselines, baselineInFlight, pendingBaselineRuns, pollTick]);
 
-  function runBaseline() {
+  /** Baselines are per repository: each registered repository runs its own confirmed recipes. */
+  function runBaseline(repositoryId: string) {
     if (!selected || !view) return;
-    const repository = view.repositories[0];
-    if (!repository) return;
+    if (!view.repositories.some((repository) => repository.repository_id === repositoryId)) return;
     void guarded("Baseline", async (signal) => {
       if (!client) return;
-      const run = await client.startBaseline(selected, { repository_id: repository.repository_id }, signal);
+      const run = await client.startBaseline(selected, { repository_id: repositoryId }, signal);
       if (signal.aborted) return;
-      setPendingBaselineRun(run.id);
+      setPendingBaselineRuns((current) => ({ ...current, [repositoryId]: run.id }));
       await refresh(selected, signal);
     });
   }
@@ -271,7 +313,7 @@ export function Projects({ client, connectionEpoch = 0 }: { client: LuunaClient 
   function rebind(event: FormEvent) {
     event.preventDefault();
     if (!selected || !registration || !rebindConfirmed) return;
-    const repository = registration.repository_id;
+    const repository = rebindRepository || registration.repository_id;
     void guarded("Rebind", async (signal) => {
       if (!client) return;
       await client.rebindRepository(selected, repository, rebindPath.trim() ? { local_path: rebindPath.trim() } : {}, signal);
@@ -286,15 +328,12 @@ export function Projects({ client, connectionEpoch = 0 }: { client: LuunaClient 
     event.preventDefault();
     void guarded("Registration", async (signal) => {
       if (!client) return;
-      const created = await client.registerProject({
-        name: name.trim(),
-        ...(projectId.trim() && { id: projectId.trim() }),
-        repositories: [{ id: repositoryId.trim(), path: path.trim() }],
-      }, signal);
+      // Every row is sent; the shared builder refuses an incomplete or repeated row before any request.
+      const created = await client.registerProject(registrationRequest(name, projectId, rows), signal);
       if (signal.aborted) return;
       setName("");
       setProjectId("");
-      setPath("");
+      setRows([{ id: "app", path: "" }]);
       await refresh(created.project.id, signal);
     });
   }
@@ -376,7 +415,11 @@ export function Projects({ client, connectionEpoch = 0 }: { client: LuunaClient 
 
   const registration = view?.repositories[0];
   const observation = registration?.observation;
-  const runningBaseline = pendingBaselineRun ?? baselines.find((baseline) => baseline.status === "running")?.run_id ?? null;
+  const repositoryIds = view?.repositories.map((repository) => repository.repository_id) ?? [];
+  // The baseline run in flight per repository: accepted and pending, or recorded as running.
+  const runningBaselines: Record<string, string | undefined> = Object.fromEntries(repositoryIds.map((id) => [id, pendingBaselineRuns[id] ?? baselines.find((baseline) => baseline.identity.repository_id === id && baseline.status === "running")?.run_id]));
+  const rebindTarget = view?.repositories.find((repository) => repository.repository_id === rebindRepository) ?? registration;
+  const rowsComplete = rows.length > 0 && rows.every((row) => row.id.trim() && row.path.trim());
   const shownLog = baselineLog && baselines.some((baseline) => baseline.run_id === baselineLog.runId) ? baselineLog : null;
 
   function selectProject(id: string) {
@@ -398,9 +441,13 @@ export function Projects({ client, connectionEpoch = 0 }: { client: LuunaClient 
           <fieldset disabled={!client || busy}>
             <label>Project name<input value={name} onChange={(event) => setName(event.target.value)} required placeholder="My product" /></label>
             <label>Project ID<input value={projectId} onChange={(event) => setProjectId(event.target.value)} placeholder="derived from the name" spellCheck={false} pattern="[a-z][a-z0-9\-]{0,63}" /></label>
-            <label>Repository ID<input value={repositoryId} onChange={(event) => setRepositoryId(event.target.value)} required spellCheck={false} pattern="[a-z][a-z0-9\-]{0,63}" /></label>
-            <label>Repository root path<input value={path} onChange={(event) => setPath(event.target.value)} required spellCheck={false} placeholder="/absolute/path/to/checkout" /></label>
-            <div className="form-footer"><small>Paths stay in the local machine registry; the manifest never contains them.</small><button className="primary" disabled={!name.trim() || !path.trim()} data-capability="projects.register">Register repository</button></div>
+            <ul className="repository-rows record-list" aria-label="Repositories to register">{rows.map((row, index) => <li key={index} className="record repository-row field-row">
+              <label>Repository ID<input value={row.id} onChange={(event) => setRows((current) => current.map((item, i) => i === index ? { ...item, id: event.target.value } : item))} required spellCheck={false} pattern="[a-z][a-z0-9\-]{0,63}" /></label>
+              <label>Repository root path<input value={row.path} onChange={(event) => setRows((current) => current.map((item, i) => i === index ? { ...item, path: event.target.value } : item))} required spellCheck={false} placeholder="/absolute/path/to/checkout" /></label>
+              {rows.length > 1 && <button type="button" className="text-button" onClick={() => setRows((current) => current.filter((_, i) => i !== index))}>Remove repository {row.id || index + 1}</button>}
+            </li>)}</ul>
+            <button type="button" className="text-button" onClick={() => setRows((current) => [...current, { id: "", path: "" }])}>Add another repository</button>
+            <div className="form-footer"><small>A project registers every related repository at once; paths stay in the local machine registry, and the manifest never contains them.</small><button className="primary" disabled={!name.trim() || !rowsComplete} data-capability="projects.register">Register {rows.length > 1 ? `${rows.length} repositories` : "repository"}</button></div>
           </fieldset>
         </form>
         <details className="scaffold section"><summary>Create a new project from a stack profile</summary>
@@ -439,7 +486,7 @@ export function Projects({ client, connectionEpoch = 0 }: { client: LuunaClient 
       <div className="project-detail">
         {view && registration && observation ? <>
           <dl className="facts project-facts">
-            <div><dt>Repository</dt><dd><code>{registration.repository_id}</code> · {registration.local_path}</dd></div>
+            <div><dt>{view.repositories.length > 1 ? "Repositories" : "Repository"}</dt><dd>{view.repositories.map((repository, index) => <span key={repository.repository_id}>{index > 0 && " · "}<code>{repository.repository_id}</code> {repository.local_path}</span>)}</dd></div>
             <div><dt>Remote identity</dt><dd>{observation.identity.remote ?? "no portable origin"}{observation.identity.push_remote && ` · push ${observation.identity.push_remote}`}{observation.identity.shallow && " · shallow clone"}</dd></div>
             <div><dt>HEAD at registration</dt><dd><code>{observation.head_commit.slice(0, 12)}</code> on {observation.branch ?? "detached HEAD"}</dd></div>
             <div><dt>Dirty state</dt><dd>{observation.dirty.staged} staged · {observation.dirty.unstaged} unstaged · {observation.dirty.untracked} untracked · {observation.dirty.conflicted} conflicted</dd></div>
@@ -448,8 +495,9 @@ export function Projects({ client, connectionEpoch = 0 }: { client: LuunaClient 
           <details className="rebind section"><summary>Rebind repository</summary>
             <form onSubmit={rebind} className="rebind-form">
               <fieldset disabled={busy}>
-                <label>New repository root path (empty re-inspects the registered path)<input value={rebindPath} onChange={(event) => setRebindPath(event.target.value)} spellCheck={false} placeholder={registration.local_path} /></label>
-                <label className="checkbox"><input type="checkbox" checked={rebindConfirmed} onChange={(event) => setRebindConfirmed(event.target.checked)} /> I moved this checkout or changed its remote on purpose; bind {registration.repository_id} to it.</label>
+                {view.repositories.length > 1 && <label>Repository to rebind<select aria-label="Repository to rebind" value={rebindTarget?.repository_id ?? ""} onChange={(event) => setRebindRepository(event.target.value)}>{view.repositories.map((repository) => <option key={repository.repository_id} value={repository.repository_id}>{repository.repository_id}</option>)}</select></label>}
+                <label>New repository root path (empty re-inspects the registered path)<input value={rebindPath} onChange={(event) => setRebindPath(event.target.value)} spellCheck={false} placeholder={rebindTarget?.local_path ?? registration.local_path} /></label>
+                <label className="checkbox"><input type="checkbox" checked={rebindConfirmed} onChange={(event) => setRebindConfirmed(event.target.checked)} /> I moved this checkout or changed its remote on purpose; bind {rebindTarget?.repository_id ?? registration.repository_id} to it.</label>
                 <div className="form-footer"><small>The runtime inspects the checkout read-only and records the old and new identity. Plans, baselines and approvals stay bound to exact commits; a manifest whose remote no longer matches must be confirmed again.</small><button className="primary" disabled={!rebindConfirmed} data-capability="projects.repositories.rebind">Rebind repository</button></div>
               </fieldset>
             </form>
@@ -457,10 +505,9 @@ export function Projects({ client, connectionEpoch = 0 }: { client: LuunaClient 
           <div className="project-actions actions">
             <button type="button" disabled={busy} data-capability="projects.discover" onClick={discover}>Discover proposed map</button>
             <button type="button" disabled={busy} data-capability="projects.export" onClick={exportProject}>Export project</button>
-            <button type="button" disabled={busy || !view.manifest || baselineInFlight} data-capability="baselines.start" onClick={runBaseline}>Run baseline</button>
-            {runningBaseline && <button type="button" className="danger" disabled={busy} data-capability="runs.cancel" onClick={() => cancelBaseline(runningBaseline)}>Cancel baseline</button>}
-            <small>Discovery reads manifests and lockfiles; it never runs repository commands. A baseline runs the confirmed required recipes on a clean checkout and records exact evidence.</small>
+            <small>Discovery reads manifests and lockfiles; it never runs repository commands. A baseline runs one repository's confirmed required recipes on a clean checkout and records exact evidence; a multi-repository feature needs every repository's passing baseline.</small>
           </div>
+          <RepositoryBaselines repositoryIds={repositoryIds} baselines={baselines} running={runningBaselines} busy={busy} manifestConfirmed={view.manifest !== null && view.manifest !== undefined} onRun={runBaseline} onCancel={cancelBaseline} />
           {exported && exported.project.id === selected && <details open className="project-export section"><summary>Project export · omits {exported.omitted.join(", ")}</summary>
             <p><a href={`data:application/json;charset=utf-8,${encodeURIComponent(JSON.stringify(exported, null, 2))}`} download={`luuna-${exported.project.id}-export.json`}>Save export JSON</a> · {exported.tickets.length} tickets, {exported.memory.length} memories, {exported.prompts.length} prompts</p>
             <pre aria-label="Project export" tabIndex={0}>{JSON.stringify(exported, null, 2)}</pre>
@@ -483,7 +530,7 @@ export function Projects({ client, connectionEpoch = 0 }: { client: LuunaClient 
             </form>
           </>}
           <ProjectComponents key={view.project.id} client={client} projectId={view.project.id} connectionEpoch={connectionEpoch} onContextChange={setComponentContext} onStatusChange={setComponentStatus} onChanged={() => setComponentEpoch((value) => value + 1)} />
-          <Workflows client={client} projectId={view.project.id} repositoryId={registration.repository_id} manifestConfirmed={view.manifest !== null && view.manifest !== undefined} connectionEpoch={connectionEpoch} componentContext={componentContext} componentsEnabled={componentStatus?.enabled ?? false} componentEpoch={componentEpoch} onChanged={() => { if (selected) void guarded("Refresh", (signal) => refresh(selected, signal)); }} />
+          <Workflows client={client} projectId={view.project.id} repositoryId={registration.repository_id} repositoryIds={repositoryIds} manifestConfirmed={view.manifest !== null && view.manifest !== undefined} connectionEpoch={connectionEpoch} componentContext={componentContext} componentsEnabled={componentStatus?.enabled ?? false} componentEpoch={componentEpoch} onChanged={() => { if (selected) void guarded("Refresh", (signal) => refresh(selected, signal)); }} />
           <details className="project-events section" data-capability="projects.events"><summary>Project event record ({events.length})</summary>
             <ol className="events" aria-label="Durable project events" tabIndex={0}>{events.map((event) => <li key={event.event_id}><details><summary><span className="event-number">{event.sequence}</span><span>{event.type}</span></summary><pre>{JSON.stringify(event.payload, null, 2)}</pre></details></li>)}</ol>
           </details>

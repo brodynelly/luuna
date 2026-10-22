@@ -5,7 +5,7 @@
 use crate::{integrations, internal, projects::storage_error, ApiError, AppState};
 use axum::http::StatusCode;
 use luuna_domain::{Ticket, TicketSource};
-use luuna_storage::MissionsBinding;
+use luuna_storage::{MissionsBinding, TicketRevision};
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 use sha2::{Digest, Sha256};
@@ -405,6 +405,142 @@ pub(crate) async fn reconcile(
             &hash,
         )
         .map_err(storage_error)
+}
+
+/// Edit the Missions-owned intent of an enabled project's ticket through the
+/// Missions CLI, then reconcile the projection so its revision advances and
+/// every plan made for the earlier revision is stale (ADR 0014 point 4 keeps
+/// refusing them at the work and evidence boundaries). The edit runs under the
+/// durable component-operation ledger: the intent is recorded before the CLI
+/// write, a retry after an uncertain write finds the written title and
+/// envelope in the source instead of writing twice, and a concurrent external
+/// edit is refused rather than overwritten.
+pub(crate) async fn update(
+    state: &AppState,
+    ticket: &Ticket,
+    expected_revision: u64,
+    changes: &TicketRevision,
+) -> Result<Ticket, ApiError> {
+    if !integrations::enabled(state, &ticket.project_id)? {
+        return Err(conflict(
+            "enable components before editing Missions tickets",
+        ));
+    }
+    if ticket.revision != expected_revision {
+        return Err(conflict(&format!(
+            "revision conflict: expected {expected_revision}, current {}",
+            ticket.revision
+        )));
+    }
+    let (binding, issue, _all, hash) = current(state, ticket).await?;
+    if binding.source_revision.as_deref() != Some(hash.as_str()) {
+        return Err(conflict(
+            "Missions ticket changed outside Luuna; reconcile the source before editing it",
+        ));
+    }
+    let source_id = binding.source_id.clone().ok_or_else(malformed)?;
+    let before = projection(ticket, &issue)?;
+    let mut desired = before.clone();
+    changes.apply(&mut desired);
+    desired
+        .validate()
+        .map_err(|error| ApiError(StatusCode::UNPROCESSABLE_ENTITY, error.to_string()))?;
+    if desired.title == before.title
+        && desired.intent == before.intent
+        && desired.acceptance_criteria == before.acceptance_criteria
+        && desired.repository_ids == before.repository_ids
+    {
+        return Err(ApiError(
+            StatusCode::UNPROCESSABLE_ENTITY,
+            "the edit changes nothing; name a field with a new value".into(),
+        ));
+    }
+    let registered: Vec<String> = state
+        .store
+        .lock()
+        .map_err(internal)?
+        .repositories(&ticket.project_id)
+        .map_err(internal)?
+        .into_iter()
+        .map(|registration| registration.repository_id)
+        .collect();
+    if let Some(unknown) = desired
+        .repository_ids
+        .iter()
+        .find(|id| !registered.contains(id))
+    {
+        return Err(ApiError(
+            StatusCode::UNPROCESSABLE_ENTITY,
+            format!(
+                "repository {unknown} is not registered in project {}",
+                ticket.project_id
+            ),
+        ));
+    }
+    let description = serde_json::to_string(&Intent::from_ticket(&desired)).map_err(internal)?;
+    let key = format!("ticket-update:{}:{expected_revision}", ticket.id);
+    let operation = state
+        .store
+        .lock()
+        .map_err(internal)?
+        .begin_component_operation(
+            &ticket.project_id,
+            &key,
+            "ticket.update",
+            &json!({"title": desired.title, "description": description}),
+            &ticket.id,
+        )
+        .map_err(|_| conflict("A different edit of this ticket revision was already recorded; refresh and edit the current revision"))?;
+    if let Some(response) = operation.response {
+        return serde_json::from_value(response).map_err(internal);
+    }
+    let written = issue["title"].as_str() == Some(desired.title.as_str())
+        && issue["description"].as_str() == Some(description.as_str());
+    if !written {
+        if operation.attempted {
+            return Err(conflict("Uncertain Missions update cannot be reconciled by its identity; inspect the managed source before retrying"));
+        }
+        state
+            .store
+            .lock()
+            .map_err(internal)?
+            .mark_component_operation_attempted(&ticket.project_id, &key)
+            .map_err(internal)?;
+        call(
+            state,
+            &ticket.project_id,
+            &[
+                "update".into(),
+                source_id,
+                format!("--title={}", desired.title),
+                format!("--description={description}"),
+            ],
+        )
+        .await?;
+    }
+    // The source fingerprint changed, so the projection revision advances;
+    // a plan bound to the previous revision is stale from here on.
+    let reconciled = reconcile(state, ticket, expected_revision).await?;
+    if reconciled.title != desired.title
+        || reconciled.intent != desired.intent
+        || reconciled.acceptance_criteria != desired.acceptance_criteria
+        || reconciled.repository_ids != desired.repository_ids
+    {
+        return Err(conflict(
+            "Missions ticket changed during the edit; reconcile the source before continuing",
+        ));
+    }
+    state
+        .store
+        .lock()
+        .map_err(internal)?
+        .complete_component_operation(
+            &ticket.project_id,
+            &key,
+            &serde_json::to_value(&reconciled).map_err(internal)?,
+        )
+        .map_err(internal)?;
+    Ok(reconciled)
 }
 
 #[cfg(test)]

@@ -41,7 +41,8 @@
         "client_method",
         "desktop",
         "tui",
-        "failure_modes"
+        "failure_modes",
+        "required_by"
       ],
       "properties": {
         "id": {
@@ -106,6 +107,16 @@
               "internal",
               "client"
             ]
+          }
+        },
+        "required_by": {
+          "type": "array",
+          "minItems": 1,
+          "uniqueItems": true,
+          "description": "The requirements (R..), acceptance scenarios (A..) or specification sections (docs/...#anchor) this action is required by; scripts/check-contracts.mjs traces a fixed list of required actions to cataloged entries with both clients wired.",
+          "items": {
+            "type": "string",
+            "pattern": "^(R[0-9]{2}|A[0-9]{2}|docs/[A-Za-z0-9/_.-]+\\.md(#[a-z0-9-]+)?)$"
           }
         }
       }

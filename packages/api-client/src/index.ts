@@ -274,6 +274,15 @@ export interface CreateTicketRequest {
   repository_ids: string[];
 }
 
+/** `PUT /tickets/{id}`: the named fields replace the current ones; the revision must match what the client read. */
+export interface UpdateTicketRequest {
+  expected_revision: number;
+  title?: string;
+  intent?: string;
+  acceptance_criteria?: string[];
+  repository_ids?: string[];
+}
+
 export interface ComponentStatus {
   enabled: boolean;
   workspace_path?: string;
@@ -307,6 +316,39 @@ export interface PromoteMemoryRequest {
 export interface PromotedMemory {
   promoted: MemoryRecord;
   from: { id: string; scope: MemoryScope };
+}
+
+/** Corrects a record's content at its displayed hash; the record keeps its scope and gains provenance naming the correction. */
+export interface UpdateMemoryRequest {
+  idempotency_key: string;
+  expected_hash: string;
+  content: string;
+}
+
+/** The personal export: user-scope memory with provenance, and nothing of any project. */
+export interface UserMemoryExport {
+  schema_version: string;
+  kind: "luuna-user-memory-export";
+  exported_at: string;
+  scope: "user";
+  memory: MemoryRecord[];
+  omitted: string[];
+}
+
+/** Longest age in days a record of each scope may reach before `applyMemoryRetention` deletes it; null keeps records. User memory is never subject to a project policy. */
+export interface MemoryRetentionPolicy {
+  process_max_age_days: number | null;
+  project_max_age_days: number | null;
+}
+
+export interface ApplyMemoryRetentionRequest {
+  idempotency_key: string;
+}
+
+export interface MemoryRetentionResult {
+  applied_at: string;
+  policy: MemoryRetentionPolicy;
+  deleted: { id: string; scope: MemoryScope; created_at: string; hash: string }[];
 }
 
 export interface ProjectExport {
@@ -533,6 +575,55 @@ export function planBudgetProblem(budgets: PlanBudgetRequest): string | null {
 /** Idempotency keys are 1 to 128 visible ASCII characters. */
 export function validIdempotencyKey(key: string): boolean {
   return /^[\x21-\x7e]{1,128}$/.test(key);
+}
+
+/** One task of a multi-repository plan as a client collects it: `id` defaults to the repository id. */
+export interface PlanTaskDraft {
+  id?: string;
+  repository_id: string;
+  paths: string[];
+  operations: Operation[];
+  acceptance_criteria?: string[];
+  depends_on?: string[];
+}
+
+/**
+ * The plan request both clients send for the same tasks (ADR 0017): one `task` for a single-task
+ * plan (its pre-M4 shape, so the plan hashes exactly as before), `tasks` with `depends_on` for a
+ * task graph, and `budgets.max_workers` only when it is not the default. Empty paths default to
+ * `src`; every task must name a distinct repository; `depends_on` must name other tasks of this
+ * plan. The runtime validates the graph again; this only refuses what no runtime would accept.
+ */
+export function planRequestForTasks(drafts: PlanTaskDraft[], budgets: PlanBudgetRequest = {}, options: { componentContext?: ComponentContext; permissions?: Record<string, string[]> } = {}): Omit<CreatePlanRequest, "idempotency_key"> {
+  if (drafts.length === 0) throw new Error("A plan needs at least one task.");
+  const tasks: PlanTaskRequest[] = drafts.map((draft) => {
+    const id = (draft.id ?? draft.repository_id).trim();
+    const repository = draft.repository_id.trim();
+    if (!repository) throw new Error("Every task names a registered repository.");
+    const paths = draft.paths.map((path) => path.trim()).filter(Boolean);
+    const depends = (draft.depends_on ?? []).map((task) => task.trim()).filter(Boolean);
+    const criteria = (draft.acceptance_criteria ?? []).map((line) => line.trim()).filter(Boolean);
+    return { ...(drafts.length > 1 && { id }), repository_id: repository, paths: paths.length ? paths : ["src"], operations: draft.operations, ...(criteria.length && { acceptance_criteria: criteria }), ...(depends.length && { depends_on: depends }) };
+  });
+  const ids = tasks.map((task) => task.id ?? "implement");
+  const repositories = tasks.map((task) => task.repository_id);
+  if (new Set(repositories).size !== repositories.length) throw new Error("Each task of a plan targets a distinct repository; a dependent change inside one repository is one task.");
+  if (new Set(ids).size !== ids.length) throw new Error("Task ids must be unique.");
+  for (const task of tasks) for (const dependency of task.depends_on ?? []) {
+    if (dependency === task.id) throw new Error(`Task ${task.id} cannot depend on itself.`);
+    if (!ids.includes(dependency)) throw new Error(`Task ${task.id} depends on ${dependency}, which is not a task of this plan.`);
+  }
+  const { max_workers, ...rest } = budgets;
+  const named: PlanBudgetRequest = { ...rest, ...(max_workers !== undefined && max_workers !== DEFAULT_PLAN_BUDGETS.max_workers && { max_workers }) };
+  if (named.max_workers !== undefined && named.max_workers > tasks.length) throw new Error(`budgets.max_workers must be between 1 and ${tasks.length} for ${tasks.length} task(s).`);
+  const problem = planBudgetProblem(named);
+  if (problem) throw new Error(problem);
+  return {
+    ...(tasks.length === 1 ? { task: tasks[0] } : { tasks }),
+    ...(Object.keys(named).length && { budgets: named }),
+    ...(options.permissions && { permissions: options.permissions }),
+    ...(options.componentContext && (options.componentContext.memory_ids.length > 0 || options.componentContext.prompt) ? { component_context: options.componentContext } : {}),
+  };
 }
 
 export interface PlanOpened {
@@ -795,6 +886,20 @@ export interface RegisterProjectRequest {
   id?: string;
   name: string;
   repositories: { id: string; path: string }[];
+}
+
+/**
+ * The registration both clients send for the same repositories: every row with a repository id and
+ * an absolute root path, none repeated. Paths stay in the machine registry; the manifest never
+ * carries them.
+ */
+export function registerProjectRequest(name: string, repositories: { id: string; path: string }[], id?: string): RegisterProjectRequest {
+  const rows = repositories.map((row) => ({ id: row.id.trim(), path: row.path.trim() })).filter((row) => row.id || row.path);
+  if (!name.trim()) throw new Error("A project needs a name.");
+  if (rows.length === 0) throw new Error("Register at least one repository: an id and its absolute root path.");
+  for (const row of rows) if (!row.id || !row.path) throw new Error("Every repository row needs an id and an absolute root path.");
+  if (new Set(rows.map((row) => row.id)).size !== rows.length) throw new Error("Repository ids must be unique within a project.");
+  return { name: name.trim(), ...(id?.trim() && { id: id.trim() }), repositories: rows };
 }
 
 /** Sending it is the developer's confirmation; the registered path is re-inspected when omitted. */
@@ -1127,6 +1232,13 @@ export class LuunaClient {
     });
   }
 
+  /** Edits a ticket at the revision the client read; the runtime advances the revision and stales earlier plans. */
+  updateTicket(id: string, request: UpdateTicketRequest, signal?: AbortSignal): Promise<Ticket> {
+    if (!Number.isSafeInteger(request.expected_revision) || request.expected_revision < 1) throw new Error("Invalid ticket revision.");
+    if (request.title === undefined && request.intent === undefined && request.acceptance_criteria === undefined && request.repository_ids === undefined) throw new Error("Name at least one ticket field to change.");
+    return this.request(`/tickets/${encodeURIComponent(id)}`, { method: "PUT", body: JSON.stringify(request), signal });
+  }
+
   ticketSource(id: string, signal?: AbortSignal): Promise<TicketSourceStatus> {
     return this.request(`/tickets/${encodeURIComponent(id)}/source`, { signal });
   }
@@ -1153,6 +1265,37 @@ export class LuunaClient {
   deleteMemory(projectId: string, id: string, expectedHash: string, signal?: AbortSignal): Promise<{ deleted: boolean }> {
     if (!expectedHash.startsWith("sha256:")) throw new Error("Delete memory by its exact content hash.");
     return this.request(`/projects/${encodeURIComponent(projectId)}/memory/${encodeURIComponent(id)}?expected_hash=${encodeURIComponent(expectedHash)}`, { method: "DELETE", signal });
+  }
+
+  /** Corrects a memory's content at its exact displayed hash; the record keeps its scope. */
+  updateMemory(projectId: string, id: string, request: UpdateMemoryRequest, signal?: AbortSignal): Promise<MemoryRecord> {
+    if (!request.expected_hash.startsWith("sha256:")) throw new Error("Correct memory by its exact content hash.");
+    if (!request.idempotency_key.trim()) throw new Error("An idempotency key is required.");
+    if (!request.content.trim()) throw new Error("Memory content is required.");
+    return this.request(`/projects/${encodeURIComponent(projectId)}/memory/${encodeURIComponent(id)}`, { method: "PUT", body: JSON.stringify(request), signal });
+  }
+
+  /** The personal export: user memory with provenance; the runtime refuses one carrying a credential value or a host path. */
+  exportUserMemory(signal?: AbortSignal): Promise<UserMemoryExport> {
+    return this.request("/memory/user/export", { signal });
+  }
+
+  memoryRetention(projectId: string, signal?: AbortSignal): Promise<MemoryRetentionPolicy> {
+    return this.request(`/projects/${encodeURIComponent(projectId)}/memory/retention`, { signal });
+  }
+
+  /** Replaces the policy; nothing is deleted until `applyMemoryRetention`. */
+  setMemoryRetention(projectId: string, policy: MemoryRetentionPolicy, signal?: AbortSignal): Promise<MemoryRetentionPolicy> {
+    for (const days of [policy.process_max_age_days, policy.project_max_age_days]) {
+      if (days !== null && (!Number.isSafeInteger(days) || days < 1 || days > 3650)) throw new Error("A retention limit is between 1 and 3650 days, or null to keep records.");
+    }
+    return this.request(`/projects/${encodeURIComponent(projectId)}/memory/retention`, { method: "PUT", body: JSON.stringify(policy), signal });
+  }
+
+  /** Deletes expired project and process memory through the adapter; replaying the key returns the recorded result. */
+  applyMemoryRetention(projectId: string, request: ApplyMemoryRetentionRequest, signal?: AbortSignal): Promise<MemoryRetentionResult> {
+    if (!request.idempotency_key.trim()) throw new Error("An idempotency key is required.");
+    return this.request(`/projects/${encodeURIComponent(projectId)}/memory/retention/apply`, { method: "POST", body: JSON.stringify(request), signal });
   }
 
   /** Widens a memory's scope one step (process -> project, project -> user); the narrower record is deleted after the wider one exists. */

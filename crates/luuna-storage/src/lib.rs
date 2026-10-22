@@ -27,7 +27,7 @@ pub use publication::*;
 pub use validation::{
     TicketUsage, WorkflowUsageView, COST_UNREPORTED_EVENT, STAGE_HEARTBEAT_SECONDS,
 };
-pub use writer::{AttemptRecord, PlanOpening, TaskRecord};
+pub use writer::{AttemptRecord, PlanOpening, TaskRecord, TicketRevision};
 
 #[derive(Error)]
 pub enum StorageError {

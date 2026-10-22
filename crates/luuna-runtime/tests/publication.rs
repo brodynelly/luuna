@@ -1281,3 +1281,57 @@ async fn the_pre_push_policy_refuses_credentials_without_naming_their_values() {
     assert_eq!(view["evidence"]["status"], "reviewed", "{view}");
     assert_eq!(harness.run(&run_id).await["state"], "reviewed");
 }
+
+#[tokio::test]
+async fn editing_the_ticket_after_the_review_refuses_publication_as_source_changed() {
+    let harness = Harness::new().await;
+    let repo = Repo::new();
+    let (run_id, ticket, candidate) = harness.reviewed(repo.path()).await;
+    let hash = candidate["hash"].clone();
+    let ticket_id = ticket["id"].as_str().unwrap();
+    let (status, edited) = harness
+        .request(
+            "PUT",
+            &format!("/api/v1/tickets/{ticket_id}"),
+            Some(json!({"expected_revision": ticket["revision"], "title": "Edited after the review"})),
+        )
+        .await;
+    assert_eq!(status, StatusCode::OK, "{edited}");
+    assert_eq!(edited["revision"], 2, "{edited}");
+
+    let (status, refused) = harness.publish(&run_id, &hash, "publish-edited").await;
+    assert_eq!(status, StatusCode::CONFLICT, "{refused}");
+    let reason = refused["error"].as_str().unwrap();
+    assert!(
+        reason.contains("Ticket changed since plan approval"),
+        "{reason}"
+    );
+    assert_eq!(harness.requests("POST", "/pulls"), 0);
+    assert_eq!(harness.requests("GET", "/pulls"), 0);
+    assert!(remote_branch(repo.path(), "luuna").is_none());
+    let (status, body) = harness.publication(&run_id).await;
+    assert_eq!(status, StatusCode::NOT_FOUND, "{body}");
+    let events = harness.events(&run_id).await;
+    assert_eq!(refusals(&events), vec!["source_changed"]);
+    let refusal = events
+        .iter()
+        .find(|e| e["type"] == "publication.refused")
+        .unwrap();
+    assert_eq!(refusal["payload"]["candidate_hash"], hash);
+    assert!(refusal["payload"]["reason"]
+        .as_str()
+        .unwrap()
+        .contains("create a new plan"));
+    assert!(
+        !event_types(&events)
+            .iter()
+            .any(|e| e == "publication.requested" || e == "publication.pushed"),
+        "{events:?}"
+    );
+    // Reconciliation meets the same gate; the reviewed evidence is kept for revision 1.
+    let (status, body) = harness.reconcile(&run_id).await;
+    assert_ne!(status, StatusCode::ACCEPTED, "{body}");
+    let view = harness.candidate(&run_id).await;
+    assert_eq!(view["evidence"]["status"], "reviewed");
+    assert_eq!(harness.run(&run_id).await["state"], "reviewed");
+}

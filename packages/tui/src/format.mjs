@@ -115,7 +115,11 @@ export function format(id, value) {
     case "memory.delete": return value.deleted ? "Memory deleted." : "Memory not deleted.";
     case "prompts.list": return value.length ? value.map((prompt) => `${prompt.name}  version ${prompt.version}${prompt.hash ? `  ${prompt.hash}` : ""}`).join("\n") : "No prompts.";
     case "prompts.create": case "prompts.render": return `${value.name}  version ${value.version}  ${value.hash}\n${value.body}`;
-    case "tickets.create": case "tickets.show": case "tickets.reconcile": return formatTicket(value);
+    case "tickets.create": case "tickets.show": case "tickets.reconcile": case "tickets.update": return formatTicket(value);
+    case "memory.update": return `${value.id}  ${value.scope}  ${value.hash}\n  ${value.content}\n  provenance: ${value.provenance}`;
+    case "memory.user.export": return `${value.memory.length} private user memory record(s) exported at ${value.exported_at} · omits ${value.omitted.join(", ")}\n${value.memory.map((record) => `${record.id}  ${record.hash}\n  ${record.content}\n  provenance: ${record.provenance}`).join("\n")}`;
+    case "memory.retention.show": case "memory.retention.set": return `process memory: ${value.process_max_age_days === null ? "kept" : `${value.process_max_age_days} day(s)`} · project memory: ${value.project_max_age_days === null ? "kept" : `${value.project_max_age_days} day(s)`} · user memory is never subject to a project policy`;
+    case "memory.retention.apply": return value.deleted.length ? `Deleted ${value.deleted.length} expired record(s) at ${value.applied_at}: ${value.deleted.map((record) => `${record.id} (${record.scope}, created ${record.created_at})`).join(", ")}` : `No memory record exceeded the retention policy at ${value.applied_at}.`;
     case "tickets.list": return value.length ? value.map(formatTicket).join("\n") : "No tickets.";
     case "tickets.source": return `source ${value.source ?? "unknown"} · id ${value.source_id ?? "none"} · revision ${value.source_revision ?? "none"} · reconciliation ${value.reconciliation_required ? "REQUIRED" : "not required"}${value.workspace ? ` · ${value.workspace}` : ""}`;
     case "plans.create": return `${formatPlanRecord(value.plan)}\nworkflow run: ${runLine(value.run)}`;

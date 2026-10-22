@@ -624,7 +624,19 @@ pub fn router(state: AppState) -> Router {
         )
         .route(
             "/api/v1/projects/{id}/memory/{memory_id}",
-            axum::routing::delete(integrations::delete_memory),
+            axum::routing::delete(integrations::delete_memory).put(integrations::update_memory),
+        )
+        .route(
+            "/api/v1/projects/{id}/memory/retention",
+            get(integrations::memory_retention).put(integrations::set_memory_retention),
+        )
+        .route(
+            "/api/v1/projects/{id}/memory/retention/apply",
+            post(integrations::apply_memory_retention),
+        )
+        .route(
+            "/api/v1/memory/user/export",
+            get(integrations::export_user_memory),
         )
         .route(
             "/api/v1/projects/{id}/memory/{memory_id}/promote",
@@ -671,7 +683,10 @@ pub fn router(state: AppState) -> Router {
             "/api/v1/projects/{id}/tickets",
             get(writer::list_tickets).post(writer::create_ticket),
         )
-        .route("/api/v1/tickets/{id}", get(writer::get_ticket))
+        .route(
+            "/api/v1/tickets/{id}",
+            get(writer::get_ticket).put(writer::update_ticket),
+        )
         .route(
             "/api/v1/tickets/{id}/plans",
             get(writer::list_plans).post(writer::create_plan),

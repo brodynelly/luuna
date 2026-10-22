@@ -37,3 +37,35 @@ test("the desktop calls each cataloged client method it exposes directly, or the
     expect(code, `${capability.id} should call client.${capability.client_method}`).toMatch(new RegExp(`\\.${capability.client_method}\\(`));
   }
 });
+
+// ---- Behaviour level (audit findings 2 and 7): a marker proves wiring; these prove the desktop
+// builds the cataloged request and shows state-specific controls. The request bodies themselves
+// are covered beside each panel (Projects.test.tsx, Workflows.test.tsx, ProjectComponents.test.tsx)
+// through the builders packages/api-client shares with the TUI. ----
+test("state-specific controls share one capability: Implement for an approved run and Resume task for a resumable task both carry runs.implement", () => {
+  const workflows = sources.find(([file]) => file === "Workflows.tsx")![1];
+  expect(workflows.match(/data-capability="runs.implement"/g)?.length).toBeGreaterThanOrEqual(2);
+  expect(workflows).toMatch(/run\.state === "approved"[^\n]*data-capability="runs.implement"/);
+  expect(workflows).toMatch(/taskResumable\(run, task\)[^\n]*data-capability="runs.implement"/);
+  expect(workflows).toMatch(/task_id: taskId/);
+});
+
+test("every repository, task and memory control sends the cataloged body through the shared builders", () => {
+  const projects = sources.find(([file]) => file === "Projects.tsx")![1];
+  expect(projects).toMatch(/registerProject\(registrationRequest\(name, projectId, rows\)/);
+  expect(projects).toMatch(/startBaseline\(selected, \{ repository_id: repositoryId \}/);
+  const workflows = sources.find(([file]) => file === "Workflows.tsx")![1];
+  expect(workflows).toMatch(/planRequestFromRows\(rows, \{ \.\.\.budgets, max_workers: workers \}/);
+  expect(workflows).toMatch(/updateTicket\(ticket\.id, request/);
+  const components = sources.find(([file]) => file === "ProjectComponents.tsx")![1];
+  expect(components).toMatch(/updateMemory\(projectId, record\.id, \{ idempotency_key: .*expected_hash: record\.hash, content \}/);
+  expect(components).toMatch(/setMemoryRetention\(projectId, retentionPolicyFromForm\(processDays, projectDays\)/);
+  expect(components).toMatch(/applyMemoryRetention\(projectId, \{ idempotency_key:/);
+  expect(components).toMatch(/exportUserMemory\(signal\)/);
+});
+
+test("the catalog traces every action to what requires it, and the required actions of ADR 0026 are wired in the desktop", () => {
+  const required = JSON.parse(readFileSync(new URL("../../../schemas/capability-catalog.json", root), "utf8")) as { capabilities: (Capability & { required_by: string[] })[] };
+  for (const capability of required.capabilities) expect(capability.required_by.length, capability.id).toBeGreaterThan(0);
+  for (const id of ["tickets.update", "memory.update", "memory.user.export", "memory.retention.set", "memory.retention.apply", "baselines.start", "projects.register", "plans.create", "runs.implement", "runs.cancel", "runs.publication.reconcile", "runs.stream"]) expect(exposed.has(id), id).toBe(true);
+});

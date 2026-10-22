@@ -5,7 +5,7 @@
 // id and whose `name` is the catalog's `tui` command. `example` is the input the parity test runs
 // against a mocked fetch to prove the command issues the cataloged method and route.
 import { randomUUID } from "node:crypto";
-import { readEventPages } from "@luuna/api-client";
+import { planRequestForTasks, readEventPages, registerProjectRequest } from "@luuna/api-client";
 
 const HASH = `sha256:${"a".repeat(64)}`;
 
@@ -81,10 +81,19 @@ export const COMMANDS = [
   { id: "projects.list", name: "projects", action: "Project listing", context: "runtime", args: [], flags: {}, example: { args: [], flags: {} },
     run: (client, _input, io) => client.listProjects(io.signal) },
   { id: "projects.register", name: "register", action: "Registration", context: "runtime",
-    args: [{ name: "name", description: "project name", prompt: "Project name" }, { name: "repository-id", description: "repository id (for example app)", prompt: "Repository id" }, { name: "path", description: "absolute path of the existing repository root", prompt: "Repository root path" }],
-    flags: { id: { description: "project id (derived from the name when omitted)" } },
+    args: [{ name: "name", description: "project name", prompt: "Project name" }, { name: "repository-id", description: "first repository id (for example app)", prompt: "Repository id" }, { name: "path", description: "absolute path of that repository root", prompt: "Repository root path" }],
+    flags: { id: { description: "project id (derived from the name when omitted)" }, repository: { repeat: true, description: "another repository of the project as <id>=<absolute path> (repeatable)", prompt: "Further repositories as <id>=<path> (one per line; empty line ends)", multiline: true } },
     example: { args: ["Walkthrough", "app", "/srv/walkthrough"], flags: { id: "walkthrough" } },
-    run: (client, { args, flags }, io) => client.registerProject({ name: args[0], ...(flags.id && { id: String(flags.id) }), repositories: [{ id: args[1], path: args[2] }] }, io.signal) },
+    run: (client, { args, flags }, io) => {
+      const extra = list(flags.repository).map((spec) => {
+        const match = /^([^=]+)=(.+)$/.exec(String(spec).trim());
+        if (!match) throw new UsageError("--repository takes <id>=<absolute path>");
+        return { id: match[1], path: match[2] };
+      });
+      let request;
+      try { request = registerProjectRequest(args[0], [{ id: args[1], path: args[2] }, ...extra], flags.id ? String(flags.id) : undefined); } catch (failure) { throw new ClientRefusal(failure.message); }
+      return client.registerProject(request, io.signal);
+    } },
   { id: "projects.scaffold.propose", name: "propose-scaffold", action: "Scaffold proposal", context: "runtime",
     args: [{ name: "profile", description: "node, node-typescript, react, python, go, rust, flutter, android or ios", prompt: "Stack profile" }, { name: "name", description: "project id (^[a-z][a-z0-9-]{0,63}$)", prompt: "Project name" }, { name: "parent-dir", description: "absolute existing directory the project is created under", prompt: "Parent directory" }],
     flags: {}, example: { args: ["python", "fresh", "C:\\projects"], flags: {} },
@@ -166,6 +175,35 @@ export const COMMANDS = [
       if (!["project", "user"].includes(args[3])) throw new UsageError("Memory promotes to project (from process) or to user (from project).");
       return client.promoteMemory(args[0], args[1], { idempotency_key: flags.key ? String(flags.key) : randomUUID(), expected_hash: args[2], to_scope: args[3] }, io.signal);
     } },
+  { id: "memory.update", name: "correct-memory", action: "Memory correction", context: "project",
+    args: [{ name: "project", context: true }, { name: "memory-id", description: "the memory record id", prompt: "Memory id" }, { name: "hash", description: "the record's exact content hash (sha256:…)", prompt: "Exact content hash" }, { name: "content", description: "the corrected content (the record keeps its scope; provenance names the correction)", prompt: "Corrected content" }],
+    flags: { key: { description: "idempotency key (generated when omitted)" } },
+    example: { args: ["walkthrough", "mem-1", HASH, "Tests use pytest"], flags: { key: "k12" } },
+    run: (client, { args, flags }, io) => {
+      if (!String(args[3]).trim()) throw new UsageError("The corrected content is empty.");
+      return client.updateMemory(args[0], args[1], { idempotency_key: flags.key ? String(flags.key) : randomUUID(), expected_hash: args[2], content: args[3] }, io.signal);
+    } },
+  { id: "memory.user.export", name: "export-user-memory", action: "User memory export", context: "runtime", args: [],
+    flags: { output: { description: "write the personal export JSON to this file instead of printing it" } },
+    example: { args: [], flags: {} },
+    run: async (client, { flags }, io) => {
+      const exported = await client.exportUserMemory(io.signal);
+      if (flags.output) { await io.writeFile(String(flags.output), JSON.stringify(exported, null, 2) + "\n"); return { written: String(flags.output), omitted: exported.omitted, memory: exported.memory.length }; }
+      return exported;
+    } },
+  { id: "memory.retention.show", name: "retention", action: "Retention policy inspection", context: "project", args: [{ name: "project", context: true }], flags: {}, example: { args: ["walkthrough"], flags: {} },
+    run: (client, { args }, io) => client.memoryRetention(args[0], io.signal) },
+  { id: "memory.retention.set", name: "set-retention", action: "Retention policy", context: "project", args: [{ name: "project", context: true }],
+    flags: { "process-days": { description: "longest age of process memory in days (1 to 3650), or none to keep it", prompt: "Process memory max age in days (empty keeps it)" }, "project-days": { description: "longest age of project memory in days (1 to 3650), or none to keep it", prompt: "Project memory max age in days (empty keeps it)" } },
+    example: { args: ["walkthrough"], flags: { "process-days": "30" } },
+    run: (client, { args, flags }, io) => {
+      const days = (name) => { const value = flags[name]; if (value === undefined || value === "" || String(value).toLowerCase() === "none") return null; const number = integer(value, name, { min: 1 }); if (number > 3650) throw new UsageError(`--${name} is at most 3650 days.`); return number; };
+      return client.setMemoryRetention(args[0], { process_max_age_days: days("process-days"), project_max_age_days: days("project-days") }, io.signal);
+    } },
+  { id: "memory.retention.apply", name: "apply-retention", action: "Retention", context: "project", args: [{ name: "project", context: true }],
+    flags: { key: { description: "idempotency key (generated when omitted; repeat the same key to replay the recorded result)" } },
+    example: { args: ["walkthrough"], flags: { key: "k13" } }, confirm: "Delete every project and process memory record older than the retention policy allows? Each deletion is reconciled through the adapter and recorded; user memory is never touched.",
+    run: (client, { args, flags }, io) => client.applyMemoryRetention(args[0], { idempotency_key: flags.key ? String(flags.key) : randomUUID() }, io.signal) },
   { id: "prompts.list", name: "prompts", action: "Prompt listing", context: "project", args: [{ name: "project", context: true }], flags: {}, example: { args: ["walkthrough"], flags: {} },
     run: (client, { args }, io) => client.listPrompts(args[0], io.signal) },
   { id: "prompts.create", name: "save-prompt", action: "Prompt creation", context: "project",
@@ -207,6 +245,23 @@ export const COMMANDS = [
     example: { args: ["ticket-1"], flags: { revision: "1" } },
     run: async (client, { args, flags }, io) => client.reconcileTicket(args[0], integer(flags.revision, "revision", { min: 1 }) ?? (await client.ticket(args[0], io.signal)).revision, io.signal) },
 
+  { id: "tickets.update", name: "edit-ticket", action: "Ticket edit", context: "ticket", args: [{ name: "ticket", context: true }],
+    flags: { title: { description: "the new title", prompt: "New title (empty keeps it)" }, intent: { description: "the new intent", prompt: "New intent (empty keeps it)" }, criterion: { repeat: true, description: "an acceptance criterion (repeatable; given together they replace the list)", prompt: "Acceptance criteria (one per line; empty line keeps the current list)", multiline: true }, repository: { repeat: true, description: "a repository id (repeatable; given together they replace the list)" }, revision: { description: "the ticket revision this client read (read from the ticket when omitted)" } },
+    example: { args: ["ticket-1"], flags: { title: "Implement the greeting (edited)", revision: "1" } },
+    run: async (client, { args, flags }, io) => {
+      const title = flags.title === undefined ? undefined : String(flags.title).trim();
+      const intent = flags.intent === undefined ? undefined : String(flags.intent).trim();
+      const criteria = list(flags.criterion).map((line) => String(line).trim()).filter(Boolean);
+      const repositories = list(flags.repository).map((id) => String(id).trim()).filter(Boolean);
+      if (title === undefined && intent === undefined && !criteria.length && !repositories.length) throw new UsageError("Name at least one change: --title, --intent, --criterion or --repository.");
+      if (title === "" || intent === "") throw new UsageError("A title or intent cannot be emptied; omit the flag to keep the current value.");
+      const bytes = (text) => Buffer.byteLength(text, "utf8");
+      if (title !== undefined && bytes(title) > TEXT_LIMITS.title) throw new ClientRefusal(`The title is ${bytes(title)} bytes; the runtime accepts at most ${TEXT_LIMITS.title} (UTF-8).`);
+      if (intent !== undefined && bytes(intent) > TEXT_LIMITS.intent) throw new ClientRefusal(`The intent is ${bytes(intent)} bytes; the runtime accepts at most ${TEXT_LIMITS.intent} (UTF-8).`);
+      const revision = integer(flags.revision, "revision", { min: 1 }) ?? (await client.ticket(args[0], io.signal)).revision;
+      return client.updateTicket(args[0], { expected_revision: revision, ...(title !== undefined && { title }), ...(intent !== undefined && { intent }), ...(criteria.length && { acceptance_criteria: criteria }), ...(repositories.length && { repository_ids: repositories }) }, io.signal);
+    } },
+
   // ---- plans ----
   { id: "plans.create", name: "plan", action: "Planning", context: "ticket", args: [{ name: "ticket", context: true }],
     flags: { repository: { description: "repository id (the ticket's first repository when omitted)" }, path: { repeat: true, description: "a writer path (repeatable; default src)", prompt: "Writer paths (comma separated; default src)" }, "read-only": { boolean: true, description: "allow reads only" }, criterion: { repeat: true, description: "a task acceptance criterion (repeatable)" }, task: { repeat: true, description: "a task for a multi-repository plan as <repository>=<path,...>[>dependency-task,...] (repeatable; task ids are the repository ids)" }, workers: { description: "concurrent writers for a multi-task plan (1 to the number of tasks, at most 4)" }, attempts: { description: "writer attempts (1 to 10)" }, timeout: { description: "time budget in seconds (1 to 86400)" }, "cost-usd": { description: "cost budget in dollars (at most 1000)" }, memory: { repeat: true, description: "a selected memory id (repeatable; components only)" }, prompt: { description: "a selected prompt as name@version#hash (components only)" }, key: { description: "idempotency key (generated when omitted)" } },
@@ -221,18 +276,17 @@ export const COMMANDS = [
         if (flags.prompt !== undefined && !selected) throw new UsageError("--prompt names an exact prompt as name@version#sha256:<hash>.");
         componentContext = { memory_ids: list(flags.memory).map(String), ...(selected && { prompt: { name: selected[1], version: Number(selected[2]), hash: selected[3] } }) };
       }
-      return client.createPlan(args[0], {
-        ...(list(flags.task).length ? { tasks: list(flags.task).map((spec) => {
-          const match = /^([a-z][a-z0-9-]*)=([^>]*)(?:>(.*))?$/.exec(String(spec));
-          if (!match) throw new UsageError("--task takes <repository>=<path,...>[>dependency-task,...]");
-          const taskPaths = match[2].split(",").map((p) => p.trim()).filter(Boolean);
-          const depends = (match[3] ?? "").split(",").map((d) => d.trim()).filter(Boolean);
-          return { id: match[1], repository_id: match[1], paths: taskPaths.length ? taskPaths : ["src"], operations: flags["read-only"] ? ["read"] : ["read", "write"], ...(list(flags.criterion).length && { acceptance_criteria: list(flags.criterion).map(String) }), ...(depends.length && { depends_on: depends }) };
-        }) } : { task: { repository_id: repository, paths: paths.length ? paths : ["src"], operations: flags["read-only"] ? ["read"] : ["read", "write"], ...(list(flags.criterion).length && { acceptance_criteria: list(flags.criterion).map(String) }) } }),
-        ...(Object.keys(budgets).length && { budgets }),
-        ...(componentContext && { component_context: componentContext }),
-        idempotency_key: flags.key ? String(flags.key) : randomUUID(),
-      }, io.signal);
+      const operations = flags["read-only"] ? ["read"] : ["read", "write"];
+      const criteria = list(flags.criterion).map(String);
+      // The same builder the desktop uses, so both clients send one body for the same tasks (R02).
+      const drafts = list(flags.task).length ? list(flags.task).map((spec) => {
+        const match = /^([a-z][a-z0-9-]*)=([^>]*)(?:>(.*))?$/.exec(String(spec));
+        if (!match) throw new UsageError("--task takes <repository>=<path,...>[>dependency-task,...]");
+        return { id: match[1], repository_id: match[1], paths: match[2].split(","), operations, acceptance_criteria: criteria, depends_on: (match[3] ?? "").split(",") };
+      }) : [{ repository_id: repository, paths, operations, acceptance_criteria: criteria }];
+      let request;
+      try { request = planRequestForTasks(drafts, budgets, { componentContext }); } catch (failure) { throw new ClientRefusal(failure.message); }
+      return client.createPlan(args[0], { ...request, idempotency_key: flags.key ? String(flags.key) : randomUUID() }, io.signal);
     } },
   { id: "plans.list", name: "plans", action: "Plan listing", context: "ticket", args: [{ name: "ticket", context: true }], flags: {}, example: { args: ["ticket-1"], flags: {} },
     run: (client, { args }, io) => client.listPlans(args[0], io.signal) },
