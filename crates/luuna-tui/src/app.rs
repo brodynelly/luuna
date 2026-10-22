@@ -183,6 +183,14 @@ impl Default for AppState {
 }
 
 impl AppState {
+    /// Frame-clock hook for eased scrolling: true while an animation needs frames at
+    /// cadence. Never animates until that work lands.
+    pub fn animating(&self) -> bool {
+        false
+    }
+    /// Frame-clock hook for eased scrolling: advance animation state by the clamped
+    /// time since the previous frame.
+    pub fn advance_animations(&mut self, _dt: std::time::Duration) {}
     pub fn id(&mut self) -> String {
         self.next_id += 1;
         format!("ui-{}", self.next_id)

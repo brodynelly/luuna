@@ -127,6 +127,23 @@ fn real_pty_keyboard_resize_and_terminal_cleanup() {
             }
             std::thread::sleep(Duration::from_millis(30));
         }
+        if token_present && quit == b"q" {
+            // Idle evidence: after settling, a quiet workbench must not redraw per tick.
+            // The tolerance allows the bridge health/connection updates (~every 2 s).
+            std::thread::sleep(Duration::from_millis(300));
+            let settled = captured.lock().unwrap().len();
+            std::thread::sleep(Duration::from_secs(1));
+            let bytes = captured.lock().unwrap();
+            let all = String::from_utf8_lossy(&bytes).into_owned();
+            let fresh = String::from_utf8_lossy(&bytes[settled.min(bytes.len())..]).into_owned();
+            drop(bytes);
+            if all.contains("\x1b[?2026h") {
+                let frames = fresh.matches("\x1b[?2026h").count();
+                assert!(frames <= 3, "idle workbench drew {frames} frames in 1 s");
+            } else {
+                eprintln!("idle frame check skipped: ?2026 not passed through by this PTY");
+            }
+        }
         writer.write_all(b"\x1b[B\x1b[A").unwrap();
         writer.flush().unwrap();
         pair.master

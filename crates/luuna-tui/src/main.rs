@@ -1,9 +1,11 @@
-use crossterm::event::{self, Event, KeyCode, KeyEventKind, KeyModifiers};
+use crossterm::event::{Event, KeyCode, KeyEventKind, KeyModifiers};
 use luuna_tui::{
     app::AppState,
     bridge::{default_bridge, Bridge},
-    protocol::safe_text,
-    terminal::{install_panic_restore, Shutdown, TerminalGuard},
+    frame::{sync_from, FrameClock},
+    input::{Input, INPUT_QUEUE},
+    protocol::{safe_text, BridgeEvent, QUEUE_SIZE},
+    terminal::{draw_frame, install_panic_restore, Shutdown, TerminalGuard},
     theme::Theme,
     ui,
 };
@@ -14,8 +16,11 @@ use ratatui::{
 use std::{
     io::{self, IsTerminal},
     path::PathBuf,
-    time::Duration,
+    time::{Duration, Instant},
 };
+
+/// Shutdown marker/signal check cadence; it never draws.
+const SHUTDOWN_POLL: Duration = Duration::from_millis(100);
 
 const HELP:&str="luuna-tui — Rust terminal workbench\n\nUsage: luuna-tui [--bridge <absolute bridge.mjs path>] [--node <node executable>]\n\nConnection: LUUNA_URL (HTTP loopback) and LUUNA_API_TOKEN (hidden prompt if absent).\nUse the existing Luuna CLI for named script commands and JSON output.\nF1 help · F2 catalog · F5 refresh · q/Ctrl+C quit · Esc stops local request.\n";
 
@@ -73,13 +78,31 @@ async fn run() -> io::Result<u8> {
     install_panic_restore();
     let shutdown = Shutdown::install()?;
     let guard = TerminalGuard::enter()?;
+    // Declared after `guard` so early returns join the input thread before restoration.
+    let mut input = Input::spawn()?;
     let mut terminal = guard.screen()?;
+    let sync = sync_from(std::env::var("LUUNA_TUI_SYNC").ok().as_deref());
+    let mut clock = FrameClock::from_env();
     let theme = Theme::from_env();
     let mut token = std::env::var("LUUNA_API_TOKEN").unwrap_or_default();
     if token.trim().is_empty() {
-        match secret(&mut terminal, theme, &shutdown)? {
+        match secret(
+            &mut terminal,
+            theme,
+            &shutdown,
+            &mut input,
+            sync,
+            &mut clock,
+        )
+        .await?
+        {
             Some(value) => token = value,
-            None => return Ok(0),
+            None => {
+                drop(input);
+                drop(terminal);
+                drop(guard);
+                return Ok(0);
+            }
         }
     }
     let url = std::env::var("LUUNA_URL").ok();
@@ -88,91 +111,196 @@ async fn run() -> io::Result<u8> {
     let mut app = AppState::default();
     app.start();
     let mut transport_stopped = false;
+    let mut bridge_open = true;
+    clock.mark_dirty();
+    let mut shutdown_tick = tokio::time::interval(SHUTDOWN_POLL);
+    shutdown_tick.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
     let result = loop {
         if shutdown.requested() {
             break Ok(0);
         }
         while let Some(request) = app.queue.pop_front() {
+            clock.mark_dirty();
             if let Err(error) = bridge.send(&request) {
                 app.transport_failed(&error);
                 break;
             }
         }
-        // Bound work per frame: terminal input still runs when the producer is busy.
-        for _ in 0..32 {
-            match bridge.try_recv() {
-                Some(Ok(event)) => app.apply(event),
-                Some(Err(error)) => {
-                    app.transport_failed(&error);
-                    break;
-                }
-                None => break,
-            }
-        }
         if app.bridge_failed && !transport_stopped {
             bridge.shutdown().await;
             transport_stopped = true;
+            clock.mark_dirty();
         }
-        if let Err(error) = terminal.draw(|frame| ui::render(frame, &mut app, theme)) {
-            break Err(error);
+        if app.animating() {
+            clock.request_animation_frame();
+        }
+        let now = Instant::now();
+        if clock.should_draw(now) {
+            app.advance_animations(clock.frame_delta(now));
+            if let Err(error) = draw_frame(&mut terminal, sync, |frame| {
+                ui::render(frame, &mut app, theme)
+            }) {
+                break Err(error);
+            }
+            clock.frame_drawn(now);
         }
         if app.quit {
             break Ok(0);
         }
-        match event::poll(Duration::from_millis(35)) {
-            Ok(true) => match event::read() {
-                Ok(Event::Key(key)) if key.kind != KeyEventKind::Release => app.key(key),
-                Ok(Event::Paste(text)) => app.paste(&text),
-                Ok(_) => {}
-                Err(error) => break Err(error),
+        let deadline = clock
+            .next_deadline(Instant::now())
+            .map(tokio::time::Instant::from_std);
+        tokio::select! {
+            biased;
+            event = input.recv() => match event {
+                Some(Ok(event)) => {
+                    handle_input(&mut app, &mut clock, event);
+                    let mut failed = None;
+                    for _ in 0..INPUT_QUEUE {
+                        match input.try_recv() {
+                            Some(Ok(event)) => handle_input(&mut app, &mut clock, event),
+                            Some(Err(error)) => {
+                                failed = Some(error);
+                                break;
+                            }
+                            None => break,
+                        }
+                    }
+                    if let Some(error) = failed {
+                        break Err(error);
+                    }
+                }
+                Some(Err(error)) => break Err(error),
+                None => break Err(io::Error::other("Terminal input closed")),
             },
-            Ok(false) => {}
-            Err(error) => break Err(error),
+            event = bridge.recv(), if bridge_open && !transport_stopped => {
+                clock.mark_dirty();
+                match event {
+                    Some(first) => {
+                        // Bound work per wake: terminal input still runs when the producer is busy.
+                        let mut next = Some(first);
+                        for _ in 0..=QUEUE_SIZE {
+                            let Some(result) = next.take() else { break };
+                            if !apply_bridge(&mut app, result) {
+                                break;
+                            }
+                            next = bridge.try_recv();
+                        }
+                    }
+                    None => {
+                        bridge_open = false;
+                        if !app.bridge_failed {
+                            app.transport_failed("Bridge event channel closed. Inspect runtime state before retrying an in-flight mutation.");
+                        }
+                    }
+                }
+            },
+            _ = tokio::time::sleep_until(deadline.unwrap_or_else(tokio::time::Instant::now)), if deadline.is_some() => {},
+            _ = shutdown_tick.tick() => {},
         }
-        tokio::task::yield_now().await;
     };
     bridge.shutdown().await;
+    drop(input);
     drop(terminal);
     drop(guard);
     result
 }
 
-fn secret(
+fn handle_input(app: &mut AppState, clock: &mut FrameClock, event: Event) {
+    match event {
+        Event::Key(key) if key.kind != KeyEventKind::Release => {
+            app.key(key);
+            clock.mark_dirty();
+        }
+        Event::Paste(text) => {
+            app.paste(&text);
+            clock.mark_dirty();
+        }
+        Event::Resize(..) => clock.mark_dirty(),
+        _ => {}
+    }
+}
+
+/// Returns false when the transport failed and draining should stop.
+fn apply_bridge(app: &mut AppState, result: Result<BridgeEvent, String>) -> bool {
+    match result {
+        Ok(event) => {
+            app.apply(event);
+            true
+        }
+        Err(error) => {
+            app.transport_failed(&error);
+            false
+        }
+    }
+}
+
+async fn secret(
     terminal: &mut luuna_tui::terminal::Screen,
     theme: Theme,
     shutdown: &Shutdown,
+    input: &mut Input,
+    sync: bool,
+    clock: &mut FrameClock,
 ) -> io::Result<Option<String>> {
     let mut value = String::new();
+    let mut shutdown_tick = tokio::time::interval(SHUTDOWN_POLL);
+    shutdown_tick.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
+    clock.mark_dirty();
     loop {
         if shutdown.requested() {
             return Ok(None);
         }
-        terminal.draw(|frame|{
-            let text=format!("LUUNA / LOCAL RUNTIME\n\nService token (hidden): {}\n\nEnter connects · Esc quits\nThe token remains in process memory and the owned bridge environment.","•".repeat(value.chars().count().min(32)));
-            frame.render_widget(Paragraph::new(text).block(Block::default().borders(Borders::ALL).title(" Connection ")).style(theme.panel().add_modifier(Modifier::BOLD)).wrap(Wrap{trim:false}),frame.area());
-        })?;
-        if !event::poll(Duration::from_millis(35))? {
-            continue;
+        let now = Instant::now();
+        if clock.should_draw(now) {
+            draw_frame(terminal, sync, |frame| {
+                let text=format!("LUUNA / LOCAL RUNTIME\n\nService token (hidden): {}\n\nEnter connects · Esc quits\nThe token remains in process memory and the owned bridge environment.","•".repeat(value.chars().count().min(32)));
+                frame.render_widget(
+                    Paragraph::new(text)
+                        .block(Block::default().borders(Borders::ALL).title(" Connection "))
+                        .style(theme.panel().add_modifier(Modifier::BOLD))
+                        .wrap(Wrap { trim: false }),
+                    frame.area(),
+                );
+            })?;
+            clock.frame_drawn(now);
         }
-        match event::read()? {
-            Event::Key(key) if key.kind != KeyEventKind::Release => match key.code {
-                KeyCode::Esc => return Ok(None),
-                KeyCode::Char('c') if key.modifiers.contains(KeyModifiers::CONTROL) => {
-                    return Ok(None)
-                }
-                KeyCode::Enter if !value.trim().is_empty() => return Ok(Some(value)),
-                KeyCode::Backspace => {
-                    value.pop();
-                }
-                KeyCode::Char(c) if !c.is_control() && value.len() < 8192 => value.push(c),
-                _ => {}
+        let deadline = clock
+            .next_deadline(Instant::now())
+            .map(tokio::time::Instant::from_std);
+        let event = tokio::select! {
+            biased;
+            event = input.recv() => match event {
+                Some(event) => event?,
+                None => return Err(io::Error::other("Terminal input closed")),
             },
+            _ = tokio::time::sleep_until(deadline.unwrap_or_else(tokio::time::Instant::now)), if deadline.is_some() => continue,
+            _ = shutdown_tick.tick() => continue,
+        };
+        match event {
+            Event::Key(key) if key.kind != KeyEventKind::Release => {
+                clock.mark_dirty();
+                match key.code {
+                    KeyCode::Esc => return Ok(None),
+                    KeyCode::Char('c') if key.modifiers.contains(KeyModifiers::CONTROL) => {
+                        return Ok(None)
+                    }
+                    KeyCode::Enter if !value.trim().is_empty() => return Ok(Some(value)),
+                    KeyCode::Backspace => {
+                        value.pop();
+                    }
+                    KeyCode::Char(c) if !c.is_control() && value.len() < 8192 => value.push(c),
+                    _ => {}
+                }
+            }
             Event::Paste(text) => {
+                clock.mark_dirty();
                 let text = safe_text(&text);
                 if !text.contains('\n') && value.len() + text.len() <= 8192 {
                     value.push_str(&text);
                 }
             }
+            Event::Resize(..) => clock.mark_dirty(),
             _ => {}
         }
     }

@@ -25,6 +25,17 @@ Version metadata was verified using `cargo info` and the registry manifests.
 See [Ratatui installation](https://ratatui.rs/installation/) and
 [Crossterm terminal API](https://docs.rs/crossterm/0.28.1/crossterm/terminal/).
 
+## Rendering
+
+Frames are event-driven and capped at `LUUNA_TUI_FPS` (default 60, clamped to
+30-144); an idle workbench performs zero redraws. Terminal input, bridge events and
+the frame deadline wake the loop, pending work is drained, and at most one frame is
+drawn per interval. DEC 2026 synchronized output wraps each frame and is on by
+default; `LUUNA_TUI_SYNC=0` turns it off. Terminals without support ignore it. A
+dedicated input thread (`input.rs`) is the only crossterm event reader and is joined
+before the terminal is restored. Shutdown markers and signals are checked every
+100 ms, so marker latency is at most 100 ms.
+
 ## Shared interface
 
 `app::AppState` is the UI state/reducer; `ui::render` draws it. Later views queue
