@@ -122,9 +122,14 @@ def supervise():
     report['child_pid']=child.pid
     result=pathlib.Path(os.environ.pop('LUUNA_AUDIT_RESULT'))
     result.write_text(json.dumps(report))
-    report['exit']=child.wait();report['after']=modes()
+    report['exit']=child.wait()
+    try:report['after']=modes()
+    except Exception as error:report['mode_error']=str(error)
     result.write_text(json.dumps(report))
-    sys.exit(report['exit'])
+    # The supervisor does not write terminal output. Python's shutdown flush can
+    # race ConPTY detach and replace the child's status with 120 (flush failure).
+    # The result file is already closed; preserve the observed child exit exactly.
+    os._exit(report['exit'])
 
 def serve():
     console=None

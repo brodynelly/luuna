@@ -4,7 +4,7 @@ import { tmpdir } from "node:os";
 import path from "node:path";
 import { setTimeout as sleep } from "node:timers/promises";
 import { test } from "node:test";
-import { ConptyTerminal, TerminalScreen } from "./tui-terminal.mjs";
+import { ConptyTerminal, TerminalScreen, terminalSnapshotHtml } from "./tui-terminal.mjs";
 import { stageTerminal } from "./stage-terminal.mjs";
 
 test("VT captures current cursor-addressed cells, colors and split UTF-8/control sequences", () => {
@@ -29,6 +29,19 @@ test("VT alternate screen restoration and resize discard stale screen contents",
   assert.equal(screen.snapshot().lines[0].trim(), "main");
   assert.equal(screen.snapshot().alternate, false);
   assert.deepEqual(screen.snapshot().events, ["alternate-enter", "alternate-leave"]);
+});
+
+test("zero RGB/indexed channels preserve existing rendition and reconstructed HTML colors", () => {
+  const screen = new TerminalScreen(12, 2);
+  screen.feed("\x1b[1;48;2;0;0;170m\x1b[38;2;0;170;0mA\x1b[38;5;0mB\x1b[0mC");
+  const result = screen.snapshot();
+  assert.equal(result.colors[0][0], "0;1;48;2;0;0;170;38;2;0;170;0");
+  assert.equal(result.colors[0][1], "0;1;48;2;0;0;170;38;5;0");
+  assert.equal(result.colors[0][2], "0");
+  const html = terminalSnapshotHtml(result, "<capture>");
+  assert.match(html, /color:rgb\(0,170,0\);background:rgb\(0,0,170\);font-weight:bold/);
+  assert.match(html, /color:#000000;background:rgb\(0,0,170\)/);
+  assert.ok(html.includes("&lt;capture&gt;"));
 });
 
 test("staging refuses incomplete payload before copying", (t) => {
@@ -63,7 +76,7 @@ test("Windows ConPTY runs real Node terminal input, resize, screen rendering and
     const resized = await wait((state) => state.lines.join("\n").includes("SIZE 40x12"));
     assert.equal(resized.columns, 40); assert.equal(resized.rows, 12);
     await terminal.send("q"); const closed = await wait((state) => state.exit !== null);
-    assert.equal(closed.exit, 7); assert.equal(closed.alternate, false); assert.equal(closed.cursorVisible, true);
+    assert.equal(closed.exit, 7, `${readFileSync(result, "utf8")} ${terminal.raw.toString().slice(-1000)}`); assert.equal(closed.alternate, false); assert.equal(closed.cursorVisible, true);
     assert.equal(closed.lines[0].trim(), "main"); assert.deepEqual(closed.unknown, []);
     const consoleResult = JSON.parse(readFileSync(result, "utf8"));
     assert.equal(consoleResult.exit, 7);
