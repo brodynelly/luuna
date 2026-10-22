@@ -354,6 +354,11 @@ export function Workflows({ client, projectId, repositoryId, manifestConfirmed, 
       const record = await client.reconcilePublication(run.id, signal);
       if (!signal.aborted) setPublications((previous) => ({ ...previous, [run.id]: record }));
     }),
+    repairPublication: (run, view) => guarded("Repair after a CI failure", async (signal) => {
+      if (!client || !view.evidence) return;
+      const { run: _started, ...record } = await client.repairPublication(run.id, { candidate_hash: view.evidence.candidate.hash, ...modelSettings() }, signal);
+      if (!signal.aborted) setPublications((previous) => ({ ...previous, [run.id]: record }));
+    }),
     tasks: (run) => guarded("Task graph inspection", async (signal) => {
       if (!client) return;
       const list = await client.tasks(run.id, signal);
@@ -427,6 +432,7 @@ export interface TicketActions {
   publish: (run: RunRecord, view: CandidateView) => void;
   publication: (run: RunRecord) => void;
   reconcilePublication: (run: RunRecord) => void;
+  repairPublication: (run: RunRecord, view: CandidateView) => void;
 }
 
 /** One ticket: its latest plan revision's workflow, with earlier revisions summarised. */
@@ -481,7 +487,7 @@ export function TicketCard({ ticket, source, revisions, snapshots, diffs, attemp
     {(snapshot?.leases ?? []).map((lease) => <small key={lease.id} className="worktree-line meta" data-capability="runs.worktrees">worktree <code>{lease.path}</code> · {lease.state}{lease.candidate_commit && <> · candidate <code>{lease.candidate_commit.slice(0, 12)}</code></>}{lease.reason && ` · ${lease.reason}`}</small>)}
     {run && latest && latest.tasks.length > 1 && <div className="tasks-inspection actions"><button type="button" className="text-button" disabled={busy || !connected} data-capability="runs.tasks" onClick={() => actions.tasks(run)}>Show task graph</button>{tasks[run.id] && <ul className="record-list" aria-label="Task graph">{tasks[run.id].map((task) => <li key={task.task_id}><code>{task.task_id}</code> ({task.repository_id}) · {task.state}{task.depends_on.length ? ` · after ${task.depends_on.join(", ")}` : ""}{task.candidate_commit ? ` · commit ${task.candidate_commit.slice(0, 12)}` : ""}{task.reason ? ` · ${task.reason}` : ""}</li>)}</ul>}</div>}
     {run && <div className="attempts-inspection actions"><button type="button" className="text-button" disabled={busy || !connected} data-capability="runs.attempts" onClick={() => actions.attempts(run)}>Show writer attempts</button>{attempts[run.id] && <small className="meta" aria-label="Writer attempts">{attempts[run.id].length === 0 ? "No writer attempts recorded." : attempts[run.id].map((attempt) => `attempt ${attempt.number} (${attempt.task_id}): ${attempt.state}`).join(" · ")}</small>}</div>}
-    {run && candidate && <CandidateReview run={run} view={candidate} diff={diffs[run.id]} log={logs[run.id]} busy={busy} onValidate={() => actions.validate(run, candidate)} onRepair={() => actions.repair(run, candidate)} onCancel={() => actions.cancel(run)} onDiff={() => actions.diff(run)} onArtifact={(id) => actions.artifact(run, candidate, id)} publication={publications[run.id]} onPublish={() => actions.publish(run, candidate)} onPublication={() => actions.publication(run)} onReconcilePublication={() => actions.reconcilePublication(run)} />}
+    {run && candidate && <CandidateReview run={run} view={candidate} diff={diffs[run.id]} log={logs[run.id]} busy={busy} onValidate={() => actions.validate(run, candidate)} onRepair={() => actions.repair(run, candidate)} onCancel={() => actions.cancel(run)} onDiff={() => actions.diff(run)} onArtifact={(id) => actions.artifact(run, candidate, id)} publication={publications[run.id]} onPublish={() => actions.publish(run, candidate)} onPublication={() => actions.publication(run)} onReconcilePublication={() => actions.reconcilePublication(run)} onRepairPublication={() => actions.repairPublication(run, candidate)} />}
   </li>;
 }
 

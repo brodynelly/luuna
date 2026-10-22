@@ -19,6 +19,16 @@ interface Props {
   onPublish?: () => void;
   onPublication?: () => void;
   onReconcilePublication?: () => void;
+  onRepairPublication?: () => void;
+}
+
+/** A published candidate whose pull request failed CI on at least one repository may be sent to a bounded repair (the runtime re-observes CI and re-checks every repair gate); a superseded or still-active record never offers it. */
+export function canRepairPublication(run: RunRecord, view: CandidateView, publication?: PublicationRecord): boolean {
+  const evidence = view.evidence;
+  if (!evidence || !publication || view.active || publication.active) return false;
+  if (publication.candidate_hash !== evidence.candidate.hash || publication.superseded_by_repair) return false;
+  if (evidence.status !== "reviewed" || run.state !== "reviewed" || publication.publication_state !== "pr_open") return false;
+  return Object.values(publication.repositories).some((repository) => repository.ci.state === "failure");
 }
 
 /** A reviewed candidate with a passed review and no publication in flight may be published; the runtime re-checks every gate. */
@@ -34,6 +44,7 @@ export function PublicationSummary({ publication }: { publication: PublicationRe
   return <div className="publication subpanel" aria-label="Publication record" data-tone={publication.publication_state === "integrated" ? "success" : publication.publication_state === "failed" ? "danger" : publication.active ? "active" : "neutral"}>
     <p><strong>Publication</strong> <StatusBadge tone={publication.publication_state === "integrated" ? "success" : publication.publication_state === "failed" ? "danger" : publication.active ? "active" : "neutral"}>{publication.publication_state}</StatusBadge>{publication.active && <small> in progress</small>}</p>
     {publication.reason && <p className="failure-note" data-tone="danger">{publication.reason}</p>}
+    {publication.superseded_by_repair && <p className="recovery-note" role="status">Superseded: this publication's candidate was sent to a bounded repair after its pull request failed CI. The pull request stays yours to close; the repaired candidate publishes under a new branch whose pull request names this one.{publication.superseded_reason ? ` ${publication.superseded_reason}` : ""}</p>}
     <ul className="record-list" aria-label="Published repositories">{Object.entries(publication.repositories).map(([id, repository]) => <li key={id}>
       <strong>{id}</strong> · branch <code>{repository.branch}</code> at <code>{repository.commit.slice(0, 12)}</code> · push {repository.push} · pull request {repository.pull_request ? <a href={repository.pull_request.url} target="_blank" rel="noreferrer">#{repository.pull_request.number}</a> : repository.pull_request_step}
       <small> · CI {repository.ci.state}{repository.ci.reason ? ` (${repository.ci.reason})` : ""} · {repository.merge.merged ? `merged${repository.merge.merged_by ? ` by ${repository.merge.merged_by}` : ""}` : "not merged; merging stays with you on GitHub"}</small>
@@ -43,7 +54,7 @@ export function PublicationSummary({ publication }: { publication: PublicationRe
 }
 
 /** Displays durable runtime evidence; worker prose never decides these controls. */
-export function CandidateReview({ run, view, diff, log, busy, onValidate, onRepair, onCancel, onDiff, onArtifact, publication, onPublish, onPublication, onReconcilePublication }: Props) {
+export function CandidateReview({ run, view, diff, log, busy, onValidate, onRepair, onCancel, onDiff, onArtifact, publication, onPublish, onPublication, onReconcilePublication, onRepairPublication }: Props) {
   const evidence = view.evidence;
   if (!evidence) return null;
   const candidate = evidence.candidate;
@@ -70,6 +81,7 @@ export function CandidateReview({ run, view, diff, log, busy, onValidate, onRepa
       {onPublish && canPublish(run, view, publication) && <button type="button" disabled={busy} data-capability="runs.publish" onClick={onPublish}>Publish: push and open pull requests</button>}
       {onPublication && evidence.status === "reviewed" && <button type="button" className="text-button" disabled={busy} data-capability="runs.publication" onClick={onPublication}>Show publication</button>}
       {onReconcilePublication && publication && publication.candidate_hash === candidate.hash && publication.publication_state === "failed" && !publication.active && <button type="button" disabled={busy} data-capability="runs.publication.reconcile" onClick={onReconcilePublication}>Reconcile publication</button>}
+      {onRepairPublication && canRepairPublication(run, view, publication) && <button type="button" disabled={busy} data-capability="runs.publication.repair" onClick={onRepairPublication}>Repair after CI failure</button>}
     </div>
     {publication && publication.candidate_hash === candidate.hash && <PublicationSummary publication={publication} />}
     {view.active && <p className="callout" data-tone="active" role="status">The runtime is {run.state === "implementing" ? "running the scoped writer repair" : evidence.status === "reviewing" ? "running the independent reviewer" : "executing the approved checks"}. Closing this view does not cancel the workflow.</p>}

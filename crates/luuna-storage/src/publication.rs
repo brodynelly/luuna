@@ -113,6 +113,18 @@ pub struct PublicationRecord {
     pub updated_at: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub observed_at: Option<String>,
+    /// The developer sent the published candidate to a bounded repair after
+    /// its pull request failed CI (A24): the reviewed evidence behind this
+    /// record was invalidated and a later candidate revision publishes under
+    /// its own record, whose pull request body names this one as superseded.
+    /// The publication state is left as observed; the pull requests remain
+    /// the developer's to close or merge.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub superseded_by_repair: bool,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub superseded_reason: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub superseded_at: Option<String>,
 }
 
 impl PublicationRecord {
@@ -296,6 +308,16 @@ impl Store {
             .transpose()
     }
 
+    /// Every publication of a run, oldest first: earlier candidate hashes
+    /// superseded by a repair and the current one.
+    pub fn publications(&self, run_id: &str) -> Result<Vec<PublicationRecord>> {
+        let mut statement = self.connection.prepare(
+            "SELECT payload FROM publications WHERE run_id=?1 ORDER BY created_at, candidate_hash",
+        )?;
+        let rows = statement.query_map(params![run_id], |row| row.get::<_, String>(0))?;
+        rows.map(|row| Ok(serde_json::from_str(&row?)?)).collect()
+    }
+
     /// Persist the record as it now stands and, when `event` is given, a
     /// durable run event in the same transaction.
     pub fn update_publication(
@@ -457,6 +479,9 @@ mod tests {
             created_at: now(),
             updated_at: now(),
             observed_at: None,
+            superseded_by_repair: false,
+            superseded_reason: None,
+            superseded_at: None,
         }
     }
 

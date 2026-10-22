@@ -25,7 +25,8 @@ pub use missions::MissionsBinding;
 pub use projects::*;
 pub use publication::*;
 pub use validation::{
-    TicketUsage, WorkflowUsageView, COST_UNREPORTED_EVENT, STAGE_HEARTBEAT_SECONDS,
+    TicketUsage, WorkflowUsageView, COST_UNREPORTED_EVENT, MULTI_REPOSITORY_REPAIR,
+    STAGE_HEARTBEAT_SECONDS,
 };
 pub use writer::{AttemptRecord, PlanOpening, TaskRecord};
 

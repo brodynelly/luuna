@@ -787,8 +787,17 @@ export interface PublicationRecord {
   created_at: string;
   updated_at: string;
   observed_at?: string;
+  /** The developer sent this published candidate to a bounded repair after its pull request failed CI; a later revision publishes under its own record whose pull request body names this one. */
+  superseded_by_repair?: boolean;
+  superseded_reason?: string;
+  superseded_at?: string;
   contract: Publication;
   active: boolean;
+}
+
+/** The response of a CI-failure repair: the superseded publication record plus the workflow run now implementing the next candidate revision. */
+export interface PublicationRepair extends PublicationRecord {
+  run: RunRecord;
 }
 
 export interface CandidateDiff {
@@ -1313,6 +1322,12 @@ export class LuunaClient {
   /** Retries only the steps a partial publication still lacks, reconciling what the remote already has. */
   reconcilePublication(runId: string, signal?: AbortSignal): Promise<PublicationRecord> {
     return this.request(`/runs/${encodeURIComponent(runId)}/publication/reconcile`, { method: "POST", signal });
+  }
+
+  /** Sends a published candidate whose pull request failed CI to a bounded repair: the runtime re-observes CI, invalidates the reviewed evidence naming the failing checks, marks the publication superseded and starts the repair writer. */
+  repairPublication(runId: string, request: CandidateActionRequest, signal?: AbortSignal): Promise<PublicationRepair> {
+    if (!/^sha256:[a-f0-9]{64}$/.test(request.candidate_hash)) throw new Error("Use the candidate's complete hash.");
+    return this.request(`/runs/${encodeURIComponent(runId)}/publication/repair`, { method: "POST", body: JSON.stringify(request), signal });
   }
 
   /** The task graph of a workflow: one durable record per plan task with its state, attempt and exact candidate commit. */

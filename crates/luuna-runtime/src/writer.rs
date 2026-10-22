@@ -1189,7 +1189,7 @@ pub async fn implement(
             .await
             .map_err(Into::into);
     }
-    schedule_writer(state, id, request, None, None)
+    schedule_writer(state, id, request, None, None, None)
         .await
         .map_err(Into::into)
 }
@@ -1209,6 +1209,35 @@ pub async fn repair(
         },
         Some(request.candidate_hash),
         None,
+        None,
+    )
+    .await
+}
+
+/// The repair path entered after a published candidate's pull request failed
+/// CI (A24, ADR 0018): the reviewed candidate has already been invalidated by
+/// the publication route, and the repair writer's evidence carries the
+/// observed CI failure (`ci_failure`: repository, pull request, check names,
+/// statuses and conclusions as observed, never log content) beside the
+/// previous candidate's own checks and review. The gates, budgets, worktree
+/// and scope rules are exactly those of `POST …/repair`.
+pub(crate) async fn repair_after_ci_failure(
+    state: AppState,
+    id: String,
+    request: crate::candidates::CandidateRequest,
+    ci_failure: Value,
+) -> Result<(StatusCode, Json<RunRecord>), ApiError> {
+    schedule_writer(
+        state,
+        id,
+        Implement {
+            task_id: None,
+            provider: request.provider,
+            model: request.model,
+        },
+        Some(request.candidate_hash),
+        None,
+        Some(ci_failure),
     )
     .await
 }
@@ -1219,6 +1248,7 @@ async fn schedule_writer(
     request: Implement,
     repair_hash: Option<String>,
     inline_cancel: Option<watch::Receiver<bool>>,
+    ci_failure: Option<Value>,
 ) -> Result<(StatusCode, Json<RunRecord>), ApiError> {
     // Only the cheap admission checks happen here; the artifact reads behind the
     // repair feedback run after the repair is exclusively claimed, so rejected or
@@ -1440,10 +1470,11 @@ async fn schedule_writer(
             // Provenance survives the attempt's settlement. An automatic
             // repair writer runs on the provider and model of the validation
             // request that started it, as recorded here.
-            let trigger = match (&repair_hash, &inline_cancel) {
-                (None, _) => "implement",
-                (Some(_), None) => "repair",
-                (Some(_), Some(_)) => "automatic_repair",
+            let trigger = match (&repair_hash, &inline_cancel, &ci_failure) {
+                (None, _, _) => "implement",
+                (Some(_), None, None) => "repair",
+                (Some(_), None, Some(_)) => "ci_repair",
+                (Some(_), Some(_), _) => "automatic_repair",
             };
             let attempt = store
             .start_attempt(
@@ -1483,8 +1514,15 @@ async fn schedule_writer(
     if let Some(cancel) = inline_cancel {
         // Automatic repair already runs inside the validation pipeline's own task.
         let mut job = job;
-        (job.repair_feedback, job.preparation_seconds) =
-            repair_feedback(&state, &run.id, previous_evidence, &job.plan, &cancel).await;
+        (job.repair_feedback, job.preparation_seconds) = repair_feedback(
+            &state,
+            &run.id,
+            previous_evidence,
+            ci_failure,
+            &job.plan,
+            &cancel,
+        )
+        .await;
         let _ = writer_worker(state, job, cancel).await;
         return Ok((StatusCode::ACCEPTED, Json(run)));
     }
@@ -1492,20 +1530,30 @@ async fn schedule_writer(
     let run_id = run.id.clone();
     state.spawn_supervised(run.id.clone(), async move {
         let mut job = job;
-        (job.repair_feedback, job.preparation_seconds) =
-            repair_feedback(&worker_state, &run_id, previous_evidence, &job.plan, &rx).await;
+        (job.repair_feedback, job.preparation_seconds) = repair_feedback(
+            &worker_state,
+            &run_id,
+            previous_evidence,
+            ci_failure,
+            &job.plan,
+            &rx,
+        )
+        .await;
         let _ = writer_worker(worker_state, job, rx).await;
     });
     Ok((StatusCode::ACCEPTED, Json(run)))
 }
 
 /// The repair writer's feedback: the previous candidate's reason, check records,
-/// review and the bounded, redacted tail of each failed check's verified
-/// artifacts. A lost blocking task yields feedback without quoted output.
+/// review, the bounded, redacted tail of each failed check's verified
+/// artifacts and, for a repair after a published candidate failed CI, the
+/// observed CI failure (`ci_failure`). A lost blocking task yields feedback
+/// without quoted output.
 async fn repair_feedback(
     state: &AppState,
     run_id: &str,
     evidence: Option<luuna_domain::CandidateEvidence>,
+    ci_failure: Option<Value>,
     plan: &PlanRevision,
     cancel: &watch::Receiver<bool>,
 ) -> (Option<String>, u64) {
@@ -1557,7 +1605,13 @@ async fn repair_feedback(
         )
         .await
     };
-    let raw = json!({"reason":evidence.reason.as_deref().map(path_free),"checks":model_check_view(&evidence.results),"check_output":check_output,"review":evidence.review});
+    let mut raw = json!({"reason":evidence.reason.as_deref().map(path_free),"checks":model_check_view(&evidence.results),"check_output":check_output,"review":evidence.review});
+    if let Some(ci_failure) = ci_failure {
+        // Observed on the pull request after the review: check names,
+        // statuses and conclusions per repository, never GitHub log content.
+        // It sits inside the same marker-delimited envelope as the rest.
+        raw["ci_failure"] = ci_failure;
+    }
     let prompt = repair_evidence_envelope(&repair_evidence_json(&raw, &secrets));
     // Verify the final text: JSON escaping, clipping marks or the delimiters
     // must not reproduce a configured value either.
@@ -1745,6 +1799,7 @@ pub(crate) async fn automatic_repair(
         },
         Some(hash),
         Some(cancel),
+        None,
     )
     .await
     .map(|_| ())
