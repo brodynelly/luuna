@@ -1,6 +1,6 @@
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import type { FormEvent } from "react";
-import type { BaselineEvidence, CheckResult, ComponentContext, ComponentStatus, Discovery, EventEnvelope, LuunaClient, ProjectExport, ProjectRecord, ProjectView, ScaffoldProfile, ScaffoldProposal, ScaffoldResult } from "@luuna/api-client";
+import type { BaselineEvidence, CheckResult, ComponentContext, ComponentStatus, Discovery, EventEnvelope, LuunaClient, ProjectExport, ProjectImportResult, ProjectRecord, ProjectView, ScaffoldProfile, ScaffoldProposal, ScaffoldResult } from "@luuna/api-client";
 import { ApiError, isTerminal, mergeEvents, readEventPages } from "@luuna/api-client";
 import { Workflows } from "./Workflows";
 import { ProjectComponents } from "./ProjectComponents";
@@ -82,6 +82,9 @@ export function Projects({ client, connectionEpoch = 0 }: { client: LuunaClient 
   const [rebindPath, setRebindPath] = useState("");
   const [rebindConfirmed, setRebindConfirmed] = useState(false);
   const [exported, setExported] = useState<ProjectExport | null>(null);
+  const [importText, setImportText] = useState("");
+  const [importPaths, setImportPaths] = useState<Record<string, string>>({});
+  const [importResult, setImportResult] = useState<ProjectImportResult | null>(null);
   const [scaffoldProfile, setScaffoldProfile] = useState<ScaffoldProfile>("python");
   const [scaffoldName, setScaffoldName] = useState("");
   const [scaffoldParent, setScaffoldParent] = useState("");
@@ -308,6 +311,37 @@ export function Projects({ client, connectionEpoch = 0 }: { client: LuunaClient 
     });
   }
 
+  // The pasted document is parsed locally only to list the repositories it names;
+  // the runtime validates its hash, identities and content.
+  const importDraft = useMemo<ProjectExport | null>(() => {
+    if (!importText.trim()) return null;
+    try {
+      const value = JSON.parse(importText) as ProjectExport;
+      return value && typeof value === "object" && value.kind === "luuna-project-export" ? value : null;
+    } catch {
+      return null;
+    }
+  }, [importText]);
+  const importRepositories = importDraft?.manifest?.repositories.map((repository) => repository.id) ?? [];
+  const importReady = importDraft !== null && importRepositories.length > 0 && importRepositories.every((id) => (importPaths[id] ?? "").trim());
+
+  function importProject(event: FormEvent) {
+    event.preventDefault();
+    if (!importDraft || !importReady) return;
+    const draft = importDraft;
+    const repositories = importRepositories.map((id) => ({ id, path: (importPaths[id] ?? "").trim() }));
+    void guarded("Project import", async (signal) => {
+      if (!client) return;
+      setImportResult(null);
+      const result = await client.importProject({ export: draft, repositories, idempotency_key: `import-${(draft.export_hash ?? "").slice(7, 31) || draft.project.id}` }, signal);
+      if (signal.aborted) return;
+      setImportResult(result);
+      setImportText("");
+      setImportPaths({});
+      await refresh(result.project.project.id, signal);
+    });
+  }
+
   function proposeScaffold(event: FormEvent) {
     event.preventDefault();
     void guarded("Scaffold proposal", async (signal) => {
@@ -403,6 +437,17 @@ export function Projects({ client, connectionEpoch = 0 }: { client: LuunaClient 
             <div className="form-footer"><small>Paths stay in the local machine registry; the manifest never contains them.</small><button className="primary" disabled={!name.trim() || !path.trim()} data-capability="projects.register">Register repository</button></div>
           </fieldset>
         </form>
+        <details className="import section"><summary>Import a project export from another machine</summary>
+          <form onSubmit={importProject} className="form-group">
+            <fieldset disabled={!client || busy}>
+              <label>Export JSON<textarea value={importText} onChange={(event) => setImportText(event.target.value)} rows={4} spellCheck={false} placeholder='{"kind":"luuna-project-export", …}' aria-describedby="import-note" /></label>
+              {importText.trim() && !importDraft && <p className="reason" role="status">The pasted text is not a Luuna project export.</p>}
+              {importRepositories.map((id) => <label key={id}>Checkout of repository <code>{id}</code><input value={importPaths[id] ?? ""} onChange={(event) => setImportPaths({ ...importPaths, [id]: event.target.value })} required spellCheck={false} placeholder="/absolute/path/to/clone" /></label>)}
+              <div className="form-footer"><small id="import-note">The runtime checks the export hash, matches each clone's remote and root commits against the exported identity, and refuses user memory, credentials and host paths. Tickets, project and process memory and prompts arrive through Missions, Atlas and Beacon.</small><button className="primary" disabled={!importReady} data-capability="projects.import">Import project</button></div>
+            </fieldset>
+          </form>
+          {importResult && <p className="reason" role="status">Imported <code>{importResult.project.project.id}</code> at manifest <code>{importResult.manifest_hash.slice(0, 23)}…</code>: {importResult.counts.tickets} tickets, {importResult.counts.memory} memories, {importResult.counts.prompts} prompts{importResult.components_enabled ? "" : " (components not enabled on this host)"}{importResult.replayed ? " (replayed)" : ""}.</p>}
+        </details>
         <details className="scaffold section"><summary>Create a new project from a stack profile</summary>
           <form onSubmit={proposeScaffold} className="form-group">
             <fieldset disabled={!client || busy}>

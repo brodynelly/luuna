@@ -125,6 +125,17 @@ export const COMMANDS = [
       if (flags.output) { await io.writeFile(String(flags.output), JSON.stringify(exported, null, 2) + "\n"); return { written: String(flags.output), omitted: exported.omitted, tickets: exported.tickets.length, memory: exported.memory.length, prompts: exported.prompts.length }; }
       return exported;
     } },
+  { id: "projects.import", name: "import", action: "Project import", context: "runtime",
+    args: [{ name: "export", description: "path of the export JSON from the other machine, or - for standard input", prompt: "Export file path" }, { name: "repository-id", description: "exported repository id (for example app)", prompt: "Repository id" }, { name: "path", description: "absolute path of this machine's checkout of that repository", prompt: "Repository root path" }],
+    flags: { key: { description: "idempotency key (derived from the export hash when omitted; the same key replays)" } },
+    example: { args: ["luuna-walkthrough-export.json", "app", "/srv/walkthrough"], flags: {} },
+    run: async (client, { args, flags }, io) => {
+      let exported;
+      try { exported = JSON.parse(await document(io, args[0])); } catch { throw new ClientRefusal("The export document is not valid JSON."); }
+      if (!exported || typeof exported !== "object" || exported.kind !== "luuna-project-export") throw new ClientRefusal("The document is not a Luuna project export; pass the JSON that `export` wrote on the other machine.");
+      const key = flags.key ? String(flags.key) : `import-${String(exported.export_hash ?? "").slice(7, 31) || randomUUID()}`;
+      return client.importProject({ export: exported, repositories: [{ id: args[1], path: args[2] }], idempotency_key: key }, io.signal);
+    } },
   { id: "projects.events", name: "project-events", action: "Project event replay", context: "project", args: [{ name: "project", context: true }],
     flags: { after: { description: "replay after this sequence (default 0)" }, limit: { description: "page size (default 1000)" } },
     example: { args: ["walkthrough"], flags: {} },

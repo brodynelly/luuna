@@ -39,6 +39,9 @@ use tower_http::cors::CorsLayer;
 /// How long shutdown waits for admitted mutation requests before closing
 /// admission anyway, and then for signalled owned work to settle.
 const ADMISSION_DRAIN: Duration = Duration::from_secs(5);
+/// An export document carries up to 1000 tickets of bounded text; the import
+/// route alone accepts it, every other route keeps the 256 KiB limit.
+const IMPORT_BODY_LIMIT: usize = 16 * 1024 * 1024;
 const SETTLE_DEADLINE: Duration = Duration::from_secs(5);
 
 #[derive(Clone)]
@@ -323,6 +326,13 @@ impl AppState {
     /// Override the component toolchain in isolated adapter tests.
     pub fn with_components(mut self, components: luuna_components::Components) -> Self {
         self.components = Some(Arc::new(components));
+        self
+    }
+
+    /// A runtime without the component toolchain, for synthetic tests whose
+    /// outcome must not depend on whether the pinned CLIs are populated.
+    pub fn without_components(mut self) -> Self {
+        self.components = None;
         self
     }
 
@@ -682,6 +692,11 @@ pub fn router(state: AppState) -> Router {
             get(projects::list_projects).post(projects::register_project),
         )
         .route("/api/v1/projects/{id}", get(projects::get_project))
+        .route(
+            "/api/v1/projects/import",
+            post(projects::import_project)
+                .layer(axum::extract::DefaultBodyLimit::max(IMPORT_BODY_LIMIT)),
+        )
         .route(
             "/api/v1/projects/scaffold/propose",
             post(scaffold::propose_scaffold),

@@ -43,7 +43,7 @@ function io(overrides = {}) {
   let err = "";
   const base = makeIo({ stdin: { setEncoding() {}, on() {}, resume() {} }, stdout: { write: (text) => { out += text; return true; } }, stderr: { write: (text) => { err += text; return true; } }, json: true, ...overrides });
   base.readStdin = async () => JSON.stringify({ schema_version: "0.1", id: "walkthrough" });
-  base.readFile = () => JSON.stringify({ schema_version: "0.1", id: "walkthrough" });
+  base.readFile = (path) => JSON.stringify(String(path).includes("export") ? { schema_version: "0.1", kind: "luuna-project-export", export_hash: `sha256:${"b".repeat(64)}`, project: { id: "walkthrough" } } : { schema_version: "0.1", id: "walkthrough" });
   return { io: base, out: () => out, err: () => err };
 }
 

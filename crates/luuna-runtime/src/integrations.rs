@@ -158,14 +158,22 @@ pub async fn enable(
     State(state): State<AppState>,
     Path(id): Path<String>,
 ) -> Result<Json<Value>, ApiError> {
-    let directory = workspace(&state, &id)?;
     let _guard = state.component_locks.lock().await;
-    available(&state)?;
+    enable_project(&state, &id).await?;
+    drop(_guard);
+    status(State(state), Path(id)).await
+}
+/// Activation itself, for a caller that already holds the component lock:
+/// initializes the three private stores and migrates legacy tickets while the
+/// project is frozen in `initializing`. Repeating it is harmless.
+pub(crate) async fn enable_project(state: &AppState, id: &str) -> Result<(), ApiError> {
+    let directory = workspace(state, id)?;
+    available(state)?;
     state
         .store
         .lock()
         .map_err(internal)?
-        .begin_component_enable(&id)
+        .begin_component_enable(id)
         .map_err(internal)?;
     private_directory(&directory, &state.config.data_dir)?;
     for (component, marker) in [
@@ -174,18 +182,17 @@ pub async fn enable(
         ("beacon", ".canopy/config.yaml"),
     ] {
         if !directory.join(marker).exists() {
-            call(&state, component, &directory, vec!["init".into()]).await?;
+            call(state, component, &directory, vec!["init".into()]).await?;
         }
     }
-    crate::missions::migrate_project(&state, &id).await?;
+    crate::missions::migrate_project(state, id).await?;
     state
         .store
         .lock()
         .map_err(internal)?
-        .finish_component_enable(&id)
+        .finish_component_enable(id)
         .map_err(internal)?;
-    drop(_guard);
-    status(State(state), Path(id)).await
+    Ok(())
 }
 
 #[derive(Deserialize)]
@@ -349,7 +356,11 @@ pub async fn create_memory(
         .await?,
     ))
 }
-fn validate_memory_request(scope: &str, content: &str, provenance: &str) -> Result<(), ApiError> {
+pub(crate) fn validate_memory_request(
+    scope: &str,
+    content: &str,
+    provenance: &str,
+) -> Result<(), ApiError> {
     if !matches!(scope, "project" | "process" | "user")
         || content.trim().is_empty()
         || content.len() > 16_000
@@ -364,7 +375,7 @@ fn validate_memory_request(scope: &str, content: &str, provenance: &str) -> Resu
 }
 /// Creates one memory under the caller's component lock. Durable intent is
 /// recorded before the Atlas write and reconciled by identity on retry.
-async fn create_memory_locked(
+pub(crate) async fn create_memory_locked(
     state: &AppState,
     id: &str,
     idempotency_key: &str,
@@ -730,7 +741,7 @@ pub async fn export_project(
     Path(id): Path<String>,
 ) -> Result<Json<Value>, ApiError> {
     project(&state, &id)?;
-    let (record, manifest, tickets, local_paths) = {
+    let (record, manifest, tickets, local_paths, identities) = {
         let store = state.store.lock().map_err(internal)?;
         let record = store
             .get_project(&id)
@@ -738,13 +749,24 @@ pub async fn export_project(
             .ok_or_else(not_found)?;
         let manifest = store.current_manifest(&id).map_err(internal)?;
         let tickets = store.tickets(&id).map_err(internal)?;
-        let local_paths: Vec<String> = store
-            .repositories(&id)
-            .map_err(internal)?
-            .into_iter()
-            .map(|registration| registration.local_path)
+        let registrations = store.repositories(&id).map_err(internal)?;
+        let local_paths: Vec<String> = registrations
+            .iter()
+            .map(|registration| registration.local_path.clone())
             .collect();
-        (record, manifest, tickets, local_paths)
+        // The registered identity (remote and root commits) is machine
+        // independent; an import compares it with the checkout it is given.
+        let identities: std::collections::BTreeMap<String, luuna_domain::RepositoryIdentity> =
+            registrations
+                .into_iter()
+                .map(|registration| {
+                    (
+                        registration.repository_id,
+                        registration.observation.identity,
+                    )
+                })
+                .collect();
+        (record, manifest, tickets, local_paths, identities)
     };
     let components_enabled = enabled(&state, &id)? && state.components.is_some();
     let (memory, prompts) = if components_enabled {
@@ -765,18 +787,51 @@ pub async fn export_project(
     } else {
         (Vec::new(), Vec::new())
     };
-    let export = json!({
+    let mut export = json!({
         "schema_version": luuna_domain::SCHEMA_VERSION,
-        "kind": "luuna-project-export",
+        "kind": EXPORT_KIND,
         "exported_at": chrono::Utc::now().to_rfc3339(),
         "project": {"id": record.id, "name": record.name, "manifest_revision": record.revision, "manifest_hash": record.manifest_hash},
         "manifest": manifest.map(|m| m.manifest),
+        "repository_identities": identities,
         "tickets": tickets,
         "memory": memory,
         "prompts": prompts,
         "omitted": ["user memory", "credentials", "machine registry paths", "worktrees and private artifacts"],
     });
-    let mut forbidden: Vec<(String, &str)> = crate::writer::known_secrets(&state)
+    let forbidden = forbidden_values(&state, local_paths);
+    export_guard(&export, &forbidden).map_err(|what| {
+        conflict(format!(
+            "Export refused: it would include {what}; remove it from the ticket or memory text first"
+        ))
+    })?;
+    // The content hash covers every other field; an import recomputes it and
+    // refuses a document that was edited in transit.
+    let hash = export_hash(&export).map_err(internal)?;
+    export[EXPORT_HASH_FIELD] = Value::String(hash);
+    Ok(Json(export))
+}
+
+pub(crate) const EXPORT_KIND: &str = "luuna-project-export";
+pub(crate) const EXPORT_HASH_FIELD: &str = "export_hash";
+
+/// The `luuna-json-v1` hash of an export document without its own hash field.
+pub(crate) fn export_hash(export: &Value) -> Result<String, luuna_domain::DomainError> {
+    let mut body = export.clone();
+    if let Some(fields) = body.as_object_mut() {
+        fields.remove(EXPORT_HASH_FIELD);
+    }
+    hash_value(&body)
+}
+
+/// Exact values no export may carry and no import may bring in: this host's
+/// credential values, its runtime data directory, the given checkout paths and
+/// the home directory.
+pub(crate) fn forbidden_values(
+    state: &AppState,
+    local_paths: Vec<String>,
+) -> Vec<(String, &'static str)> {
+    let mut forbidden: Vec<(String, &str)> = crate::writer::known_secrets(state)
         .into_iter()
         .map(|secret| (secret, "a credential value"))
         .collect();
@@ -797,12 +852,7 @@ pub async fn export_project(
             ));
         }
     }
-    export_guard(&export, &forbidden).map_err(|what| {
-        conflict(format!(
-            "Export refused: it would include {what}; remove it from the ticket or memory text first"
-        ))
-    })?;
-    Ok(Json(export))
+    forbidden
 }
 
 /// Fails closed on any string that carries a forbidden exact value, an
@@ -1083,20 +1133,50 @@ pub async fn create_prompt(
     Json(request): Json<CreatePrompt>,
 ) -> Result<Json<RenderedPrompt>, ApiError> {
     require_enabled(&state, &id)?;
-    if !valid_prompt_name(&request.name)
-        || request.body.trim().is_empty()
-        || request.body.len() > 16_000
-    {
+    valid_prompt_request(&request.name, &request.body)?;
+    let _guard = state.component_locks.lock().await;
+    Ok(Json(
+        create_prompt_locked(
+            &state,
+            &id,
+            &request.idempotency_key,
+            &request.name,
+            &request.body,
+            request.expected_version,
+        )
+        .await?,
+    ))
+}
+pub(crate) fn valid_prompt_request(name: &str, body: &str) -> Result<(), ApiError> {
+    if !valid_prompt_name(name) || body.trim().is_empty() || body.len() > 16_000 {
         return Err(invalid(
             "Prompts require a bounded name and nonempty content",
         ));
     }
-    let _guard = state.component_locks.lock().await;
-    let operation=state.store.lock().map_err(internal)?.begin_component_operation(&id,&request.idempotency_key,"prompt.create",&json!({"name":request.name,"body":request.body,"expected_version":request.expected_version}),&format!("prompt-{}",uuid::Uuid::new_v4())).map_err(|_| conflict("Prompt idempotency key conflicts with a previous request"))?;
+    Ok(())
+}
+/// Creates or updates one prompt under the caller's component lock. Durable
+/// intent is recorded before the Beacon write and reconciled on retry through
+/// the `luuna_request` frontmatter identity.
+pub(crate) async fn create_prompt_locked(
+    state: &AppState,
+    id: &str,
+    idempotency_key: &str,
+    name: &str,
+    body: &str,
+    expected_version: Option<u64>,
+) -> Result<RenderedPrompt, ApiError> {
+    let request = CreatePrompt {
+        idempotency_key: idempotency_key.to_owned(),
+        name: name.to_owned(),
+        body: body.to_owned(),
+        expected_version,
+    };
+    let operation=state.store.lock().map_err(internal)?.begin_component_operation(id,&request.idempotency_key,"prompt.create",&json!({"name":request.name,"body":request.body,"expected_version":request.expected_version}),&format!("prompt-{}",uuid::Uuid::new_v4())).map_err(|_| conflict("Prompt idempotency key conflicts with a previous request"))?;
     if let Some(response) = operation.response {
-        return Ok(Json(serde_json::from_value(response).map_err(internal)?));
+        return serde_json::from_value(response).map_err(internal);
     }
-    let records = prompt_records(&state, &id).await?;
+    let records = prompt_records(state, id).await?;
     if let Some(existing) = records
         .iter()
         .find(|value| value["name"].as_str() == Some(&request.name))
@@ -1115,12 +1195,12 @@ pub async fn create_prompt(
                 .store
                 .lock()
                 .map_err(internal)?
-                .mark_component_operation_attempted(&id, &request.idempotency_key)
+                .mark_component_operation_attempted(id, &request.idempotency_key)
                 .map_err(internal)?;
             call(
-                &state,
+                state,
                 "beacon",
-                &workspace(&state, &id)?,
+                &workspace(state, id)?,
                 vec![
                     "update".into(),
                     request.name.clone(),
@@ -1143,12 +1223,12 @@ pub async fn create_prompt(
             .store
             .lock()
             .map_err(internal)?
-            .mark_component_operation_attempted(&id, &request.idempotency_key)
+            .mark_component_operation_attempted(id, &request.idempotency_key)
             .map_err(internal)?;
         call(
-            &state,
+            state,
             "beacon",
-            &workspace(&state, &id)?,
+            &workspace(state, id)?,
             vec![
                 "create".into(),
                 "--name".into(),
@@ -1161,13 +1241,13 @@ pub async fn create_prompt(
         )
         .await?;
     }
-    let result = render(&state, &id, &request.name, None).await?;
+    let result = render(state, id, &request.name, None).await?;
     if result.version != request.expected_version.unwrap_or(0).saturating_add(1) {
         return Err(conflict(
             "Beacon advanced during the operation; refresh and reconcile before retrying",
         ));
     }
-    let records = prompt_records(&state, &id).await?;
+    let records = prompt_records(state, id).await?;
     let written = records
         .iter()
         .find(|record| record["name"].as_str() == Some(&request.name))
@@ -1188,12 +1268,12 @@ pub async fn create_prompt(
         .lock()
         .map_err(internal)?
         .complete_component_operation(
-            &id,
+            id,
             &request.idempotency_key,
             &serde_json::to_value(&result).map_err(internal)?,
         )
         .map_err(internal)?;
-    Ok(Json(result))
+    Ok(result)
 }
 
 #[derive(Deserialize, Clone)]
