@@ -14,6 +14,17 @@ export const VIEWS = [
 
 export type View = (typeof VIEWS)[number]["id"];
 
+/** The sidebar's sections, in VIEWS order so the Ctrl+N shortcuts stay stable. */
+export const NAV_SECTIONS = [
+  { id: "workspace", label: "Workspace", views: ["home", "board", "projects", "sessions"] },
+  { id: "general", label: "General", views: ["settings", "help"] },
+] as const satisfies ReadonlyArray<{ id: string; label: string; views: readonly View[] }>;
+
+/** The shortcut that selects a view: Ctrl+, for Settings, otherwise Ctrl with the view's position. */
+export function viewShortcut(id: View): string {
+  return id === "settings" ? "Ctrl+," : `Ctrl+${VIEWS.findIndex((item) => item.id === id) + 1}`;
+}
+
 export function viewInfo(id: View) {
   return VIEWS.find((item) => item.id === id)!;
 }

@@ -1,16 +1,17 @@
-import { VIEWS } from "../content/views";
+import { CONNECTION_LABEL, NAV_SECTIONS, viewInfo, viewShortcut } from "../content/views";
 import type { View } from "../content/views";
 import { connectionTone } from "../design/tone";
-import { CONNECTION_LABEL } from "../content/views";
-import { ConnectionStatus, NavItem, Sidebar } from "../ui";
+import { ConnectionStatus, NavItem, NavSection, Sidebar } from "../ui";
 
-/** The window's sidebar: the wordmark, the connection status and one item per view. */
+/** The window's sidebar: the wordmark, the palette trigger, the views in sections and the connection status. */
 export function WindowSidebar({ view, onSelect, connection, address, activeRuns, collapsed, onToggle, onSearch }: {
   view: View; onSelect: (view: View) => void; connection: keyof typeof CONNECTION_LABEL; address?: string; activeRuns: number; collapsed: boolean; onToggle: () => void; onSearch: () => void;
 }) {
-  const status = <ConnectionStatus tone={connectionTone[connection]} label={CONNECTION_LABEL[connection]} title={address} />;
-  return <Sidebar status={status} collapsed={collapsed} onToggle={onToggle} onSearch={onSearch}>
-    {VIEWS.map((item, index) => <NavItem key={item.id} icon={item.id} label={item.label} current={view === item.id}
-      shortcut={item.id === "settings" ? "Ctrl+," : `Ctrl+${index + 1}`} count={item.id === "sessions" ? activeRuns : undefined} onSelect={() => onSelect(item.id)} />)}
+  const status = <ConnectionStatus tone={connectionTone[connection]} label={CONNECTION_LABEL[connection]} title={address} live={connection === "connected"} />;
+  return <Sidebar status={status} current={view} collapsed={collapsed} onToggle={onToggle} onSearch={onSearch}>
+    {NAV_SECTIONS.map((section) => <NavSection key={section.id} id={section.id} label={section.label}>
+      {section.views.map((id) => <NavItem key={id} icon={id} label={viewInfo(id).label} current={view === id}
+        shortcut={viewShortcut(id)} count={id === "sessions" ? activeRuns : undefined} onSelect={() => onSelect(id)} />)}
+    </NavSection>)}
   </Sidebar>;
 }
