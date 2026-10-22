@@ -1,6 +1,6 @@
 // Non-interactive entry: `luuna-tui <command> [args] [--flag value] [--json]`, one command per
 // catalog entry, for scripts and tests. Without a command and with a terminal, the interactive
-// workbench opens (interactive.mjs). Exit codes: 0 done, 1 refused or failed, 2 usage.
+// Rust workbench opens. Exit codes: 0 done, 1 refused or failed, 2 usage.
 import { readFileSync, writeFileSync } from "node:fs";
 import { LuunaClient, describeFailure, explainFailure } from "@luuna/api-client";
 import { COMMANDS, ClientRefusal, PROJECTIONS, UsageError, commandsByName, usage } from "./commands.mjs";
@@ -141,13 +141,11 @@ export function makeIo({ stdin, stdout, stderr, json = false, interactive = fals
   };
 }
 
-export async function main(argv, { env, stdin, stdout, stderr, fetcher }) {
+export async function main(argv, { env, stdin, stdout, stderr, fetcher, nativeLauncher }) {
   const [name, ...rest] = argv;
-  if (name === undefined && stdin?.isTTY) {
-    const { interactive } = await import("./interactive.mjs");
-    let client;
-    try { client = await connect(env, { stdin, stdout, fetcher }); } catch (failure) { stderr.write(`${failure instanceof UsageError ? failure.message : explainFailure("Connection", failure).message}\n`); return failure instanceof UsageError ? 2 : 1; }
-    return interactive(client, { stdin, stdout, stderr, colour: colourEnabled({ env, stdout }) });
+  if (name === undefined && stdin?.isTTY && stdout?.isTTY) {
+    const launch = nativeLauncher ?? (await import("./native.mjs")).launchNative;
+    return launch({ env, stdin, stdout, stderr });
   }
   if (name === undefined || name === "help" || name === "--help" || name === "-h") { stdout.write(help()); return name === undefined ? 2 : 0; }
   if (name === "catalog") { stdout.write(`${JSON.stringify(catalog, null, 2)}\n`); return 0; }

@@ -52,6 +52,14 @@ Client parity (R02, A33) follows one capability catalog ([ADR 0020](decisions/00
 
 The workspace should add crates when they contain a real contract or implementation: domain, storage, runtime/API, engine/Pi, Git, executor, validation, and external adapters. Shared frontend packages are created when an actual shared consumer needs them. Empty placeholders do not establish implementation progress.
 
+The terminal renderer is now the native Rust application in `crates/luuna-tui`
+([ADR 0029](decisions/0029-rust-terminal-workbench.md)). `packages/tui` retains
+script commands and supplies the versioned local JSONL bridge to the shared
+client. Public no-command terminal launches select Rust deterministically;
+Windows packages carry `luuna-tui.exe` and its Node bridge together. Historical
+JavaScript interactive audit results above do not establish native renderer
+coverage; native UI and staged-launch evidence must be recorded separately.
+
 ## Runtime ownership
 
 Only the Rust runtime may enforce state transitions, immutable plan hashes, approval scope, execution permissions, task dependencies, limits, retries, candidate identity, check evidence, review acceptance, and publication gates. Agents provide proposals and worker output. Deterministic runtime code produces authoritative domain events.

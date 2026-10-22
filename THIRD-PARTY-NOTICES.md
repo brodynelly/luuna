@@ -5,9 +5,9 @@ Jaymin West's MIT-licensed os-eco tools:
 
 | Luuna distribution | Upstream | Imported version | License |
 | --- | --- | --- | --- |
-| Luuna Missions | https://github.com/jayminwest/seeds | 0.6.0 | [MIT](https://github.com/brodynelly/luuna-missions/blob/bda5f31e8e7968af54f0d5f55f60c04dbd823d3e/LICENSE) |
-| Luuna Atlas | https://github.com/jayminwest/mulch | 0.11.0 | [MIT](https://github.com/brodynelly/luuna-atlas/blob/3296243402ec51aa4f21a317c3379b8b8de5e7ca/LICENSE) |
-| Luuna Beacon | https://github.com/jayminwest/canopy | 0.2.6 | [MIT](https://github.com/brodynelly/luuna-beacon/blob/e103e010082afaa3bde00460b5bd4ceae0f0e476/LICENSE) |
+| Luuna Missions | https://github.com/jayminwest/seeds | 0.6.0 | [MIT](https://github.com/brodynelly/luuna-missions/blob/5832801137dc1189915340c1f6076516b34e21b1/LICENSE) |
+| Luuna Atlas | https://github.com/jayminwest/mulch | 0.11.0 | [MIT](https://github.com/brodynelly/luuna-atlas/blob/7c04005c5541e7efdb652d834728602a8dcb4d29/LICENSE) |
+| Luuna Beacon | https://github.com/jayminwest/canopy | 0.2.6 | [MIT](https://github.com/brodynelly/luuna-beacon/blob/ae7741fe84df39c59a0081e8f56b13ef567bcce8/LICENSE) |
 
 The upstream copyright notices remain in each component. Renaming a distribution
 does not imply upstream endorsement or change the compatible data formats. The
