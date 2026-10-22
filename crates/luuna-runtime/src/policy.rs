@@ -200,11 +200,16 @@ fn secret_assignment(line: &str) -> bool {
     let mut index = 0;
     while index < bytes.len() {
         if bytes[index] == b'=' || bytes[index] == b':' {
-            let key = line[..index].trim_end();
+            // The key may be quoted (JSON, YAML); the identifier is its last
+            // run of identifier characters, found on a character boundary so
+            // a multibyte character before it cannot split a code point.
+            let key = line[..index].trim_end().trim_end_matches(['"', '\'']);
             let key_end = key
-                .rfind(|c: char| !(c.is_ascii_alphanumeric() || c == '_' || c == '-' || c == '.'))
-                .map_or(0, |at| at + 1);
-            let identifier = key[key_end..].trim_matches('"').to_ascii_lowercase();
+                .char_indices()
+                .rev()
+                .find(|(_, c)| !(c.is_ascii_alphanumeric() || *c == '_' || *c == '-' || *c == '.'))
+                .map_or(0, |(at, c)| at + c.len_utf8());
+            let identifier = key[key_end..].to_ascii_lowercase();
             if !identifier.is_empty()
                 && SECRET_IDENTIFIERS
                     .iter()
@@ -336,6 +341,9 @@ fn added_lines(text: &str) -> Vec<(String, usize, String)> {
     let mut line_number = 0usize;
     for line in text.lines() {
         if let Some(header) = line.strip_prefix("+++ ") {
+            // Git quotes a path with unusual bytes (`+++ "b/caf\303\251"`);
+            // decoded, it names the same file as `diff.files`.
+            let header = unquote_git_path(header);
             path = header
                 .strip_prefix("b/")
                 .filter(|p| *p != "/dev/null")
@@ -371,6 +379,56 @@ fn added_lines(text: &str) -> Vec<(String, usize, String)> {
     lines
 }
 
+/// Decode Git's C-style quoting of a path (`"..."` with `\\`, `\"`, `\t`,
+/// `\n` and `\ooo` octal escapes); an unquoted path is returned as is.
+fn unquote_git_path(text: &str) -> String {
+    let Some(inner) = text
+        .strip_prefix('"')
+        .and_then(|rest| rest.strip_suffix('"'))
+    else {
+        return text.to_owned();
+    };
+    let bytes = inner.as_bytes();
+    let mut out = Vec::with_capacity(bytes.len());
+    let mut i = 0;
+    while i < bytes.len() {
+        if bytes[i] == b'\\' && i + 1 < bytes.len() {
+            let next = bytes[i + 1];
+            if next.is_ascii_digit() && i + 3 < bytes.len() {
+                let octal = &inner[i + 1..i + 4];
+                if let Ok(value) = u8::from_str_radix(octal, 8) {
+                    out.push(value);
+                    i += 4;
+                    continue;
+                }
+            }
+            out.push(match next {
+                b'n' => b'\n',
+                b't' => b'\t',
+                b'r' => b'\r',
+                b'a' => 7,
+                b'b' => 8,
+                b'f' => 12,
+                b'v' => 11,
+                other => other,
+            });
+            i += 2;
+            continue;
+        }
+        out.push(bytes[i]);
+        i += 1;
+    }
+    String::from_utf8_lossy(&out).into_owned()
+}
+
+/// The content of a file the patch could only summarize (binary or
+/// non-UTF-8), read from its blob by the caller; `None` when it could not be
+/// read, which is a finding.
+pub struct BinaryContent {
+    pub path: String,
+    pub bytes: Option<Vec<u8>>,
+}
+
 fn changed_path(file: &DiffFile) -> ChangedPath {
     ChangedPath {
         path: file.path.clone(),
@@ -386,6 +444,7 @@ pub fn scan_repository(
     plan: &PlanRevision,
     diff: &ReviewDiff,
     known: &[String],
+    binary: &[BinaryContent],
 ) -> Vec<PolicyFinding> {
     let mut findings = Vec::new();
     // Approved scope: the same rule the writer's post-session judgement
@@ -424,13 +483,46 @@ pub fn scan_repository(
                 detail,
             ));
         }
-        if file.shown == DiffShown::Omitted {
-            findings.push(PolicyFinding::new(
+        match file.shown {
+            DiffShown::Omitted => findings.push(PolicyFinding::new(
                 repository_id,
                 &file.path,
                 "unscanned",
                 "the file's patch exceeded the scan budget, so its content could not be checked",
-            ));
+            )),
+            DiffShown::Summary => {
+                // A summary names blobs, not content: the caller read the
+                // blob, and its bytes are scanned line by line (lossily
+                // decoded, which keeps every ASCII credential intact).
+                match binary.iter().find(|b| b.path == file.path) {
+                    Some(BinaryContent {
+                        bytes: Some(bytes), ..
+                    }) => {
+                        let text = String::from_utf8_lossy(bytes);
+                        for (number, line) in text.lines().enumerate() {
+                            if let Some((rule, detail)) = line_finding(line, known) {
+                                findings.push(PolicyFinding::new(
+                                    repository_id,
+                                    &file.path,
+                                    rule,
+                                    format!(
+                                        "{detail} (first at line {} of the binary or non-UTF-8 candidate file)",
+                                        number + 1
+                                    ),
+                                ));
+                                break;
+                            }
+                        }
+                    }
+                    _ => findings.push(PolicyFinding::new(
+                        repository_id,
+                        &file.path,
+                        "unscanned",
+                        "the file is binary or not UTF-8 and its content could not be read for the policy check",
+                    )),
+                }
+            }
+            DiffShown::Text => {}
         }
     }
     let mut seen = std::collections::BTreeSet::new();
@@ -520,11 +612,89 @@ mod tests {
         ] {
             assert!(line_finding(ordinary, &none).is_none(), "{ordinary}");
         }
+        // Quoted keys (JSON, YAML) and multibyte text before the key.
+        assert!(line_finding("\"password\": \"Xk9f2mQ8vL3pR7wZ\",", &none).is_some());
+        assert!(line_finding("  'api_key': 'Xk9f2mQ8vL3pR7wZq1'", &none).is_some());
+        assert!(line_finding("// 日本語: explanation", &none).is_none());
+        assert!(line_finding("ключ_token = \"Xk9f2mQ8vL3pR7wZ\"", &none).is_some());
+        assert!(line_finding("名前: 値", &none).is_none());
         let known = vec!["synthetic-runtime-token-value".to_owned()];
         assert_eq!(
             line_finding("x = 'synthetic-runtime-token-value'", &known).map(|f| f.0),
             Some("known-credential")
         );
+    }
+
+    #[test]
+    fn quoted_git_paths_are_decoded_before_scanning() {
+        assert_eq!(unquote_git_path("b/plain.txt"), "b/plain.txt");
+        assert_eq!(unquote_git_path("\"b/caf\\303\\251.txt\""), "b/café.txt");
+        assert_eq!(
+            unquote_git_path("\"b/say \\\"hi\\\".txt\""),
+            "b/say \"hi\".txt"
+        );
+        let text = "diff --git \"a/caf\\303\\251.txt\" \"b/caf\\303\\251.txt\"\n--- /dev/null\n+++ \"b/caf\\303\\251.txt\"\n@@ -0,0 +1 @@\n+ghp_0123456789abcdefghijklmnopqrstuvwxyz0123\n";
+        let lines = added_lines(text);
+        assert_eq!(lines.len(), 1);
+        assert_eq!(lines[0].0, "café.txt");
+        assert!(line_finding(&lines[0].2, &[]).is_some());
+    }
+
+    #[test]
+    fn binary_files_are_scanned_from_their_blob_or_refused() {
+        let plan: PlanRevision =
+            serde_json::from_str(include_str!("../../../fixtures/domain/plan.valid.json")).unwrap();
+        let repository = plan.tasks[0].repository_id.clone();
+        let path = plan.tasks[0].paths[0].clone();
+        let file = |shown| DiffFile {
+            path: path.clone(),
+            status: "A".into(),
+            old_blob: "0".repeat(40),
+            new_blob: "1".repeat(40),
+            shown,
+        };
+        let diff = ReviewDiff {
+            text: String::new(),
+            files: vec![file(DiffShown::Summary)],
+            truncated: false,
+        };
+        let mut secret =
+            b"\0binary header\ntoken = 'ghp_0123456789abcdefghijklmnopqrstuvwxyz0123'\n".to_vec();
+        secret.push(0);
+        let found = scan_repository(
+            &repository,
+            &plan,
+            &diff,
+            &[],
+            &[BinaryContent {
+                path: path.clone(),
+                bytes: Some(secret),
+            }],
+        );
+        assert!(
+            found
+                .iter()
+                .any(|f| f.rule == "credential-token" && f.path == path),
+            "{found:?}"
+        );
+        let clean = scan_repository(
+            &repository,
+            &plan,
+            &diff,
+            &[],
+            &[BinaryContent {
+                path: path.clone(),
+                bytes: Some(vec![0, 1, 2, 255, 254]),
+            }],
+        );
+        assert!(
+            clean
+                .iter()
+                .all(|f| f.rule != "credential-token" && f.rule != "unscanned"),
+            "{clean:?}"
+        );
+        let unread = scan_repository(&repository, &plan, &diff, &[], &[]);
+        assert!(unread.iter().any(|f| f.rule == "unscanned"), "{unread:?}");
     }
 
     #[test]

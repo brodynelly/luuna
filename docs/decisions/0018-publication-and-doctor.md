@@ -185,8 +185,14 @@ deterministic secrets/path policy ran before the push
    JSON web token, a password inside a URL, a credential-shaped literal
    assigned to a secret-named key, or a credential value this runtime was
    configured with. A file whose patch exceeds the scan budget is refused as
-   unscanned. Findings name the repository, path, rule and line, never the
-   matched text; the refusal is `422` and the reviewed evidence is kept.
+   unscanned; a file the patch can only summarize (binary or non-UTF-8) is
+   read from its blob and scanned line by line, and one that cannot be read
+   is refused as unscanned. Git-quoted paths are decoded so every section is
+   attributed to its file, and quoted keys (JSON, YAML) are recognized as
+   assignments. Findings name the repository, path, rule and line, never the
+   matched text; the refusal is `422`, and because the refused content is
+   the candidate itself, the reviewed candidate is invalidated (failed, not
+   drift) so the bounded repair path of `POST …/repair` is open.
 4. **Drift after review invalidates the candidate.** When the worktree no
    longer holds the frozen candidate, `Store::invalidate_reviewed_candidate`
    marks the candidate failed with content drift (never re-validated in
@@ -215,5 +221,5 @@ refuses publication and reconciliation, invalidates the candidate with the
 drift marked and pushes nothing; a candidate carrying a GitHub-shaped token
 and a `.env` file (`write_secret` synthetic writer scenario) passes its check
 and review and is refused by the policy with findings that never contain the
-values. The ticket-revision case of `verify_plan_sources` is exercised through
+values, is failed so that a repair is admitted, and nothing is pushed. The ticket-revision case of `verify_plan_sources` is exercised through
 the ticket editing route (ADR 0026) rather than here.

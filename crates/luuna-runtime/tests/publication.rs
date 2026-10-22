@@ -1276,8 +1276,27 @@ async fn the_pre_push_policy_refuses_credentials_without_naming_their_values() {
         .any(|f| f["path"] == "src/.env" && f["rule"] == "credential-path"));
     let serialized = refusal.to_string();
     assert!(!serialized.contains("ghp_a1b2") && !serialized.contains("Xk9f2mQ8"));
-    // The reviewed evidence is kept: the policy refusal is not drift.
+    // The reviewed evidence is invalidated (not as drift) so the bounded
+    // repair path is open: the candidate is failed, the run left `reviewed`.
     let view = harness.candidate(&run_id).await;
-    assert_eq!(view["evidence"]["status"], "reviewed", "{view}");
-    assert_eq!(harness.run(&run_id).await["state"], "reviewed");
+    assert_eq!(view["evidence"]["status"], "failed", "{view}");
+    assert_ne!(view["evidence"]["content_drift"], true);
+    assert!(view["evidence"]["reason"]
+        .as_str()
+        .unwrap()
+        .starts_with("pre-push policy refused"));
+    assert_eq!(view["repair_allowed"], true, "{view}");
+    assert_eq!(harness.run(&run_id).await["state"], "failed");
+    assert!(events
+        .iter()
+        .any(|e| e["type"] == "candidate.invalidated" && e["payload"]["content_drift"] == false));
+    // A repair is admitted from here: the next revision replaces the finding.
+    let (status, repair) = harness
+        .request(
+            "POST",
+            &format!("/api/v1/runs/{run_id}/repair"),
+            Some(json!({"candidate_hash": hash, "provider": "test", "model": "synthetic"})),
+        )
+        .await;
+    assert_eq!(status, StatusCode::ACCEPTED, "{repair}");
 }

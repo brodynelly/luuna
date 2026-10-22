@@ -448,18 +448,42 @@ async fn admit(state: &AppState, id: &str, prepared: &mut Prepared) -> Result<()
                     format!("repository {repository_id}: cannot read the candidate patch for the pre-push policy check: {error}"),
                 )
             })?;
+        // Files the patch could only summarize are read from their blobs so
+        // a binary or non-UTF-8 file never carries unscanned content.
+        let mut binary = Vec::new();
+        for file in diff
+            .files
+            .iter()
+            .filter(|file| file.shown == luuna_git::DiffShown::Summary && file.status != "D")
+        {
+            let bytes = state.git.blob_bytes(worktree, &file.new_blob).await.ok();
+            binary.push(crate::policy::BinaryContent {
+                path: file.path.clone(),
+                bytes,
+            });
+        }
         findings.extend(crate::policy::scan_repository(
             repository_id,
             &prepared.plan,
             &diff,
             &known,
+            &binary,
         ));
     }
     if !findings.is_empty() {
         let reason = format!(
-            "pre-push policy refused the candidate ({}); nothing was pushed; repair the candidate (POST /repair) or create the next plan revision; the reviewed evidence is kept",
+            "pre-push policy refused the candidate ({}); nothing was pushed; the reviewed evidence is invalidated and the candidate is failed so a bounded repair can remove the finding: repair the candidate (POST /repair) or create the next plan revision",
             crate::policy::describe(&findings)
         );
+        // The candidate's content is what the policy refused, so its review
+        // is no longer evidence that it may be published; failing it opens
+        // the same bounded repair path as a failed check.
+        state
+            .store
+            .lock()
+            .map_err(internal)?
+            .invalidate_reviewed_candidate(id, &evidence.candidate.hash, &reason, false)
+            .map_err(storage_error)?;
         refused(
             state,
             id,
