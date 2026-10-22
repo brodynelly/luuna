@@ -1,5 +1,74 @@
 /*
- * Keyframes and motion primitives. Owned by item B (run stripe-ui-20261022-0905); filled in wave 2.
- * Placeholder: the manifest test requires one rule. Item B replaces this file's content.
+ * Motion: every @keyframes and the motion primitives (ADR 0032). Only transform, opacity,
+ * background-position and stroke-dashoffset animate; durations and easings are tokens; entrance
+ * animations fill backwards so nothing is left transformed at rest. The reduced-motion block
+ * switches every animation off; the static state is the final state. Plain-state meaning never
+ * depends on motion, and evidence (live output) never pulses.
  */
-:root {}
+@keyframes menu-in { from { opacity: 0; transform: scale(var(--enter-scale)); } }
+@keyframes dialog-in { from { opacity: 0; transform: scale(var(--enter-scale)); } }
+@keyframes scrim-in { from { opacity: 0; } }
+@keyframes toast-in { from { opacity: 0; transform: translateY(var(--toast-offset)); } }
+@keyframes reveal-in { from { opacity: 0; transform: translateY(var(--reveal-offset)); } }
+@keyframes pulse-ring { from { opacity: 1; transform: scale(1); } to { opacity: 0; transform: scale(var(--pulse-scale)); } }
+@keyframes shimmer { from { background-position: 100% 0; } to { background-position: 0 0; } }
+@keyframes progress-slide { from { transform: translateX(-100%); } to { transform: translateX(250%); } }
+@keyframes dot-pulse { 0%, 100% { opacity: 0.35; transform: scale(0.7); } 40% { opacity: 1; transform: scale(1); } }
+@keyframes draw { from { stroke-dashoffset: 1; } to { stroke-dashoffset: 0; } }
+@keyframes aurora-drift { from { transform: translate(-3%, -2%) rotate(0deg) scale(1); } to { transform: translate(3%, 2%) rotate(4deg) scale(1.08); } }
+
+/* Reveal: children rise in one after another (--i is capped at 10 by the script); once data-revealed is set, children added later do not animate. */
+.reveal > * { animation: reveal-in var(--duration-large) var(--ease-out) backwards; animation-delay: calc(var(--i) * var(--duration-stagger)); }
+.reveal[data-revealed] > * { animation: none; }
+
+.count-up { font-variant-numeric: tabular-nums; }
+
+/* CheckDraw: the circle draws first, then the check. pathLength is 1, so a dash of 1 is the whole path. */
+.check-draw { display: inline-block; flex: none; width: var(--check-size-md); height: var(--check-size-md); fill: none; stroke: currentColor; stroke-width: var(--icon-stroke); stroke-linecap: round; stroke-linejoin: round; }
+.check-draw[data-size="sm"] { width: var(--check-size-sm); height: var(--check-size-sm); }
+.check-draw[data-size="lg"] { width: var(--check-size-lg); height: var(--check-size-lg); }
+.check-draw :is(circle, path) { stroke-dasharray: 1; animation: draw var(--duration-draw) var(--ease-out) backwards; }
+.check-draw path { animation-delay: var(--duration-draw); }
+
+/* GlowSurface: a pale radial light behind the content, following a fine pointer (--mx, --my are written by script). */
+.glow-surface { position: relative; isolation: isolate; }
+.glow-surface::before { content: ""; position: absolute; inset: 0; z-index: -1; border-radius: inherit; background: radial-gradient(var(--glow-size) circle at var(--mx) var(--my), var(--color-glow), transparent); opacity: 0; pointer-events: none; transition: opacity var(--duration-standard) var(--ease-standard); }
+
+/* Aurora: a soft, slow colour wash behind an empty state. Decorative; the parent must be positioned and isolated. */
+.aurora-host { position: relative; isolation: isolate; overflow: hidden; }
+.aurora { position: absolute; inset: -20%; z-index: -1; background: var(--gradient-aurora); filter: blur(var(--blur-aurora)); pointer-events: none; animation: aurora-drift var(--duration-ambient) var(--ease-standard) infinite alternate; }
+.aurora[data-intensity="vivid"] { background: var(--gradient-aurora-vivid); }
+
+/* Loading skeleton: rows in the shape of the content, with a slow shimmer. */
+.skeleton { display: grid; gap: var(--space-2); }
+.skeleton-row { display: block; height: var(--skeleton-height); border: var(--border-width) solid var(--color-border); border-radius: var(--radius-button); background: var(--gradient-shimmer); background-size: 200% 100%; animation: shimmer var(--duration-shimmer) var(--ease-linear) infinite; }
+.skeleton-row:nth-child(3n) { width: var(--skeleton-short); }
+
+/* Indeterminate progress: a short segment sweeps across a thin track. */
+.progress-bar { position: relative; overflow: hidden; height: var(--progress-height); border-radius: var(--radius-pill); background: var(--color-accent-tint); }
+.progress-bar::before { content: ""; position: absolute; inset-block: 0; inset-inline-start: 0; width: 40%; border-radius: inherit; background: var(--color-accent); animation: progress-slide var(--duration-shimmer) var(--ease-standard) infinite; }
+
+/* Streaming dots: three dots breathe in turn while output streams. */
+.streaming-dots { display: inline-flex; align-items: center; gap: var(--space-1); }
+.streaming-dots > span { width: var(--dot-size); height: var(--dot-size); border-radius: var(--radius-pill); background: var(--color-text-subtle); animation: dot-pulse var(--duration-pulse) var(--ease-standard) infinite; }
+.streaming-dots > span:nth-child(2) { animation-delay: calc(var(--duration-stagger) * 4); }
+.streaming-dots > span:nth-child(3) { animation-delay: calc(var(--duration-stagger) * 8); }
+
+@media (hover: hover) and (pointer: fine) {
+  .glow-surface:hover::before { opacity: 1; }
+}
+
+/* Reduced motion: no animation; each element rests in its final state (the glow is not drawn). */
+@media (prefers-reduced-motion: reduce) {
+  .reveal > *, .check-draw :is(circle, path), .aurora, .skeleton-row, .progress-bar::before, .streaming-dots > span { animation: none; }
+  .skeleton-row { background: var(--color-surface-raised); }
+  .glow-surface::before { display: none; }
+}
+
+@media (forced-colors: active) {
+  .aurora, .glow-surface::before { display: none; }
+  .skeleton-row { forced-color-adjust: none; background: Canvas; border-color: GrayText; }
+  .progress-bar { forced-color-adjust: none; background: Canvas; border: var(--border-width) solid GrayText; }
+  .progress-bar::before { forced-color-adjust: none; background: Highlight; }
+  .streaming-dots > span { forced-color-adjust: none; background: CanvasText; }
+}
