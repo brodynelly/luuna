@@ -164,10 +164,21 @@ function formatTicket(ticket) {
   return `${ticket.id}  r${ticket.revision}  ${ticket.source}  ${ticket.title}${usage}\n  ${ticket.intent}\n  criteria: ${ticket.acceptance_criteria.join(" | ")}`;
 }
 
+/**
+ * The doctor report as `luuna-runtime doctor` prints it: status, item name, detail and the
+ * required marker per line, then the verdict. Details name credentials, never values.
+ */
+export function formatDoctor(report) {
+  const lines = report.items.map((item) => `${item.status.padEnd(8)} ${item.name.padEnd(20)} ${item.detail}${item.required ? " (required)" : ""}`);
+  lines.push(`doctor: ${report.ok ? "ok" : "FAILED"}`);
+  return lines.join("\n");
+}
+
 /** Renders one command result for a terminal; `id` is the catalog id. */
 export function format(id, value) {
   if (value === undefined || value === null) return "";
   switch (id) {
+    case "doctor": return formatDoctor(value);
     case "health": return `runtime ${value.status} · Pi ${value.pi_version} · native execution ${value.native_execution ? "yes" : "no"} · build ${value.build_identity ?? "unknown"}`;
     case "projects.list": return value.length ? value.map((project) => `${project.id}  ${project.revision > 0 ? `manifest r${project.revision}` : "unconfirmed"}  ${project.name}`).join("\n") : "No projects registered.";
     case "projects.show": case "projects.register": case "projects.manifest.confirm": case "projects.repositories.rebind": return formatProject(value);

@@ -9,6 +9,7 @@ import { Home } from "./Home";
 import type { OpenRequest } from "./Home";
 import { Board } from "./Board";
 import { Help } from "./Help";
+import { Settings } from "./Settings";
 import { actionFailure, describeFailure } from "./failures";
 import { ensureLocalRuntime, nativeDesktop } from "./native-runtime";
 import { StatusBadge } from "./design/StatusBadge";
@@ -425,6 +426,7 @@ export function App() {
         </div>
       </div>
 
+      <Settings client={client} connectionEpoch={connectionEpoch} refreshEpoch={refresh} />
       <Help />
     </main>
     <footer>Luuna · Local-first engineering workbench<span>Import · baseline · approved writer · candidate checks and review</span></footer>

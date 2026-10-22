@@ -66,6 +66,10 @@ export const COMMANDS = [
   // ---- runtime ----
   { id: "health", name: "health", action: "Connection", context: "runtime", args: [], flags: {}, example: { args: [], flags: {} },
     run: (client, _input, io) => client.health(io.signal) },
+  // Settings (ADR 0027 point 4): the runtime's environment and credential presence by name, the
+  // same table `luuna-runtime doctor` prints; values are never shown and nothing is edited here.
+  { id: "doctor", name: "doctor", action: "Settings (doctor)", context: "runtime", args: [], flags: {}, example: { args: [], flags: {} },
+    run: (client, _input, io) => client.doctor(io.signal) },
   { id: "runs.list", name: "runs", action: "Run listing", context: "runtime", args: [],
     flags: { limit: { description: "at most this many runs (default 200)" }, project: { description: "only this project's runs" }, before: { description: "the page of older runs before this run id" } },
     example: { args: [], flags: { limit: "50" } },

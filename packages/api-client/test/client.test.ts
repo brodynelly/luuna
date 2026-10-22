@@ -1,6 +1,6 @@
 import { describe, expect, it, vi } from "vitest";
 import { ApiError, EventReplay, EventWindow, LuunaClient, MAX_REASON_LENGTH, advisoryRole, assistantText, awaitsValidation, checkResults, confirmedManifest, isTerminal, loopbackUrl, mergeEvents, nextStep, overrideFromRefusal, planRequestForTasks, registerProjectRequest } from "../src/index";
-import type { EventEnvelope, ProjectManifest, ProjectExport } from "../src/index";
+import type { DoctorReport, EventEnvelope, ProjectManifest, ProjectExport } from "../src/index";
 
 it("retains bounded event payloads while replaying text and rejects a gap atomically", () => {
   const window = new EventWindow();
@@ -117,6 +117,27 @@ describe("local runtime connection", () => {
     const result = await new LuunaClient("http://localhost:4242", "test-token", fetcher).cancelRun("r", signal);
     expect(result.state).toBe("cancelled");
     expect(fetcher.mock.calls[0][1]).toMatchObject({ method: "POST", signal });
+  });
+
+  it("reads the runtime's doctor report as a token-protected GET and returns it unchanged (ADR 0027 point 4)", async () => {
+    const report: DoctorReport = { ok: false, items: [
+      { name: "git", required: true, status: "ok", detail: "git version 2.55.0" },
+      { name: "api_token", required: false, status: "ok", detail: "LUUNA_API_TOKEN is configured (value not shown)" },
+      { name: "provider_credentials", required: false, status: "warning", detail: "set but empty: ANTHROPIC_API_KEY (an empty variable configures nothing); no provider credential carries a value (model runs fail until one does)" },
+      { name: "pi", required: true, status: "missing", detail: "unsupported Pi version; expected 1.3.0" },
+    ] };
+    const fetcher = vi.fn<typeof fetch>().mockResolvedValue(new Response(JSON.stringify(report), { headers: { "Content-Type": "application/json" } }));
+    const signal = new AbortController().signal;
+    const client = new LuunaClient("http://localhost:4242", "private-token", fetcher);
+    expect(await client.doctor(signal)).toEqual(report);
+    const [url, init] = fetcher.mock.calls[0];
+    expect(String(url)).toBe("http://localhost:4242/api/v1/doctor");
+    expect(init?.method ?? "GET").toBe("GET");
+    expect(init?.body).toBeUndefined();
+    expect(init?.signal).toBe(signal);
+    expect(new Headers(init?.headers).get("Authorization")).toBe("Bearer private-token");
+    const rejected = vi.fn<typeof fetch>().mockResolvedValue(new Response("sensitive", { status: 401 }));
+    await expect(new LuunaClient("http://localhost:4242", "t", rejected).doctor()).rejects.toMatchObject({ status: 401, name: "ApiError" });
   });
 });
 

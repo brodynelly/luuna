@@ -177,6 +177,9 @@ pub struct AppState {
     executor: Arc<Executor>,
     components: Option<Arc<luuna_components::Components>>,
     component_locks: Arc<tokio::sync::Mutex<()>>,
+    /// The port this runtime listens on, once the service binary bound it;
+    /// `GET /api/v1/doctor` reports it. `None` for an in-process router.
+    listen_port: Option<u16>,
     /// Set by explicit shutdown before owned work is signalled to stop.
     shutting_down: Arc<std::sync::atomic::AtomicBool>,
     shutdown_requested: Arc<Notify>,
@@ -223,6 +226,7 @@ fn restrict_to_owner(directory: &std::path::Path) -> Result<(), Box<dyn std::err
 mod baselines;
 mod candidates;
 mod dispatch;
+pub mod doctor;
 mod graph;
 mod integrations;
 mod missions;
@@ -308,6 +312,7 @@ impl AppState {
             executor: Arc::new(Executor::default()),
             components: discovered_components(),
             component_locks: Arc::new(tokio::sync::Mutex::new(())),
+            listen_port: None,
             shutting_down: Arc::new(std::sync::atomic::AtomicBool::new(false)),
             shutdown_requested: Arc::new(Notify::new()),
             admission: Arc::new(RwLock::new(())),
@@ -321,6 +326,13 @@ impl AppState {
     /// the service binary passes what `ServiceSettings::from_env` read.
     pub fn with_publication(mut self, settings: PublicationSettings) -> Self {
         self.publication = Arc::new(settings);
+        self
+    }
+
+    /// The address the service binary bound, so the doctor route can say
+    /// that this runtime is the one listening on it.
+    pub fn with_listen_port(mut self, port: u16) -> Self {
+        self.listen_port = Some(port);
         self
     }
 
@@ -670,6 +682,7 @@ pub fn router(state: AppState) -> Router {
             post(writer::reconcile_ticket),
         )
         .route("/api/v1/shutdown", post(request_shutdown))
+        .route("/api/v1/doctor", get(doctor::doctor))
         .route("/api/v1/runs", get(list_runs).post(start_run))
         .route("/api/v1/runs/{id}", get(get_run))
         .route("/api/v1/runs/{id}/events", get(events))

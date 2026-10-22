@@ -36,7 +36,7 @@ The October 21 tables are kept unchanged as the Windows-host record.
 
 | Item | October 22 disposition | Evidence (Linux, this branch) |
 | --- | --- | --- |
-| R02 / A33 client parity | behaviour-level parity for multi-repository registration, per-repository baselines, task-graph planning with roles, derivation and dependency overrides, task resume, ticket editing, memory correction, personal export and retention, the testing-setup offer and setup plan, and the Home summary, Kanban projection, Help panel and editor handoff; 16 specification obligations and 4 required surfaces traced through the catalog | 58-action catalog against 48 routes, `check-contracts.mjs` required-action and required-surface traces, desktop/client/TUI suites below, `scripts/tui-smoke.mjs`; the interactive TUI audit remains open (ADR 0027 point 5) |
+| R02 / A33 client parity | behaviour-level parity for multi-repository registration, per-repository baselines, task-graph planning with roles, derivation and dependency overrides, task resume, ticket editing, memory correction, personal export and retention, the testing-setup offer and setup plan, and the Home summary, Kanban projection, Help panel, editor handoff and the Settings panel (the runtime's doctor report, ADR 0027 point 4); 16 specification obligations and 5 required surfaces traced through the catalog | 59-action catalog against 49 routes, `check-contracts.mjs` required-action and required-surface traces, desktop/client/TUI suites below, `scripts/tui-smoke.mjs`; the interactive TUI audit remains open (ADR 0027 point 5) |
 | R06 delegated roles (P42) | implemented for v1: advisory roles, traces, no runtime-created children (ADR 0023); only candidate repositories' checks are required of a mixed plan | `multirepo.rs` 14 scenarios, domain tests |
 | R05 dependency overrides (P44) | implemented: confirmed-relationship check with justified `waive`/`add` overrides in the hashed plan (ADR 0023) | `multirepo.rs` |
 | R07 / R09 / E02 / E05 / E06 publication guards | superseded plan revision, worktree drift, source change and the pre-push policy refuse publication and reconciliation before any side effect; the policy scans every commit the push would publish and a repair after a refusal starts history-clean (ADR 0018 amendment) | `publication.rs` 15 scenarios (including a credential in an ancestor commit), policy unit tests, four Codex review rounds fixed |
@@ -57,7 +57,7 @@ Checks on the branch's final revision, all local (hosted CI could not start):
 | --- | --- |
 | `cargo fmt --all -- --check`, `cargo clippy --locked --workspace --all-targets -- -D warnings` | passed |
 | `cargo test --locked --workspace -- --test-threads=2` | 460 passed, 0 failed, 16 ignored (the ignored tests are the real-CLI and genuine-provider tests run separately below) |
-| `npm test` | 29 contract checks; 58-action catalog with 16 required actions and 4 required surfaces traced; 8 scope-guard, 8 component-pin, 8 harness; 285 desktop; 47 API-client; 81 TUI |
+| `npm test` | 29 contract checks; 59-action catalog with 16 required actions and 5 required surfaces traced; 8 scope-guard, 8 component-pin, 8 harness; 291 desktop; 48 API-client; 83 TUI |
 | `npm run typecheck`, `npm run build`, `node scripts/check-hygiene.mjs`, `git diff --check` | passed |
 | `node scripts/components-smoke.mjs` (Bun 1.4.3) | 14/14 |
 | `cargo test -p luuna-runtime --lib components_real_ -- --ignored` / `missions_real_` / `luuna-components --test real` | 9 / 4 / 1 passed |

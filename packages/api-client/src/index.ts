@@ -28,6 +28,28 @@ export interface Health {
   build_flags?: string;
 }
 
+/** One item of the runtime's doctor report: `ok`, `warning`, or `missing` (which fails a required item). */
+export type DoctorStatus = "ok" | "warning" | "missing";
+
+export interface DoctorItem {
+  name: string;
+  /** Git, Pi and a writable data directory; a missing required item fails the report. */
+  required: boolean;
+  status: DoctorStatus;
+  /** One line; credential items name the variable and say whether it is set, never its value. */
+  detail: string;
+}
+
+/**
+ * The host diagnostic `luuna-runtime doctor` prints, served by the running runtime for its own
+ * configuration (`GET /api/v1/doctor`, ADR 0027 point 4): the clients' settings surface. Nothing
+ * here is editable; credentials are configured in the runtime's environment.
+ */
+export interface DoctorReport {
+  ok: boolean;
+  items: DoctorItem[];
+}
+
 export interface RunRequest {
   prompt: string;
   provider?: string;
@@ -1316,6 +1338,11 @@ export class LuunaClient {
 
   health(signal?: AbortSignal): Promise<Health> {
     return this.request("/health", { signal });
+  }
+
+  /** The running runtime's doctor report: environment and credential presence by name, never values. */
+  doctor(signal?: AbortSignal): Promise<DoctorReport> {
+    return this.request("/doctor", { signal });
   }
 
   /** Asks the runtime to stop in an orderly way (ADR 0010); it answers 202 and drains. */

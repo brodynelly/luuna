@@ -402,3 +402,35 @@ test("home prints every project's validation health and blockers, and board ever
   assert.match(rendered.out(), /\[prerequisite\] Testing setup needed for lib · two/);
   assert.match(rendered.out(), /\[ticket\] Establish tests · two · t3 r2 · testing setup · run run-3 approved/);
 });
+
+// ---- ADR 0027 point 4: settings are the runtime's doctor report, printed as the CLI subcommand prints it. ----
+test("doctor prints the runtime's doctor table exactly as luuna-runtime doctor does, naming credentials without values", async () => {
+  const report = { ok: false, items: [
+    { name: "git", required: true, status: "ok", detail: "git version 2.55.0" },
+    { name: "api_token", required: false, status: "ok", detail: "LUUNA_API_TOKEN is configured (value not shown)" },
+    { name: "provider_credentials", required: false, status: "warning", detail: "set but empty: ANTHROPIC_API_KEY (an empty variable configures nothing); no provider credential carries a value (model runs fail until one does)" },
+    { name: "port", required: false, status: "ok", detail: "this runtime is the one listening on http://127.0.0.1:4242" },
+    { name: "pi", required: true, status: "missing", detail: "unsupported Pi version; expected 1.3.0" },
+  ] };
+  const requests = [];
+  const fetcher = async (url, init = {}) => { requests.push(`${init.method ?? "GET"} ${new URL(url).pathname}`); return new Response(JSON.stringify(report), { status: 200, headers: { "Content-Type": "application/json" } }); };
+  const client = new LuunaClient("http://127.0.0.1:4242", "test-token-never-printed", fetcher);
+  const { io: context, out } = io({ json: false });
+  assert.equal(await runCommand(commandsByName.get("doctor"), { args: [], flags: {} }, client, context), 0);
+  assert.deepEqual(requests, ["GET /api/v1/doctor"]);
+  assert.equal(out(), [
+    "ok       git                  git version 2.55.0 (required)",
+    "ok       api_token            LUUNA_API_TOKEN is configured (value not shown)",
+    "warning  provider_credentials set but empty: ANTHROPIC_API_KEY (an empty variable configures nothing); no provider credential carries a value (model runs fail until one does)",
+    "ok       port                 this runtime is the one listening on http://127.0.0.1:4242",
+    "missing  pi                   unsupported Pi version; expected 1.3.0 (required)",
+    "doctor: FAILED",
+    "",
+  ].join("\n"));
+  assert.ok(!out().includes("test-token-never-printed"));
+  const asJson = io({ json: true });
+  assert.equal(await runCommand(commandsByName.get("doctor"), { args: [], flags: {} }, client, asJson.io), 0);
+  assert.deepEqual(JSON.parse(asJson.out()), report, "--json prints the runtime's report unchanged");
+  const command = commandsByName.get("doctor");
+  assert.equal(command.context, "runtime", "doctor is listed in the runtime menu of the interactive workbench");
+});

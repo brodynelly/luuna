@@ -86,11 +86,16 @@ test("the testing-setup offer's create control is a variant of ticket creation, 
 test("the experience surfaces of ADR 0027 point 4 exist as marked desktop panels projecting cataloged actions", () => {
   const surfaces = new Map<string, string[]>();
   for (const [file, source] of sources) for (const match of source.matchAll(/data-surface="([^"]+)"/g)) surfaces.set(match[1], [...(surfaces.get(match[1]) ?? []), file]);
-  expect([...surfaces.keys()].sort()).toEqual(["board", "editor-handoff", "help", "home"]);
+  expect([...surfaces.keys()].sort()).toEqual(["board", "editor-handoff", "help", "home", "settings"]);
   expect(surfaces.get("home")).toEqual(["Home.tsx"]);
   expect(surfaces.get("board")).toEqual(["Board.tsx"]);
   expect(surfaces.get("help")).toEqual(["Help.tsx"]);
   expect(surfaces.get("editor-handoff")).toEqual(["CandidateReview.tsx"]);
+  expect(surfaces.get("settings")).toEqual(["Settings.tsx"]);
+  // Settings are the runtime's doctor report (ADR 0027 point 4): one cataloged read, nothing editable.
+  const settings = sources.find(([file]) => file === "Settings.tsx")![1];
+  expect(settings).toContain('data-capability="doctor"');
+  expect(settings).not.toMatch(/<(input|textarea|form)\b/);
   const board = sources.find(([file]) => file === "Board.tsx")![1];
   expect(board).not.toMatch(/draggable|onDragStart|onDrop/);
   expect(board).toContain("boardProjection(");

@@ -24,6 +24,26 @@
       ]
     },
     {
+      "id": "doctor",
+      "title": "Read the runtime's environment and credential presence (its doctor report)",
+      "method": "GET",
+      "route": "/api/v1/doctor",
+      "client_method": "doctor",
+      "desktop": "doctor",
+      "tui": "doctor",
+      "failure_modes": [
+        "unreachable",
+        "aborted",
+        "rejected_token",
+        "internal"
+      ],
+      "required_by": [
+        "A18",
+        "docs/decisions/0027-v1-advertised-scope.md#decisions-proposed",
+        "docs/09-experience.md#views"
+      ]
+    },
+    {
       "id": "projects.list",
       "title": "List registered projects",
       "method": "GET",

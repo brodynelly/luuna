@@ -56,7 +56,7 @@ clients, per-task resume from the task graph, ticket editing
 (`PUT /api/v1/tickets/{id}`, legacy and Missions), memory correction
 (`PUT …/memory/{id}`), personal memory export (`GET /api/v1/memory/user/export`)
 and a per-project retention policy with explicit application. The catalog grew
-from 50 to 58 actions, every entry carries `required_by`, and
+from 50 to 58 actions (59 with the later `doctor` read of the settings surface), every entry carries `required_by`, and
 `scripts/check-contracts.mjs` traces 14 specification obligations to cataloged
 actions with desktop and TUI controls. Behaviour-level tests assert request
 bodies and state-specific controls. The desktop and terminal clients also
@@ -64,8 +64,9 @@ surface the testing-setup offer and setup plan (finding 3), task roles,
 derivation and dependency overrides with assignment traces and advisory
 results (finding 4), and the Home summary, the Kanban projection, the Help
 panel and the editor handoff (ADR 0027 point 4, dated note) through a shared
-projection module and read-only cataloged reads; `check-contracts` traces 16
-required actions and 4 required surfaces. Still open: the interactive terminal
+projection module and read-only cataloged reads, and the Settings panel as the
+runtime's own doctor report (`GET /api/v1/doctor`); `check-contracts` traces 16
+required actions and 5 required surfaces. Still open: the interactive terminal
 keyboard and width audit (ADR 0027 point 5).
 
 ### 3. Testing-setup prerequisite workflow — done
