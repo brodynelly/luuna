@@ -1,7 +1,7 @@
 /*
  * Screen: shell. The window chrome, tokens only (docs/DESIGN-SYSTEM.md, ADR 0032): the sidebar, its
  * sliding nav pill, the connection chip, the palette trigger, the content column, every page's
- * header, Home's wash and the view change. Owned by item C of run stripe-ui-20261022-0905.
+ * header, Home's wash and the view change. Owned by the app-shell restyle item (ADR 0032).
  * Every selector is scoped by a class unique to the shell (.app, .sidebar, .nav-section, .view ...).
  * The current view shows by fill, accent text and weight, never by colour alone. Motion is
  * transform and opacity only; text ancestors keep no transform or opacity at rest, so every
