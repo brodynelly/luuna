@@ -24,6 +24,55 @@ Evidence kinds, as used in the tables:
   and [PR-11-WINDOWS-VERIFICATION.md](PR-11-WINDOWS-VERIFICATION.md);
 - *none*: no evidence exists; the row blocks the label it belongs to.
 
+## October 22, 2026 update (Linux development container)
+
+The [October 22 specification audit](SPEC-AUDIT-2026-10-22.md) found eight
+implementation gaps beyond the blocker list below. The
+[response](SPEC-AUDIT-RESPONSE-2026-10-22.md) records what the
+`fix/vibrant-knuth-xt945c` branch implemented (ADRs 0018 amendments,
+0022–0027) and the dispositions below replace the corresponding rows of the
+October 21 tables for the audited items; every other row stands as written.
+The October 21 tables are kept unchanged as the Windows-host record.
+
+| Item | October 22 disposition | Evidence (Linux, this branch) |
+| --- | --- | --- |
+| R02 / A33 client parity | behaviour-level parity for multi-repository registration, per-repository baselines, task-graph planning, task resume, ticket editing, memory correction, personal export and retention; 14 specification obligations traced through the catalog | 58-action catalog against 48 routes, `check-contracts.mjs` required-action trace, desktop/client/TUI suites below, `scripts/tui-smoke.mjs` 51/51; interactive TUI audit and the Home/Kanban/Help surfaces remain open (ADR 0027) |
+| R06 delegated roles (P42) | implemented for v1: advisory roles, traces, no runtime-created children (ADR 0023) | `multirepo.rs` 13 scenarios, domain tests |
+| R05 dependency overrides (P44) | implemented: confirmed-relationship check with justified `waive`/`add` overrides in the hashed plan (ADR 0023) | `multirepo.rs` |
+| R07 / R09 / E02 / E05 / E06 publication guards | superseded plan revision, worktree drift, source change and the pre-push policy refuse publication and reconciliation before any side effect (ADR 0018 amendment) | `publication.rs` 13 scenarios, policy unit tests, Codex review rounds fixed |
+| R08 / A06 testing prerequisite | offered prerequisite, approved `testing_setup` workflow admitted without a baseline, real-test pass rule (ADR 0022) | `testing_setup.rs` 3 scenarios; client wiring in progress |
+| R10 / A24 CI-failure repair | bounded repair from an observed CI failure invalidates the published candidate; the repaired revision publishes a superseding pull request (ADR 0018 second amendment) | `publication.rs` |
+| R11 / A22 / A25 linked sets | three-repository linked publication, partial-set recovery without duplicates, one-of-several merged is not integrated | `publication_multirepo.rs` 5 scenarios; real GitHub still **not established** |
+| R13 / A05 stacks | Next.js scaffold profile; scope for Android/iOS/Go/Flutter/React proposed in ADR 0027 | `scaffold.rs`; capable runners still absent |
+| R14 / A29 memory and portability | project import on another machine (ADR 0021 amendment), memory correction, personal export, retention policy (ADR 0026) | `projects.rs` synthetic import tests; real-CLI runtime tests 9/9, Missions 3/3, adapter 1/1, component smoke 14/14 with Bun 1.4.3 |
+| R01 / A02 packaging | portable component layout with digest verification, Bun and the terminal client with a compiled API client staged by the packager (ADR 0024) | `stage-components` tests, `luuna-components` portable-layout tests, doctor; the installer was **not built** and no clean machine ran it (no Windows host here) |
+| A14 / A26 drift after review | reproduced probe now refused; candidate invalidated, nothing pushed | `publication.rs` |
+| A09 superseded revision | reproduced probe now refused for publication and reconciliation | `publication.rs` |
+| A32 container profile | out of v1 scope by proposed decision (ADR 0027), awaiting the owner | — |
+
+Checks on the branch's final revision, all local (hosted CI could not start):
+
+| Check | Result |
+| --- | --- |
+| `cargo fmt --all -- --check`, `cargo clippy --locked --workspace --all-targets -- -D warnings` | passed |
+| `cargo test --locked --workspace -- --test-threads=2` | 457 passed, 0 failed, 15 ignored (before the third review round; recounted in the final revision) |
+| `npm test` | 29 contract checks; 58-action catalog with 14 required actions traced; 8 scope-guard, 8 component-pin, 8 harness; 263 desktop; 43 API-client; 74 TUI |
+| `npm run typecheck`, `npm run build`, `node scripts/check-hygiene.mjs`, `git diff --check` | passed |
+| `node scripts/components-smoke.mjs` (Bun 1.4.3) | 14/14 |
+| `cargo test -p luuna-runtime --lib components_real_ -- --ignored` / `missions_real_` / `luuna-components --test real` | 9 / 3 / 1 passed |
+| `node scripts/tui-smoke.mjs --runtime <release>` | 51/51 |
+| `node scripts/m1-smoke.mjs --mode fixture` | 19/19 |
+| `node scripts/backup-recovery-drill.mjs --skip-migration-tests` | 30/30 |
+| `node scripts/mvp-ui-smoke.mjs` (Chromium) | rerun in progress on this branch after the per-repository baseline control changed the walkthrough selector; the result is recorded in the final revision |
+| `node scripts/m6-ui-smoke.mjs` (real component CLIs) | rerun in progress (same selector change) |
+| `node scripts/m3-smoke.mjs --mode fixture` (strict) | refused on an uncommitted tree as designed; rerun on the final committed revision is recorded there |
+| Genuine provider steps, real GitHub, native Windows/Mac, installer build | not run: no provider credential, no GitHub token or repository for the publisher, no Windows or Mac host |
+
+Blocking the v1 label after this update: items 1–6 of the October 21 list
+below still hold (the publication guard defects, client parity, P22, P42/P44,
+A24 and the memory management gaps the audit added are closed), plus the
+owner's decision on ADR 0027 and the client surfaces it names.
+
 ## Platform matrix
 
 | Host | OS | Architecture | Git | Rust | Node / npm | Bun | Python | Pi | Evidence |
