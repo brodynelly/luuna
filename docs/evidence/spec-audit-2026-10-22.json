@@ -1,0 +1,219 @@
+{
+  "schema_version": 1,
+  "audit_date": "2026-10-22",
+  "revision": "87a7e3fea0416551e9ba61195ec5fff8f90a1989",
+  "initial_checkout_clean": true,
+  "platform": "Windows x64",
+  "tools": {
+    "cargo": "cargo 1.90.0 (840b83a10 2025-07-30)",
+    "rustc": "rustc 1.90.0 (1159e78c4 2025-09-14)",
+    "git": "git version 2.55.0.windows.5",
+    "python": "Python 3.11.9",
+    "npm": "11.19.1",
+    "pinned_npm_retest": "11.9.0"
+  },
+  "node": "v26.10.0",
+  "release_complete": false,
+  "product_source_changed": false,
+  "checks": [
+    {
+      "id": "fmt",
+      "kind": "deterministic",
+      "status": "passed",
+      "exit": 0,
+      "detail": ""
+    },
+    {
+      "id": "clippy",
+      "kind": "deterministic",
+      "status": "passed",
+      "exit": 0,
+      "detail": ""
+    },
+    {
+      "id": "cargo-test",
+      "kind": "deterministic",
+      "status": "failed",
+      "exit": 101,
+      "detail": ""
+    },
+    {
+      "id": "npm-test",
+      "kind": "deterministic",
+      "status": "passed",
+      "exit": 0,
+      "detail": "251 vitest, 39 vitest"
+    },
+    {
+      "id": "typecheck",
+      "kind": "deterministic",
+      "status": "passed",
+      "exit": 0,
+      "detail": ""
+    },
+    {
+      "id": "build",
+      "kind": "deterministic",
+      "status": "passed",
+      "exit": 0,
+      "detail": ""
+    },
+    {
+      "id": "hygiene",
+      "kind": "deterministic",
+      "status": "passed",
+      "exit": 0,
+      "detail": ""
+    },
+    {
+      "id": "diff-check",
+      "kind": "deterministic",
+      "status": "passed",
+      "exit": 0,
+      "detail": ""
+    },
+    {
+      "id": "native-check",
+      "kind": "deterministic",
+      "status": "passed",
+      "exit": 0,
+      "detail": ""
+    },
+    {
+      "id": "components",
+      "kind": "real-cli",
+      "status": "passed",
+      "exit": 0,
+      "detail": ""
+    },
+    {
+      "id": "components-real",
+      "kind": "real-cli",
+      "status": "passed",
+      "exit": 0,
+      "detail": "6 passed, 0 failed, 0 ignored across 1 suites"
+    },
+    {
+      "id": "missions-real",
+      "kind": "real-cli",
+      "status": "passed",
+      "exit": 0,
+      "detail": "3 passed, 0 failed, 0 ignored across 1 suites"
+    },
+    {
+      "id": "components-adapter-real",
+      "kind": "real-cli",
+      "status": "passed",
+      "exit": 0,
+      "detail": "1 passed"
+    },
+    {
+      "id": "writer-component-source-drift",
+      "kind": "real-cli-with-synthetic-pi",
+      "status": "passed",
+      "exit": 0,
+      "detail": "1 passed; direct existing test binary"
+    },
+    {
+      "id": "npm-pinned-retest",
+      "kind": "deterministic",
+      "status": "passed",
+      "exit": 0,
+      "detail": "npm 11.9.0 version probe, test, typecheck and build passed"
+    }
+  ],
+  "smokes": [
+    {
+      "id": "m1-smoke",
+      "kind": "synthetic",
+      "passed": 19,
+      "total": 19
+    },
+    {
+      "id": "backup-recovery-drill",
+      "kind": "synthetic",
+      "passed": 30,
+      "total": 30
+    },
+    {
+      "id": "mvp-ui-smoke",
+      "kind": "synthetic",
+      "passed": 64,
+      "total": 64
+    },
+    {
+      "id": "m6-ui-smoke",
+      "kind": "real-cli-with-synthetic-pi",
+      "passed": 23,
+      "total": 23
+    },
+    {
+      "id": "tui-smoke",
+      "kind": "synthetic",
+      "passed": 53,
+      "total": 53
+    },
+    {
+      "id": "m3-fixture",
+      "kind": "synthetic-strict-clean-revision",
+      "passed": 69,
+      "total": 69
+    }
+  ],
+  "publication_negative_probes": [
+    {
+      "name": "post-review-worktree-drift",
+      "expected_http": 409,
+      "actual_http": 202,
+      "publication_state": "pr_open",
+      "fake_pr_creates": 1,
+      "passes_policy": false
+    },
+    {
+      "name": "superseded-plan-revision",
+      "expected_http": 409,
+      "actual_http": 202,
+      "publication_state": "pr_open",
+      "fake_pr_creates": 1,
+      "passes_policy": false
+    }
+  ],
+  "initial_workspace_failure": {
+    "test": "explicit_shutdown_interrupts_a_running_baseline_instead_of_cancelling_it",
+    "expected_check_results": 1,
+    "actual_check_results": 0,
+    "isolated_retest": "passed",
+    "cause": "unresolved; load/timing suspected"
+  },
+  "final_workspace_run": {
+    "status": "passed",
+    "exit": 0,
+    "command": "cargo test --locked --workspace --no-fail-fast -- --test-threads=2",
+    "isolated_target_directory": true,
+    "passed": 389,
+    "failed": 0,
+    "ignored": 13,
+    "suites": 43,
+    "ignored_tests_exercised_separately": 11,
+    "remaining_ignored": [
+      "Windows large-index stress test",
+      "manual history benchmark"
+    ]
+  },
+  "unverified": [
+    "genuine-provider-current-revision",
+    "genuine-provider-multirepository",
+    "real-GitHub-publication",
+    "Mac-native-installation-lifecycle",
+    "fresh-Windows-installation",
+    "positive-mobile-runner-matrix",
+    "interactive-TUI-keyboard-audit",
+    "full-independent-component-suites",
+    "real-project-pilot",
+    "current-hosted-CI-status"
+  ],
+  "final_checkout_changes": [
+    "docs/SPEC-COMPLETENESS-AUDIT-2026-10-22.md",
+    "docs/evidence/spec-audit-2026-10-22.json"
+  ]
+}
