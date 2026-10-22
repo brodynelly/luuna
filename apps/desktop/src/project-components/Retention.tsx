@@ -1,4 +1,4 @@
-import { Button, Checkbox, Disclosure, FieldRow, Form, FormFooter, Hint, StatusLine, submitted, TextField } from "../ui";
+import { Button, Checkbox, Disclosure, Form, FormFooter, Hint, InlineFields, StatusLine, submitted, TextField } from "@luuna/ui";
 import { retentionPolicyFromForm } from "./model";
 import type { ComponentsState } from "./useComponents";
 
@@ -28,10 +28,10 @@ export function MemoryRetention({ state }: { state: ComponentsState }) {
   const nothingToApply = !retention || (retention.process_max_age_days === null && retention.project_max_age_days === null);
   return <Disclosure className="memory-retention" summary={summary}>
     <Form className="form-group" onSubmit={submitted(save)} disabled={busy || !client}>
-      <FieldRow>
+      <InlineFields columns={2}>
         <TextField label="Process memory max age (days)" type="number" inputMode="numeric" min={1} max={3650} step={1} value={processDays} onChange={(event) => state.setProcessDays(event.target.value)} placeholder="kept" />
         <TextField label="Project memory max age (days)" type="number" inputMode="numeric" min={1} max={3650} step={1} value={projectDays} onChange={(event) => state.setProjectDays(event.target.value)} placeholder="kept" />
-      </FieldRow>
+      </InlineFields>
       <Hint>An empty field keeps that scope's records. Saving the policy deletes nothing; applying it deletes every project or process record older than the limit through the adapter and records what was deleted. Private user memory is never subject to a project policy.</Hint>
       <FormFooter>
         <Button variant="text" disabled={busy} data-capability="memory.retention.show" onClick={reload}>Reload policy</Button>

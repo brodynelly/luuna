@@ -1,6 +1,6 @@
 import { useState } from "react";
 import type { MemoryRecord } from "@luuna/api-client";
-import { Box, Button, Checkbox, Form, FormFooter, Hint, Id, Item, List, StatusLine, submitted, TextArea } from "../ui";
+import { Button, Checkbox, Form, FormFooter, Hint, Id, Inline, ListGroup, ListRow, Stack, submitted, TextArea } from "@luuna/ui";
 import { promotionTarget } from "./model";
 
 /**
@@ -28,19 +28,19 @@ export function MemorySelection({ records, selected, busy, onToggle, onDelete, o
   onPromote?: (record: MemoryRecord, toScope: "project" | "user") => void; onCorrect?: (record: MemoryRecord, content: string) => void;
 }) {
   const [correcting, setCorrecting] = useState<string | null>(null);
-  return <List className="component-records" label="Atlas memory records">{records.map((record) => {
+  return <ListGroup className="component-records" aria-label="Atlas memory records">{records.map((record) => {
     const target = promotionTarget(record.scope);
-    return <Item key={record.id}>
-      <Checkbox className="component-selection" label="Include this memory in the next plan" checked={selected.includes(record.id)} disabled={busy} onChange={() => onToggle(record)} />
-      <StatusLine status={false} className="component-content">{record.content}</StatusLine>
-      <Hint>{record.scope === "user" ? "Private user memory" : `${record.scope} memory`} · provenance: {record.provenance}</Hint>
-      <Box className="component-record-meta">
-        <Id>{record.id}</Id>
-        <Button variant="text" disabled={busy} data-capability="memory.delete" onClick={() => onDelete(record)}>Delete memory</Button>
-        {onPromote && target && <Button variant="text" disabled={busy} data-capability="memory.promote" onClick={() => onPromote(record, target)}>Promote to {target} memory</Button>}
-        {onCorrect && correcting !== record.id && <Button variant="text" disabled={busy} onClick={() => setCorrecting(record.id)}>Correct memory</Button>}
-      </Box>
-      {onCorrect && correcting === record.id && <MemoryCorrection key={record.hash} record={record} busy={busy} onSave={(content) => { setCorrecting(null); onCorrect(record, content); }} onCancel={() => setCorrecting(null)} />}
-    </Item>;
-  })}</List>;
+    return <ListRow key={record.id} title={<span className="component-content">{record.content}</span>}
+      meta={<Hint>{record.scope === "user" ? "Private user memory" : `${record.scope} memory`} · provenance: {record.provenance}</Hint>}
+      detail={<Stack gap={2}>
+        <Checkbox className="component-selection" label="Include this memory in the next plan" checked={selected.includes(record.id)} disabled={busy} onChange={() => onToggle(record)} />
+        <Inline gap={3} align="center" wrap className="component-record-meta">
+          <Id>{record.id}</Id>
+          <Button variant="text" disabled={busy} data-capability="memory.delete" onClick={() => onDelete(record)}>Delete memory</Button>
+          {onPromote && target && <Button variant="text" disabled={busy} data-capability="memory.promote" onClick={() => onPromote(record, target)}>Promote to {target} memory</Button>}
+          {onCorrect && correcting !== record.id && <Button variant="text" disabled={busy} onClick={() => setCorrecting(record.id)}>Correct memory</Button>}
+        </Inline>
+        {onCorrect && correcting === record.id && <MemoryCorrection key={record.hash} record={record} busy={busy} onSave={(content) => { setCorrecting(null); onCorrect(record, content); }} onCancel={() => setCorrecting(null)} />}
+      </Stack>} />;
+  })}</ListGroup>;
 }

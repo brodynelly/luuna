@@ -1,6 +1,5 @@
 import type { RunRecord, Ticket } from "@luuna/api-client";
-import { runTone } from "../design/tone";
-import { ContextMenuArea, Item, List, SelectableCard, StatusBadge, copyText, useNotify } from "../ui";
+import { runTone, ListGroup, ListRow, StatusBadge, copyText, useNotify } from "@luuna/ui";
 import { stateText } from "./model";
 
 export interface TicketRow { ticket: Ticket; run?: RunRecord; planRevision?: number }
@@ -13,21 +12,18 @@ export interface TicketRow { ticket: Ticket; run?: RunRecord; planRevision?: num
  */
 export function TicketList({ rows, selected, onSelect }: { rows: readonly TicketRow[]; selected: string | null; onSelect: (id: string) => void }) {
   const notify = useNotify();
-  return <List className="ticket-list" label="Ticket list">{rows.map(({ ticket, run, planRevision }) => <Item key={ticket.id} className="ticket-row">
-    <ContextMenuArea label={`Actions for ${ticket.title}`} commands={() => [
+  return <ListGroup aria-label="Ticket list">{rows.map(({ ticket, run, planRevision }) => <ListRow key={ticket.id} onOpen={() => onSelect(ticket.id)} selected={selected === ticket.id}
+    buttonLabel={`${ticket.title}, ${run ? stateText(run.state) : "no plan"}`} title={ticket.title}
+    meta={<>
+      {run ? <StatusBadge tone={runTone[run.state]}>{stateText(run.state)}</StatusBadge> : <StatusBadge>no plan</StatusBadge>}
+      <span>ticket r{ticket.revision}</span>
+      {planRevision !== undefined && <span>plan r{planRevision}</span>}
+      {ticket.purpose === "testing_setup" && <span>testing setup</span>}
+    </>}
+    menuLabel={`Actions for ${ticket.title}`} commands={() => [
       { label: "Open ticket", onSelect: () => onSelect(ticket.id) },
       { label: "Copy ticket ID", group: true, onSelect: () => void copyText(ticket.id).then(() => notify("Ticket ID copied")) },
-    ]}>
-      <SelectableCard selected={selected === ticket.id} onSelect={() => onSelect(ticket.id)} label={`${ticket.title}, ${run ? stateText(run.state) : "no plan"}`}
-        title={ticket.title}
-        meta={<>
-          {run ? <StatusBadge tone={runTone[run.state]}>{stateText(run.state)}</StatusBadge> : <StatusBadge>no plan</StatusBadge>}
-          <span>ticket r{ticket.revision}</span>
-          {planRevision !== undefined && <span>plan r{planRevision}</span>}
-          {ticket.purpose === "testing_setup" && <span>testing setup</span>}
-        </>} />
-    </ContextMenuArea>
-  </Item>)}</List>;
+    ]} />)}</ListGroup>;
 }
 
 /** Which ticket the detail shows: the one asked for, the one already shown, or the newest. */

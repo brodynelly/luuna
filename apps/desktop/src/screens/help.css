@@ -1,29 +1,9 @@
 /* Screen: help. Layout and screen-specific presentation, tokens only (docs/DESIGN-SYSTEM.md). */
-/*
- * The Help panel (docs/09-experience.md, ADR 0027 point 4): onboarding steps, what each state
- * means (the six tones of the design system with their runtime values), where evidence lives,
- * and the repository documents. A single-column docs layout at a readable measure inside the
- * content cap; topics are plain sections with a section title, not cards. Static prose; every
- * rule is scoped by a class unique to this screen.
- */
-
-.help-sections { display: grid; grid-template-columns: minmax(0, 1fr); gap: var(--space-6); min-width: 0; max-width: var(--measure); }
-.help-section { display: grid; grid-template-columns: minmax(0, 1fr); align-content: start; gap: var(--space-2); min-width: 0; }
-.help-section > .panel-heading > h3 { margin: 0; }
-.help-section > :is(ol, ul) { display: grid; gap: var(--space-2); margin: 0; padding-left: var(--space-5); color: var(--ink-body); font-size: var(--text-label); line-height: var(--leading-label); }
-.help-section > ul.help-plain { padding-left: 0; list-style: none; }
-.help-section > .help-states { display: grid; gap: var(--space-3); margin: 0; font-size: var(--text-label); }
-.help-section > .help-states > div { display: grid; grid-template-columns: minmax(0, 1fr); gap: var(--space-0-5); }
-.help-states .help-state-term { display: flex; flex-wrap: wrap; align-items: baseline; gap: var(--space-1-5); color: var(--ink-muted); }
-.help-states .help-state-meaning { margin: 0; color: var(--ink-body); }
-/* Onboarding steps: the list markup is unchanged; a counter draws the numbered badge on the neutral fill. */
-.help-section > ol { padding-left: 0; list-style: none; counter-reset: help-step; }
-.help-section > ol > li { position: relative; min-height: var(--space-5); padding-left: var(--space-6); counter-increment: help-step; }
-.help-section > ol > li::before { content: counter(help-step); position: absolute; inset-block-start: 0; inset-inline-start: 0; display: grid; place-items: center; width: var(--space-5); height: var(--space-5); border-radius: var(--radius-full); background: var(--fill); color: var(--ink); font-size: var(--text-caption); font-variant-numeric: tabular-nums; font-weight: var(--weight-medium); }
-/* Shortcuts: the action on the left and its key cap on the right, with hairline separators. */
-.help-shortcuts > li { display: flex; align-items: center; justify-content: space-between; gap: var(--space-3); min-height: var(--row-height); padding-block: var(--space-1); border-bottom: var(--border-width) solid var(--separator); }
-.help-shortcuts > li:last-child { border-bottom: 0; }
-/* Documents: a link row with its path as muted identity text. */
-.help-documents > li { display: flex; flex-wrap: wrap; align-items: baseline; justify-content: space-between; gap: var(--space-1) var(--space-3); min-height: var(--row-height); padding-block: var(--space-1); border-bottom: var(--border-width) solid var(--separator); }
-.help-documents > li:last-child { border-bottom: 0; }
-.help-documents > li > code { color: var(--ink-muted); font-size: var(--text-caption); overflow-wrap: anywhere; }
+/* Help topics on a readable measure; steps, states, evidence, shortcuts and documents are library ListRow, PropertyList and ListGroup. */
+.help-sections { max-width: var(--measure); }
+/* The steps are a bare Stack, whose Mantine default gap is --spacing-md; the rows carry their own padding and separators, so no gap. */
+.help-steps { gap: 0; }
+.help-step-number { display: grid; place-items: center; width: var(--space-5); height: var(--space-5); border-radius: var(--radius-full); background: var(--fill); color: var(--ink); font-size: var(--text-caption); font-variant-numeric: tabular-nums; font-weight: var(--weight-medium); }
+.help-steps .list-row-title { font-weight: var(--weight-medium); }
+.help-states .help-state-values { color: var(--ink-muted); }
+.help-states .help-state-meaning { margin: 0; color: var(--ink-body); font-size: var(--text-label); }

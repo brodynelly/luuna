@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState } from "react";
 import type { ComponentContext, LuunaClient, PlanRevision, TaskRecord, TestingPrerequisite } from "@luuna/api-client";
 import { retryIdentity } from "../ProjectComponents";
-import { Button, EmptyState, ErrorBanner, RecordList, Section } from "../ui";
+import { Alert, Button, EmptyState, ListGroup, Section } from "@luuna/ui";
 import { rowsFromProposal, setupTicketDraft, ticketTextSizes, tooLong } from "./model";
 import { DEFAULT_RUN_SETTINGS, emptyTicketForm, usePatchState } from "./settings";
 import { useWorkflowData } from "./useWorkflowData";
@@ -116,16 +116,16 @@ export function Workflows({ client, projectId, repositoryId, repositoryIds = [re
   const description = `${componentsEnabled ? "Tickets live in Missions; reconcile outside edits before planning again." : "Tickets are stored locally until project components are enabled."} ${SCOPE_TAIL}`;
 
   return <Section id="workflows-heading" title="Tickets" variant="subpanel" className="workflows" accessory={refresh} description={description}>
-    {shownError && <ErrorBanner message={shownError} onDismiss={() => { work.setError(""); data.clearLoadError(); }} />}
+    {shownError && <Alert tone="danger" onDismiss={() => { work.setError(""); data.clearLoadError(); }}>{shownError}</Alert>}
     <PrerequisiteOffers offers={offers} disabled={!client || work.busy || !manifestConfirmed} prefillSetupTicket={prefillSetupTicket} />
     {data.tickets.list.length > 0
       ? <TicketList rows={data.tickets.list.map((ticket) => { const latest = data.tickets.plans[ticket.id]?.at(-1); return { ticket, run: latest && runFor(latest), planRevision: latest?.revision }; })} selected={selected} onSelect={setChosen} />
       : <EmptyState title="No tickets yet">Create the first one below.</EmptyState>}
-    {detail && <RecordList className="tickets" label="Tickets" data-capability="tickets.list">
+    {detail && <ListGroup aria-label="Tickets" data-capability="tickets.list">
       <TicketCard key={detail.id} ticket={detail} source={data.tickets.sources[detail.id]} revisions={(data.tickets.plans[detail.id] ?? []).map((plan) => ({ plan, run: runFor(plan) }))}
         snapshots={data.snapshots} diffs={work.inspections.diffs} attempts={work.inspections.attempts} publications={work.inspections.publications}
         tasks={work.inspections.tasks} logs={work.inspections.logs} busy={work.busy} connected={client !== null} actions={actions} repositoryIds={repositoryIds} />
-    </RecordList>}
+    </ListGroup>}
     <TicketForm form={form} update={updateForm} sizes={sizes} tooLong={blocked} disabled={!client || work.busy || !manifestConfirmed} manifestConfirmed={manifestConfirmed} repositoryIds={repositoryIds} scoped={scoped} onCreate={createTicket} />
     <RunSettings settings={settings} update={updateSettings} repositoryId={repositoryId} repositoryIds={repositoryIds} error={work.error} />
   </Section>;

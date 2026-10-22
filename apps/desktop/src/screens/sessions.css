@@ -1,28 +1,24 @@
-/* Screen: sessions refinements. Layered after app.css (item C owns that sheet), tokens only (docs/DESIGN-SYSTEM.md). */
+/* Screen: sessions refinements. Layered after app.css, tokens only (docs/DESIGN-SYSTEM.md). */
 /*
  * Static depth only. The live output card never carries a transform, opacity, filter or
  * will-change (ADR 0031: the sticky-scroll and caret contract), and event rows stream
  * continuously, so they get no entrance animation and no transition.
  */
 
-/* History rail: hover and focus change the background only; the selected card keeps its accent tint. */
-.history-list > li button.run-card { border-radius: var(--radius-md); transition: background-color var(--duration-micro) var(--ease-standard); }
-.history-list > li button.run-card:hover:not(:disabled):not([aria-pressed="true"]), .history-list > li button.run-card:focus-visible:not([aria-pressed="true"]) { background: var(--fill); }
+/* History rail: keyboard focus tints the unselected card; hover, radius and selection come from the library. */
+.history-list > li button.run-card:focus-visible:not([aria-pressed="true"]) { background: var(--fill); }
 
-/* The run bar and its streaming dots sit above the response, outside the output region. */
-.event-panel > .run-detail { border-radius: var(--radius-lg); }
+/* The streaming dots sit in the run bar, outside the response region. */
 .run-detail > .streaming-dots { flex: none; }
 
-/* Live output: a raised card; the response region inside is untouched. */
-.event-panel > .assistant-output { padding: var(--space-3); border: var(--border-width) solid var(--color-border); border-radius: var(--radius-card); background: var(--surface-muted); box-shadow: var(--shadow-card); }
+/* Live output: the Surface supplies the card; the heading hairline and the response ground stay here. */
 .assistant-output > .panel-heading { padding-bottom: var(--space-1-5); border-bottom: var(--border-width) solid var(--color-border); }
-.assistant-output > pre { border-radius: var(--radius-button); background: var(--color-surface); }
+.assistant-output > pre { border-radius: var(--radius-md); background: var(--color-surface); }
 
-/* Event rows: 40 px rows, hairlines and a hover tint. */
-ol.events > li { min-height: var(--row-height); border-bottom: var(--border-width) solid var(--color-border); }
-ol.events > li:last-child { border-bottom: 0; }
-ol.events > li:hover, ol.events > li:focus-within { background: var(--fill); }
+/* Event rows: a row-height floor and a focus tint (hairlines and hover come from the library). */
+ol.events > li { min-height: var(--row-height); }
+ol.events > li:focus-within { background: var(--fill); }
 ol.events .event-number { font-variant-numeric: tabular-nums; }
 
 /* Empty states: a quiet ground behind the selection prompt. */
-.event-panel > .activity-empty { background: var(--surface-muted); border-radius: var(--radius-card); }
+.event-panel > .activity-empty { background: var(--surface-muted); border-radius: var(--radius-md); }

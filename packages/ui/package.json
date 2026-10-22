@@ -1,0 +1,35 @@
+{
+  "name": "@luuna/ui",
+  "version": "0.1.0",
+  "private": true,
+  "license": "MIT",
+  "type": "module",
+  "exports": {
+    ".": "./src/index.ts",
+    "./styles/*": "./src/styles/*",
+    "./assets/*": "./src/assets/*",
+    "./navigation/*": "./src/navigation/*",
+    "./forms/*": "./src/forms/*",
+    "./data/*": "./src/data/*",
+    "./overlay/*": "./src/overlay/*",
+    "./primitives/*": "./src/primitives/*"
+  },
+  "scripts": {
+    "typecheck": "tsc --noEmit",
+    "test": "vitest run"
+  },
+  "dependencies": {
+    "@luuna/api-client": "0.1.0"
+  },
+  "peerDependencies": {
+    "react": "19.2.0"
+  },
+  "devDependencies": {
+    "@types/react": "19.2.2",
+    "@types/react-dom": "19.2.2",
+    "react": "19.2.0",
+    "react-dom": "19.2.0",
+    "typescript": "5.9.3",
+    "vitest": "4.1.11"
+  }
+}

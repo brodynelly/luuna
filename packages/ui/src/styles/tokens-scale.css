@@ -1,0 +1,202 @@
+/*
+ * Design tokens, scale: fonts, type styles, spacing, control sizes and layout (ADR 0035). The Mantine-native
+ * tokens (--font-size-*, --line-height-*, --font-weight-*, --heading-*, --spacing-*, --breakpoint-*) are the exact
+ * Mantine default-theme values (design/mantine-tokens.test.ts compares them with design/mantine-values.ts). The
+ * Luuna role names (--text-*, --leading-*, --weight-*, --space-*) keep their ADR 0033 names and are defined
+ * from them. The Luuna-only layout tokens keep their earlier values. A literal-holding token sheet.
+ * Type: body and UI text use Mantine's system stack; headings, titles and display use Outfit (SIL OFL 1.1,
+ * bundled, fonts.css) at weight 600, the split mantine.dev uses. To set the body in Outfit as well, point
+ * --font-sans at var(--font-display). Every type role has --text-*, --leading-* and --weight-* (the
+ * font-size lint needs var(--text-*)).
+ */
+:root {
+  /* Fonts. */
+  --font-stack: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif, "Apple Color Emoji", "Segoe UI Emoji";
+  --font-sans: var(--font-stack);
+  --font-display: "Outfit", var(--font-stack);
+  --font-mono: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", "Courier New", monospace;
+
+  /* Mantine type scale: sizes, line heights and weights (regular 400, medium 600, bold 700). */
+  --font-size-xs: 0.75rem;
+  --font-size-sm: 0.875rem;
+  --font-size-md: 1rem;
+  --font-size-lg: 1.125rem;
+  --font-size-xl: 1.25rem;
+  --line-height-xs: 1.4;
+  --line-height-sm: 1.45;
+  --line-height-md: 1.55;
+  --line-height-lg: 1.6;
+  --line-height-xl: 1.65;
+  --font-weight-regular: 400;
+  --font-weight-medium: 600;
+  --font-weight-bold: 700;
+  /* Mantine headings h1 to h6 (size, line height). Mantine sets them at 700; Luuna sets Outfit titles at 600, as mantine.dev does. */
+  --heading-1-size: 2.125rem;
+  --heading-1-line-height: 1.3;
+  --heading-2-size: 1.625rem;
+  --heading-2-line-height: 1.35;
+  --heading-3-size: 1.375rem;
+  --heading-3-line-height: 1.4;
+  --heading-4-size: 1.125rem;
+  --heading-4-line-height: 1.45;
+  --heading-5-size: 1rem;
+  --heading-5-line-height: 1.5;
+  --heading-6-size: 0.875rem;
+  --heading-6-line-height: 1.5;
+  --font-weight-heading: 600;
+
+  /* Mantine spacing and breakpoints. The 4px --space-N rhythm below stays for layout. */
+  --spacing-xs: 10px;
+  --spacing-sm: 12px;
+  --spacing-md: 16px;
+  --spacing-lg: 20px;
+  --spacing-xl: 32px;
+  --breakpoint-xs: 36em;
+  --breakpoint-sm: 48em;
+  --breakpoint-md: 62em;
+  --breakpoint-lg: 75em;
+  --breakpoint-xl: 88em;
+
+  /* Luuna type roles. Page title is Mantine h2 (26px), metric-lg and the wordmark h3 (22px), section title h4 (18px). */
+  --text-page-title: var(--heading-2-size);
+  --leading-page-title: var(--heading-2-line-height);
+  --weight-page-title: var(--font-weight-heading);
+  --tracking-page-title: 0em;
+  --text-metric-lg: var(--heading-3-size);
+  --leading-metric-lg: var(--heading-3-line-height);
+  --weight-metric-lg: var(--font-weight-heading);
+  --text-section-title: var(--heading-4-size);
+  --leading-section-title: var(--heading-4-line-height);
+  --weight-section-title: var(--font-weight-heading);
+  --text-metric: var(--font-size-xl);
+  --leading-metric: var(--line-height-xs);
+  --weight-metric: var(--font-weight-medium);
+  --text-body-strong: var(--font-size-md);
+  --leading-body-strong: var(--line-height-md);
+  --weight-body-strong: var(--font-weight-medium);
+  --text-body: var(--font-size-md);
+  --leading-body: var(--line-height-md);
+  --weight-body: var(--font-weight-regular);
+  --text-label: var(--font-size-sm);
+  --leading-label: var(--line-height-sm);
+  --weight-label: var(--font-weight-medium);
+  --text-caption: var(--font-size-xs);
+  --leading-caption: var(--line-height-xs);
+  --weight-caption: var(--font-weight-regular);
+  --text-overline: var(--font-size-xs);
+  --leading-overline: var(--line-height-xs);
+  --weight-overline: var(--font-weight-medium);
+  --text-mono: var(--font-size-sm);
+  --leading-mono: var(--line-height-md);
+  --weight-mono: var(--font-weight-regular);
+
+  /* Luuna weights, line heights and tracking, defined from the Mantine tokens. Mantine has no tracking: titles and body track 0. */
+  --weight-light: 300;
+  --weight-regular: var(--font-weight-regular);
+  --weight-medium: var(--font-weight-medium);
+  --weight-semibold: var(--font-weight-medium);
+  --weight-bold: var(--font-weight-bold);
+  --leading-none: 1;
+  --leading-tight: 1.25;
+  --leading: var(--line-height-md);
+  --leading-code: var(--line-height-md);
+  --leading-prose: var(--line-height-xl);
+  --tracking-none: 0em;
+  --tracking-tight: 0em;
+  --tracking-title: 0em;
+  --tracking-wide: 0.12em;
+  --text-wordmark: var(--heading-3-size);
+  --text-glyph: var(--heading-1-size);
+
+  /* Space: the 4px layout rhythm, plus half steps (Mantine spacing is --spacing-*). */
+  --space-0-5: 2px;
+  --space-1: 4px;
+  --space-1-5: 6px;
+  --space-2: 8px;
+  --space-2-5: 10px;
+  --space-3: 12px;
+  --space-4: 16px;
+  --space-5: 20px;
+  --space-6: 24px;
+  --space-8: 32px;
+  --space-12: 48px;
+
+  /* Control heights (ADR 0035 follow-up). Luuna sm, md and lg are Mantine's xs, sm and md (30, 36, 42 px); md is the
+     default control (Mantine's Button, inputs, Checkbox and Switch default to its size sm). --control-xl is Mantine lg. */
+  --control-sm: 30px;
+  --control-md: 36px;
+  --control-lg: 42px;
+  --control-xl: 50px;
+  --press-offset: 1px;
+  --sidebar-width: 240px;
+  --drawer-width: 440px;
+  --dialog-width: 480px;
+  --banner-height: 40px;
+  --topbar-height: 56px;
+  --content-max-width: 1200px;
+  --fold-reference: 768px;
+
+  /* Luuna-only controls and layout. */
+  --field-line: 34px;
+  --field-pad-y-multiline: 5.5px;
+  --control-pad-x: 18px;
+  --control-pad-x-sm: 14px;
+  --control-pad-x-lg: 22px;
+  --checkbox-size: 20px;
+  --checkbox-icon: 12px;
+  --checkbox-check-w: 5px;
+  --checkbox-check-h: 9px;
+  --check-label-line: 20px;
+  --switch-track-width: 38px;
+  --switch-track-height: 20px;
+  --switch-knob: 14px;
+  --switch-knob-travel: 18px;
+  --chip-height: 28px;
+  --chip-pad-x: 20px;
+  --chip-pad-x-checked: 10px;
+  --app-min-width: 360px;
+  --layout-max: 1280px;
+  --connect-width: 440px;
+  --palette-width: 600px;
+  --palette-top: 12vh;
+  --palette-list-max: 50vh;
+  --menu-min-width: 200px;
+  /* The context menu sets its own position at runtime; these are the resting values. */
+  --menu-x: 0px;
+  --menu-y: 0px;
+  --viewport-height: 100vh;
+  --sidebar-compact: 64px;
+  --nav-height: 34px;
+  --icon-size: 16px;
+  --icon-stroke: 1.75;
+  --gutter: 40px;
+  --section-gap: 24px;
+  --panel-pad: 22px;
+  --aside-width: 286px;
+  --rail-width: 300px;
+  --facts-term: 150px;
+  --field-min: 14rem;
+  --hint-min: 16rem;
+  --measure: 72ch;
+  --number-width: 3ch;
+  --scroll-max: 28rem;
+  --textarea-min: 68px;
+  --plan-max: 24rem;
+  --empty-min: 168px;
+  --skeleton-height: 44px;
+  --skeleton-short: 60%;
+}
+
+@media (max-width: 920px) {
+  :root {
+    --gutter: 24px;
+    --section-gap: 16px;
+    --panel-pad: 18px;
+  }
+}
+
+@media (max-width: 680px) {
+  :root {
+    --gutter: 16px;
+  }
+}

@@ -1,0 +1,152 @@
+/*
+ * Typography and layout primitives (ADR 0034, family 5). Layer: components. Only var(--token) values: space comes
+ * from --space-*, widths from --content-max-width, --measure and --connect-width, columns from the two breakpoints
+ * (920 and 680 px) and --field-min / --hint-min. Props are names, so every name has one rule here; tokens.test.ts
+ * checks the pairing. Dark surfaces have no shadow because --shadow-card is none there. Defaults follow Mantine (ADR 0035):
+ * Stack and Grid gap --spacing-md, Container pads --spacing-md, Divider label gap --spacing-xs, Code 12 px on the muted ground.
+ */
+
+/* Space scale: gap, padding and spacer size. */
+.prim-gap[data-gap="0"] { --prim-gap: 0; }
+.prim-gap[data-gap="0.5"] { --prim-gap: var(--space-0-5); }
+.prim-gap[data-gap="1"] { --prim-gap: var(--space-1); }
+.prim-gap[data-gap="1.5"] { --prim-gap: var(--space-1-5); }
+.prim-gap[data-gap="2"] { --prim-gap: var(--space-2); }
+.prim-gap[data-gap="2.5"] { --prim-gap: var(--space-2-5); }
+.prim-gap[data-gap="3"] { --prim-gap: var(--space-3); }
+.prim-gap[data-gap="4"] { --prim-gap: var(--space-4); }
+.prim-gap[data-gap="5"] { --prim-gap: var(--space-5); }
+.prim-gap[data-gap="6"] { --prim-gap: var(--space-6); }
+.prim-gap[data-gap="8"] { --prim-gap: var(--space-8); }
+.prim-gap[data-gap="12"] { --prim-gap: var(--space-12); }
+
+.prim-pad[data-pad="0"] { --prim-pad: 0; }
+.prim-pad[data-pad="0.5"] { --prim-pad: var(--space-0-5); }
+.prim-pad[data-pad="1"] { --prim-pad: var(--space-1); }
+.prim-pad[data-pad="1.5"] { --prim-pad: var(--space-1-5); }
+.prim-pad[data-pad="2"] { --prim-pad: var(--space-2); }
+.prim-pad[data-pad="2.5"] { --prim-pad: var(--space-2-5); }
+.prim-pad[data-pad="3"] { --prim-pad: var(--space-3); }
+.prim-pad[data-pad="4"] { --prim-pad: var(--space-4); }
+.prim-pad[data-pad="5"] { --prim-pad: var(--space-5); }
+.prim-pad[data-pad="6"] { --prim-pad: var(--space-6); }
+.prim-pad[data-pad="8"] { --prim-pad: var(--space-8); }
+.prim-pad[data-pad="12"] { --prim-pad: var(--space-12); }
+.prim-pad[data-pad="panel"] { --prim-pad: var(--panel-pad); }
+
+.prim-spacer[data-size="0"] { --prim-size: 0; }
+.prim-spacer[data-size="0.5"] { --prim-size: var(--space-0-5); }
+.prim-spacer[data-size="1"] { --prim-size: var(--space-1); }
+.prim-spacer[data-size="1.5"] { --prim-size: var(--space-1-5); }
+.prim-spacer[data-size="2"] { --prim-size: var(--space-2); }
+.prim-spacer[data-size="2.5"] { --prim-size: var(--space-2-5); }
+.prim-spacer[data-size="3"] { --prim-size: var(--space-3); }
+.prim-spacer[data-size="4"] { --prim-size: var(--space-4); }
+.prim-spacer[data-size="5"] { --prim-size: var(--space-5); }
+.prim-spacer[data-size="6"] { --prim-size: var(--space-6); }
+.prim-spacer[data-size="8"] { --prim-size: var(--space-8); }
+.prim-spacer[data-size="12"] { --prim-size: var(--space-12); }
+
+/* Stack, Inline, Center, Spacer. */
+.prim-stack { display: flex; flex-direction: column; gap: var(--prim-gap, var(--spacing-md)); min-width: 0; }
+ul.prim-stack, ol.prim-stack { margin: 0; padding: 0; list-style: none; }
+.prim-stack[data-align="start"] { align-items: flex-start; }
+.prim-stack[data-align="center"] { align-items: center; }
+.prim-stack[data-align="end"] { align-items: flex-end; }
+.prim-stack[data-align="stretch"] { align-items: stretch; }
+.prim-stack[data-justify="start"] { justify-content: flex-start; }
+.prim-stack[data-justify="center"] { justify-content: center; }
+.prim-stack[data-justify="end"] { justify-content: flex-end; }
+.prim-inline { display: flex; flex-direction: row; align-items: center; gap: var(--prim-gap, var(--spacing-md)); min-width: 0; }
+span.prim-inline { display: inline-flex; }
+ul.prim-inline, ol.prim-inline { margin: 0; padding: 0; list-style: none; }
+.prim-inline[data-wrap] { flex-wrap: wrap; }
+.prim-inline[data-align="start"] { align-items: flex-start; }
+.prim-inline[data-align="center"] { align-items: center; }
+.prim-inline[data-align="end"] { align-items: flex-end; }
+.prim-inline[data-align="stretch"] { align-items: stretch; }
+.prim-inline[data-align="baseline"] { align-items: baseline; }
+.prim-inline[data-justify="start"] { justify-content: flex-start; }
+.prim-inline[data-justify="center"] { justify-content: center; }
+.prim-inline[data-justify="end"] { justify-content: flex-end; }
+.prim-inline[data-justify="between"] { justify-content: space-between; }
+.prim-center { display: flex; flex-direction: column; align-items: center; justify-content: center; min-width: 0; text-align: center; }
+.prim-center[data-inline] { display: inline-flex; }
+.prim-center[data-fill] { min-height: var(--empty-min); }
+.prim-spacer { flex: 1 1 auto; min-width: 0; }
+.prim-spacer[data-size] { flex: none; width: var(--prim-size); height: var(--prim-size); }
+
+/* Grid: equal columns, fewer at the compact (920 px) and narrow (680 px) breakpoints. */
+.prim-grid { display: grid; grid-template-columns: repeat(var(--prim-cols, 1), minmax(0, 1fr)); gap: var(--prim-gap, var(--spacing-md)); min-width: 0; }
+.prim-grid[data-cols="1"] { --prim-cols: 1; }
+.prim-grid[data-cols="2"] { --prim-cols: 2; }
+.prim-grid[data-cols="3"] { --prim-cols: 3; }
+.prim-grid[data-cols="4"] { --prim-cols: 4; }
+.prim-grid[data-cols="5"] { --prim-cols: 5; }
+.prim-grid[data-cols="6"] { --prim-cols: 6; }
+@media (max-width: 920px) {
+  .prim-grid[data-cols-compact="1"] { --prim-cols: 1; }
+  .prim-grid[data-cols-compact="2"] { --prim-cols: 2; }
+  .prim-grid[data-cols-compact="3"] { --prim-cols: 3; }
+  .prim-grid[data-cols-compact="4"] { --prim-cols: 4; }
+  .prim-grid[data-cols-compact="5"] { --prim-cols: 5; }
+  .prim-grid[data-cols-compact="6"] { --prim-cols: 6; }
+}
+@media (max-width: 680px) {
+  .prim-grid[data-cols-narrow="1"] { --prim-cols: 1; }
+  .prim-grid[data-cols-narrow="2"] { --prim-cols: 2; }
+  .prim-grid[data-cols-narrow="3"] { --prim-cols: 3; }
+  .prim-grid[data-cols-narrow="4"] { --prim-cols: 4; }
+  .prim-grid[data-cols-narrow="5"] { --prim-cols: 5; }
+  .prim-grid[data-cols-narrow="6"] { --prim-cols: 6; }
+}
+.prim-simple-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(min(100%, var(--prim-min, var(--field-min))), 1fr)); gap: var(--prim-gap, var(--spacing-md)); min-width: 0; }
+.prim-simple-grid[data-min="field"] { --prim-min: var(--field-min); }
+.prim-simple-grid[data-min="hint"] { --prim-min: var(--hint-min); }
+
+/* Container: a centred column bounded by a width token. */
+.prim-container { width: 100%; max-width: var(--prim-max, var(--content-max-width)); margin-inline: auto; padding-inline: var(--spacing-md); min-width: 0; }
+.prim-container[data-size="content"] { --prim-max: var(--content-max-width); }
+.prim-container[data-size="measure"] { --prim-max: var(--measure); }
+.prim-container[data-size="narrow"] { --prim-max: var(--connect-width); }
+.prim-container[data-gutter] { padding-inline: var(--gutter); }
+
+/* Divider: a hairline in --separator; labelled, the text sits in the rule. */
+.prim-divider { margin: 0; border: 0; border-block-start: var(--border-width) solid var(--separator); }
+.prim-divider[data-orientation="vertical"] { align-self: stretch; width: 0; min-height: 1lh; border-block-start: 0; border-inline-start: var(--border-width) solid var(--separator); }
+.prim-divider[data-labelled] { display: flex; align-items: center; gap: var(--spacing-xs); border: 0; color: var(--ink-muted); font-size: var(--text-caption); line-height: var(--leading-caption); }
+.prim-divider[data-labelled]::before, .prim-divider[data-labelled]::after { content: ""; flex: 1 1 0; border-block-start: var(--border-width) solid var(--separator); }
+
+/* Title: the heading's own style unless a type style is named (headings take the display face from base.css, ADR 0035). */
+.prim-title[data-size="page"] { font-size: var(--text-page-title); line-height: var(--leading-page-title); font-weight: var(--weight-page-title); letter-spacing: var(--tracking-page-title); }
+.prim-title[data-size="section"] { font-size: var(--text-section-title); line-height: var(--leading-section-title); font-weight: var(--weight-section-title); }
+.prim-title[data-size="subsection"] { font-size: var(--text-body-strong); line-height: var(--leading-body-strong); font-weight: var(--weight-body-strong); }
+.prim-title[data-size="label"] { font-size: var(--text-label); line-height: var(--leading-label); font-weight: var(--weight-label); }
+
+/* Code: an identity inline, whole and wrapping anywhere (never truncated). */
+.prim-code { padding: var(--space-0-5) var(--space-1); border-radius: var(--radius-sm); background: var(--fill); color: var(--ink-body); font-size: var(--text-xs); line-height: var(--leading-code); overflow-wrap: anywhere; }
+.prim-code[data-size="inherit"] { font-size: inherit; }
+
+/* Surface: one border, radius and ground for muted and raised groups. Light cards cast --shadow-card; dark ones have none. */
+.prim-surface { min-width: 0; border: var(--border-width) solid transparent; border-radius: var(--radius-md); }
+.prim-surface[data-level="raised"] { border-color: var(--separator); background: var(--surface-raised); box-shadow: var(--shadow-card); }
+.prim-surface[data-level="muted"] { background: var(--surface-muted); }
+.prim-surface[data-shadow="true"] { box-shadow: var(--shadow-card); }
+.prim-surface[data-shadow="false"] { box-shadow: none; }
+.prim-pad { padding: var(--prim-pad, 0); }
+
+/* ScrollArea: bounded height; focusable and named by the component only while it overflows. */
+.prim-scroll[data-scroll-area] { max-block-size: var(--prim-max, var(--scroll-max)); min-width: 0; overscroll-behavior: contain; }
+.prim-scroll[data-scroll-area][data-axis="y"] { overflow-y: auto; }
+.prim-scroll[data-scroll-area][data-axis="x"] { overflow-x: auto; }
+.prim-scroll[data-scroll-area][data-axis="both"] { overflow: auto; }
+.prim-scroll[data-max="plan"] { --prim-max: var(--plan-max); }
+.prim-scroll[data-max="scroll"] { --prim-max: var(--scroll-max); }
+.prim-scroll[data-max="list"] { --prim-max: var(--palette-list-max); }
+
+/* Anchor: accent text. Mantine underlines on hover only; here every anchor is underlined at rest (hover-only affordances are banned for essential
+   information), so hover adds nothing. The external mark follows the label. */
+.prim-anchor { color: var(--accent-text); text-decoration: underline; overflow-wrap: anywhere; }
+.prim-anchor[data-variant="subtle"] { color: var(--ink-body); }
+.prim-anchor[data-underline="always"] { text-decoration-color: var(--border-strong); }
+.prim-anchor-mark { margin-inline-start: var(--space-0-5); }

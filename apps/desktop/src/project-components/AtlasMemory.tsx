@@ -1,5 +1,5 @@
 import type { MemoryScope } from "@luuna/api-client";
-import { Actions, Button, Checkbox, CodeBlock, Disclosure, DownloadLink, EmptyState, Form, Hint, Meta, Section, SelectField, submitted, TextArea, TextField } from "../ui";
+import { Actions, Button, Checkbox, CodeBlock, Disclosure, DownloadLink, EmptyState, Form, Hint, Inline, Meta, Section, SearchField, SelectField, submitted, TextArea, TextField } from "@luuna/ui";
 import { jsonDataUrl } from "../projects/project-model";
 import { MemorySelection } from "./MemoryList";
 import { MEMORY_SCOPES } from "./model";
@@ -13,9 +13,11 @@ export function AtlasMemory({ state }: { state: ComponentsState }) {
   return <Section id="memory-heading" level={4} variant="plain" title="Atlas memory">
     <Checkbox className="checkbox" label="Include private user memory" checked={state.includeUser} disabled={busy} onChange={(event) => state.toggleUserMemory(event.target.checked)} />
     <Form onSubmit={submitted(() => state.setAppliedQuery(state.query.trim()))} className="component-search">
-      <TextField label="Search memory" value={state.query} onChange={(event) => state.setQuery(event.target.value)} />
-      <Button submit disabled={busy || loading} data-capability="memory.list">Search memory</Button>
-      {state.appliedQuery && <Button disabled={busy} onClick={() => { state.setQuery(""); state.setAppliedQuery(""); }}>Clear search</Button>}
+      <Inline gap={2} align="end" wrap>
+        <SearchField label="Search memory" clearable={false} value={state.query} onChange={state.setQuery} />
+        <Button submit disabled={busy || loading} data-capability="memory.list">Search memory</Button>
+        {state.appliedQuery && <Button disabled={busy} onClick={() => { state.setQuery(""); state.setAppliedQuery(""); }}>Clear search</Button>}
+      </Inline>
     </Form>
     <Form onSubmit={submitted(state.saveMemory)} disabled={busy || !client}>
       <SelectField label="Memory scope" aria-label="Memory scope" value={state.scope} onChange={(event) => state.setScope(event.target.value as MemoryScope)} options={MEMORY_SCOPES} />

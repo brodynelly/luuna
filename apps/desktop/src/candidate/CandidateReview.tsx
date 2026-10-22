@@ -1,8 +1,7 @@
 import type { CandidateDiff, CandidateView, PublicationRecord, RunRecord, SetupHandoff, WorktreeLease } from "@luuna/api-client";
 import { allowedActions, canCancel, canRepair, canRevalidate, canValidate, usageSummary, validationRefusal } from "../workflow-state";
 import { nextStep } from "../failures";
-import { candidateTone } from "../design/tone";
-import { Actions, Button, Callout, Facts, Id, Meta, NextStep, ReasonNote, Section, StatusBadge } from "../ui";
+import { candidateTone, Actions, Alert, Button, Meta, NextStep, PropertyList, ReasonNote, Section, StatusBadge } from "@luuna/ui";
 import { canPublish, canRepairPublication } from "./rules";
 import { PublicationSummary } from "./Publication";
 import { EditorHandoff, SetupHandoffView } from "./Handoffs";
@@ -68,19 +67,19 @@ export function CandidateReview(props: Props) {
   const refusal = step.startsWith("Validation is not available") ? "" : validationRefusal(run, view);
   const revalidate = canRevalidate(run, view);
   const identities = [
-    { term: "Candidate hash", value: <Id>{candidate.hash}</Id> },
-    { term: "Approved plan hash", value: <Id>{candidate.plan_hash}</Id> },
-    ...Object.entries(candidate.repository_commits).map(([id, commit]) => ({ key: id, term: `${id} commit`, value: <Id>{commit}</Id> })),
-    ...Object.entries(evidence.repository_trees).map(([id, tree]) => ({ key: `${id}-tree`, term: `${id} tree`, value: <Id>{tree}</Id> })),
+    { term: "Candidate hash", value: candidate.hash, mono: true },
+    { term: "Approved plan hash", value: candidate.plan_hash, mono: true },
+    ...Object.entries(candidate.repository_commits).map(([id, commit]) => ({ key: id, term: `${id} commit`, value: commit, mono: true })),
+    ...Object.entries(evidence.repository_trees).map(([id, tree]) => ({ key: `${id}-tree`, term: `${id} tree`, value: tree, mono: true })),
   ];
   const badge = <span className="candidate-heading"><StatusBadge tone={candidateTone[evidence.status]}>{evidence.status.replace(/_/g, " ")}</StatusBadge></span>;
   return <Section id={`candidate-${run.id}-r${candidate.revision}`} level={4} variant="subpanel" className="candidate-review" title={`Candidate r${candidate.revision}`} accessory={badge}>
-    <Facts items={identities} />
+    <PropertyList layout="inline" items={identities} />
     <CandidateActions {...props} />
     {publication && publication.candidate_hash === candidate.hash && <PublicationSummary publication={publication} />}
     {handoff && <SetupHandoffView handoff={handoff} />}
     {worktrees.length > 0 && <EditorHandoff worktrees={worktrees} busy={busy} />}
-    {view.active && <Callout tone="active" status>The runtime is {activity(run, evidence.status)}. Closing this view does not cancel the workflow.</Callout>}
+    {view.active && <Alert tone="active" announce="status">The runtime is {activity(run, evidence.status)}. Closing this view does not cancel the workflow.</Alert>}
     {evidence.reason && <ReasonNote block tone={candidateTone[evidence.status]} reason={evidence.reason} />}
     {evidence.reason && !revalidate && !view.active && step && <NextStep block>{step}</NextStep>}
     {refusal && <NextStep block>{refusal}</NextStep>}

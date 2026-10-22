@@ -20,7 +20,8 @@ test("the board projects every ticket into the column of its latest plan revisio
   expect(RUN_COLUMN.testing_blocked).toBe("testing_prerequisite");
   const html = renderToStaticMarkup(<BoardView projection={projection} busy={false} onOpen={() => {}} />);
   expect(html).toContain('aria-label="Kanban columns"');
-  for (const column of BOARD_COLUMNS) expect(html).toContain(`${column.title} <span class="board-count"`);
+  for (const column of BOARD_COLUMNS) expect(html).toContain(`>${column.title}</h3>`);
+  expect(html).toContain("card(s)");
   expect(html).toContain('aria-label="Open Greeting (t1 r1) in one"');
   expect(html).toMatch(/<span class="state" data-tone="attention">paused<\/span>/);
   expect(html).toContain('aria-label="Open Testing setup needed for lib in two"');
@@ -31,11 +32,12 @@ test("the board projects every ticket into the column of its latest plan revisio
   expect(html).toContain("Nothing here.");
 });
 
-test("Board cards stay unchanged buttons inside a plain list that keeps its heading name", async () => {
+test("Board cards are interactive list rows (one native button each) in a list labelled by the column heading", async () => {
   const { client } = fixtureClient();
   const projection = await readBoard(client, new AbortController().signal);
   const html = renderToStaticMarkup(<BoardView projection={projection} busy={false} onOpen={() => {}} />);
-  expect(html).toMatch(/<ul class="board-cards" aria-labelledby="board-[a-z_]+">/);
-  expect(html).toContain('class="run-card');
+  expect(html).toMatch(/<h3 id="board-column-backlog">[^<]+<\/h3>/);
+  expect(html).toMatch(/<ul class="board-column-body board-cards" aria-labelledby="board-column-backlog">/);
+  expect(html).toContain('class="list-row-body"');
   expect(html).not.toMatch(/draggable/);
 });

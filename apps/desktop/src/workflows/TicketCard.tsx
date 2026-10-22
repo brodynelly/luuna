@@ -3,8 +3,7 @@ import type { AttemptRecord, CandidateDiff, CandidateView, PlanRevision, Publica
 import { allowedActions, canCancel, planBlocker, planSupersedes } from "../workflow-state";
 import { nextStep } from "../failures";
 import { CandidateReview } from "../candidate/CandidateReview";
-import { Actions, Box, Button, Callout, Checkbox, Hint, ReasonNote, RecordItem, StatusBadge } from "../ui";
-import { runTone } from "../design/tone";
+import { Alert, Button, Checkbox, Hint, Inline, ListRow, ReasonNote, Stack, StatusBadge, runTone } from "@luuna/ui";
 import { EMPTY_CHECK_ROW, setupChecksFromRows, stateText } from "./model";
 import type { CheckRow } from "./model";
 import type { RunSnapshot } from "./read";
@@ -83,25 +82,26 @@ export function TicketCard({ ticket, source, revisions, snapshots, diffs, attemp
   const step = run && reason ? nextStep(reason, allowedActions(run, candidate)) : "";
   const offline = busy || !connected;
   const reconcile = source?.reconciliation_required === true;
-  return <RecordItem className="ticket-card" id={`ticket-${ticket.id}`} focusable>
-    <Box className="ticket-head">
-      <strong>{ticket.title}</strong>
-      <StatusBadge>ticket r{ticket.revision} · {stateText(ticket.source)}{setup && " · testing setup"}</StatusBadge>
-    </Box>
+  const badge = `ticket r${ticket.revision} · ${stateText(ticket.source)}${setup ? " · testing setup" : ""}`;
+  return <ListRow className="ticket-card" id={`ticket-${ticket.id}`} tabIndex={-1} title={<Inline as="span" className="ticket-head"><strong>{ticket.title}</strong></Inline>} trailing={<StatusBadge>{badge}</StatusBadge>} detail={<Stack gap={2}>
     <Hint className="ticket-intent">{ticket.intent}</Hint>
-    {reconcile && <Callout tone="attention" status className="reconcile-note">This ticket changed outside Luuna. Reconcile its current source before creating another plan or starting work.</Callout>}
+    {reconcile && <Alert tone="attention" announce="status" className="reconcile-note">This ticket changed outside Luuna. Reconcile its current source before creating another plan or starting work.</Alert>}
     {setup && <SetupChecksEditor ticket={ticket} rows={checkRows} busy={offline} onChange={setCheckRows} />}
-    <Actions className="ticket-actions">
-      {ticket.source === "missions" && <Button disabled={offline} data-capability="tickets.reconcile" onClick={() => actions.reconcile(ticket)}>Reconcile external changes</Button>}
-      <Button disabled={offline || reconcile || blocker !== "" || !confirmed} data-capability="plans.create" onClick={() => actions.plan(ticket, latest?.revision ?? 0, setup ? setupChecks : undefined)}>{planLabel(latest, setup)}</Button>
-      {latest && run && run.state === "approved" && <Button variant="primary" disabled={busy || reconcile} data-capability="runs.implement" onClick={() => actions.implement(run)}>Implement</Button>}
-      {writerActive && <Button variant="danger" disabled={busy} data-capability="runs.cancel" onClick={() => actions.cancel(run)}>Cancel workflow</Button>}
-      {run && <StatusBadge tone={runTone[run.state]}>{stateText(run.state)}</StatusBadge>}
-      {blocker && <Hint className="plan-blocker">{blocker}</Hint>}
-    </Actions>
+    <Inline className="ticket-actions" wrap gap={2} justify="between">
+      <Inline wrap gap={2}>
+        {ticket.source === "missions" && <Button disabled={offline} data-capability="tickets.reconcile" onClick={() => actions.reconcile(ticket)}>Reconcile external changes</Button>}
+        <Button disabled={offline || reconcile || blocker !== "" || !confirmed} data-capability="plans.create" onClick={() => actions.plan(ticket, latest?.revision ?? 0, setup ? setupChecks : undefined)}>{planLabel(latest, setup)}</Button>
+        {latest && run && run.state === "approved" && <Button variant="primary" disabled={busy || reconcile} data-capability="runs.implement" onClick={() => actions.implement(run)}>Implement</Button>}
+      </Inline>
+      {(writerActive || run) && <Inline gap={2}>
+        {writerActive && <Button variant="danger" disabled={busy} data-capability="runs.cancel" onClick={() => actions.cancel(run)}>Cancel workflow</Button>}
+        {run && <StatusBadge tone={runTone[run.state]}>{stateText(run.state)}</StatusBadge>}
+      </Inline>}
+    </Inline>
+    {blocker && <Hint className="plan-blocker">{blocker}</Hint>}
     <TicketEditor ticket={ticket} repositoryIds={repositoryIds} busy={offline} latestRevision={latest?.revision} onSave={(request) => actions.update(ticket, request)} />
     {supersedes && latest && <Checkbox className="plan-supersede" label={`Plan r${latest.revision + 1} anyway: ${supersedes}`} checked={acknowledged === supersedes} disabled={offline} onChange={(event) => setAcknowledged(event.target.checked ? supersedes : "")} />}
-    {writerActive && latest && <Callout tone="active" status className="writer-status">The runtime is running the scoped writer for plan r{latest.revision}. Closing this view does not cancel the workflow.</Callout>}
+    {writerActive && latest && <Alert tone="active" announce="status" className="writer-status">The runtime is running the scoped writer for plan r{latest.revision}. Closing this view does not cancel the workflow.</Alert>}
     <TicketUsage ticket={ticket} />
     {latest && <PlanReview key={latest.hash} plan={latest} canApprove={run?.state === "plan_ready" && !reconcile} busy={busy} onApprove={() => actions.approve(latest)} />}
     {latest && <PlanMeta plan={latest} earlier={revisions.slice(0, -1)} />}
@@ -111,6 +111,6 @@ export function TicketCard({ ticket, source, revisions, snapshots, diffs, attemp
       onValidate={() => actions.validate(run, candidate)} onRepair={() => actions.repair(run, candidate)} onCancel={() => actions.cancel(run)} onDiff={() => actions.diff(run)}
       onArtifact={(id) => actions.artifact(run, candidate, id)} publication={publications[run.id]} onPublish={() => actions.publish(run, candidate)} onPublication={() => actions.publication(run)}
       onReconcilePublication={() => actions.reconcilePublication(run)} onRepairPublication={() => actions.repairPublication(run, candidate)} />}
-  </RecordItem>;
+  </Stack>} />;
 }
 

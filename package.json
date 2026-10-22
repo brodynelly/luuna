@@ -10,6 +10,7 @@
   "workspaces": [
     "apps/desktop",
     "packages/api-client",
+    "packages/ui",
     "packages/tui"
   ],
   "scripts": {

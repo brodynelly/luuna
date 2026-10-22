@@ -1,5 +1,5 @@
 import type { LuunaClient } from "@luuna/api-client";
-import { Actions, Button, Card, CodeBlock, Disclosure, DownloadLink, EmptyState, Facts, HeadingRow, Hint, Id, Meta } from "../ui";
+import { Button, Card, CodeBlock, Disclosure, DownloadLink, EmptyState, Hint, Id, Inline, Meta, PropertyList, Title } from "@luuna/ui";
 import { Workflows } from "../Workflows";
 import { ProjectComponents } from "../project-components/ProjectComponents";
 import { BaselineList, RepositoryBaselines } from "./Baselines";
@@ -16,7 +16,7 @@ function ProjectFacts({ state }: { state: ProjectsState }) {
   const view = state.view!;
   const observation = view.repositories[0]!.observation!;
   const manifest = view.manifest;
-  return <Facts className="project-facts" items={[
+  return <PropertyList className="project-facts facts" layout="inline" items={[
     { term: view.repositories.length > 1 ? "Repositories" : "Repository", value: view.repositories.map((repository, index) => <span key={repository.repository_id}>{index > 0 && " · "}<Id>{repository.repository_id}</Id> {repository.local_path}</span>) },
     { term: "Remote identity", value: <>{observation.identity.remote ?? "no portable origin"}{observation.identity.push_remote && ` · push ${observation.identity.push_remote}`}{observation.identity.shallow && " · shallow clone"}</> },
     { term: "HEAD at registration", value: <><Id>{observation.head_commit.slice(0, 12)}</Id> on {observation.branch ?? "detached HEAD"}</> },
@@ -43,14 +43,18 @@ export function ProjectDetail({ client, connectionEpoch, state, actions }: { cli
   const running: Record<string, string | undefined> = Object.fromEntries(repositoryIds.map((id) => [id, state.pendingBaselineRuns[id] ?? baselines.find((baseline) => baseline.identity.repository_id === id && baseline.status === "running")?.run_id]));
   const shownLog = state.baselineLog && baselines.some((baseline) => baseline.run_id === state.baselineLog!.runId) ? state.baselineLog : null;
   return <Card className="project-detail">
-    <HeadingRow level={3} id="project-detail-heading" className="project-header" title={view.project.name} accessory={<><ManifestBadge revision={view.project.revision} /><Id>{view.project.id}</Id></>} />
+    <Inline className="project-header" align="baseline" gap={2} wrap>
+      <Title order={3} id="project-detail-heading">{view.project.name}</Title>
+      <ManifestBadge revision={view.project.revision} />
+      <Id>{view.project.id}</Id>
+    </Inline>
     <ProjectFacts state={state} />
     <RebindForm key={`rebind-${view.project.id}`} view={view} busy={busy} onRebind={actions.rebind} />
-    <Actions className="project-actions">
+    <Inline className="project-actions" align="center" gap={2} wrap>
       <Button disabled={busy} data-capability="projects.discover" onClick={actions.discover}>Discover proposed map</Button>
       <Button disabled={busy} data-capability="projects.export" onClick={actions.exportProject}>Export project</Button>
       <Hint>Discovery reads manifests and lockfiles without running anything. A baseline runs a repository's confirmed checks on a clean checkout; a feature across repositories needs each one's passing baseline.</Hint>
-    </Actions>
+    </Inline>
     <RepositoryBaselines repositoryIds={repositoryIds} baselines={baselines} running={running} busy={busy} manifestConfirmed={manifestConfirmed} onRun={actions.runBaseline} onCancel={actions.cancelBaseline} />
     {exported && exported.project.id === selected && <Disclosure open className="project-export" summary={`Project export · omits ${exported.omitted.join(", ")}`}>
       <Meta block className="export-link"><DownloadLink href={jsonDataUrl(exported)} file={`luuna-${exported.project.id}-export.json`}>Save export JSON</DownloadLink> · {exported.tickets.length} tickets, {exported.memory.length} memories, {exported.prompts.length} prompts</Meta>

@@ -1,0 +1,40 @@
+/*
+ * Feedback (ADR 0034 family 4; Ledger Alert, Skeleton, Spinner), layer components. An alert reads its colours from the
+ * tone indirection in components.css (--tone-bg) and draws its shape with the shared .tone-mark, so colour, shape and
+ * text always travel together; it has no coloured edge. Metrics follow Mantine's Alert, Skeleton and Loader
+ * (specs/mantine-component-metrics.md). The skeleton pulses its opacity and the spinner turns, both transform or
+ * opacity only; reduced motion replaces the spinner with its label as plain text and stills the skeleton.
+ */
+@keyframes spinner-turn { to { transform: rotate(1turn); } }
+
+.ov-alert { display: flex; align-items: flex-start; gap: var(--space-4); margin: 0; padding: var(--space-4); border: var(--border-width) solid transparent; border-radius: var(--radius-md); background: var(--surface-muted); color: var(--ink-body); font-size: var(--text-label); line-height: var(--leading-body); overflow-wrap: anywhere; }
+.ov-alert[data-tone] { background: var(--tone-bg); }
+.ov-alert > .tone-mark { margin-top: calc((1lh - var(--mark-size)) / 2); }
+.ov-alert-content { display: grid; flex: 1 1 auto; gap: var(--space-2-5); min-width: 0; }
+.ov-alert-title { color: var(--ink); font-size: var(--text-label); font-weight: var(--weight-bold); }
+.ov-alert-text > :first-child { margin-top: 0; }
+.ov-alert-text > :last-child { margin-bottom: 0; }
+.ov-alert > .text-button { flex: none; margin-inline-start: auto; }
+
+/* Placeholder rows on the separator role (Mantine gray-3 / dark-4), 8px radius, opacity pulse; the last of several is short. */
+.ov-skeleton { display: grid; gap: var(--space-2); }
+.ov-skeleton-row { display: block; height: var(--control-md); border: var(--border-width) solid transparent; border-radius: var(--radius-md); background: var(--separator); animation: skeleton-pulse var(--duration-shimmer) var(--ease-linear) infinite; }
+.ov-skeleton[data-height="sm"] > .ov-skeleton-row { height: var(--control-sm); }
+.ov-skeleton[data-height="lg"] > .ov-skeleton-row { height: var(--skeleton-height); }
+.ov-skeleton > .ov-skeleton-row:last-child:not(:first-child) { width: var(--skeleton-short); }
+
+/* The ring turns (Mantine oval Loader: a 3/4 ring in the primary colour, 3px at 24px); its label is read by screen readers and shown as text when motion is reduced. */
+.ov-spinner { position: relative; display: inline-flex; align-items: center; gap: var(--space-2); color: var(--ink-muted); font-size: var(--text-label); }
+.ov-spinner-ring { display: block; flex: none; width: var(--space-6); height: var(--space-6); border: calc(var(--border-width) * 3) solid var(--accent); border-bottom-color: transparent; border-radius: var(--radius-full); animation: spinner-turn var(--duration-shimmer) var(--ease-linear) infinite; }
+.ov-spinner-label { position: absolute; width: var(--border-width); height: var(--border-width); overflow: hidden; clip-path: inset(50%); white-space: nowrap; }
+
+@media (prefers-reduced-motion: reduce) {
+  .ov-skeleton-row { animation: none; }
+  .ov-spinner-ring { display: none; animation: none; }
+  .ov-spinner-label { position: static; width: auto; height: auto; overflow: visible; clip-path: none; white-space: normal; }
+}
+
+@media (forced-colors: active) {
+  .ov-skeleton-row { forced-color-adjust: none; background: Canvas; border-color: GrayText; }
+  .ov-spinner-ring { forced-color-adjust: none; border-color: Highlight; border-bottom-color: transparent; }
+}

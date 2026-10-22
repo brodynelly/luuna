@@ -1,15 +1,15 @@
 import type { PromptRecord, RenderedPrompt } from "@luuna/api-client";
-import { Box, Button, CodeBlock, Form, Hint, Id, Item, List, Section, submitted, TextArea, TextField } from "../ui";
+import { Button, CodeBlock, Form, Hint, ListGroup, ListRow, PropertyList, Section, Stack, submitted, TextArea, TextField } from "@luuna/ui";
 import type { ComponentsState } from "./useComponents";
 
 /** A rendered prompt: its exact version, body and hash, before the developer selects it. */
 export function PromptPreview({ prompt, selected, busy, onSelect }: { prompt: RenderedPrompt; selected: boolean; busy: boolean; onSelect: () => void }) {
-  return <Box className="prompt-preview">
+  return <Stack gap={3} className="prompt-preview">
     <strong>{prompt.name} · version {prompt.version}</strong>
     <CodeBlock label="Rendered Beacon prompt">{prompt.body}</CodeBlock>
-    <Hint>Exact prompt hash: <Id>{prompt.hash}</Id></Hint>
+    <PropertyList layout="inline" items={[{ term: "Exact prompt hash", value: prompt.hash, mono: true }]} />
     <Button disabled={busy} aria-pressed={selected} onClick={onSelect}>{selected ? "Remove prompt from next plan" : "Use this prompt in next plan"}</Button>
-  </Box>;
+  </Stack>;
 }
 
 /** The project's versioned Beacon prompts: save a version, preview one, select it for the next plan. */
@@ -28,8 +28,7 @@ export function BeaconPrompts({ state }: { state: ComponentsState }) {
 }
 
 function PromptList({ prompts, busy, onPreview }: { prompts: PromptRecord[]; busy: boolean; onPreview: (prompt: PromptRecord) => void }) {
-  return <List className="component-records" label="Beacon prompts" data-capability="prompts.list">{prompts.map((prompt) => <Item key={prompt.name}>
-    <strong>{prompt.name} · version {prompt.version}</strong>
-    <Button disabled={busy} data-capability="prompts.render" onClick={() => onPreview(prompt)}>Preview prompt</Button>
-  </Item>)}</List>;
+  return <ListGroup className="component-records" aria-label="Beacon prompts" data-capability="prompts.list">{prompts.map((prompt) => <ListRow key={prompt.name}
+    title={<strong>{prompt.name} · version {prompt.version}</strong>}
+    detail={<Button disabled={busy} data-capability="prompts.render" onClick={() => onPreview(prompt)}>Preview prompt</Button>} />)}</ListGroup>;
 }

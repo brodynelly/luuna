@@ -1,9 +1,8 @@
 import { useState } from "react";
 import { isTerminal, type EventEnvelope, type LuunaClient, type RunRecord } from "@luuna/api-client";
 import { canCancel } from "../workflow-state";
-import { runTone } from "../design/tone";
+import { runTone, Button, copyText, Disclosure, EmptyState, FieldRow, Form, FormFooter, HeadingRow, Id, Inline, ListGroup, ListRow, LiveOutput, Meta, Placeholder, ReasonNote, Section, StatusBadge, StreamingDots, Surface, submitted, Tag, TextArea, TextField, Toolbar, useNotify } from "@luuna/ui";
 import { localTime, runTitle, sessionStatus } from "../shell/runtime";
-import { Box, Button, ContextMenuArea, copyText, Disclosure, EmptyState, FieldRow, Form, FormFooter, HeadingRow, Id, Item, List, LiveOutput, Meta, Placeholder, ReasonNote, Section, SelectableCard, StatusBadge, StreamingDots, submitted, Tag, TextArea, TextField, Toolbar, useNotify } from "../ui";
 import { EventList } from "./EventList";
 
 /** The history rail: every recorded run as a selectable card, newest first, paged by 200. */
@@ -15,15 +14,13 @@ export function History({ runs, selected, connected, newer, onSelect, onRefresh,
   const refresh = <Button variant="text" disabled={!connected} data-capability="runs.list" onClick={onRefresh}>Refresh</Button>;
   return <Section id="history-heading" title="History" as="aside" className="history" accessory={refresh}>
     {runs.length
-      ? <List className="history-list">{runs.map((run) => <Item key={run.id}>
-        <ContextMenuArea label={`Actions for ${runTitle(run)}`} commands={() => [
+      ? <ListGroup aria-label="Session history" className="history-list">{runs.map((run) => <ListRow key={run.id} data-capability="runs.show"
+        buttonClassName="run-card" selected={selected === run.id} onOpen={() => onSelect(run.id)} title={runTitle(run)}
+        meta={<><StatusBadge tone={runTone[run.state]}>{run.state}</StatusBadge><time dateTime={run.created_at}>{localTime(run.created_at)}</time></>}
+        menuLabel={`Actions for ${runTitle(run)}`} commands={() => [
           { label: "Show session", onSelect: () => onSelect(run.id) },
           { label: "Copy run ID", group: true, onSelect: () => void copyText(run.id).then(() => notify("Run ID copied")) },
-        ]}>
-          <SelectableCard selected={selected === run.id} onSelect={() => onSelect(run.id)} data-capability="runs.show" title={runTitle(run)}
-            meta={<><StatusBadge tone={runTone[run.state]}>{run.state}</StatusBadge><time dateTime={run.created_at}>{localTime(run.created_at)}</time></>} />
-        </ContextMenuArea>
-      </Item>)}</List>
+        ]} />)}</ListGroup>
       : connected ? <EmptyState title="No sessions yet">Start one to create a durable run record.</EmptyState> : <EmptyState>Connect to see sessions saved by your runtime.</EmptyState>}
     {connected && runs.length > 0 && <Toolbar>
       <Button disabled={!newer} onClick={onNewer}>Newer sessions</Button>
@@ -62,15 +59,15 @@ export function EventPanel({ client, active, events, output, live, candidateActi
 }) {
   return <Section id="events-heading" title={active ? "Session events" : "Live activity"} className="event-panel" accessory={active && <StatusBadge tone={runTone[active.state]}>{active.state}</StatusBadge>}>
     {active && client ? <>
-      <Box className="run-detail meta">
+      <Inline wrap align="center" gap={3} className="run-detail meta">
         <Id>{active.id}</Id>
         <span role="status">{sessionStatus(live, active.state)}</span>
         {!isTerminal(active.state) && <StreamingDots />}
         <span>event replay from sequence {events.at(-1)?.sequence ?? 0}</span>
         {canCancel(active.state, candidateActive) && <Button variant="danger" disabled={busy} data-capability="runs.cancel" onClick={onCancel}>Cancel session</Button>}
-      </Box>
+      </Inline>
       {active.state === "failed" && <ReasonNote block tone="danger" reason="This session failed. Open the final events below for the runtime’s recorded reason." />}
-      {output && <Box className="assistant-output"><HeadingRow level={4} title="Pi response" /><LiveOutput key={active.id} label="Pi response" live={!isTerminal(active.state)} followKey={output.length}>{output}</LiveOutput></Box>}
+      {output && <Surface level="raised" pad={3} className="assistant-output"><HeadingRow level={4} title="Pi response" /><LiveOutput key={active.id} label="Pi response" live={!isTerminal(active.state)} followKey={output.length}>{output}</LiveOutput></Surface>}
       <EventList key={active.id} events={events} client={client} runId={active.id} />
       {!events.length && <EmptyState>Waiting for the runtime’s event record…</EmptyState>}
       <Meta block className="event-caption">Events replay from the last received sequence after an interruption. A completed session is not a validation result.</Meta>

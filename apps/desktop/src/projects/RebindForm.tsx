@@ -1,6 +1,6 @@
 import { useState } from "react";
 import type { ProjectView } from "@luuna/api-client";
-import { Button, Checkbox, Disclosure, Form, FormFooter, SelectField, TextField, options, submitted } from "../ui";
+import { Button, Checkbox, Disclosure, Form, FormFooter, SelectField, TextField, options, submitted } from "@luuna/ui";
 
 /**
  * Binds a registered repository to a moved checkout or a changed remote, on purpose. Rendered

@@ -1,14 +1,14 @@
 import { memo, useEffect, useMemo, useRef, useState } from "react";
 import type { EventEnvelope, LuunaClient } from "@luuna/api-client";
 import { describeFailure } from "../failures";
-import { Button, Disclosure, ErrorBanner, Item, Meta, Output, ScrollList, Toolbar } from "../ui";
+import { Button, Disclosure, ErrorBanner, EventLog, Meta, Output, Toolbar } from "@luuna/ui";
 
 /** One durable event: its sequence, type and time; the payload renders only while open. */
 const EventRow = memo(function EventRow({ event }: { event: EventEnvelope }) {
   const [open, setOpen] = useState(event.type.includes("error") || event.type === "run.failed");
   const payload = useMemo(() => open ? JSON.stringify(event.payload, null, 2) : "", [event, open]);
   const summary = <><span className="event-number">{event.sequence}</span><span>{event.type}</span><time dateTime={event.timestamp}>{new Date(event.timestamp).toLocaleTimeString()}</time></>;
-  return <Item><Disclosure summary={summary} section={false} open={open} onToggle={setOpen}>{open && <Output>{payload}</Output>}</Disclosure></Item>;
+  return <Disclosure summary={summary} section={false} open={open} onToggle={setOpen}>{open && <Output>{payload}</Output>}</Disclosure>;
 });
 
 /** The session's event record with paging through older and newer pages (ADR 0015). */
@@ -45,7 +45,7 @@ export const EventList = memo(function EventList({ events, client, runId }: { ev
   return <>
     {(first > 1 || page !== null) && <Toolbar><Meta>Events {first}–{last}</Meta>{paging}</Toolbar>}
     {error && <ErrorBanner message={error} onDismiss={() => setError("")} />}
-    <ScrollList label="Durable session events" follow={page === null} followKey={shown.at(-1)?.event_id} data-capability="runs.events runs.stream">{shown.map((event) => <EventRow key={event.event_id} event={event} />)}</ScrollList>
+    <EventLog aria-label="Durable session events" events={shown} eventKey={(event) => event.event_id} renderEvent={(event) => <EventRow event={event} />} empty={null} follow={page === null} followKey={shown.at(-1)?.event_id} data-capability="runs.events runs.stream" />
   </>;
 });
 

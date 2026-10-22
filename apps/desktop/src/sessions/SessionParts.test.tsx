@@ -13,7 +13,7 @@ test("a running session shows an aria-hidden streaming indicator outside the res
   expect(html.indexOf("streaming-dots")).toBeLessThan(html.indexOf('aria-label="Pi response"'));
   expect(html).toMatch(/<pre[^>]*data-live="true"[^>]*aria-label="Pi response"|<pre[^>]*aria-label="Pi response"[^>]*data-live="true"/);
   expect(html).toContain('aria-label="Durable session events"');
-  const before = html.slice(html.indexOf('class="assistant-output"'), html.indexOf("<pre"));
+  const before = html.slice(html.indexOf("assistant-output"), html.indexOf("<pre"));
   for (const motion of ["reveal", "glow-surface", "aurora", "streaming-dots", "style="]) expect(before).not.toContain(motion);
 });
 

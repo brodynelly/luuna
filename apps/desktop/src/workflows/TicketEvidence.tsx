@@ -1,7 +1,6 @@
 import type { AttemptRecord, PlanRevision, RunRecord, TaskRecord, Ticket } from "@luuna/api-client";
 import { advisoryRole } from "@luuna/api-client";
-import { Actions, Button, Id, Meta, StatusBadge } from "../ui";
-import { runTone } from "../design/tone";
+import { Button, Id, Inline, Meta, StatusBadge, Stack, runTone } from "@luuna/ui";
 import { dollars, stateText } from "./model";
 import type { RunSnapshot } from "./read";
 import { TaskGraph } from "./TaskGraph";
@@ -52,14 +51,14 @@ export function RunEvidence({ run, plan, snapshot, attempts, tasks, busy, connec
     {(snapshot?.leases ?? []).map((lease) => <Meta key={lease.id} className="worktree-line" data-capability="runs.worktrees">
       worktree <Id>{lease.path}</Id> · {lease.state}{lease.candidate_commit && <> · candidate <Id>{lease.candidate_commit.slice(0, 12)}</Id></>}{lease.reason && ` · ${lease.reason}`}
     </Meta>)}
-    {plan && graph && <Actions className="tasks-inspection">
-      <Button variant="text" disabled={offline} data-capability="runs.tasks" onClick={() => actions.tasks(run)}>Show task graph</Button>
+    {plan && graph && <Stack gap={2} className="tasks-inspection">
+      <Inline><Button variant="text" disabled={offline} data-capability="runs.tasks" onClick={() => actions.tasks(run)}>Show task graph</Button></Inline>
       {tasks && <TaskGraph run={run} tasks={tasks} overrides={plan.dependency_overrides ?? []} busy={offline || reconcile}
         onResume={(taskId) => actions.implement(run, taskId)} onDerive={actions.derive && !blocked ? (task) => actions.derive?.(task) : undefined} />}
-    </Actions>}
-    <Actions className="attempts-inspection">
+    </Stack>}
+    <Inline wrap gap={2} className="attempts-inspection">
       <Button variant="text" disabled={offline} data-capability="runs.attempts" onClick={() => actions.attempts(run)}>Show writer attempts</Button>
       {attempts && <Meta label="Writer attempts">{attempts.length === 0 ? "No writer attempts recorded." : attempts.map((attempt) => `attempt ${attempt.number} (${attempt.task_id}): ${attempt.state}`).join(" · ")}</Meta>}
-    </Actions>
+    </Inline>
   </>;
 }

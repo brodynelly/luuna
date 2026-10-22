@@ -1,0 +1,107 @@
+/*
+ * Overlays (ADR 0034 family 4; Mantine Modal, Drawer, Popover, Menu, Tooltip metrics from
+ * specs/mantine-component-metrics.md): the native dialog, the drawer and the three floating panels, layer components.
+ * Panels are --surface-overlay with the popover elevation, modals and drawers with the xl elevation; none blurs or
+ * tints what is behind it. Hover rules are gated to a fine hover pointer; hover and focus changes are instant. Entrances reuse the keyframes of motion.css once, with a backwards
+ * fill. There is no exit animation: a dialog or drawer closes instantly, so an approval or evidence decision never
+ * fades away. Floating panels are placed by overlay/placement.ts through --float-x and --float-y (viewport px).
+ */
+
+.ov-anchor { position: relative; display: inline-block; }
+
+/* Floating panels: popover, menu and tooltip. */
+.ov-popover, .ov-menu, .ov-tooltip {
+  --float-x: 0;
+  --float-y: 0;
+  position: fixed;
+  top: var(--float-y);
+  left: var(--float-x);
+  border: var(--border-width) solid transparent;
+  border-radius: var(--radius-md);
+  background: var(--surface-overlay);
+  color: var(--ink-body);
+  box-shadow: var(--shadow-popover);
+}
+.ov-popover, .ov-menu { border-color: var(--separator); z-index: var(--z-menu); transform-origin: top left; animation: menu-in var(--duration-micro) var(--ease-out) backwards; }
+.ov-popover { min-width: var(--menu-min-width); padding: var(--space-3) var(--space-4); font-size: var(--text-body); }
+.ov-menu { display: grid; min-width: var(--menu-min-width); padding: var(--space-1); }
+.ov-popover[data-placement^="top"], .ov-menu[data-placement^="top"] { transform-origin: bottom left; }
+
+.ov-menu-item {
+  justify-content: flex-start;
+  gap: var(--space-2);
+  width: 100%;
+  min-height: 0;
+  padding: var(--space-1-5) var(--space-3);
+  border-color: transparent;
+  border-radius: var(--radius-md);
+  background: transparent;
+  color: var(--ink-body);
+  box-shadow: none;
+  font-size: var(--text-label);
+  font-weight: var(--weight-regular);
+  line-height: var(--leading-body);
+}
+.ov-menu-item[data-tone] { color: var(--tone-fg); }
+.ov-menu-item:focus-visible:not(:disabled) { background: var(--fill-strong); }
+@media (hover: hover) and (pointer: fine) {
+  .ov-menu-item:hover:not(:disabled) { background: var(--fill-strong); }
+}
+.ov-menu-item:focus-visible { outline-offset: var(--focus-inset); }
+.ov-menu-item:disabled { background: transparent; color: var(--ink-disabled); }
+
+/* Tooltip: a short hint, one fade in. It never holds essential information. Mantine: inverted ground, 14px, 4px 10px, no border or shadow. */
+.ov-tooltip-anchor { display: inline-flex; }
+.ov-tooltip {
+  z-index: var(--z-toast);
+  max-width: var(--toast-max);
+  padding: var(--space-1) var(--space-2-5);
+  border-radius: var(--radius-md);
+  background: var(--toast);
+  color: var(--ink-on-toast);
+  box-shadow: none;
+  font-size: var(--text-label);
+  line-height: var(--leading-label);
+  overflow-wrap: anywhere;
+  animation: scrim-in var(--duration-micro) var(--ease-out) backwards;
+}
+.ov-tooltip[hidden] { display: none; }
+
+/* Dialog and drawer: the native modal. The browser centres a dialog and supplies the scroll; open state only sets layout. */
+dialog.ov-dialog, dialog.ov-drawer {
+  padding: var(--space-4);
+  border: var(--border-width) solid transparent;
+  background: var(--surface-overlay);
+  color: var(--ink-body);
+  box-shadow: var(--shadow-xl);
+}
+/* Mantine's md modal is 440px, the width of --drawer-width; --dialog-width (480px) has no Mantine counterpart. */
+dialog.ov-dialog { width: min(var(--drawer-width), calc(100% - 2 * var(--space-4))); border-radius: var(--radius-md); }
+dialog.ov-dialog[open] { display: grid; gap: var(--space-4); transform-origin: center; animation: dialog-in var(--duration-standard) var(--ease-out) backwards; }
+dialog.ov-dialog::backdrop, dialog.ov-drawer::backdrop { background: var(--scrim); }
+dialog.ov-dialog[open]::backdrop, dialog.ov-drawer[open]::backdrop { animation: scrim-in var(--duration-standard) var(--ease-out) backwards; }
+
+.ov-dialog-title { display: flex; align-items: center; gap: var(--space-2); margin: 0; color: var(--ink); font-size: var(--text-body); font-weight: var(--weight-regular); line-height: var(--leading-none); overflow-wrap: anywhere; }
+.ov-dialog-description { margin: 0; font-size: var(--text-body); overflow-wrap: anywhere; }
+.ov-dialog-body { font-size: var(--text-body); overflow-wrap: anywhere; }
+.ov-dialog-actions { display: flex; flex-wrap: wrap; justify-content: flex-end; gap: var(--space-2); padding-top: 0; }
+
+/* The drawer fills the window height against one edge; the logical max-size reset lifts the browser's inset cap on a modal. */
+dialog.ov-drawer { width: min(var(--drawer-width), 100%); height: 100%; max-inline-size: none; max-block-size: none; margin: 0; border-radius: 0; inset-block: 0; }
+dialog.ov-drawer[data-side="right"] { inset-inline: auto 0; transform-origin: right center; }
+dialog.ov-drawer[data-side="left"] { inset-inline: 0 auto; transform-origin: left center; }
+dialog.ov-drawer[open] { display: flex; flex-direction: column; gap: var(--space-4); animation: dialog-in var(--duration-standard) var(--ease-out) backwards; }
+.ov-drawer-header { display: flex; align-items: center; justify-content: space-between; gap: var(--space-3); }
+.ov-drawer-body { flex: 1 1 auto; min-height: 0; font-size: var(--text-body); overflow-wrap: anywhere; }
+
+@media (prefers-reduced-motion: reduce) {
+  .ov-popover, .ov-menu, .ov-tooltip, dialog.ov-dialog[open], dialog.ov-drawer[open], dialog.ov-dialog[open]::backdrop, dialog.ov-drawer[open]::backdrop { animation: none; }
+}
+
+@media (forced-colors: active) {
+  .ov-menu-item:focus-visible:not(:disabled) { forced-color-adjust: none; background: Highlight; color: HighlightText; }
+  .ov-tooltip { border-color: CanvasText; }
+}
+@media (forced-colors: active) and (hover: hover) and (pointer: fine) {
+  .ov-menu-item:hover:not(:disabled) { forced-color-adjust: none; background: Highlight; color: HighlightText; }
+}

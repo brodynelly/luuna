@@ -1,0 +1,200 @@
+/*
+ * Luuna design tokens, colour (ADR 0035). Every role below keeps its ADR 0033 name and takes its value from the
+ * Mantine default theme (@mantine/core 9.7.3, MIT; design-token values only, no Mantine source is vendored):
+ * the light scheme is Mantine's light scheme, the dark scheme its dark scheme, and the palette primitives are
+ * Mantine's 14 palettes. Where a Mantine value fails the repo contrast gate the nearest passing value is used and
+ * the deviation is recorded in design/mantine-values.ts and ADR 0035. design/mantine-tokens.test.ts proves it.
+ * With tokens-depth.css, tokens-scale.css, tokens-motion.css and tokens-legacy.css, these are the only
+ * stylesheets that may contain literal colours, lengths or durations.
+ * Themes: light is the default; dark comes from data-theme="dark", or from the OS unless data-theme="light".
+ * The dark attribute block and the dark media block must stay identical (the test compares them).
+ * Reference: docs/DESIGN-SYSTEM.md, ADR 0035 (and ADR 0033 for the rules that stay). Before changing anything here:
+ *   1. A new colour role is defined in both themes, added to ROLES in design/mantine-values.ts and to the contrast
+ *      pairs in design/mantine-tokens.test.ts (text 4.5:1, marks, borders and focus 3:1).
+ *   2. Green (the success tone) is earned: passed evidence and a live connection only.
+ *   3. Run npm test, npm run typecheck and npm run build with Node 24.19.0, then
+ *      node scripts/mvp-ui-smoke.mjs (contrast in both schemes, 760 px width), and report each.
+ */
+:root, :root[data-theme="light"] {
+  color-scheme: light;
+  --surface: #ffffff;
+  --surface-raised: #ffffff;
+  --surface-muted: #f8f9fa;
+  --fill: #f1f3f5;
+  --fill-strong: #e9ecef;
+  --control-selected: #ffffff;
+  --surface-overlay: #ffffff;
+  --field: #ffffff;
+  --scrim: rgba(0, 0, 0, 0.40);
+  --banner: #212529;
+  --separator: #dee2e6;
+  --border: #ced4da;
+  --border-strong: #868e96;
+  --ink: #000000;
+  --ink-body: #000000;
+  --ink-muted: #495057;
+  --ink-subdued: #495057;
+  --ink-disabled: #adb5bd;
+  --ink-on-banner: #ffffff;
+  --accent: #1971c2;
+  --accent-hover: #1864ab;
+  --ink-on-accent: #ffffff;
+  --accent-text: #1971c2;
+  --accent-soft: #e7f5ff;
+  --focus-ring: #228be6;
+  --toast: #212529;
+  --ink-on-toast: #ffffff;
+  --toast-action: #a5d8ff;
+  --chart-1: #228be6;
+  --chart-2: #7950f2;
+  --chart-3: #12b886;
+  --chart-4: #fd7e14;
+  --chart-5: #e64980;
+  --ai: #7048e8;
+  --chart-muted: #ced4da;
+  --chart-grid: #e9ecef;
+  --success: #087f5b;
+  --success-soft: #e6fcf5;
+  --danger: #c92a2a;
+  --ink-on-danger: #ffffff;
+  --danger-soft: #fff5f5;
+  --warning: #c8420e;
+  --warning-soft: #fff4e6;
+  --info: #1971c2;
+  --info-soft: #e7f5ff;
+}
+
+:root[data-theme="dark"] {
+  color-scheme: dark;
+  --surface: #242424;
+  --surface-raised: #242424;
+  --surface-muted: #1f1f1f;
+  --fill: #2e2e2e;
+  --fill-strong: #3b3b3b;
+  --control-selected: #424242;
+  --surface-overlay: #2e2e2e;
+  --field: #2e2e2e;
+  --scrim: rgba(0, 0, 0, 0.60);
+  --banner: #2e2e2e;
+  --separator: #3b3b3b;
+  --border: #424242;
+  --border-strong: #828282;
+  --ink: #ffffff;
+  --ink-body: #c9c9c9;
+  --ink-muted: #b8b8b8;
+  --ink-subdued: #b8b8b8;
+  --ink-disabled: #696969;
+  --ink-on-banner: #c9c9c9;
+  --accent: #1971c2;
+  --accent-hover: #1864ab;
+  --ink-on-accent: #ffffff;
+  --accent-text: #4dabf7;
+  --accent-soft: #22303c;
+  --focus-ring: #1c7ed6;
+  --toast: #3b3b3b;
+  --ink-on-toast: #ffffff;
+  --toast-action: #74c0fc;
+  --chart-1: #339af0;
+  --chart-2: #845ef7;
+  --chart-3: #20c997;
+  --chart-4: #ff922b;
+  --chart-5: #f06595;
+  --ai: #9775fa;
+  --chart-muted: #424242;
+  --chart-grid: #3b3b3b;
+  --success: #12b886;
+  --success-soft: #20352e;
+  --danger: #ff6b6b;
+  --ink-on-danger: #000000;
+  --danger-soft: #402626;
+  --warning: #fd7e14;
+  --warning-soft: #412c20;
+  --info: #4dabf7;
+  --info-soft: #22303c;
+}
+
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) {
+    color-scheme: dark;
+    --surface: #242424;
+    --surface-raised: #242424;
+    --surface-muted: #1f1f1f;
+    --fill: #2e2e2e;
+    --fill-strong: #3b3b3b;
+    --control-selected: #424242;
+    --surface-overlay: #2e2e2e;
+    --field: #2e2e2e;
+    --scrim: rgba(0, 0, 0, 0.60);
+    --banner: #2e2e2e;
+    --separator: #3b3b3b;
+    --border: #424242;
+    --border-strong: #828282;
+    --ink: #ffffff;
+    --ink-body: #c9c9c9;
+    --ink-muted: #b8b8b8;
+    --ink-subdued: #b8b8b8;
+    --ink-disabled: #696969;
+    --ink-on-banner: #c9c9c9;
+    --accent: #1971c2;
+    --accent-hover: #1864ab;
+    --ink-on-accent: #ffffff;
+    --accent-text: #4dabf7;
+    --accent-soft: #22303c;
+    --focus-ring: #1c7ed6;
+    --toast: #3b3b3b;
+    --ink-on-toast: #ffffff;
+    --toast-action: #74c0fc;
+    --chart-1: #339af0;
+    --chart-2: #845ef7;
+    --chart-3: #20c997;
+    --chart-4: #ff922b;
+    --chart-5: #f06595;
+    --ai: #9775fa;
+    --chart-muted: #424242;
+    --chart-grid: #3b3b3b;
+    --success: #12b886;
+    --success-soft: #20352e;
+    --danger: #ff6b6b;
+    --ink-on-danger: #000000;
+    --danger-soft: #402626;
+    --warning: #fd7e14;
+    --warning-soft: #412c20;
+    --info: #4dabf7;
+    --info-soft: #22303c;
+  }
+}
+
+/* Mantine palette primitives: --color-<palette>-<shade>, shades 0 to 9, identical in both schemes. The roles above reference nothing here (hex only, so the contrast test parses them); use these for new roles. */
+:root {
+  --color-dark-0: #c9c9c9; --color-dark-1: #b8b8b8; --color-dark-2: #828282; --color-dark-3: #696969; --color-dark-4: #424242; --color-dark-5: #3b3b3b; --color-dark-6: #2e2e2e; --color-dark-7: #242424; --color-dark-8: #1f1f1f; --color-dark-9: #141414;
+  --color-gray-0: #f8f9fa; --color-gray-1: #f1f3f5; --color-gray-2: #e9ecef; --color-gray-3: #dee2e6; --color-gray-4: #ced4da; --color-gray-5: #adb5bd; --color-gray-6: #868e96; --color-gray-7: #495057; --color-gray-8: #343a40; --color-gray-9: #212529;
+  --color-red-0: #fff5f5; --color-red-1: #ffe3e3; --color-red-2: #ffc9c9; --color-red-3: #ffa8a8; --color-red-4: #ff8787; --color-red-5: #ff6b6b; --color-red-6: #fa5252; --color-red-7: #f03e3e; --color-red-8: #e03131; --color-red-9: #c92a2a;
+  --color-pink-0: #fff0f6; --color-pink-1: #ffdeeb; --color-pink-2: #fcc2d7; --color-pink-3: #faa2c1; --color-pink-4: #f783ac; --color-pink-5: #f06595; --color-pink-6: #e64980; --color-pink-7: #d6336c; --color-pink-8: #c2255c; --color-pink-9: #a61e4d;
+  --color-grape-0: #f8f0fc; --color-grape-1: #f3d9fa; --color-grape-2: #eebefa; --color-grape-3: #e599f7; --color-grape-4: #da77f2; --color-grape-5: #cc5de8; --color-grape-6: #be4bdb; --color-grape-7: #ae3ec9; --color-grape-8: #9c36b5; --color-grape-9: #862e9c;
+  --color-violet-0: #f3f0ff; --color-violet-1: #e5dbff; --color-violet-2: #d0bfff; --color-violet-3: #b197fc; --color-violet-4: #9775fa; --color-violet-5: #845ef7; --color-violet-6: #7950f2; --color-violet-7: #7048e8; --color-violet-8: #6741d9; --color-violet-9: #5f3dc4;
+  --color-indigo-0: #edf2ff; --color-indigo-1: #dbe4ff; --color-indigo-2: #bac8ff; --color-indigo-3: #91a7ff; --color-indigo-4: #748ffc; --color-indigo-5: #5c7cfa; --color-indigo-6: #4c6ef5; --color-indigo-7: #4263eb; --color-indigo-8: #3b5bdb; --color-indigo-9: #364fc7;
+  --color-blue-0: #e7f5ff; --color-blue-1: #d0ebff; --color-blue-2: #a5d8ff; --color-blue-3: #74c0fc; --color-blue-4: #4dabf7; --color-blue-5: #339af0; --color-blue-6: #228be6; --color-blue-7: #1c7ed6; --color-blue-8: #1971c2; --color-blue-9: #1864ab;
+  --color-cyan-0: #e3fafc; --color-cyan-1: #c5f6fa; --color-cyan-2: #99e9f2; --color-cyan-3: #66d9e8; --color-cyan-4: #3bc9db; --color-cyan-5: #22b8cf; --color-cyan-6: #15aabf; --color-cyan-7: #1098ad; --color-cyan-8: #0c8599; --color-cyan-9: #0b7285;
+  --color-teal-0: #e6fcf5; --color-teal-1: #c3fae8; --color-teal-2: #96f2d7; --color-teal-3: #63e6be; --color-teal-4: #38d9a9; --color-teal-5: #20c997; --color-teal-6: #12b886; --color-teal-7: #0ca678; --color-teal-8: #099268; --color-teal-9: #087f5b;
+  --color-green-0: #ebfbee; --color-green-1: #d3f9d8; --color-green-2: #b2f2bb; --color-green-3: #8ce99a; --color-green-4: #69db7c; --color-green-5: #51cf66; --color-green-6: #40c057; --color-green-7: #37b24d; --color-green-8: #2f9e44; --color-green-9: #2b8a3e;
+  --color-lime-0: #f4fce3; --color-lime-1: #e9fac8; --color-lime-2: #d8f5a2; --color-lime-3: #c0eb75; --color-lime-4: #a9e34b; --color-lime-5: #94d82d; --color-lime-6: #82c91e; --color-lime-7: #74b816; --color-lime-8: #66a80f; --color-lime-9: #5c940d;
+  --color-yellow-0: #fff9db; --color-yellow-1: #fff3bf; --color-yellow-2: #ffec99; --color-yellow-3: #ffe066; --color-yellow-4: #ffd43b; --color-yellow-5: #fcc419; --color-yellow-6: #fab005; --color-yellow-7: #f59f00; --color-yellow-8: #f08c00; --color-yellow-9: #e67700;
+  --color-orange-0: #fff4e6; --color-orange-1: #ffe8cc; --color-orange-2: #ffd8a8; --color-orange-3: #ffc078; --color-orange-4: #ffa94d; --color-orange-5: #ff922b; --color-orange-6: #fd7e14; --color-orange-7: #f76707; --color-orange-8: #e8590c; --color-orange-9: #d9480f;
+
+  /* Motion that is not a Mantine token: state changes only; evidence never pulses. Easings and the rest are in tokens-motion.css. */
+  --duration-fast: 120ms;
+  /* Following live output: the glide length and how near the bottom still counts as pinned (0 ms jumps). */
+  --duration-follow: 160ms;
+  --follow-threshold: 48px;
+  /* Tail caret: a steady block after live text, sized to the text. */
+  --tail-caret-width: 0.55em;
+  --tail-caret-height: 1.15em;
+  --tail-caret-gap: 0.1em;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  :root {
+    --duration-fast: 0ms;
+    --duration-follow: 0ms;
+  }
+}

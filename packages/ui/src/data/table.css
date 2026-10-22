@@ -1,0 +1,38 @@
+/*
+ * DataTable and Pagination (ADR 0034), components layer. Tokens only. The sticky header sticks to the page
+ * scroll; only labelled regions in components.css scroll, so no overflow is set here.
+ */
+.data-table { width: 100%; border-collapse: collapse; overflow-wrap: anywhere; color: var(--ink-body); font-size: var(--text-label); line-height: var(--leading-body); }
+.data-table > caption { padding: 0 0 var(--space-2-5); color: var(--ink-muted); font-size: var(--text-label); text-align: start; }
+.data-table :is(th, td) { padding: var(--space-2-5); border-bottom: var(--border-width) solid var(--separator); text-align: start; vertical-align: middle; }
+.data-table th { color: var(--ink); font-size: var(--text-label); font-weight: var(--weight-bold); }
+.data-table[data-sticky] thead th { position: sticky; top: 0; z-index: var(--z-sticky); background: var(--surface); }
+@media (hover: hover) and (pointer: fine) { .data-table tbody tr:hover { background: var(--fill); } }
+.data-table tbody tr[data-selected] { background: var(--control-selected); }
+.data-table tbody tr:last-child td { border-bottom: 0; }
+.data-table :is(th, td)[data-numeric] { text-align: end; font-variant-numeric: tabular-nums; }
+.data-table :is(th, td)[data-align="center"] { text-align: center; }
+.data-table :is(th, td)[data-align="end"] { text-align: end; }
+.data-table .data-table-select { width: var(--row-height); text-align: center; }
+.data-table-empty td { padding: var(--space-8) var(--space-6); color: var(--ink-muted); text-align: center; }
+
+/* Sort button: a quiet button in the header; the caret is drawn with borders and flips for descending. */
+.data-table th .sort-button { gap: var(--space-1-5); min-height: var(--control-sm); margin-inline: calc(var(--space-2) * -1); padding: 0 var(--space-2); border-color: transparent; background: transparent; box-shadow: none; color: inherit; font: inherit; }
+@media (hover: hover) and (pointer: fine) { .data-table th .sort-button:hover:not(:disabled) { background: var(--fill); } }
+.sort-mark { flex: none; width: 0; height: 0; border-style: solid; border-width: var(--caret-size) var(--caret-size) 0; border-color: var(--ink-subdued) transparent transparent; }
+.sort-button[data-direction] .sort-mark { border-top-color: var(--ink); }
+.sort-button[data-direction="ascending"] .sort-mark { transform: rotate(180deg); }
+
+/* Pagination. */
+.pagination { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: var(--space-3); }
+/* Mantine Pagination control: 32px, 8px radius, 16px text, 8px gap; the current page is the filled accent. */
+.pagination button { min-width: var(--control-md); min-height: var(--control-md); padding-inline: var(--space-2); border-radius: var(--radius-md); font-size: var(--text-body); }
+.pagination-summary { margin: 0; color: var(--ink-muted); font-size: var(--text-label); font-variant-numeric: tabular-nums; }
+.pagination > ul { display: flex; flex-wrap: wrap; align-items: center; gap: var(--space-2); margin: 0; padding: 0; list-style: none; }
+.pagination button[aria-current="page"] { border-color: var(--accent); background: var(--accent); color: var(--ink-on-accent); font-weight: var(--weight-regular); }
+.pagination-gap { padding: 0 var(--space-1); color: var(--ink-muted); }
+
+@media (forced-colors: active) {
+  .sort-mark { border-top-color: CanvasText; forced-color-adjust: none; }
+  .pagination button[aria-current="page"] { border-color: Highlight; }
+}

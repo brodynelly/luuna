@@ -1,0 +1,77 @@
+/*
+ * Data display family (ADR 0034), components layer. Metric cards, property lists, list rows and groups, timeline,
+ * event log, board column, accordion. Tokens only. Tone colour comes from the shared .tone-mark and StatusBadge
+ * rules in components.css; nothing here maps a tone or draws a coloured edge.
+ */
+
+/* Property list: terms and values; the stacked layout matches .facts so either class can carry it. */
+.property-list { display: grid; gap: var(--space-2-5); margin: 0; font-size: var(--text-body); }
+.property-list > div { display: grid; grid-template-columns: var(--facts-term) minmax(0, 1fr); gap: var(--space-4); }
+.property-list[data-layout="inline"] { display: flex; flex-wrap: wrap; gap: var(--space-2) var(--space-6); }
+.property-list[data-layout="inline"] > div { display: flex; gap: var(--space-2); }
+.property-list dt { color: var(--ink-muted); }
+.property-list dd { min-width: 0; margin: 0; color: var(--ink); font-variant-numeric: tabular-nums; overflow-wrap: anywhere; }
+
+/* Metric card: a static figure, never animated, never toned. */
+.metric-card { display: flex; flex-direction: column; gap: var(--space-1); min-width: 0; margin: 0; padding: var(--space-4); border: var(--border-width) solid var(--separator); border-radius: var(--radius-md); background: var(--surface-raised); box-shadow: var(--shadow-card); }
+.metric-card > dt { color: var(--ink); font-size: var(--text-body); font-weight: var(--weight-semibold); }
+.metric-card > dd { margin: 0; }
+.metric-card > .metric-value { color: var(--ink); font-size: var(--text-metric); font-weight: var(--weight-semibold); font-variant-numeric: tabular-nums; line-height: var(--leading-metric); }
+.metric-card > .metric-empty { color: var(--ink-muted); font-size: var(--text-body); font-weight: var(--weight-regular); line-height: var(--leading-body); }
+.metric-card > .metric-hint { color: var(--ink-muted); font-size: var(--text-body); }
+
+/* List group and row: hairline separators, one button fills an interactive row. */
+.list-group { margin: 0; padding: 0; list-style: none; }
+.list-row { border-bottom: var(--border-width) solid var(--separator); }
+.list-row:last-child { border-bottom: 0; }
+.list-row-body { display: flex; align-items: center; gap: var(--space-3); box-sizing: border-box; width: 100%; min-height: var(--row-height); padding: var(--space-2) var(--space-3); color: var(--ink-body); font-size: var(--text-body); text-align: start; }
+button.list-row-body { justify-content: flex-start; border-color: transparent; border-radius: 0; background: transparent; box-shadow: none; font-weight: var(--weight-regular); }
+@media (hover: hover) and (pointer: fine) { button.list-row-body:hover:not(:disabled) { background: var(--fill); } }
+button.list-row-body[aria-pressed="true"] { background: var(--control-selected); color: var(--ink); }
+.list-row-detail { padding: 0 var(--space-3) var(--space-2); }
+button.list-row-body:disabled { cursor: not-allowed; }
+.list-row-leading, .list-row-trailing { display: inline-flex; flex: none; align-items: center; gap: var(--space-2); }
+.list-row-trailing { margin-inline-start: auto; font-variant-numeric: tabular-nums; }
+.list-row-main { display: flex; flex: 1 1 auto; flex-direction: column; min-width: 0; }
+.list-row-head { display: flex; align-items: center; min-width: 0; }
+.list-row-head > .list-row-body { flex: 1 1 auto; width: auto; min-width: 0; }
+.list-row-actions { display: inline-flex; flex: none; align-items: center; gap: var(--space-2); padding-inline: var(--space-2) var(--space-3); }
+.list-row-title { margin: 0; color: var(--ink); font-weight: var(--weight-medium); overflow-wrap: anywhere; }
+.list-row-meta { color: var(--ink-muted); font-size: var(--text-label); overflow-wrap: anywhere; }
+
+/* Timeline: a marker column (shape carries the tone) and a neutral connector. */
+.timeline { margin: 0; padding: 0; list-style: none; }
+.timeline > li { display: grid; grid-template-columns: var(--space-5) minmax(0, 1fr); gap: var(--space-3); }
+.timeline-marker { position: relative; display: flex; justify-content: center; padding-top: var(--space-1-5); }
+.timeline-marker::after { content: ""; position: absolute; top: calc(var(--space-1-5) + var(--mark-size) + var(--space-1)); bottom: 0; width: var(--rule-width); background: var(--separator); }
+.timeline > li:last-child .timeline-marker::after { display: none; }
+.timeline-dot { flex: none; box-sizing: border-box; width: var(--mark-size); height: var(--mark-size); border: var(--mark-stroke) solid var(--border-strong); border-radius: var(--radius-full); }
+.timeline-content { min-width: 0; padding-bottom: var(--space-8); }
+.timeline-head { display: flex; flex-wrap: wrap; align-items: center; gap: var(--space-2); margin: 0; color: var(--ink-muted); font-size: var(--text-caption); font-variant-numeric: tabular-nums; }
+.timeline-title { margin: 0; color: var(--ink); font-size: var(--text-body); font-weight: var(--weight-semibold); overflow-wrap: anywhere; }
+.timeline-body { color: var(--ink-body); font-size: var(--text-body); overflow-wrap: anywhere; }
+
+/* Event log: the shared ol.events rules do the work; only the empty row is added. No motion in live output. */
+.event-log-empty { padding: var(--space-3); color: var(--ink-muted); font-size: var(--text-body); }
+
+/* Board column: structure only. */
+.board-column { display: flex; flex-direction: column; gap: var(--space-2); min-width: 0; padding: var(--space-4); border-radius: var(--radius-md); background: var(--surface-muted); }
+.board-column-head { display: flex; align-items: baseline; justify-content: space-between; gap: var(--space-2); }
+.board-column-head > :is(h3, h4) { margin: 0; color: var(--ink); font-size: var(--text-body); font-weight: var(--weight-semibold); }
+.board-column-count { color: var(--ink-muted); font-size: var(--text-label); font-variant-numeric: tabular-nums; }
+.board-column-body { display: flex; flex-direction: column; gap: var(--space-2); margin: 0; padding: 0; list-style: none; }
+
+/* Accordion (Mantine default variant: 16px inline, 12px label block, weight 400, 1px item rule, 16px content); native details; the summary caret comes from components.css. */
+.accordion { display: flex; flex-direction: column; }
+.accordion > details { border-bottom: var(--border-width) solid var(--separator); }
+.accordion > details > summary { margin-inline: 0; padding: var(--space-3) var(--space-4); border-radius: 0; color: var(--ink); font-size: var(--text-body); font-weight: var(--weight-regular); }
+.accordion-panel { padding: var(--space-1) var(--space-4) var(--space-4); color: var(--ink-body); font-size: var(--text-body); }
+
+@media (max-width: 680px) {
+  .property-list > div { grid-template-columns: minmax(0, 1fr); gap: var(--space-0-5); }
+}
+
+@media (forced-colors: active) {
+  button.list-row-body[aria-pressed="true"] { background: SelectedItem; color: SelectedItemText; }
+  .timeline-marker::after { background: CanvasText; }
+}

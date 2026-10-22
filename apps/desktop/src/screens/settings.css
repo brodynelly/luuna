@@ -7,14 +7,14 @@
  * screen; badges, tags, settings rows and callouts come from components.css.
  */
 
-.settings-report { display: grid; gap: var(--space-4); min-width: 0; }
-.settings-report > .settings-groups { display: grid; gap: var(--space-4); min-width: 0; }
+.settings-report { display: grid; gap: var(--spacing-md); min-width: 0; }
+.settings-report > .settings-groups { display: grid; gap: var(--spacing-md); min-width: 0; }
 /* A group is a raised card of rows; its title is a sentence-case section title, never all caps. */
-.settings-groups > .settings-group { padding: var(--space-4) var(--space-4) var(--space-1); border: var(--border-width) solid var(--separator); border-radius: var(--radius-lg); background: var(--surface-raised); box-shadow: var(--shadow-card); }
-.settings-group > .panel-heading > h4 { margin: 0; color: var(--ink); font-size: var(--text-body-strong); font-weight: var(--weight-semibold); }
+.settings-groups > .settings-group { padding-block-end: var(--space-1); border-color: var(--separator); }
+.settings-group .panel-heading > h4 { margin: 0; color: var(--ink); font-size: var(--text-body-strong); font-weight: var(--weight-semibold); }
 .settings-rows { display: grid; min-width: 0; }
 /* Rows stay compact; the detail wraps under the title and the badge sits at the end (the row stacks under 680 px). */
-.settings-rows > .settings-item { padding-block: var(--space-3); min-height: var(--row-height); }
+.settings-rows > .settings-item { padding-block: var(--spacing-sm); min-height: var(--row-height); }
 .settings-item .settings-row-title > code { font-weight: var(--weight-medium); }
 .settings-item .settings-row-desc { font-size: var(--text-caption); }
 .settings-item .settings-row-control { min-width: var(--facts-term); justify-content: flex-start; }

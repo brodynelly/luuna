@@ -1,10 +1,12 @@
 /*
- * Screen: shell. The window chrome in Ledger's AppShell layout, tokens only (docs/DESIGN-SYSTEM.md, ADR 0033):
+ * Screen: shell. The window chrome in Mantine's AppShell layout, tokens only (docs/DESIGN-SYSTEM.md, ADR 0033, ADR 0035;
+ * metrics from specs/mantine-component-metrics.md: AppShell inner-edge borders, NavLink 8px 12px padding, 8px radius and
+ * light active ground, Breadcrumbs separator, ActionIcon-sized toggles):
  * the banner, the sidebar and its nav items, the connection status, the top bar, the content column,
  * every page's header and the view change. Every selector is scoped by a class unique to the shell
  * (.app, .sidebar, .topbar, .banner, .nav-section, .view ...). The current view shows by accent text and
- * weight, never by colour alone and never by a filled pill. At 768 px and below the sidebar is an
- * off-canvas panel. Motion is a fade or a panel slide; under reduced motion everything here is instant.
+ * weight on the light accent ground, never by colour alone. At 768 px and below the sidebar is an
+ * off-canvas panel. Motion is a fade or a panel slide; hover and focus changes are instant, and under reduced motion everything is.
  */
 .app {
   --side: var(--sidebar-width);
@@ -62,19 +64,27 @@
   line-height: var(--leading-none);
 }
 /* The brand mark: an accent disc whose leading half is cut from the sidebar's own surface. */
-.wordmark-mark { flex: none; overflow: visible; width: var(--space-5); height: var(--space-5); }
-.wordmark-mark > circle { fill: var(--accent); }
-.wordmark-mark > path { fill: var(--surface); stroke: var(--accent); stroke-width: var(--focus-width); vector-effect: non-scaling-stroke; }
+.wordmark-mark, .connect-mark { flex: none; overflow: visible; width: var(--space-5); height: var(--space-5); }
+.connect-mark { width: var(--space-7); height: var(--space-7); }
+:is(.wordmark-mark, .connect-mark) > circle { fill: var(--accent); }
+:is(.wordmark-mark, .connect-mark) > path { fill: var(--surface-raised); stroke: var(--accent); stroke-width: var(--focus-width); vector-effect: non-scaling-stroke; }
+.wordmark-mark > path { fill: var(--surface); }
 .sidebar-top > .sidebar-toggle, .topbar-menu {
   flex: none;
-  min-height: var(--control-sm);
-  padding: 0 var(--space-1-5);
+  width: var(--control-sm);
+  min-width: 0;
+  height: var(--control-sm);
+  min-height: 0;
+  padding: 0;
   border-color: transparent;
+  border-radius: var(--radius-md);
   box-shadow: none;
   background: transparent;
   color: var(--ink-muted);
 }
-.sidebar-top > .sidebar-toggle:hover:not(:disabled), .topbar-menu:hover:not(:disabled) { background: var(--fill); color: var(--ink); }
+@media (hover: hover) and (pointer: fine) {
+  .sidebar-top > .sidebar-toggle:hover:not(:disabled), .topbar-menu:hover:not(:disabled) { background: var(--fill); color: var(--ink); }
+}
 :is(.sidebar, .topbar) .icon {
   flex: none;
   width: var(--icon-size);
@@ -86,7 +96,7 @@
   stroke-linejoin: round;
 }
 
-/* Navigation: sections of icon items. The current item is accent text and bold, with no fill. */
+/* Navigation: sections of icon items (Mantine NavLink: 8px 12px, 8px radius). The current item is accent text on the light accent ground, semibold. */
 .nav-section + .nav-section { margin-top: var(--space-4); }
 .nav-section > ul { margin: 0; padding: 0; list-style: none; }
 .nav-section-label {
@@ -99,23 +109,25 @@
 }
 .sidebar-nav button.nav-item {
   justify-content: flex-start;
-  gap: var(--space-2-5);
+  gap: var(--space-3);
   width: 100%;
-  min-height: var(--nav-height);
-  padding: 0 var(--space-2);
+  min-height: 0;
+  padding: var(--space-2) var(--space-3);
   border-color: transparent;
   box-shadow: none;
   border-radius: var(--radius-md);
   background: transparent;
   color: var(--ink-body);
-  font-size: var(--text-body);
+  font-size: var(--text-label);
   font-weight: var(--weight-body);
-  transition: background-color var(--duration-micro) var(--ease), color var(--duration-micro) var(--ease);
+  line-height: var(--leading-body);
 }
 .sidebar-nav button.nav-item > .icon { color: var(--ink-muted); }
-/* Intentional: hover also sets the ink colour, so on the current item it replaces the accent text until the pointer leaves. */
-.sidebar-nav button.nav-item:hover:not(:disabled) { background: var(--fill); color: var(--ink); }
-.sidebar-nav button.nav-item[aria-current="page"] { color: var(--accent-text); font-weight: var(--weight-bold); }
+/* Hover is a ground change and never replaces the current item's accent ground or text. */
+@media (hover: hover) and (pointer: fine) {
+  .sidebar-nav button.nav-item:hover:not(:disabled, [aria-current="page"]) { background: var(--fill); color: var(--ink); }
+}
+.sidebar-nav button.nav-item[aria-current="page"] { background: var(--accent-soft); color: var(--accent-text); font-weight: var(--weight-medium); }
 .sidebar-nav button.nav-item[aria-current="page"] > .icon { color: var(--accent-text); }
 .sidebar-nav .nav-count { margin-left: auto; color: var(--ink-muted); font-size: var(--text-caption); font-variant-numeric: tabular-nums; }
 
@@ -140,6 +152,7 @@
   gap: var(--space-2);
   height: var(--topbar-height);
   padding-inline: var(--space-8);
+  border-bottom: var(--border-width) solid var(--separator);
   background: var(--surface);
 }
 .topbar-menu { display: none; }
@@ -159,7 +172,9 @@
   font-size: var(--text-body);
   font-weight: var(--weight-body);
 }
-.topbar > button.topbar-search:hover:not(:disabled) { background: var(--fill-strong); color: var(--ink); }
+@media (hover: hover) and (pointer: fine) {
+  .topbar > button.topbar-search:hover:not(:disabled) { background: var(--fill-strong); color: var(--ink); }
+}
 .topbar-search-label { flex: 1 1 auto; text-align: left; }
 .topbar-spacer { flex: 1 1 0; }
 
@@ -181,6 +196,7 @@
 .view > .page > .panel-heading { flex-wrap: wrap; align-items: flex-end; justify-content: space-between; gap: var(--space-2) var(--space-4); }
 .view > .page > .panel-heading > h2 {
   color: var(--ink);
+  font-family: var(--font-display);
   font-size: var(--text-page-title);
   font-weight: var(--weight-page-title);
   letter-spacing: var(--tracking-page-title);
@@ -190,10 +206,12 @@
 .view > .page > .breadcrumbs { margin-bottom: calc(var(--space-2) - var(--space-5)); }
 
 /* Breadcrumbs: ancestors as buttons, the current page as text. */
-.breadcrumbs > ol { display: flex; flex-wrap: wrap; align-items: center; gap: var(--space-1); margin: 0; padding: 0; list-style: none; color: var(--ink-muted); font-size: var(--text-label); line-height: var(--leading-label); }
-.breadcrumbs li + li::before { content: "/"; margin-right: var(--space-1); color: var(--ink-disabled); }
-.breadcrumbs button { min-height: 0; padding: 0; border: 0; box-shadow: none; background: transparent; color: var(--ink-muted); font-size: inherit; font-weight: var(--weight-body); }
-.breadcrumbs button:hover:not(:disabled) { background: transparent; color: var(--accent-text); text-decoration: underline; }
+.breadcrumbs > ol { display: flex; flex-wrap: wrap; align-items: center; gap: var(--space-1) 0; margin: 0; padding: 0; list-style: none; color: var(--ink-body); font-size: var(--text-body); line-height: var(--leading-none); }
+.breadcrumbs li + li::before { content: "/"; margin-inline: var(--space-2-5); color: var(--ink-muted); }
+.breadcrumbs button { min-height: 0; padding: 0; border: 0; box-shadow: none; background: transparent; color: var(--accent-text); font-size: inherit; font-weight: var(--weight-body); line-height: inherit; }
+@media (hover: hover) and (pointer: fine) {
+  .breadcrumbs button:hover:not(:disabled) { background: transparent; color: var(--accent-text); text-decoration: underline; }
+}
 .breadcrumbs [aria-current="page"] { color: var(--ink); }
 
 /* View change: a plain fade, native where View Transitions exist, otherwise from the data-entering slot. */
@@ -269,8 +287,8 @@
 }
 
 @media (forced-colors: active) {
-  .wordmark-mark > circle { fill: CanvasText; }
-  .wordmark-mark > path { fill: Canvas; stroke: CanvasText; }
+  :is(.wordmark-mark, .connect-mark) > circle { fill: CanvasText; }
+  :is(.wordmark-mark, .connect-mark) > path { fill: Canvas; stroke: CanvasText; }
   .banner, .sidebar-scrim { border: var(--border-width) solid CanvasText; }
   .sidebar-nav button.nav-item[aria-current="page"] { forced-color-adjust: none; background: SelectedItem; color: SelectedItemText; }
   .sidebar-nav button.nav-item[aria-current="page"] > .icon { color: SelectedItemText; }

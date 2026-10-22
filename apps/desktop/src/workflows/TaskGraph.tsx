@@ -1,26 +1,28 @@
 import type { DependencyOverride, RunRecord, TaskRecord } from "@luuna/api-client";
-import { Actions, Box, Button, Hint, Id, Item, List, Meta, RecordItem, RecordList } from "../ui";
+import { Alert, Button, Hint, Id, Inline, ListGroup, ListRow, Meta, Stack } from "@luuna/ui";
 import { stateText, taskResumable } from "./model";
 
 type AdvisoryResult = NonNullable<TaskRecord["advisory_result"]>;
 
 /** An advisory task's findings, proposed tasks and risks; a proposal becomes real only through a plan you approve. */
 function AdvisoryResultView({ task, result, busy, onDerive }: { task: TaskRecord; result: AdvisoryResult; busy: boolean; onDerive?: (task: TaskRecord) => void }) {
-  return <Box className="advisory-result" aria-label={`Advisory result of ${task.task_id}`}>
-    <Meta>Advisory result: {result.findings.length} finding(s), {result.proposed_tasks.length} proposed task(s), {result.risks.length} risk(s). A proposed task becomes real only through a plan revision you create and approve.</Meta>
-    {result.findings.length > 0 && <List className="advisory-list" label="Findings">{result.findings.map((finding, index) => <Item key={index}>{finding}</Item>)}</List>}
-    {result.proposed_tasks.length > 0 && <List className="advisory-list" label="Proposed tasks">{result.proposed_tasks.map((proposed) => <Item key={proposed.id}>
-      <Id>{proposed.id}</Id> ({proposed.repository_id}, {stateText(String(proposed.role ?? "implementer"))})
-      {proposed.depends_on?.length ? ` · after ${proposed.depends_on.join(", ")}` : ""}
-      {proposed.paths?.length ? ` · paths ${proposed.paths.join(", ")}` : ""}
-      {proposed.rationale ? ` · ${proposed.rationale}` : ""}
-    </Item>)}</List>}
-    {result.risks.length > 0 && <List className="advisory-list" label="Risks">{result.risks.map((risk, index) => <Item key={index}>{risk}</Item>)}</List>}
-    {onDerive && result.proposed_tasks.length > 0 && <Actions>
-      <Button disabled={busy} onClick={() => onDerive(task)}>Derive plan from this proposal</Button>
-      <Hint>Pre-fills the next plan revision's tasks with this proposal, each deriving from <Id>{task.task_id}</Id>; you edit, create and approve it like any plan.</Hint>
-    </Actions>}
-  </Box>;
+  return <Alert tone="neutral" announce="status" className="advisory-result" aria-label={`Advisory result of ${task.task_id}`}>
+    <Stack gap="1.5">
+      <Meta>Advisory result: {result.findings.length} finding(s), {result.proposed_tasks.length} proposed task(s), {result.risks.length} risk(s). A proposed task becomes real only through a plan revision you create and approve.</Meta>
+      {result.findings.length > 0 && <ListGroup aria-label="Findings">{result.findings.map((finding, index) => <ListRow key={index} title={finding} />)}</ListGroup>}
+      {result.proposed_tasks.length > 0 && <ListGroup aria-label="Proposed tasks">{result.proposed_tasks.map((proposed) => <ListRow key={proposed.id} title={<>
+        <Id>{proposed.id}</Id> ({proposed.repository_id}, {stateText(String(proposed.role ?? "implementer"))})
+        {proposed.depends_on?.length ? ` · after ${proposed.depends_on.join(", ")}` : ""}
+        {proposed.paths?.length ? ` · paths ${proposed.paths.join(", ")}` : ""}
+        {proposed.rationale ? ` · ${proposed.rationale}` : ""}
+      </>} />)}</ListGroup>}
+      {result.risks.length > 0 && <ListGroup aria-label="Risks">{result.risks.map((risk, index) => <ListRow key={index} title={risk} />)}</ListGroup>}
+      {onDerive && result.proposed_tasks.length > 0 && <Inline wrap gap={2}>
+        <Button disabled={busy} onClick={() => onDerive(task)}>Derive plan from this proposal</Button>
+        <Hint>Pre-fills the next plan revision's tasks with this proposal, each deriving from <Id>{task.task_id}</Id>; you edit, create and approve it like any plan.</Hint>
+      </Inline>}
+    </Stack>
+  </Alert>;
 }
 
 /** The trace lines of one task: who assigned it, what it derives from and the overrides that name it. */
@@ -44,19 +46,18 @@ function TaskTraces({ task, named }: { task: TaskRecord; named: DependencyOverri
  * runtime re-checks the approval, the budgets and every binding before anything runs.
  */
 export function TaskGraph({ run, tasks, overrides = [], busy, onResume, onDerive }: { run: RunRecord; tasks: TaskRecord[]; overrides?: DependencyOverride[]; busy: boolean; onResume: (taskId: string) => void; onDerive?: (task: TaskRecord) => void }) {
-  return <RecordList className="task-graph" label="Task graph">{tasks.map((task) => {
+  return <ListGroup className="task-graph" aria-label="Task graph">{tasks.map((task) => {
     const named = task.dependency_overrides ?? overrides.filter((override) => override.consumer === task.task_id || override.producer === task.task_id);
     const result = task.advisory_result ?? undefined;
-    return <RecordItem key={task.task_id} className="task-record">
-      <Box className="task-line">
-        <Id>{task.task_id}</Id> ({task.repository_id}) · role {stateText(String(task.role ?? "implementer"))} · {task.state}
-        {task.depends_on.length ? ` · after ${task.depends_on.join(", ")}` : ""}
-        {task.candidate_commit ? ` · commit ${task.candidate_commit.slice(0, 12)}` : ""}
-        {task.reason ? ` · ${task.reason}` : ""}
-        {taskResumable(run, task) && <Button disabled={busy} data-capability="runs.implement" onClick={() => onResume(task.task_id)}>Resume task {task.task_id}</Button>}
-      </Box>
+    return <ListRow key={task.task_id} title={<Inline as="span" wrap gap={2}>
+      <Id>{task.task_id}</Id> ({task.repository_id}) · role {stateText(String(task.role ?? "implementer"))} · {task.state}
+      {task.depends_on.length ? ` · after ${task.depends_on.join(", ")}` : ""}
+      {task.candidate_commit ? ` · commit ${task.candidate_commit.slice(0, 12)}` : ""}
+      {task.reason ? ` · ${task.reason}` : ""}
+    </Inline>} detail={<Stack gap={1}>
+      {taskResumable(run, task) && <Inline><Button disabled={busy} data-capability="runs.implement" onClick={() => onResume(task.task_id)}>Resume task {task.task_id}</Button></Inline>}
       <TaskTraces task={task} named={named} />
       {result && <AdvisoryResultView task={task} result={result} busy={busy} onDerive={onDerive} />}
-    </RecordItem>;
-  })}</RecordList>;
+    </Stack>} />;
+  })}</ListGroup>;
 }

@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState } from "react";
 import type { BaselineEvidence, ComponentContext, ComponentStatus, Discovery, EventEnvelope, LuunaClient, ProjectExport, ProjectRecord, ProjectView } from "@luuna/api-client";
 import { isTerminal, mergeEvents, readEventPages } from "@luuna/api-client";
-import { COMPLETED, useNotify } from "../ui";
+import { COMPLETED, useNotify } from "@luuna/ui";
 import { actionFailure, describeFailure } from "../failures";
 import { workflowReason } from "../workflow-state";
 import { baselineRunFailure, currentProposal, requestTarget } from "./project-model";

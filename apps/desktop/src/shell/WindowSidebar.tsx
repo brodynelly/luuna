@@ -1,7 +1,6 @@
 import { CONNECTION_LABEL, NAV_SECTIONS, viewInfo, viewShortcut } from "../content/views";
 import type { View } from "../content/views";
-import { connectionTone } from "../design/tone";
-import { ConnectionStatus, NavItem, NavSection, Sidebar } from "../ui";
+import { connectionTone, ConnectionStatus, NavItem, NavSection, Sidebar } from "@luuna/ui";
 
 /** The window's sidebar: the wordmark, the views in sections and the connection status. */
 export function WindowSidebar({ view, onSelect, connection, address, activeRuns, collapsed, onToggle }: {

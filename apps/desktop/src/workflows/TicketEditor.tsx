@@ -1,6 +1,6 @@
 import { useState } from "react";
 import type { Ticket, UpdateTicketRequest } from "@luuna/api-client";
-import { Button, Disclosure, Form, FormFooter, TextArea, TextField, submitted } from "../ui";
+import { Button, Disclosure, Form, FormFooter, Stack, TextArea, TextField, submitted } from "@luuna/ui";
 import { TEXT_LIMITS, ticketEditRequest, ticketTextSizes, tooLong } from "./model";
 import type { TicketDraft } from "./model";
 import { ByteCount } from "./PlanReview";
@@ -21,12 +21,18 @@ export function TicketEditor({ ticket, repositoryIds, busy, latestRevision, onSa
     : `Saving advances the ticket to r${ticket.revision}; its plans bind to the revision they were made for.`;
   return <Disclosure className="ticket-editor" summary={`Edit ticket r${ticket.revision}`}>
     <Form className="form-group" disabled={busy} onSubmit={submitted(() => { if (request && !blocked) onSave(request); })}>
-      <TextField label="Revised title" value={draft.title} onChange={(event) => setDraft({ ...draft, title: event.target.value })} required aria-describedby={`edit-title-bytes-${ticket.id}`} />
-      <ByteCount id={`edit-title-bytes-${ticket.id}`} bytes={sizes.title} limit={TEXT_LIMITS.title} />
-      <TextArea label="Revised intent" value={draft.intent} onChange={(event) => setDraft({ ...draft, intent: event.target.value })} required rows={3} aria-describedby={`edit-intent-bytes-${ticket.id}`} />
-      <ByteCount id={`edit-intent-bytes-${ticket.id}`} bytes={sizes.intent} limit={TEXT_LIMITS.intent} />
-      <TextArea label="Revised acceptance criteria (one per line)" value={draft.criteria} onChange={(event) => setDraft({ ...draft, criteria: event.target.value })} required rows={2} aria-describedby={`edit-criteria-bytes-${ticket.id}`} />
-      <ByteCount id={`edit-criteria-bytes-${ticket.id}`} prefix="Longest criterion: " bytes={sizes.criterion} limit={TEXT_LIMITS.criterion} />
+      <Stack gap={1}>
+        <TextField label="Revised title" value={draft.title} onChange={(event) => setDraft({ ...draft, title: event.target.value })} required aria-describedby={`edit-title-bytes-${ticket.id}`} />
+        <ByteCount id={`edit-title-bytes-${ticket.id}`} bytes={sizes.title} limit={TEXT_LIMITS.title} />
+      </Stack>
+      <Stack gap={1}>
+        <TextArea label="Revised intent" value={draft.intent} onChange={(event) => setDraft({ ...draft, intent: event.target.value })} required rows={3} aria-describedby={`edit-intent-bytes-${ticket.id}`} />
+        <ByteCount id={`edit-intent-bytes-${ticket.id}`} bytes={sizes.intent} limit={TEXT_LIMITS.intent} />
+      </Stack>
+      <Stack gap={1}>
+        <TextArea label="Revised acceptance criteria (one per line)" value={draft.criteria} onChange={(event) => setDraft({ ...draft, criteria: event.target.value })} required rows={2} aria-describedby={`edit-criteria-bytes-${ticket.id}`} />
+        <ByteCount id={`edit-criteria-bytes-${ticket.id}`} prefix="Longest criterion: " bytes={sizes.criterion} limit={TEXT_LIMITS.criterion} />
+      </Stack>
       {choices.length > 1 && <RepositoryScope choices={choices} selected={draft.repositoryIds} onChange={(repositoryIds) => setDraft({ ...draft, repositoryIds })} />}
       <FormFooter hint={hint}>
         <Button variant="primary" submit disabled={!request || blocked} data-capability="tickets.update">Save ticket r{ticket.revision + 1}</Button>

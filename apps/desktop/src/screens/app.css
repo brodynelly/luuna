@@ -1,30 +1,14 @@
-/* Screen: app. The connect page, Settings › Runtime and the Sessions view, tokens only (docs/DESIGN-SYSTEM.md).
+/* Screen: app. The connect page offsets, Settings › Runtime and the Sessions view, tokens only (docs/DESIGN-SYSTEM.md).
    The window chrome (sidebar, page header, view change) is in shell.css. */
 
 /* Cards inside a view share one elevation. */
 .app .panel :is(.panel, .form-group) { box-shadow: var(--shadow-card); }
 .app .view .panel .panel { background: var(--color-surface); }
 
-/* Connect page: shown in place of a view until the runtime answers. Centred, one task. */
-.content > .connect-page {
-  justify-items: center;
-  max-width: var(--connect-width);
-  margin: var(--space-7) auto 0;
-  padding: var(--space-6);
-  text-align: center;
-  background: var(--surface-raised);
-  box-shadow: var(--shadow-card);
-}
-.connect-mark { flex: none; overflow: visible; }
-.connect-page > .connect-mark { order: -1; width: var(--space-7); height: var(--space-7); }
-.connect-page > .panel-heading { justify-content: center; }
-.connect-page > .panel-heading > h2 { margin: 0; }
-.connect-mark > circle { fill: var(--color-accent); }
-.connect-mark > path { fill: var(--color-surface); stroke: var(--color-accent); stroke-width: var(--focus-width); vector-effect: non-scaling-stroke; }
-.connect-page > .scope { font-size: var(--text-sm); }
-.connect-page > .connection-form { width: 100%; text-align: left; }
-.connection-form > fieldset > button { width: 100%; }
-.connection-form > fieldset > small { text-align: center; }
+/* Connect page: Container, Surface and Stack carry the layout; this adds the top offset and the text alignment. */
+.connect-page { margin-top: var(--space-7); text-align: center; }
+.connection-form { align-self: stretch; text-align: left; }
+.connection-form small { text-align: center; }
 
 /* Settings › Runtime: the address and version under the heading; Disconnect and Stop trail it. */
 .settings-panel > .connection-panel > .panel-heading + .meta { margin-top: calc(var(--space-1) - var(--space-4)); }
@@ -39,13 +23,6 @@
 /* The history rail is tight so its cards line up with the heading's text. */
 .history { padding-inline: var(--space-3); }
 .history > :is(.panel-heading, .empty) { padding-inline: var(--space-2); }
-.history-list {
-  display: grid;
-  gap: var(--space-1);
-  margin: 0;
-  padding: 0;
-  list-style: none;
-}
 .main-column {
   display: grid;
   grid-template-columns: minmax(0, 1fr);
@@ -56,10 +33,6 @@
 
 /* Session events: heading and badge, the run bar, reason, response, then the event record. */
 .run-detail {
-  display: flex;
-  flex-wrap: wrap;
-  align-items: center;
-  gap: var(--space-2) var(--space-3);
   min-width: 0;
   padding: var(--space-2) var(--space-3);
   border: var(--border-width) solid var(--color-border);
@@ -86,16 +59,11 @@
   .workspace { grid-template-columns: minmax(0, 1fr); }
   .history { padding-inline: var(--panel-pad); }
   .history > :is(.panel-heading, .empty) { padding-inline: 0; }
-  .history-list { grid-template-columns: repeat(auto-fill, minmax(min(100%, var(--field-min)), 1fr)); gap: var(--space-2); }
+  .history-list { display: grid; grid-template-columns: repeat(auto-fill, minmax(min(100%, var(--field-min)), 1fr)); gap: var(--space-2); }
   .history-list > li { display: grid; min-width: 0; }
   .history-list > li button.run-card:not([aria-pressed="true"]) { border-color: var(--color-border); }
 }
 
 @media (max-width: 680px) {
-  .content > .connect-page { margin-top: var(--space-5); padding: var(--space-5); }
-}
-
-@media (forced-colors: active) {
-  .connect-mark > circle { fill: CanvasText; }
-  .connect-mark > path { fill: Canvas; stroke: CanvasText; }
+  .connect-page { margin-top: var(--space-5); }
 }

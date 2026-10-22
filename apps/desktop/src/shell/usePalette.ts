@@ -4,7 +4,7 @@ import { boundedMap } from "../Workflows";
 import { VIEWS } from "../content/views";
 import type { View } from "../content/views";
 import type { OpenRequest } from "../Home";
-import type { PaletteCommand } from "../ui";
+import type { PaletteCommand } from "@luuna/ui";
 
 interface Index { projects: ProjectRecord[]; tickets: Ticket[] }
 

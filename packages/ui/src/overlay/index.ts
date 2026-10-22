@@ -1,0 +1,21 @@
+/** Feedback and overlays (ADR 0034, family 4). The package root re-exports this barrel. */
+export { Alert } from "./Alert";
+export type { AlertProps } from "./Alert";
+export { ConfirmDialog } from "./ConfirmDialog";
+export type { ConfirmDialogProps } from "./ConfirmDialog";
+export { Dialog } from "./Dialog";
+export type { DialogProps } from "./Dialog";
+export { Drawer } from "./Drawer";
+export type { DrawerProps } from "./Drawer";
+export { Menu } from "./Menu";
+export type { MenuEntry, MenuProps } from "./Menu";
+export { Popover } from "./Popover";
+export type { PopoverProps } from "./Popover";
+export { Skeleton } from "./Skeleton";
+export type { SkeletonProps } from "./Skeleton";
+export { Spinner } from "./Spinner";
+export type { SpinnerProps } from "./Spinner";
+export { Tooltip } from "./Tooltip";
+export type { TooltipProps } from "./Tooltip";
+export { placeFloating } from "./placement";
+export type { Placement as OverlayPlacement } from "./placement";

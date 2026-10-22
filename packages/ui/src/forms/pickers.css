@@ -1,0 +1,64 @@
+/*
+ * Forms family, part 2 (ADR 0034, family 2): combobox, chips, icon button, button group and copy button.
+ * Load after forms.css and styles/controls.css. Every value is a token; metrics are Mantine's defaults. Colour
+ * steps on hover and press are instant (no transition, no lift) and the combobox list is a popover surface.
+ */
+
+/* Combobox: the input keeps focus; the list is a labelled scroll region under it (Mantine dropdown: 4 px padding, 14 px options with 6 px 10 px padding, 8 px radius). */
+.combobox-list[role="listbox"], .combobox-empty { position: absolute; inset-inline: 0; top: 100%; z-index: var(--z-menu); margin: var(--space-1) 0 0; border: var(--border-width) solid var(--border); border-radius: var(--radius-md); background: var(--surface-overlay); box-shadow: var(--shadow-popover); }
+.combobox-list[role="listbox"] { max-height: var(--palette-list-max); padding: var(--space-1); overflow: auto; list-style: none; }
+.combobox-empty { padding: var(--space-1-5) var(--space-2-5); color: var(--ink-muted); font-size: var(--text-label); text-align: center; }
+.combobox-option { display: flex; align-items: center; gap: var(--space-3); padding: var(--space-1-5) var(--space-2-5); border-radius: var(--radius-md); color: var(--ink-body); font-size: var(--text-label); cursor: pointer; overflow-wrap: anywhere; }
+.combobox-option > small { margin-inline-start: auto; color: var(--ink-muted); }
+.combobox-option[data-active="true"] { background: var(--fill); color: var(--ink); }
+/* The selected option is the filled accent (Mantine) and also carries a check mark and heavier text, so it never relies on colour alone. */
+.combobox-option[aria-selected="true"] { background: var(--accent); color: var(--ink-on-accent); font-weight: var(--weight-semibold); }
+.combobox-option[aria-selected="true"][data-active="true"] { background: var(--accent-hover); color: var(--ink-on-accent); }
+.combobox-option[aria-selected="true"]::after { content: ""; flex: none; width: var(--checkbox-check-w); height: var(--checkbox-check-h); margin-inline-start: auto; margin-top: calc(var(--border-width) * -2); border: solid var(--ink-on-accent); border-width: 0 var(--mark-stroke) var(--mark-stroke) 0; transform: rotate(45deg); }
+.combobox-option[aria-selected="true"] > small { margin-inline-start: 0; color: var(--ink-on-accent); }
+@media (hover: hover) and (pointer: fine) {
+  .combobox-option:hover { background: var(--fill); color: var(--ink); }
+  .combobox-option[aria-selected="true"]:hover { background: var(--accent-hover); color: var(--ink-on-accent); }
+}
+
+/* Chip (Mantine outline chip, 28 px pill): a compact choice. Selected fills with the accent and shows a check mark. */
+.chip-group { display: flex; flex-wrap: wrap; gap: var(--space-2); min-width: 0; }
+.chip { display: inline-flex; align-items: center; gap: var(--space-1-5); max-width: 100%; min-height: var(--chip-height); padding: 0 var(--chip-pad-x); border: var(--border-width) solid var(--border-strong); border-radius: var(--radius-full); background: var(--surface-raised); color: var(--ink-body); font-size: var(--text-label); font-weight: var(--weight-medium); overflow-wrap: anywhere; white-space: normal; }
+span.chip { box-shadow: none; }
+.chip[data-selected="true"] { padding: 0 var(--chip-pad-x-checked); border-color: var(--accent); background: var(--accent); color: var(--ink-on-accent); }
+.chip[data-selected="true"]::before { content: ""; flex: none; width: var(--checkbox-check-w); height: var(--checkbox-check-h); margin-top: calc(var(--border-width) * -2); border: solid var(--ink-on-accent); border-width: 0 var(--mark-stroke) var(--mark-stroke) 0; transform: rotate(45deg); }
+.chip[data-selected="true"]:disabled { border-color: transparent; background: var(--fill-strong); color: var(--ink-disabled); }
+.chip[data-selected="true"]:disabled::before { border-color: var(--ink-disabled); }
+@media (hover: hover) and (pointer: fine) {
+  button.chip:hover:not(:disabled) { background: var(--fill); }
+  button.chip[data-selected="true"]:hover:not(:disabled) { border-color: var(--accent-hover); background: var(--accent-hover); }
+}
+
+/* Icon button: a square button with one line icon in the text colour. The label is the accessible name. */
+button.icon-button { position: relative; display: inline-flex; align-items: center; justify-content: center; min-width: var(--control-sm); padding: 0; }
+button.icon-button.button-md { min-width: var(--control-md); }
+button.icon-button.button-lg { min-width: var(--control-lg); }
+.icon-button > svg { flex: none; width: var(--icon-size); height: var(--icon-size); fill: none; stroke: currentColor; stroke-width: var(--icon-stroke); stroke-linecap: round; stroke-linejoin: round; }
+.icon-button > .tone-mark { position: absolute; top: var(--space-0-5); inset-inline-end: var(--space-0-5); }
+
+/* Button group: related buttons with a gap, or joined into one segment with shared hairlines. */
+.button-group { display: inline-flex; flex-wrap: wrap; align-items: center; gap: var(--space-2); min-width: 0; }
+.button-group[data-attached="true"] { flex-wrap: nowrap; gap: 0; }
+.button-group[data-attached="true"] > button { border-radius: 0; }
+.button-group[data-attached="true"] > button + button { margin-inline-start: calc(var(--border-width) * -1); }
+.button-group[data-attached="true"] > button:first-child { border-start-start-radius: var(--radius-md); border-end-start-radius: var(--radius-md); }
+.button-group[data-attached="true"] > button:last-child { border-start-end-radius: var(--radius-md); border-end-end-radius: var(--radius-md); }
+
+/* Copy button: the button and its untimed status text. The status region always exists so a change is announced. */
+.copy-button { display: inline-flex; align-items: center; min-width: 0; }
+.copy-status { display: inline-flex; align-items: center; gap: var(--space-1-5); color: var(--ink-muted); font-size: var(--text-label); }
+.copy-status:not(:empty) { margin-inline-start: var(--space-2); }
+.copy-status[data-copy="error"] { color: var(--danger); }
+
+@media (forced-colors: active) {
+  .combobox-option[data-active="true"] { forced-color-adjust: none; background: SelectedItem; color: SelectedItemText; }
+  .chip[data-selected="true"] { forced-color-adjust: none; border-color: Highlight; background: Canvas; color: CanvasText; }
+  .chip[data-selected="true"]::before { border-color: Highlight; }
+  .combobox-option[aria-selected="true"] { forced-color-adjust: none; background: Highlight; color: HighlightText; }
+  .combobox-option[aria-selected="true"]::after { border-color: HighlightText; }
+}

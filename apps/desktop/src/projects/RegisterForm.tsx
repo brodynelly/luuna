@@ -1,5 +1,5 @@
 import { useState } from "react";
-import { Button, Form, FormFooter, RecordItem, RecordList, TextField, submitted } from "../ui";
+import { Button, Form, FormFooter, Stack, TextField, submitted } from "@luuna/ui";
 import type { RepositoryRow } from "./project-model";
 
 const FIRST_ROW: RepositoryRow = { id: "app", path: "" };
@@ -22,14 +22,16 @@ export function RegisterForm({ disabled, onRegister }: { disabled: boolean; onRe
     setRows([FIRST_ROW]);
   }
 
-  return <Form onSubmit={submitted(() => void register())} className="register-form form-group" disabled={disabled}>
-    <TextField label="Project name" value={name} onChange={(event) => setName(event.target.value)} required placeholder="My product" />
-    <TextField label="Project ID" value={projectId} onChange={(event) => setProjectId(event.target.value)} placeholder="derived from the name" mono pattern="[a-z][a-z0-9\-]{0,63}" />
-    <RecordList className="repository-rows" label="Repositories to register">{rows.map((row, index) => <RecordItem key={index} className="repository-row field-row">
+  return <Form onSubmit={submitted(() => void register())} className="form-group" disabled={disabled}>
+    <Stack gap={3}>
+      <TextField label="Project name" value={name} onChange={(event) => setName(event.target.value)} required placeholder="My product" />
+      <TextField label="Project ID" value={projectId} onChange={(event) => setProjectId(event.target.value)} placeholder="derived from the name" mono pattern="[a-z][a-z0-9\-]{0,63}" />
+    </Stack>
+    <Stack gap={3} role="group" aria-label="Repositories to register">{rows.map((row, index) => <Stack key={index} className="repository-row" gap={2}>
       <TextField label="Repository ID" value={row.id} onChange={(event) => update(index, { id: event.target.value })} required mono pattern="[a-z][a-z0-9\-]{0,63}" />
       <TextField label="Repository root path" value={row.path} onChange={(event) => update(index, { path: event.target.value })} required mono placeholder="/absolute/path/to/checkout" />
       {rows.length > 1 && <Button variant="text" onClick={() => setRows((current) => current.filter((_, i) => i !== index))}>Remove repository {row.id || index + 1}</Button>}
-    </RecordItem>)}</RecordList>
+    </Stack>)}</Stack>
     <Button variant="text" onClick={() => setRows((current) => [...current, { id: "", path: "" }])}>Add another repository</Button>
     <FormFooter hint="Register every related repository together. Paths stay on this machine and never enter the manifest.">
       <Button variant="primary" submit disabled={!name.trim() || !rowsComplete} data-capability="projects.register">

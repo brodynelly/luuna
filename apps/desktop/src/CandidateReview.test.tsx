@@ -184,7 +184,7 @@ test("a setup workflow's candidate shows the proposed checks and the runtime's h
   expect(html).toContain("<code>unit</code>: <code>python -m unittest</code> · 120s");
   expect(html).toContain("<code>lint</code>: <code>ruff</code> in <code>src</code> · 60s · shell");
   expect(html).toContain(handoff.next);
-  expect(html).toMatch(/class="setup-handoff callout" data-tone="attention"/);
+  expect(html).toMatch(/class="ov-alert setup-handoff" data-tone="attention"/);
   expect(render(view)).not.toContain("Testing-setup handoff");
   const pending = renderToStaticMarkup(<CandidateReview run={run} view={view} busy={false} {...actions} handoff={{ ...handoff, reviewed: false, candidate_commit: null, next: "the setup candidate must pass these checks" }} />);
   expect(pending).toContain("not yet reviewed with a passed verdict");

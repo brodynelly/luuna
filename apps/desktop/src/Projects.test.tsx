@@ -59,9 +59,9 @@ test("every registered repository gets its own baseline control and shows its ow
   for (const label of ["Run baseline for app", "Run baseline for web", "Run baseline for shared"]) expect(html).toContain(label);
   expect(html).toContain("Cancel baseline for web");
   expect(html).not.toContain("Cancel baseline for app");
-  expect(html).toMatch(/<code>app<\/code><span class="state" data-tone="danger">failed<\/span>/);
-  expect(html).toMatch(/<code>web<\/code><span class="state" data-tone="success">passed<\/span>/);
-  expect(html).toMatch(/<code>shared<\/code><span class="state" data-tone="attention">no baseline<\/span>/);
+  expect(html).toMatch(/<code>app<\/code>[\s\S]*?<span class="state" data-tone="danger">failed<\/span>/);
+  expect(html).toMatch(/<code>web<\/code>[\s\S]*?<span class="state" data-tone="success">passed<\/span>/);
+  expect(html).toMatch(/<code>shared<\/code>[\s\S]*?<span class="state" data-tone="attention">no baseline<\/span>/);
   // A running baseline disables only its own repository's control.
   expect(html).toMatch(/<button type="button" disabled="" data-capability="baselines.start">Run baseline for web/);
   expect(html).toMatch(/<button type="button" data-capability="baselines.start">Run baseline for app/);

@@ -3,7 +3,7 @@ import type { AttemptRecord, CandidateDiff, ComponentContext, DependencyOverride
 import { ApiError, DEFAULT_PLAN_BUDGETS, overrideFromRefusal, planBudgetProblem } from "@luuna/api-client";
 import { settleAction } from "../workflow-state";
 import { actionFailure, utf8Bytes } from "../failures";
-import { COMPLETED, useNotify } from "../ui";
+import { COMPLETED, useNotify } from "@luuna/ui";
 import { TEXT_LIMITS, parseBudgets, planRequestFromRows, planRetryIdentity } from "./model";
 import type { TaskRow } from "./model";
 import { modelSettings } from "./settings";

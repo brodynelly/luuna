@@ -1,7 +1,7 @@
 import type { Runtime } from "../shell/useRuntime";
 import { describeFailure } from "../failures";
 import { viewInfo } from "../content/views";
-import { Box, Page } from "../ui";
+import { Box, Page } from "@luuna/ui";
 import { EventPanel, History, StartSession } from "./SessionParts";
 import { useSessionReplay } from "./useSessionReplay";
 

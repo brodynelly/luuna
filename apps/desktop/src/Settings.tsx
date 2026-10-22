@@ -2,9 +2,8 @@ import { useEffect, useState } from "react";
 import type { ReactNode } from "react";
 import type { DoctorItem, DoctorReport, DoctorStatus, LuunaClient } from "@luuna/api-client";
 import { describeFailure } from "./failures";
-import type { Tone } from "./design/tone";
+import { type Tone, Box, Button, Callout, EmptyState, ErrorBanner, Id, Loading, Page, Section, SettingsRow, StatusBadge, Surface, Tag } from "@luuna/ui";
 import { viewInfo } from "./content/views";
-import { Box, Button, Callout, EmptyState, ErrorBanner, Id, Loading, Page, Section, SettingsRow, StatusBadge, Tag } from "./ui";
 
 /**
  * The doctor statuses on the six tones: `ok` is passed evidence of the environment, `warning`
@@ -42,9 +41,11 @@ export function doctorGroups(items: readonly DoctorItem[]): DoctorGroup[] {
 /** The report as titled groups of settings rows (name, required marker, the runtime's detail, status badge), then the verdict. */
 export function DoctorReportView({ report }: { report: DoctorReport }) {
   return <Box className="settings-report">
-    <Box className="settings-groups" role="group" aria-label="Runtime environment and credential presence">{doctorGroups(report.items).map((group) => <Section key={group.label} id={`settings-group-${group.label.toLowerCase().replace(/\s+/g, "-")}`} level={4} variant="plain" className="settings-group" title={group.label}>
-      <Box className="settings-rows">{group.items.map((item: DoctorItem) => <SettingsRow key={item.name} className="settings-item" title={<><Id>{item.name}</Id>{item.required && <Tag>required</Tag>}</>} description={item.detail} control={<StatusBadge tone={doctorTone[item.status]}>{item.status}</StatusBadge>} />)}</Box>
-    </Section>)}</Box>
+    <Box className="settings-groups" role="group" aria-label="Runtime environment and credential presence">{doctorGroups(report.items).map((group) => <Surface key={group.label} pad={4} className="settings-group">
+      <Section id={`settings-group-${group.label.toLowerCase().replace(/\s+/g, "-")}`} level={4} variant="plain" title={group.label}>
+        <Box className="settings-rows">{group.items.map((item: DoctorItem) => <SettingsRow key={item.name} className="settings-item" title={<><Id>{item.name}</Id>{item.required && <Tag>required</Tag>}</>} description={item.detail} control={<StatusBadge tone={doctorTone[item.status]}>{item.status}</StatusBadge>} />)}</Box>
+      </Section>
+    </Surface>)}</Box>
     <Callout className="settings-verdict" tone={report.ok ? "success" : "danger"} status>{report.ok ? "doctor: ok. Every required item is present and the database is usable." : "doctor: FAILED. A required item is missing or the database is unusable; the items above say which."}</Callout>
   </Box>;
 }

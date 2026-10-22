@@ -1,6 +1,6 @@
 import { useState } from "react";
 import type { ScaffoldProfile, ScaffoldProposal, ScaffoldResult } from "@luuna/api-client";
-import { Box, Button, Checkbox, Form, FormFooter, Id, Item, options, RecordList, SelectField, StatusBadge, StatusLine, submitted, TextField } from "../ui";
+import { Button, Checkbox, Form, FormFooter, Id, ListGroup, ListRow, options, SelectField, Stack, StatusBadge, StatusLine, submitted, Surface, TextField } from "@luuna/ui";
 
 const PROFILES: readonly ScaffoldProfile[] = ["python", "node", "node-typescript", "react", "nextjs", "rust", "go", "flutter", "android", "ios"];
 
@@ -48,12 +48,12 @@ export function ScaffoldForm({ disabled, busy, actions }: { disabled: boolean; b
         <Button variant="primary" submit disabled={!name.trim() || !parent.trim()} data-capability="projects.scaffold.propose">Propose scaffold</Button>
       </FormFooter>
     </Form>
-    {proposal && <Box className="scaffold-proposal" aria-label="Scaffold proposal">
+    {proposal && <Surface level="muted" pad={3} className="scaffold-proposal" aria-label="Scaffold proposal"><Stack gap={2}>
       <StatusLine status={false} className="scaffold-target">
         <strong>{proposal.profile}</strong> in <Id>{proposal.target_dir}</Id> · <StatusBadge tone={proposal.status === "ready" ? "neutral" : "attention"}>{proposal.status}</StatusBadge>
       </StatusLine>
       {proposal.blocked_reason && <StatusLine status={false}>{proposal.blocked_reason}</StatusLine>}
-      <RecordList label="Files the scaffold writes">{proposal.files.map((file) => <Item key={file.path}><Id>{file.path}</Id></Item>)}</RecordList>
+      <ListGroup aria-label="Files the scaffold writes">{proposal.files.map((file) => <ListRow key={file.path} title={<Id>{file.path}</Id>} />)}</ListGroup>
       <StatusLine status={false} className="scaffold-baseline">Baseline: {proposal.baseline.map((check) => <Id key={check.id}>{[check.executable, ...check.args].join(" ")}</Id>)}</StatusLine>
       {missing.length > 0 && <StatusLine status={false}>Missing on this host: {missing.map((tool) => tool.tool).join(", ")}</StatusLine>}
       {proposal.network_steps.length > 0 && <StatusLine status={false}>Network steps you confirm with the hash: {proposal.network_steps.join("; ")}</StatusLine>}
@@ -63,7 +63,7 @@ export function ScaffoldForm({ disabled, busy, actions }: { disabled: boolean; b
       <Button variant="primary" disabled={busy || proposal.status !== "ready" || !acknowledged} data-capability="projects.scaffold" onClick={() => void confirm()}>
         Create project and run its baseline
       </Button>
-    </Box>}
+    </Stack></Surface>}
     {result && <StatusLine>
       Scaffolded <Id>{result.target_dir}</Id> at commit <Id>{result.commit.slice(0, 12)}</Id>; baseline {result.check.status}
       {result.check.tests_detected !== null ? ` (${result.check.tests_detected} tests detected)` : ""}{result.replayed ? " (replayed)" : ""}.

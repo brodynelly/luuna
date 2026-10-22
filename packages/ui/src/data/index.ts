@@ -1,0 +1,23 @@
+/** Data display family (ADR 0034). The coordinator re-exports this from the package root. */
+export { DataTable } from "./DataTable";
+export type { DataColumn, DataTableProps } from "./DataTable";
+export { sortRows } from "./tableSort";
+export type { SortDirection, SortState } from "./tableSort";
+export { Pagination } from "./Pagination";
+export type { PaginationProps } from "./Pagination";
+export { PropertyList } from "./PropertyList";
+export type { PropertyItem, PropertyListProps } from "./PropertyList";
+export { ListRow } from "./ListRow";
+export type { ListRowProps } from "./ListRow";
+export { ListGroup } from "./ListGroup";
+export type { ListGroupProps } from "./ListGroup";
+export { MetricCard } from "./MetricCard";
+export type { MetricCardProps } from "./MetricCard";
+export { Timeline } from "./Timeline";
+export type { TimelineItem, TimelineProps } from "./Timeline";
+export { EventLog } from "./EventLog";
+export type { EventLogProps } from "./EventLog";
+export { BoardColumn } from "./BoardColumn";
+export type { BoardColumnProps } from "./BoardColumn";
+export { Accordion } from "./Accordion";
+export type { AccordionItem, AccordionProps } from "./Accordion";

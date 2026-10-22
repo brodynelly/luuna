@@ -1,0 +1,221 @@
+/*
+ * Components layer (ADR 0033, Ledger component specs). The tone indirection below is the only place that
+ * maps a tone name to colours; every toned component reads --tone-fg, --tone-bg, --tone-border and
+ * --tone-mark, and only from an element that carries data-tone itself (custom properties inherit, so an
+ * untoned element must never read them). Cards are flat: a hairline or token shadow in light, surface
+ * steps in dark. No coloured left edges: status is a word plus a shape mark on a soft ground.
+ */
+[data-tone="success"] { --tone-fg: var(--tone-success-fg); --tone-bg: var(--tone-success-bg); --tone-border: var(--tone-success-border); --tone-mark: var(--tone-success-mark); }
+[data-tone="active"] { --tone-fg: var(--tone-active-fg); --tone-bg: var(--tone-active-bg); --tone-border: var(--tone-active-border); --tone-mark: var(--tone-active-mark); }
+[data-tone="danger"] { --tone-fg: var(--tone-danger-fg); --tone-bg: var(--tone-danger-bg); --tone-border: var(--tone-danger-border); --tone-mark: var(--tone-danger-mark); }
+[data-tone="attention"] { --tone-fg: var(--tone-attention-fg); --tone-bg: var(--tone-attention-bg); --tone-border: var(--tone-attention-border); --tone-mark: var(--tone-attention-mark); }
+[data-tone="neutral"] { --tone-fg: var(--tone-neutral-fg); --tone-bg: var(--tone-neutral-bg); --tone-border: var(--tone-neutral-border); --tone-mark: var(--tone-neutral-mark); }
+[data-tone="interrupted"] { --tone-fg: var(--tone-interrupted-fg); --tone-bg: var(--tone-interrupted-bg); --tone-border: var(--tone-interrupted-border); --tone-mark: var(--tone-interrupted-mark); }
+
+/* Skip link: the first Tab stop, visible only while focused. */
+.skip-link { position: absolute; top: var(--space-2); left: var(--space-4); z-index: 100; padding: var(--space-2) var(--space-3); border-radius: var(--radius-md); background: var(--accent); color: var(--ink-on-accent); font-size: var(--text-label); font-weight: var(--weight-semibold); text-decoration: none; transform: translateY(-300%); }
+.skip-link:focus { transform: none; }
+
+/* Typographic helpers and links (Ledger Link: accent text, underline on hover; in prose, body ink with an underline). */
+.eyebrow { color: var(--ink-muted); font-size: var(--text-caption); font-weight: var(--weight-semibold); }
+.scope { max-width: var(--measure); margin: 0; color: var(--ink-muted); font-size: var(--text-label); }
+/* Meta line: a muted evidence sentence whose identities stay at full contrast. */
+.meta { margin: 0; color: var(--ink-muted); font-size: var(--text-label); font-variant-numeric: tabular-nums; overflow-wrap: anywhere; }
+.meta code { color: var(--ink-body); }
+/* Code (Mantine Code): inline mono at 12px on a light ground; block code is pre and keeps its own region rules. */
+:not(pre) > code { padding: var(--space-0-5) var(--space-1-5); border-radius: var(--radius-sm); background: var(--fill); font-size: var(--text-caption); line-height: var(--leading-code); }
+a { font-weight: var(--weight-medium); text-decoration: none; }
+@media (hover: hover) and (pointer: fine) { a:hover { text-decoration: underline; } }
+:is(.scope, .meta, .empty) a { color: var(--ink-body); text-decoration: underline; text-decoration-color: var(--border-strong); text-underline-offset: var(--space-0-5); }
+
+/* Panel, card and subpanel (Mantine Card: 16px padding, 8px radius, 1px border). A panel is a section or aside labelled by its heading; it spaces its children with gap. */
+.panel, .card { display: grid; grid-template-columns: minmax(0, 1fr); align-content: start; gap: var(--space-4); min-width: 0; padding: var(--space-4); border: var(--border-width) solid var(--separator); border-radius: var(--radius-md); background: var(--surface-raised); box-shadow: var(--shadow-card); }
+.panel-heading { display: flex; flex-wrap: wrap; align-items: center; gap: var(--space-2) var(--space-3); margin: 0; }
+.panel-heading > :is(h2, h3) { min-width: 0; margin-right: auto; }
+.subpanel { display: grid; grid-template-columns: minmax(0, 1fr); gap: var(--space-3); min-width: 0; padding-top: var(--space-4); border-top: var(--border-width) solid var(--separator); }
+:is(.panel, .subpanel) > .panel-heading + .scope { margin-top: calc(var(--space-2) - var(--space-4)); }
+.subpanel > .panel-heading + .scope { margin-top: calc(var(--space-2) - var(--space-3)); }
+.section-plain { display: grid; grid-template-columns: minmax(0, 1fr); gap: var(--space-3); min-width: 0; }
+/* Tray: a muted group of related settings inside a panel. */
+.tray { display: grid; grid-template-columns: minmax(0, 1fr); gap: var(--space-3); min-width: 0; padding: var(--space-4); border: var(--border-width) solid transparent; border-radius: var(--radius-md); background: var(--surface-muted); }
+
+/* Status badge (.state, Mantine Badge: 20px, 10px inline, pill, 700; 12px not 11px, never uppercase): the runtime's value as text on a soft ground; data-tone adds colour and a shape. It never animates. */
+.state { display: inline-flex; align-items: center; gap: var(--space-1-5); max-width: 100%; min-height: var(--badge-height); padding: 0 var(--space-2-5); border: var(--border-width) solid transparent; border-radius: var(--radius-full); background: var(--fill-strong); color: var(--ink-body); font-size: var(--text-caption); font-weight: var(--weight-bold); line-height: var(--leading-caption); font-variant-numeric: tabular-nums; overflow-wrap: anywhere; }
+.state[data-tone] { background: var(--tone-bg); color: var(--tone-fg); }
+.tag { display: inline-flex; align-items: center; min-height: var(--badge-height); padding: 0 var(--space-2-5); border: var(--border-width) solid transparent; border-radius: var(--radius-full); background: var(--fill-strong); color: var(--ink-body); font-size: var(--text-caption); font-weight: var(--weight-bold); overflow-wrap: anywhere; }
+/* Tone mark: one shape per tone, drawn by a badge's ::before, a callout's or note's ::before, or an element of class .tone-mark. */
+.state[data-tone]::before, .tone-mark[data-tone], .callout[data-tone]::before, .failure-note[data-tone]::before { content: ""; display: inline-block; flex: none; width: var(--mark-size); height: var(--mark-size); border-radius: var(--radius-full); background: var(--tone-mark); }
+.state[data-tone="active"]::before, .tone-mark[data-tone="active"], .callout[data-tone="active"]::before, .failure-note[data-tone="active"]::before { border: var(--mark-stroke) solid var(--tone-mark); background: transparent; }
+.state[data-tone="danger"]::before, .tone-mark[data-tone="danger"], .callout[data-tone="danger"]::before, .failure-note[data-tone="danger"]::before { border-radius: 0; transform: rotate(45deg) scale(0.85); }
+.state[data-tone="attention"]::before, .tone-mark[data-tone="attention"], .callout[data-tone="attention"]::before, .failure-note[data-tone="attention"]::before { border-radius: 0; clip-path: polygon(50% 0, 100% 100%, 0 100%); }
+.state[data-tone="neutral"]::before, .tone-mark[data-tone="neutral"], .callout[data-tone="neutral"]::before, .failure-note[data-tone="neutral"]::before { height: var(--mark-stroke); }
+/* Interrupted is a pause, not a spinner: two bars, so it never reads as work in progress. */
+.state[data-tone="interrupted"]::before, .tone-mark[data-tone="interrupted"], .callout[data-tone="interrupted"]::before, .failure-note[data-tone="interrupted"]::before { border: 0; border-inline: var(--mark-stroke) solid var(--tone-mark); border-radius: 0; background: transparent; }
+/* The completion check is a static success mark beside a recorded success (never animated). */
+.check-draw { color: var(--tone-success-mark); }
+
+/* Status indicator (Ledger StatusIndicator): a tone shape with a soft halo, a word, and optional detail. */
+.status-indicator { display: inline-flex; align-items: center; gap: var(--space-2); color: var(--ink-body); font-size: var(--text-label); }
+.status-indicator > .tone-mark[data-tone] { box-shadow: 0 0 0 var(--mark-stroke) var(--tone-bg); }
+.status-detail { color: var(--ink-muted); }
+.status-detail::before { content: "·"; margin-inline-end: var(--space-2); }
+
+/* Facts (Ledger PropertyList): a definition list of exact, full identities. Static evidence. */
+.facts { display: grid; gap: var(--space-2-5); margin: 0; font-size: var(--text-body); }
+.facts > div { display: grid; grid-template-columns: var(--facts-term) minmax(0, 1fr); gap: var(--space-4); }
+.facts dt { color: var(--ink-muted); }
+.facts dd { min-width: 0; margin: 0; color: var(--ink); font-variant-numeric: tabular-nums; overflow-wrap: anywhere; }
+
+/* Metric tiles (Ledger MetricCard): a count or short value, optionally with a comparison. Never toned, never evidence. */
+.stat-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(min(100%, var(--facts-term)), 1fr)); gap: var(--space-4); margin: 0; }
+.stat-tile { display: flex; flex-direction: column; gap: var(--space-1); min-width: 0; padding: var(--space-4); border: var(--border-width) solid var(--separator); border-radius: var(--radius-md); background: var(--surface-raised); box-shadow: var(--shadow-card); }
+.stat-tile > dt { color: var(--ink); font-size: var(--text-body); font-weight: var(--weight-semibold); }
+.stat-tile > dd { margin: 0; }
+.stat-tile > .stat-value { color: var(--ink); font-size: var(--text-metric); font-weight: var(--weight-semibold); font-variant-numeric: tabular-nums; line-height: var(--leading-metric); }
+.stat-tile > .stat-comparison { color: var(--ink-muted); font-size: var(--text-body); }
+
+/* Records: hairline rows in a list (baselines, recipes, tickets, checks, findings). Status lives in the record's badge. */
+.record-list { display: grid; gap: var(--space-2); min-width: 0; margin: 0; padding: 0; list-style: none; }
+.record-list:empty { display: none; }
+.record { display: grid; grid-template-columns: minmax(0, 1fr); gap: var(--space-1-5); min-width: 0; padding: var(--space-3); border: var(--border-width) solid var(--separator); border-radius: var(--radius-md); background: transparent; font-size: var(--text-label); }
+.record .record { background: var(--surface-muted); }
+.record > .state { justify-self: start; }
+/* Rows variant: no card chrome, hairline dividers, a row-height rhythm and a hover tint. */
+.record-list.record-rows { gap: 0; }
+.record-list.record-rows > .record { min-height: var(--row-height); padding: var(--space-2) var(--space-3); border: 0; border-bottom: var(--border-width) solid var(--separator); border-radius: 0; font-variant-numeric: tabular-nums; }
+@media (hover: hover) and (pointer: fine) { .record-list.record-rows > .record:hover { background: var(--fill); } }
+.record-list.record-rows > .record:last-child { border-bottom: 0; }
+.record-headed { grid-template-columns: auto minmax(0, 1fr); align-items: baseline; gap: var(--space-1-5) var(--space-2); }
+.record-headed > :nth-child(n + 3) { grid-column: 1 / -1; }
+
+/* Settings row (Ledger SettingsRow): title and badge, a description, and a trailing control. */
+.settings-row { display: flex; align-items: center; justify-content: space-between; gap: var(--space-6); padding: var(--space-4) 0; border-bottom: var(--border-width) solid var(--separator); }
+.settings-row:last-child { border-bottom: 0; }
+.settings-row-stacked { flex-direction: column; align-items: stretch; gap: var(--space-3); }
+.settings-row-text { display: flex; flex-direction: column; gap: var(--space-0-5); min-width: 0; }
+.settings-row-title { display: flex; flex-wrap: wrap; align-items: center; gap: var(--space-2); color: var(--ink); font-size: var(--text-body); font-weight: var(--weight-semibold); }
+.settings-row-desc { color: var(--ink-muted); font-size: var(--text-body); overflow-wrap: anywhere; }
+.settings-row-control { display: flex; flex: none; align-items: center; gap: var(--space-2); }
+
+/* Action row: at most one .primary; a .danger sits at the end. */
+.actions { display: flex; flex-wrap: wrap; align-items: center; gap: var(--space-2); min-width: 0; }
+.actions > small { flex-basis: 100%; }
+.actions > button.danger { margin-left: auto; }
+.actions:empty { display: none; }
+
+/* Form anatomy. */
+.form-footer { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: var(--space-3) var(--space-4); margin-top: var(--space-1); }
+.form-footer > small { flex: 1 1 var(--hint-min); color: var(--ink-muted); }
+.form-footer > button.primary { margin-left: auto; }
+.form-group { min-width: 0; padding: var(--space-4); border: var(--border-width) solid var(--separator); border-radius: var(--radius-md); }
+.field-row { display: flex; flex-wrap: wrap; align-items: flex-end; gap: var(--space-3); }
+.field-row > label { flex: 1 1 var(--field-min); min-width: 0; }
+.field-row > small { flex-basis: 100%; }
+
+/* Selectable card: a full-width toggle button in a list (runs, projects). Selected shows by fill plus edge. */
+button.run-card { display: grid; justify-content: stretch; justify-items: start; gap: var(--space-2); width: 100%; min-height: 0; padding: var(--space-3) var(--space-2); border-color: transparent; border-radius: var(--radius-md); background: transparent; color: var(--ink-body); box-shadow: none; font-size: var(--text-label); font-weight: var(--weight-regular); text-align: left; white-space: normal; }
+@media (hover: hover) and (pointer: fine) { button.run-card:hover:not(:disabled) { background: var(--fill); } }
+button.run-card.selected, button.run-card[aria-pressed="true"] { border-color: var(--accent); background: var(--accent-soft); color: var(--ink); }
+button.run-card.selected:hover:not(:disabled), button.run-card[aria-pressed="true"]:hover:not(:disabled) { background: var(--accent-soft); }
+.run-prompt { display: -webkit-box; overflow: hidden; -webkit-box-orient: vertical; -webkit-line-clamp: 2; color: inherit; overflow-wrap: anywhere; }
+.run-meta { display: flex; flex-wrap: wrap; align-items: center; gap: var(--space-1-5) var(--space-2); color: var(--ink-muted); font-size: var(--text-caption); font-variant-numeric: tabular-nums; }
+
+/* Notes: a recorded reason led by its tone's shape, then the next step led by an accent chevron. */
+.failure-note { margin: 0; color: var(--tone-danger-fg); font-size: var(--text-label); overflow-wrap: anywhere; }
+.failure-note[data-tone] { display: block; color: var(--tone-fg); }
+.failure-note[data-tone]::before { margin-inline-end: var(--space-1-5); vertical-align: middle; }
+.recovery-note { display: block; margin: 0; color: var(--ink-body); font-size: var(--text-label); }
+.recovery-note::before { content: ""; display: inline-block; width: 0; height: 0; margin-inline-end: var(--space-1-5); border-style: solid; border-width: var(--caret-size) 0 var(--caret-size) var(--caret-length); border-color: transparent transparent transparent var(--accent-text); vertical-align: middle; }
+/* Nested (ticket) or adjacent (candidate): the next step sits just under the reason. */
+.failure-note[data-tone] > .recovery-note { margin: var(--space-1) 0 0; }
+.failure-note + .recovery-note { margin-top: var(--space-1); }
+:is(.subpanel, .record, .panel) > .failure-note + .recovery-note { margin-top: calc(var(--space-1) - var(--space-3)); }
+.panel > .failure-note + .recovery-note { margin-top: calc(var(--space-1) - var(--space-4)); }
+
+/* Callout (Mantine Alert: 16px padding, 8px radius, 1px transparent border, 16px icon gap; toned): a soft ground, the tone's shape at the lead, body ink. Untoned is Ledger Callout. */
+.callout { margin: 0; padding: var(--space-4); border: var(--border-width) solid transparent; border-radius: var(--radius-md); background: var(--surface-muted); color: var(--ink-muted); font-size: var(--text-label); overflow-wrap: anywhere; }
+.callout[data-tone] { position: relative; padding: var(--space-4) var(--space-4) var(--space-4) calc(var(--space-4) + var(--mark-size) + var(--space-4)); background: var(--tone-bg); color: var(--ink-body); }
+.callout[data-tone]::before { position: absolute; inset-inline-start: var(--space-4); top: calc(var(--space-4) + (1lh - var(--mark-size)) / 2); }
+/* A toned list (open questions) keeps its bullets, set clear of the tone's shape mark at the lead, so its status is never colour alone. */
+ul.callout[data-tone] { padding-inline-start: calc(var(--space-4) + var(--mark-size) + var(--space-4) + var(--space-5)); }
+
+/* Alert banner (Ledger Alert, danger): a refused action or failed load; always dismissible. */
+.error { display: flex; align-items: flex-start; gap: var(--space-4); margin: 0; padding: var(--space-4); border: var(--border-width) solid transparent; border-radius: var(--radius-md); background: var(--tone-danger-bg); color: var(--ink-body); font-size: var(--text-label); overflow-wrap: anywhere; }
+.error::before { content: ""; flex: none; width: var(--mark-size); height: var(--mark-size); margin-top: calc((1lh - var(--mark-size)) / 2); background: var(--tone-danger-mark); transform: rotate(45deg) scale(0.85); }
+.error button.text-button { flex: none; margin-inline-start: auto; color: inherit; text-decoration: underline; }
+
+/* Disclosure: a CSS caret, never text, so it adds nothing to the accessible name. */
+summary { display: flex; align-items: baseline; gap: var(--space-2); margin-inline: calc(var(--space-1) * -1); padding: var(--space-1-5) var(--space-1); border-radius: var(--radius-sm); color: var(--ink-body); font-size: var(--text-label); list-style: none; cursor: pointer; overflow-wrap: anywhere; }
+summary::-webkit-details-marker { display: none; }
+summary::before { content: ""; flex: none; align-self: center; width: 0; height: 0; border-style: solid; border-width: var(--caret-size) 0 var(--caret-size) var(--caret-length); border-color: transparent transparent transparent currentColor; transition: transform var(--duration-fast) var(--ease); }
+details[open] > summary::before { transform: rotate(90deg); }
+@media (hover: hover) and (pointer: fine) { summary:hover { background: var(--fill); } }
+details > :not(summary) { margin-top: var(--space-2); }
+details.section > summary { color: var(--ink-body); font-weight: var(--weight-medium); }
+
+/* Scroll regions: labelled, focusable, bounded. Only these may scroll. */
+ol.events, pre[aria-label] { max-height: var(--scroll-max); overflow: auto; overscroll-behavior: contain; border: var(--border-width) solid var(--separator); border-radius: var(--radius-md); background: var(--surface-muted); scrollbar-color: var(--border-strong) transparent; }
+/* Stable gutter: a region that starts to overflow does not reflow its text. Paint containment only clips what the region already clips. */
+ol.events, pre[aria-label] { scrollbar-gutter: stable; contain: content; }
+/* Tail caret: steady (evidence never pulses), CSS only so it is never selected, copied or announced. */
+pre[data-live]::after { content: ""; display: inline-block; width: var(--tail-caret-width); height: var(--tail-caret-height); margin-inline-start: var(--tail-caret-gap); vertical-align: text-bottom; background: var(--tone-active-mark); }
+/* Inset ring: the region clips its own outline. */
+ol.events:focus-visible, pre[aria-label]:focus-visible { outline-offset: var(--focus-inset); }
+
+/* Event list. */
+ol.events { margin: 0; padding: 0; list-style: none; }
+ol.events > li { border-bottom: var(--border-width) solid var(--separator); }
+@media (hover: hover) and (pointer: fine) { ol.events > li:hover { background: var(--fill); } }
+ol.events > li:last-child { border-bottom: 0; }
+ol.events summary { margin-inline: 0; padding: var(--space-2) var(--space-3); border-radius: 0; font-family: var(--font-mono); }
+@media (hover: hover) and (pointer: fine) { ol.events summary:hover { background: transparent; } }
+ol.events details > pre { margin: 0 var(--space-3) var(--space-3); border: var(--border-width) solid var(--separator); background: var(--surface); }
+.event-number { min-width: var(--number-width); color: var(--ink-muted); font-variant-numeric: tabular-nums; text-align: right; }
+ol.events summary time { margin-left: auto; color: var(--ink-muted); font-family: var(--font-sans); font-size: var(--text-caption); font-variant-numeric: tabular-nums; }
+
+/* Empty states (Ledger EmptyState): a centred column; the bare empty line stays inline muted text. */
+.empty { margin: 0; color: var(--ink-muted); font-size: var(--text-body); }
+.empty-box { padding: var(--space-8) var(--space-6); border: var(--border-width) dashed var(--border); border-radius: var(--radius-md); text-align: center; }
+.empty-state { display: flex; flex-direction: column; align-items: center; gap: var(--space-1-5); text-align: center; }
+.empty-state > .empty-title { color: var(--ink); font-size: var(--text-body); font-weight: var(--weight-semibold); }
+.empty-state > .empty { max-width: var(--empty-desc-max); }
+.empty-state > :is(button, .actions) { margin-top: var(--space-3); }
+.activity-empty { display: flex; flex-direction: column; align-items: center; justify-content: center; gap: var(--space-2); min-height: var(--empty-min); text-align: center; }
+.activity-empty > span { color: var(--ink-disabled); font-size: var(--text-glyph); line-height: var(--leading-none); }
+.activity-empty > p { color: var(--ink-muted); font-size: var(--text-label); }
+
+/* Text only assistive technology reads. */
+.visually-hidden { position: absolute; width: var(--border-width); height: var(--border-width); overflow: hidden; clip-path: inset(50%); white-space: nowrap; }
+
+/* Notice (Mantine Notification metrics, untimed): a raised card above the content; stays until dismissed or replaced. No side accent. */
+.notice-region { position: fixed; inset-inline: 0; bottom: var(--space-6); z-index: var(--z-toast); display: flex; justify-content: center; padding-inline: var(--space-4); pointer-events: none; }
+.notice-region:empty { display: none; }
+.notice { display: inline-flex; align-items: center; gap: var(--space-3); max-width: min(var(--toast-max), 100%); margin: 0; padding: var(--space-2-5) var(--space-2-5) var(--space-2-5) var(--space-4); border: var(--border-width) solid var(--separator); border-radius: var(--radius-md); background: var(--surface-raised); color: var(--ink); box-shadow: var(--shadow-lg); font-size: var(--text-label); font-weight: var(--weight-regular); line-height: var(--leading-label); overflow-wrap: anywhere; pointer-events: auto; animation: toast-in var(--duration-standard) var(--ease-out) backwards; }
+.notice button.text-button { flex: none; }
+
+@media (max-width: 680px) {
+  .facts > div { grid-template-columns: minmax(0, 1fr); gap: var(--space-0-5); }
+  .settings-row { flex-direction: column; align-items: stretch; gap: var(--space-3); }
+}
+
+/* Split rail: sticky below the top bar (and the banner while it shows); static once the layout stacks. */
+.split-rail[data-sticky] { position: sticky; top: calc(var(--topbar-height) + var(--spacing-lg)); align-self: start; min-width: 0; }
+.app[data-banner] .split-rail[data-sticky] { top: calc(var(--banner-height) + var(--topbar-height) + var(--spacing-lg)); }
+@media (max-width: 920px) {
+  .split-rail[data-sticky] { position: static; }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .notice { animation: none; }
+}
+
+@media (forced-colors: active) {
+  .state[data-tone]::before, .tone-mark[data-tone], .callout[data-tone]::before, .failure-note[data-tone]::before, .error::before { forced-color-adjust: none; background: CanvasText; border-color: CanvasText; }
+  .state[data-tone="active"]::before, .state[data-tone="interrupted"]::before, .tone-mark[data-tone="active"], .tone-mark[data-tone="interrupted"], .callout[data-tone="active"]::before, .callout[data-tone="interrupted"]::before, .failure-note[data-tone="active"]::before, .failure-note[data-tone="interrupted"]::before { background: transparent; }
+  .recovery-note::before { forced-color-adjust: none; border-color: transparent transparent transparent CanvasText; }
+  button.run-card.selected, button.run-card[aria-pressed="true"] { forced-color-adjust: none; border-color: Highlight; background: SelectedItem; color: SelectedItemText; }
+  button.run-card.selected :not(.state), button.run-card[aria-pressed="true"] :not(.state) { color: SelectedItemText; }
+  button.run-card.selected:hover:not(:disabled), button.run-card[aria-pressed="true"]:hover:not(:disabled) { background: SelectedItem; }
+  summary::before { forced-color-adjust: none; border-color: transparent transparent transparent CanvasText; }
+  pre[data-live]::after { forced-color-adjust: none; background: CanvasText; }
+}

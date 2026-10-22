@@ -10,21 +10,28 @@
  * Tailwind utilities.
  */
 @layer tokens, base, components, screens, utilities;
-@import "./design/tokens.css" layer(tokens);
-@import "./design/tokens-depth.css" layer(tokens);
-@import "./design/tokens-scale.css" layer(tokens);
-@import "./design/tokens-motion.css" layer(tokens);
-@import "./design/tokens-legacy.css" layer(tokens);
-@import "./design/fonts.css" layer(tokens);
-@import "./design/base.css" layer(base);
-@import "./design/components.css" layer(components);
-@import "./design/overlays.css" layer(components);
-@import "./design/controls.css" layer(components);
-@import "./design/motion.css" layer(components);
+@source "./";
+@import "@luuna/ui/styles/tokens.css" layer(tokens);
+@import "@luuna/ui/styles/tokens-depth.css" layer(tokens);
+@import "@luuna/ui/styles/tokens-scale.css" layer(tokens);
+@import "@luuna/ui/styles/tokens-motion.css" layer(tokens);
+@import "@luuna/ui/styles/tokens-legacy.css" layer(tokens);
+@import "@luuna/ui/styles/fonts.css" layer(tokens);
+@import "@luuna/ui/styles/base.css" layer(base);
+@import "@luuna/ui/styles/components.css" layer(components);
+@import "@luuna/ui/styles/overlays.css" layer(components);
+@import "@luuna/ui/styles/controls.css" layer(components);
+@import "@luuna/ui/styles/motion.css" layer(components);
+@import "@luuna/ui/navigation/navigation.css" layer(components);
+@import "@luuna/ui/forms/forms.css" layer(components);
+@import "@luuna/ui/forms/pickers.css" layer(components);
+@import "@luuna/ui/data/data.css" layer(components);
+@import "@luuna/ui/data/table.css" layer(components);
+@import "@luuna/ui/overlay/overlay.css" layer(components);
+@import "@luuna/ui/overlay/feedback.css" layer(components);
+@import "@luuna/ui/primitives/primitives.css" layer(components);
 @import "./screens/app.css" layer(screens);
 @import "./screens/shell.css" layer(screens);
-@import "./screens/home.css" layer(screens);
-@import "./screens/board.css" layer(screens);
 @import "./screens/projects.css" layer(screens);
 @import "./screens/workflows.css" layer(screens);
 @import "./screens/candidate-review.css" layer(screens);
@@ -32,4 +39,4 @@
 @import "./screens/help.css" layer(screens);
 @import "./screens/settings.css" layer(screens);
 @import "./screens/sessions.css" layer(screens);
-@import "./design/tailwind.css" layer(utilities);
+@import "@luuna/ui/styles/tailwind.css" layer(utilities);

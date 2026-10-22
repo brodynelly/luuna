@@ -1,0 +1,72 @@
+/*
+ * Forms family, part 1 (ADR 0034, family 2): the field wrapper, radio group, search, password and number
+ * fields, form sections and inline fields. Builds on the control vocabulary in styles/controls.css (label,
+ * input, button) and adds only what those lack. Every value is a token; load it after controls.css.
+ * Tone marks (the danger shape beside an error) come from the shared .tone-mark in styles/components.css.
+ */
+
+/* Field wrapper: label, control, hint, error. The label stays visible; the error is text plus a shape. */
+.field { display: block; min-width: 0; }
+.field-required { color: var(--ink-muted); font-weight: var(--weight-regular); }
+.field-hint { display: block; margin-top: var(--space-1-5); color: var(--ink-muted); font-size: var(--text-caption); line-height: var(--leading-tight); }
+.field-error-slot { display: block; }
+.field-error { display: flex; align-items: center; gap: var(--space-1-5); margin-top: var(--space-1-5); color: var(--danger); font-size: var(--text-caption); font-weight: var(--weight-regular); line-height: var(--leading-tight); }
+
+/* Wrapped controls share one anchor: the control row sits under the label with the standard gap. */
+.search-field, .password-field, .combobox { position: relative; margin-top: var(--space-1-5); }
+.search-field > input, .password-field > input, .combobox > input { margin: 0; }
+
+/* Search: the native input with a clear button inside its trailing edge; the platform's own clear glyph is hidden. */
+.search-field > input { padding-inline-end: var(--control-md); }
+.search-field > input::-webkit-search-cancel-button, .search-field > input::-webkit-search-decoration { display: none; }
+.search-field > .search-clear { position: absolute; inset-block: 0; inset-inline-end: 0; width: var(--control-md); min-height: 0; padding: 0; border-radius: var(--radius-md); font-size: var(--text-body); }
+
+/* Password: the field and its reveal toggle on one row. Pressed is shown by fill and underline, not colour alone. */
+.password-field { display: flex; align-items: stretch; gap: var(--space-2); }
+.password-field > input { flex: 1 1 auto; min-width: 0; }
+.password-field > .password-reveal { flex: none; }
+.password-field > .password-reveal[aria-pressed="true"] { background: var(--fill-strong); color: var(--ink); text-decoration: underline; }
+
+/* Number: native spinners and keys; numerals line up. */
+.number-field-wrap input[type="number"] { font-variant-numeric: tabular-nums; }
+
+/* Radio group (Ledger Radio): the legend names the group, each option is a native radio with a label and an optional hint. */
+.radio-group { gap: var(--space-2); }
+.radio-group > legend { padding: 0; margin-bottom: var(--space-2); color: var(--ink); font-size: var(--text-label); font-weight: var(--weight-semibold); }
+.radio-option { display: flex; align-items: flex-start; gap: var(--space-3); color: var(--ink-body); font-size: var(--text-label); font-weight: var(--weight-regular); line-height: var(--check-label-line); cursor: pointer; }
+.radio-option:has(> input:disabled) { color: var(--ink-disabled); cursor: not-allowed; }
+.radio-text { display: grid; gap: var(--space-1); min-width: 0; }
+.radio-text > small { color: var(--ink-muted); font-size: var(--text-caption); line-height: var(--leading-tight); }
+.radio-option > input[type="radio"] { appearance: none; display: inline-grid; flex: none; place-content: center; width: var(--checkbox-size); height: var(--checkbox-size); margin: 0; border: var(--border-width) solid var(--border-strong); border-radius: var(--radius-full); background: var(--field); cursor: pointer; }
+.radio-option > input[type="radio"]::before { content: ""; width: var(--mark-size); height: var(--mark-size); border-radius: var(--radius-full); background: var(--ink-on-accent); visibility: hidden; }
+.radio-option > input[type="radio"]:checked { border-color: var(--accent); background: var(--accent); }
+.radio-option > input[type="radio"]:checked::before { visibility: visible; }
+.radio-option > input[type="radio"][aria-invalid="true"]:not(:checked) { border-color: var(--danger); }
+.radio-option > input[type="radio"]:disabled { border-color: var(--separator); background: var(--fill-strong); cursor: not-allowed; }
+.radio-option > input[type="radio"]:disabled::before { background: var(--ink-disabled); }
+
+/* Form section: a fieldset with a legend title and one sentence of description. */
+.form-section { gap: var(--space-3); }
+.form-section > legend { padding: 0; margin-bottom: var(--space-2); color: var(--ink); font-size: var(--text-body); font-weight: var(--weight-semibold); }
+.form-section-description { display: block; max-width: var(--measure); color: var(--ink-muted); font-size: var(--text-label); }
+
+/* Inline fields: equal columns, bottom-aligned, one column on narrow windows. */
+.inline-fields { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); align-items: end; gap: var(--space-3); min-width: 0; }
+.inline-fields[data-columns="3"] { grid-template-columns: repeat(3, minmax(0, 1fr)); }
+.inline-fields[data-columns="4"] { grid-template-columns: repeat(4, minmax(0, 1fr)); }
+.inline-fields[data-stack], .inline-fields[data-stack][data-columns] { grid-template-columns: minmax(0, 1fr); }
+@media (max-width: 920px) {
+  .inline-fields[data-columns="4"] { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+}
+@media (max-width: 680px) {
+  .inline-fields, .inline-fields[data-columns] { grid-template-columns: minmax(0, 1fr); }
+}
+
+@media (forced-colors: active) {
+  .radio-option > input[type="radio"] { forced-color-adjust: none; border-color: ButtonText; background: Canvas; }
+  .radio-option > input[type="radio"]::before { background: HighlightText; }
+  .radio-option > input[type="radio"]:checked { border-color: Highlight; background: Highlight; }
+  .radio-option > input[type="radio"]:disabled { border-color: GrayText; background: Canvas; }
+  .radio-option > input[type="radio"]:disabled::before { background: GrayText; }
+  .field-error > .tone-mark { forced-color-adjust: none; }
+}

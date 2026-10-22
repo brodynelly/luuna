@@ -44,8 +44,8 @@ test("the Home summary projects validation health per repository and the blocker
   const opened: OpenRequest[] = [];
   const html = renderToStaticMarkup(<HomeSummaryView summary={summary} busy={false} onOpen={(request) => opened.push(request)} />);
   expect(html).toContain('aria-label="Projects and validation health"');
-  expect(html).toMatch(/<code>app<\/code><span class="state" data-tone="success">passed<\/span>/);
-  expect(html).toMatch(/<code>lib<\/code><span class="state" data-tone="danger">blocked<\/span>/);
+  expect(html).toMatch(/<span class="list-row-title"><code>app<\/code><\/span>.*?<span class="state" data-tone="success">passed<\/span>/);
+  expect(html).toMatch(/<span class="list-row-title"><code>lib<\/code><\/span>.*?<span class="state" data-tone="danger">blocked<\/span>/);
   expect(html).toContain("testing setup needed</span>");
   expect(html).toContain("2 ticket(s) · 1 active workflow(s)");
   expect(html).toContain("Open One");
@@ -53,7 +53,7 @@ test("the Home summary projects validation health per repository and the blocker
   // What waits on the developer comes before the project list.
   expect(html.indexOf("Waiting on you")).toBeLessThan(html.indexOf("Projects and validation health"));
   expect(html).toContain('aria-label="Blockers waiting on you"');
-  expect(html).toMatch(/<span class="state" data-tone="attention">paused<\/span><strong>Greeting<\/strong>/);
+  expect(html).toMatch(/<span class="state" data-tone="attention">paused<\/span><\/span><span class="list-row-main"><span class="list-row-title">Greeting<\/span>/);
   expect(html).toContain("workflow run-1 (plan r2) is paused");
   expect(html).toContain("Testing setup needed for lib");
   expect(html).toContain(offer.reason);
@@ -63,19 +63,19 @@ test("the Home summary projects validation health per repository and the blocker
   expect(renderToStaticMarkup(<HomeSummaryView summary={{ ...summary, blockers: [] }} busy={false} onOpen={() => {}} />)).toContain("Nothing is waiting on you.");
 });
 
-test("Home shows four untoned stat tiles derived from the summary, with the final numbers in the markup", async () => {
+test("Home shows four untoned metric cards derived from the summary, with the final numbers in the markup", async () => {
   const { client } = fixtureClient();
   const summary = await readHome(client, new AbortController().signal);
   const html = renderToStaticMarkup(<HomeSummaryView summary={summary} busy={false} onOpen={() => {}} />);
   const sum = (pick: (project: (typeof summary.projects)[number]) => number) => summary.projects.reduce((total, project) => total + pick(project), 0);
-  expect(html).toContain('<dl class="stat-grid" aria-label="Home summary counts">');
-  const values = [...html.matchAll(/<div class="stat-tile"><dt>([^<]+)<\/dt><dd class="stat-value">(\d+)<\/dd>/g)].map((match) => [match[1], Number(match[2])]);
+  expect(html).toMatch(/<div role="group" aria-label="Home summary counts" data-cols="4" data-cols-compact="2" class="prim-grid/);
+  const values = [...html.matchAll(/<dl class="metric-card"><dt>([^<]+)<\/dt><dd class="metric-value">(\d+)<\/dd>/g)].map((match) => [match[1], Number(match[2])]);
   expect(values).toEqual([["Projects", summary.projects.length], ["Waiting on you", summary.blockers.length], ["Tickets", sum((project) => project.tickets)], ["Active workflows", sum((project) => project.active_workflows)]]);
   expect(sum((project) => project.tickets)).toBe(3);
-  expect(html.match(/class="stat-tile"[^>]*data-tone/)).toBeNull();
+  expect(html.match(/class="metric-card"[^>]*data-tone/)).toBeNull();
   expect(html).toContain('aria-label="Blockers waiting on you"');
   const empty = renderToStaticMarkup(<HomeSummaryView summary={{ projects: [], blockers: [] }} busy={false} onOpen={() => {}} onAddProject={() => {}} />);
-  expect(empty).not.toContain("stat-grid");
+  expect(empty).not.toContain("metric-card");
   expect(empty).toContain("No projects yet");
   expect(empty.match(/<button/g)).toHaveLength(1);
 });

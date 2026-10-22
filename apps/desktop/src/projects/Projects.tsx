@@ -1,5 +1,5 @@
 import type { LuunaClient } from "@luuna/api-client";
-import { Breadcrumbs, ErrorBanner, Page, Split } from "../ui";
+import { Breadcrumbs, ErrorBanner, Page, Split } from "@luuna/ui";
 import { viewInfo } from "../content/views";
 import { ProjectDetail } from "./ProjectDetail";
 import { ProjectRail } from "./ProjectRail";
@@ -18,7 +18,7 @@ export function Projects({ client, connectionEpoch = 0, requested = null }: { cl
   const info = viewInfo("projects");
   return <Page id="projects" className="projects-panel" title={info.label} description={info.description} breadcrumbs={state.view && <Breadcrumbs items={[{ label: info.label }, { label: state.view.project.name }]} />}>
     {state.error && <ErrorBanner message={state.error} onDismiss={() => state.setError("")} />}
-    <Split className="projects-layout" rail={<ProjectRail projects={state.projects} selected={state.selected} disabled={!client || state.busy} busy={state.busy} actions={actions} />}>
+    <Split className="projects-layout" stickyRail rail={<ProjectRail projects={state.projects} selected={state.selected} disabled={!client || state.busy} busy={state.busy} actions={actions} />}>
       <ProjectDetail client={client} connectionEpoch={connectionEpoch} state={state} actions={actions} />
     </Split>
   </Page>;

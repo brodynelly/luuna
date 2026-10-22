@@ -1,6 +1,6 @@
 import { useMemo, useState } from "react";
 import type { ProjectExport, ProjectImportResult } from "@luuna/api-client";
-import { Button, Form, FormFooter, Id, StatusLine, TextArea, TextField, submitted } from "../ui";
+import { Button, Form, FormFooter, Id, StatusLine, TextArea, TextField, submitted } from "@luuna/ui";
 import { parseProjectExport } from "./project-model";
 
 export interface ImportRequest { draft: ProjectExport; repositories: { id: string; path: string }[] }

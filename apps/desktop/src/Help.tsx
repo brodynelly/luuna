@@ -1,8 +1,6 @@
 import type React from "react";
-import { Box, ExternalLink, Id, Item, Kbd, List, Page, Section, StatusBadge, Text } from "./ui";
+import { ExternalLink, Id, Kbd, ListGroup, ListRow, Page, PropertyList, Section, Stack, StatusBadge, Text, TONES, candidateTone, runTone, type Tone } from "@luuna/ui";
 import { VIEWS, viewInfo, viewShortcut } from "./content/views";
-import { TONES, candidateTone, runTone } from "./design/tone";
-import type { Tone } from "./design/tone";
 
 /** The repository the desktop is built from; its documents are linked from the Help panel. */
 export const REPOSITORY_URL = "https://github.com/brodynelly/luuna/blob/main";
@@ -76,25 +74,26 @@ function Topic({ id, title, children }: { id: string; title: string; children: R
 export function Help() {
   const info = viewInfo("help");
   return <Page id="help" title={info.label} description={info.description} className="help-panel" data-surface="help">
-    <Box className="help-sections">
+    <Stack gap={6} className="help-sections">
       <Topic id="help-onboarding" title="Onboarding">
-        <List ordered>{ONBOARDING_STEPS.map((step) => <Item key={step.title}><strong>{step.title}.</strong> {step.detail}</Item>)}</List>
+        <Stack as="ol" className="help-steps">{ONBOARDING_STEPS.map((step, index) => <ListRow key={step.title} leading={<span className="help-step-number">{index + 1}</span>} title={`${step.title}.`} meta={step.detail} />)}</Stack>
       </Topic>
       <Topic id="help-states" title="What each state means">
-        <Box className="help-states">{TONES.map((tone) => <Box key={tone}>
-          <Box className="help-state-term"><StatusBadge tone={tone}>{tone}</StatusBadge><span>{statesForTone(tone).join(", ") || "connection and chips only"}</span></Box>
-          <Text className="help-state-meaning">{TONE_MEANING[tone]}</Text>
-        </Box>)}</Box>
+        <PropertyList className="help-states" items={TONES.map((tone) => ({
+          key: tone,
+          term: <StatusBadge tone={tone}>{tone}</StatusBadge>,
+          value: <Stack gap="0.5"><Text className="help-state-values">{statesForTone(tone).join(", ") || "connection and chips only"}</Text><Text className="help-state-meaning">{TONE_MEANING[tone]}</Text></Stack>,
+        }))} />
       </Topic>
       <Topic id="help-evidence" title="Where evidence lives">
-        <List>{EVIDENCE_LOCATIONS.map((location) => <Item key={location.where}><strong>{location.where}.</strong> {location.what}</Item>)}</List>
+        <ListGroup aria-label="Where evidence lives">{EVIDENCE_LOCATIONS.map((location) => <ListRow key={location.where} title={`${location.where}.`} meta={location.what} />)}</ListGroup>
       </Topic>
       <Topic id="help-shortcuts" title="Keyboard shortcuts">
-        <List className="help-plain help-shortcuts">{SHORTCUTS.map((shortcut) => <Item key={shortcut.keys}><span>{shortcut.action}</span><Kbd>{shortcut.keys}</Kbd></Item>)}</List>
+        <ListGroup aria-label="Keyboard shortcuts" className="help-shortcuts">{SHORTCUTS.map((shortcut) => <ListRow key={shortcut.keys} title={shortcut.action} trailing={<Kbd>{shortcut.keys}</Kbd>} />)}</ListGroup>
       </Topic>
       <Topic id="help-documents" title="Documents">
-        <List className="help-plain help-documents">{DOCUMENTS.map((document) => <Item key={document.path}><ExternalLink href={`${REPOSITORY_URL}/${document.path}`}>{document.title}</ExternalLink> <Id>{document.path}</Id></Item>)}</List>
+        <ListGroup aria-label="Documents" className="help-documents">{DOCUMENTS.map((document) => <ListRow key={document.path} title={<ExternalLink href={`${REPOSITORY_URL}/${document.path}`}>{document.title}</ExternalLink>} trailing={<Id>{document.path}</Id>} />)}</ListGroup>
       </Topic>
-    </Box>
+    </Stack>
   </Page>;
 }

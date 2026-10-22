@@ -3,10 +3,9 @@ import type { BaselineEvidence, HomeBlocker, HomeSummary, LuunaClient, ProjectVi
 import { homeSummary } from "@luuna/api-client";
 import { boundedMap } from "./Workflows";
 import { describeFailure } from "./failures";
-import { baselineTone, manifestTone, runTone } from "./design/tone";
+import { baselineTone, manifestTone, runTone, Actions, Button, copyText, EmptyState, ErrorBanner, Grid, Id, ListGroup, ListRow, Loading, Meta, MetricCard, Page, ReasonNote, Section, Stack, StatusBadge, Surface, useNotify, VisuallyHidden } from "@luuna/ui";
 import { viewInfo } from "./content/views";
 import type { View } from "./content/views";
-import { Actions, Box, Button, ContextMenuArea, copyText, EmptyState, ErrorBanner, Id, Item, List, Loading, Meta, Page, ReasonNote, RecordItem, RecordList, Section, StatGrid, StatTile, StatusBadge, useNotify, VisuallyHidden } from "./ui";
 
 /** Where a Home control sends the developer: the project's panel, its ticket form, or one ticket. */
 export interface OpenRequest { projectId: string; ticketId?: string; ticketForm?: boolean }
@@ -34,50 +33,45 @@ type Summary = { summary: HomeSummary; busy: boolean; onOpen: (request: OpenRequ
 /** What waits on the developer: testing-setup offers and workflows that stopped. */
 function Blockers({ summary, busy, onOpen }: Summary) {
   const count = summary.blockers.length;
-  return <Section id="home-waiting" variant="plain" className="home-section" title={<>Waiting on you{count > 0 && <span className="home-count"> {count}</span>}</>}>
-    {count > 0 ? <RecordList className="home-blockers" variant="rows" label="Blockers waiting on you">{summary.blockers.map((blocker, index) => {
+  return <Section id="home-waiting" variant="plain" title={<>Waiting on you{count > 0 && <Meta> {count}</Meta>}</>}>
+    {count > 0 ? <ListGroup className="home-blockers" aria-label="Blockers waiting on you">{summary.blockers.map((blocker, index) => {
       const tone = blockerTone(blocker);
-      return <RecordItem key={`${blocker.project_id}-${blocker.run_id ?? blocker.repository_id ?? index}`} headed className="home-blocker" tone={tone}>
-        <StatusBadge tone={tone}>{blocker.state ? blocker.state.replace(/_/g, " ") : "testing setup"}</StatusBadge>
-        <strong>{blocker.title}</strong>
-        <Meta>{blocker.project_id}{blocker.run_id && <> · workflow <Id>{blocker.run_id}</Id></>}{blocker.repository_id && <> · repository <Id>{blocker.repository_id}</Id></>}</Meta>
-        <ReasonNote tone={tone} reason={blocker.detail} />
-        <Actions><Button variant="text" disabled={busy} aria-label={`Open ${blocker.title}`} onClick={() => onOpen({ projectId: blocker.project_id, ticketId: blocker.ticket_id })}>Open</Button></Actions>
-      </RecordItem>;
-    })}</RecordList> : <EmptyState>Nothing is waiting on you.</EmptyState>}
+      return <ListRow key={`${blocker.project_id}-${blocker.run_id ?? blocker.repository_id ?? index}`} className="home-blocker"
+        leading={<StatusBadge tone={tone}>{blocker.state ? blocker.state.replace(/_/g, " ") : "testing setup"}</StatusBadge>}
+        title={blocker.title}
+        meta={<>{blocker.project_id}{blocker.run_id && <> · workflow <Id>{blocker.run_id}</Id></>}{blocker.repository_id && <> · repository <Id>{blocker.repository_id}</Id></>}</>}
+        detail={<ReasonNote tone={tone} reason={blocker.detail} />}
+        trailing={<Button variant="text" disabled={busy} aria-label={`Open ${blocker.title}`} onClick={() => onOpen({ projectId: blocker.project_id, ticketId: blocker.ticket_id })}>Open</Button>} />;
+    })}</ListGroup> : <EmptyState>Nothing is waiting on you.</EmptyState>}
   </Section>;
 }
 
 /** One record per project with its validation health: the latest baseline per repository. */
 function ProjectHealth({ summary, busy, onOpen }: Summary) {
   const notify = useNotify();
-  return <Section id="home-projects-heading" variant="plain" className="home-section" title="Projects">
-    <RecordList className="home-projects" variant="rows" label="Projects and validation health">{summary.projects.map((project) => <RecordItem key={project.id} className="home-project">
-      <ContextMenuArea label={`Actions for ${project.name}`} commands={() => [
+  return <Section id="home-projects-heading" variant="plain" title="Projects">
+    <ListGroup className="home-projects" aria-label="Projects and validation health">{summary.projects.map((project) => <ListRow key={project.id} className="home-project"
+      title={project.name}
+      meta={<><StatusBadge tone={manifestTone(project.revision)}>{project.revision > 0 ? `manifest r${project.revision}` : "unconfirmed"}</StatusBadge> <Id>{project.id}</Id> · {project.tickets} ticket(s) · {project.active_workflows} active workflow(s)</>}
+      menuLabel={`Actions for ${project.name}`}
+      commands={() => [
         { label: "Open project", onSelect: () => onOpen({ projectId: project.id }), disabled: busy },
         { label: "New ticket", onSelect: () => onOpen({ projectId: project.id, ticketForm: true }), disabled: busy || project.revision === 0 },
         { label: "Copy project ID", group: true, onSelect: () => void copyText(project.id).then(() => notify("Project ID copied")) },
-      ]}>
-      <Box className="home-project-card">
-      <Box className="home-project-head">
-        <strong>{project.name}</strong>
-        <StatusBadge tone={manifestTone(project.revision)}>{project.revision > 0 ? `manifest r${project.revision}` : "unconfirmed"}</StatusBadge>
-        <Id>{project.id}</Id>
-        <Meta>{project.tickets} ticket(s) · {project.active_workflows} active workflow(s)</Meta>
-      </Box>
-      <List className="home-repositories" label={`Validation health of ${project.name}`}>{project.repositories.map((repository) => <Item key={repository.repository_id}>
-        <Id>{repository.repository_id}</Id>
-        {repository.baseline ? <StatusBadge tone={baselineTone[repository.baseline.status]}>{repository.baseline.status}</StatusBadge> : <StatusBadge tone="attention">no baseline</StatusBadge>}
-        {repository.baseline && <Meta>manifest r{repository.baseline.manifest_revision} · commit <Id>{repository.baseline.commit.slice(0, 12)}</Id></Meta>}
-        {repository.prerequisite && <StatusBadge tone="attention">testing setup needed</StatusBadge>}
-      </Item>)}</List>
-      <Actions className="home-project-actions">
-        <Button disabled={busy} onClick={() => onOpen({ projectId: project.id })}>Open {project.name}</Button>
-        <Button variant="text" disabled={busy || project.revision === 0} aria-label={`New ticket in ${project.name}`} onClick={() => onOpen({ projectId: project.id, ticketForm: true })}>New ticket</Button>
-      </Actions>
-      </Box>
-      </ContextMenuArea>
-    </RecordItem>)}</RecordList>
+      ]}
+      detail={<Stack gap={2}>
+        <ListGroup aria-label={`Validation health of ${project.name}`}>{project.repositories.map((repository) => <ListRow key={repository.repository_id}
+          title={<Id>{repository.repository_id}</Id>}
+          meta={repository.baseline && <>manifest r{repository.baseline.manifest_revision} · commit <Id>{repository.baseline.commit.slice(0, 12)}</Id></>}
+          trailing={<>
+            {repository.baseline ? <StatusBadge tone={baselineTone[repository.baseline.status]}>{repository.baseline.status}</StatusBadge> : <StatusBadge tone="attention">no baseline</StatusBadge>}
+            {repository.prerequisite && <StatusBadge tone="attention">testing setup needed</StatusBadge>}
+          </>} />)}</ListGroup>
+        <Actions>
+          <Button disabled={busy} onClick={() => onOpen({ projectId: project.id })}>Open {project.name}</Button>
+          <Button variant="text" disabled={busy || project.revision === 0} aria-label={`New ticket in ${project.name}`} onClick={() => onOpen({ projectId: project.id, ticketForm: true })}>New ticket</Button>
+        </Actions>
+      </Stack>} />)}</ListGroup>
   </Section>;
 }
 
@@ -88,14 +82,14 @@ export function HomeSummaryView({ summary, busy, onOpen, onAddProject }: Summary
   }
   const sum = (pick: (project: HomeSummary["projects"][number]) => number) => summary.projects.reduce((total, project) => total + pick(project), 0);
   return <>
-    <Box className="home-metrics">
-      <StatGrid label="Home summary counts">
-        <StatTile term="Projects" value={summary.projects.length} />
-        <StatTile term="Waiting on you" value={summary.blockers.length} />
-        <StatTile term="Tickets" value={sum((project) => project.tickets)} />
-        <StatTile term="Active workflows" value={sum((project) => project.active_workflows)} />
-      </StatGrid>
-    </Box>
+    <Surface level="muted" padded className="home-metrics">
+      <Grid cols={{ base: 4, compact: 2 }} gap={4} role="group" aria-label="Home summary counts">
+        <MetricCard label="Projects" value={summary.projects.length} />
+        <MetricCard label="Waiting on you" value={summary.blockers.length} />
+        <MetricCard label="Tickets" value={sum((project) => project.tickets)} />
+        <MetricCard label="Active workflows" value={sum((project) => project.active_workflows)} />
+      </Grid>
+    </Surface>
     <Blockers summary={summary} busy={busy} onOpen={onOpen} />
     <ProjectHealth summary={summary} busy={busy} onOpen={onOpen} />
   </>;

@@ -1,5 +1,5 @@
-/** How a view change moves: the View Transitions API, a CSS enter keyframe, or not at all. */
-export type ViewMotion = "native" | "css" | "none";
+import type { ViewMotion } from "@luuna/ui";
+export type { ViewMotion };
 
 export type TransitionHandle = { finished: Promise<unknown>; ready?: Promise<unknown>; skipTransition(): void };
 export type TransitionHost = { startViewTransition?: (update: () => void) => TransitionHandle; hidden?: boolean };

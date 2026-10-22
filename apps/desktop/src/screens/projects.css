@@ -1,71 +1,26 @@
-/* Screen: projects. Layout and screen-specific presentation, tokens only (docs/DESIGN-SYSTEM.md). */
-/*
- * The Workflows subpanel and the candidate review are nested inside .project-detail, so every
- * rule below is scoped by a class unique to this screen. The panel grid spaces the heading,
- * scope, alert and layout; components (form group, record-headed, meta, empty box, section
- * disclosure, reason rule) come from components.css.
- */
+/* Screen: projects. Desktop-only coupling; rows, lists, header, facts, timeline and forms come from @luuna/ui (docs/DESIGN-SYSTEM.md). */
 
-/* Layout: a rail (register form, project cards) beside the selected project's detail. Above
-   920 px the rail stays in view while a long ticket scrolls the detail column. */
-.projects-layout { display: grid; grid-template-columns: var(--rail-width) minmax(0, 1fr); align-items: start; gap: var(--space-5) var(--space-6); min-width: 0; }
-.projects-rail { position: sticky; top: calc(var(--topbar-height) + var(--space-5)); display: grid; grid-template-columns: minmax(0, 1fr); align-content: start; gap: var(--space-4); min-width: 0; }
-.app[data-banner] .projects-rail { top: calc(var(--banner-height) + var(--topbar-height) + var(--space-5)); }
-
-/* Add, import and create: quiet disclosures under the project list; the open one holds its form. */
+/* Layout: a rail (register form, project list) beside the selected project's detail. `Split stickyRail`
+   keeps the rail in view above 920 px (topbar and runtime-banner offsets live in the library). */
+.projects-layout { display: grid; grid-template-columns: var(--rail-width) minmax(0, 1fr); align-items: start; gap: var(--spacing-lg) var(--space-6); min-width: 0; }
 .projects-rail > details.section > summary { color: var(--accent-text); }
 
-/* Project cards: name first, then the manifest chip and the exact project id. */
-.project-list { display: grid; grid-template-columns: minmax(0, 1fr); gap: var(--space-1); min-width: 0; margin: 0; padding: 0; list-style: none; }
-.project-list > li { min-width: 0; }
-.project-list > li .run-card { padding: var(--space-2) var(--space-3); }
-.project-list .run-prompt { font-size: var(--text-sm); font-weight: var(--weight-medium); }
-
-/* Detail column: the library's card (.card) holding the header, facts, actions, baselines,
-   discovery, workflows, then the event record. */
+/* Detail: a hairline panel without a popover shadow; the Workflows subpanel and the candidate review nest inside it. */
+.projects-layout > .project-detail { border: var(--border-width) solid var(--separator); border-radius: var(--radius-md); box-shadow: none; }
 .project-detail > .empty-box { margin: calc(var(--panel-pad) * -1); border: 0; }
-.project-header { display: flex; flex-wrap: wrap; align-items: baseline; gap: var(--space-1-5) var(--space-3); min-width: 0; }
-.project-header > h3 { min-width: 0; font-family: var(--font-display); font-size: var(--text-lg); overflow-wrap: anywhere; }
-.project-header > code { color: var(--color-text-subtle); font-size: var(--text-xs); }
-.project-facts { padding-bottom: var(--space-4); border-bottom: var(--border-width) solid var(--color-border); }
-.project-actions > small { max-width: var(--measure); }
+.project-detail > .empty-state { margin: calc(var(--panel-pad) * -1); padding: var(--space-6); }
+.project-header > h3 { min-width: 0; overflow-wrap: anywhere; }
+.project-facts { padding-bottom: var(--spacing-md); border-bottom: var(--border-width) solid var(--color-border); }
 
-/* Baselines: per-recipe results are machine output, so they keep the monospace face. */
+/* Baseline per-recipe results are machine output; open questions keep their bullets. */
 .baseline-results { font-family: var(--font-mono); }
-
-/* Discovery: open questions keep their bullets; a recipe's chip sits at the end of its command. */
 .project-questions { display: grid; gap: var(--space-1-5); padding-left: var(--space-6); }
-.recipe-record { grid-template-columns: minmax(0, 1fr) auto; align-items: baseline; gap: var(--space-1-5) var(--space-3); }
-.recipe-record > .state { justify-self: end; }
-.recipe-record > .recipe-evidence { grid-column: 1 / -1; }
 .recipe-command { color: var(--color-text); font-size: var(--text-xs); }
 .manifest-form { min-width: 0; }
 
-/* Event record: ruled off from the Workflows subpanel above it, on the subpanel's rhythm. */
-.project-events { min-width: 0; padding-top: var(--space-4); border-top: var(--border-width) solid var(--color-border); }
+/* Event record: ruled off from the Workflows subpanel above it. */
+.project-events { min-width: 0; padding-top: var(--spacing-md); border-top: var(--border-width) solid var(--color-border); }
 
 @media (max-width: 920px) {
-  .projects-layout { grid-template-columns: minmax(0, 1fr); gap: var(--space-5); }
-  .projects-rail { position: static; }
-  .register-form > fieldset { grid-template-columns: repeat(auto-fit, minmax(min(100%, var(--field-min)), 1fr)); align-items: end; }
-  .register-form > fieldset > .form-footer { grid-column: 1 / -1; }
-  .project-list { grid-template-columns: repeat(auto-fill, minmax(min(100%, var(--field-min)), 1fr)); }
+  .projects-layout { grid-template-columns: minmax(0, 1fr); gap: var(--spacing-lg); }
 }
-
-@media (max-width: 680px) {
-  .register-form > fieldset, .project-list { grid-template-columns: minmax(0, 1fr); }
-  .recipe-record { grid-template-columns: minmax(0, 1fr); }
-  .recipe-record > .state { justify-self: start; }
-}
-
-/* Rail: compact record rows; the selected row takes the accent tint, and hover is a background change only. */
-.project-list > li .run-card { min-height: var(--row-height); border-radius: var(--radius-md); transition: background-color var(--duration-micro) var(--ease-standard); }
-.project-list > li .run-card:hover:not(:disabled):not([aria-pressed="true"]), .project-list > li .run-card:focus-visible:not([aria-pressed="true"]) { background: var(--fill); }
-
-/* Detail: a drawer-like panel with a hairline border and no popover shadow; its header scrolls with the page (no extra sticky bar). */
-.projects-layout > .project-detail { border: var(--border-width) solid var(--separator); border-radius: var(--radius-lg); box-shadow: none; }
-.project-detail > .empty-state { margin: calc(var(--panel-pad) * -1); padding: var(--space-6); }
-
-/* Baseline and discovery records are table-like rows with tabular numbers. */
-.project-detail .record-list.record-rows > .record, .repository-baselines .record { min-height: var(--row-height); font-variant-numeric: tabular-nums; }
-.recipe-record:hover { background: var(--surface-muted); }
