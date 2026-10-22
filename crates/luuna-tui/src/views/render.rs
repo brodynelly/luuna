@@ -79,7 +79,7 @@ pub fn render(frame: &mut Frame, app: &mut AppState, area: Rect, theme: Theme) {
                 frame,
                 vec![Line::raw("F2 opens all runtime commands.")],
                 body,
-                app.scroll,
+                &mut app.scroll,
                 theme,
             );
         }
@@ -123,7 +123,7 @@ pub fn render(frame: &mut Frame, app: &mut AppState, area: Rect, theme: Theme) {
                     ),
                 );
             }
-            app.scroll = paragraph(frame, lines, body, app.scroll, theme);
+            paragraph(frame, lines, body, &mut app.scroll, theme);
         }
     }
 }
@@ -222,22 +222,21 @@ fn paragraph(
     frame: &mut Frame,
     lines: Vec<Line<'static>>,
     area: Rect,
-    scroll: u16,
+    scroll: &mut crate::scroll::ScrollState,
     theme: Theme,
-) -> u16 {
+) {
     let lines = cell_lines(lines, area.width);
     let max_scroll = lines
         .len()
         .saturating_sub(usize::from(area.height))
         .min(usize::from(u16::MAX)) as u16;
-    let scroll = scroll.min(max_scroll);
+    let scroll = scroll.clamp(max_scroll);
     frame.render_widget(
         Paragraph::new(lines)
             .style(theme.panel())
             .scroll((scroll, 0)),
         area,
     );
-    scroll
 }
 
 // Wrap styled spans into terminal rows: complete hashes stay readable and End
@@ -352,7 +351,7 @@ fn render_home(frame: &mut Frame, app: &mut AppState, area: Rect, theme: Theme) 
     let home = snapshot(app, "home");
     let projects = array(&home, "projects");
     if projects.is_empty() {
-        app.scroll = paragraph(frame, empty(app), area, app.scroll, theme);
+        paragraph(frame, empty(app), area, &mut app.scroll, theme);
         return;
     }
     let current = app.workbench.cursor.min(projects.len() - 1);
@@ -432,7 +431,7 @@ fn render_home(frame: &mut Frame, app: &mut AppState, area: Rect, theme: Theme) 
         lines.push(Line::raw(text(blocker, "detail")));
         lines.push(Line::raw(""));
     }
-    app.scroll = paragraph(frame, lines, area, app.scroll, theme);
+    paragraph(frame, lines, area, &mut app.scroll, theme);
 }
 
 fn append_repositories(lines: &mut Vec<Line<'static>>, repositories: &[Value], theme: Theme) {
@@ -513,7 +512,7 @@ fn render_collection(frame: &mut Frame, app: &AppState, area: Rect, theme: Theme
     };
     frame.render_widget(Paragraph::new(title).style(theme.muted()), search);
     if records.is_empty() {
-        paragraph(frame, empty(app), body, 0, theme);
+        paragraph(frame, empty(app), body, &mut Default::default(), theme);
         return;
     }
     let (list_area, preview_area) = if body.width >= 72 {
@@ -582,7 +581,13 @@ fn render_collection(frame: &mut Frame, app: &AppState, area: Rect, theme: Theme
         let inside = block.inner(preview_area);
         frame.render_widget(block, preview_area);
         let record = &records[app.workbench.cursor.min(records.len() - 1)];
-        paragraph(frame, detail_lines(screen, record, theme), inside, 0, theme);
+        paragraph(
+            frame,
+            detail_lines(screen, record, theme),
+            inside,
+            &mut Default::default(),
+            theme,
+        );
     }
 }
 
@@ -590,7 +595,7 @@ fn render_board(frame: &mut Frame, app: &AppState, area: Rect, theme: Theme) {
     let board = snapshot(app, "board");
     let columns = array(&board, "columns");
     if columns.is_empty() {
-        paragraph(frame, empty(app), area, 0, theme);
+        paragraph(frame, empty(app), area, &mut Default::default(), theme);
         return;
     }
     let visible = usize::from(area.width / 27).clamp(1, 3).min(columns.len());
@@ -944,7 +949,7 @@ fn render_run(frame: &mut Frame, app: &mut AppState, area: Rect, theme: Theme) {
             structured(event, &mut lines, 0, theme);
         }
     }
-    app.scroll = paragraph(frame, lines, body, app.scroll, theme);
+    paragraph(frame, lines, body, &mut app.scroll, theme);
 }
 
 fn render_help(frame: &mut Frame, app: &mut AppState, area: Rect, theme: Theme) {
@@ -975,5 +980,5 @@ fn render_help(frame: &mut Frame, app: &mut AppState, area: Rect, theme: Theme) 
     lines.push(Line::raw(
         "z clears unsent plan context. s toggles the inspected record.",
     ));
-    app.scroll = paragraph(frame, lines, area, app.scroll, theme);
+    paragraph(frame, lines, area, &mut app.scroll, theme);
 }

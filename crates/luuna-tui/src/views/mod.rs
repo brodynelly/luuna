@@ -223,7 +223,7 @@ pub fn open(app: &mut AppState, screen: Screen) {
     }
     app.workbench.screen = screen;
     app.workbench.cursor = 0;
-    app.scroll = 0;
+    app.scroll.reset();
     app.workbench.nav = false;
     app.workbench.query.clear();
     app.workbench.error = None;
@@ -587,27 +587,27 @@ pub fn key(app: &mut AppState, key: KeyEvent) -> bool {
         KeyCode::Tab | KeyCode::BackTab => app.workbench.nav = true,
         KeyCode::Up | KeyCode::Char('k') => {
             app.workbench.cursor = app.workbench.cursor.saturating_sub(1);
-            app.scroll = app.scroll.saturating_sub(1);
+            app.scroll.scroll_up(1);
         }
         KeyCode::Down | KeyCode::Char('j') => {
             app.workbench.cursor = (app.workbench.cursor + 1).min(count.saturating_sub(1));
-            app.scroll = app.scroll.saturating_add(1);
+            app.scroll.scroll_down(1);
         }
         KeyCode::PageDown => {
             app.workbench.cursor = (app.workbench.cursor + 8).min(count.saturating_sub(1));
-            app.scroll = app.scroll.saturating_add(8);
+            app.scroll.scroll_down(8);
         }
         KeyCode::PageUp => {
             app.workbench.cursor = app.workbench.cursor.saturating_sub(8);
-            app.scroll = app.scroll.saturating_sub(8);
+            app.scroll.scroll_up(8);
         }
         KeyCode::Home => {
             app.workbench.cursor = 0;
-            app.scroll = 0;
+            app.scroll.to_top();
         }
         KeyCode::End => {
             app.workbench.cursor = count.saturating_sub(1);
-            app.scroll = u16::MAX;
+            app.scroll.to_bottom();
         }
         KeyCode::Left | KeyCode::Right if screen == Screen::Missions => {
             let n = snapshot(app, "board")["columns"]

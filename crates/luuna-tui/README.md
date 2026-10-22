@@ -12,6 +12,10 @@ cargo run --locked -p luuna-tui
 cargo run --locked -p luuna-tui -- --help
 ```
 
+Large scroll jumps (PgUp/PgDn, Home/End, following streamed output) ease over about
+120 ms in whole rows; settled frames are identical. `LUUNA_TUI_ANIMATION=0` (or
+`off`/`false`/`no`) makes every scroll move instant.
+
 Connection uses `LUUNA_URL` and `LUUNA_API_TOKEN`. Missing tokens are entered hidden
 inside the Rust terminal and passed to the child environment, never arguments.
 `--bridge <absolute path>` and `--node <executable>` support deployed launchers;

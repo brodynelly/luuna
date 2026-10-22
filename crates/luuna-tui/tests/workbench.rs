@@ -3,12 +3,14 @@ use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 use luuna_tui::{
     app::{AppState, Mode},
     protocol::{BridgeEvent, CommandDef},
+    scroll::{ScrollMotion, DEFAULT_SCROLL_DURATION},
     theme::{state_tone, Theme},
     ui,
     views::{self, Screen},
 };
 use ratatui::{backend::TestBackend, style::Color, Terminal};
 use serde_json::{json, Value};
+use std::time::Duration;
 
 fn key(app: &mut AppState, code: KeyCode) {
     app.key(KeyEvent::new(code, KeyModifiers::NONE));
@@ -579,4 +581,72 @@ fn delayed_user_memory_response_cannot_appear_under_excluded_scope() {
         json!([{"id":"private","scope":"user","content":"Unexpected","hash":hash()}]),
     );
     assert!(views::rows(&a).is_empty());
+}
+
+fn result_app(lines: usize, motion: ScrollMotion) -> AppState {
+    let mut a = AppState::default();
+    a.mode = Mode::Result;
+    a.output = (0..lines).map(|i| format!("line-{i:03}\n")).collect();
+    a.set_scroll_motion(motion);
+    a
+}
+
+/// Draw once, then advance+draw until settled. Returns every drawn frame.
+fn settle(a: &mut AppState) -> Vec<String> {
+    let mut frames = vec![draw(a, 60, 20, false)];
+    for _ in 0..32 {
+        if !a.animating() {
+            return frames;
+        }
+        a.advance_animations(Duration::from_millis(16));
+        frames.push(draw(a, 60, 20, false));
+    }
+    panic!("scroll animation did not settle within 32 frames");
+}
+
+#[test]
+fn eased_scroll_settles_to_the_instant_frame() {
+    let mut instant = result_app(200, ScrollMotion::Instant);
+    let mut eased = result_app(200, ScrollMotion::Eased(DEFAULT_SCROLL_DURATION));
+    let mut previous = draw(&mut instant, 60, 20, false);
+    settle(&mut eased);
+    let mut moved_between = false;
+    for code in [
+        KeyCode::PageDown,
+        KeyCode::PageDown,
+        KeyCode::PageDown,
+        KeyCode::End,
+        KeyCode::Home,
+        KeyCode::PageDown,
+    ] {
+        key(&mut instant, code);
+        key(&mut eased, code);
+        let expected = draw(&mut instant, 60, 20, false);
+        let frames = settle(&mut eased);
+        let last = frames.last().unwrap();
+        assert_eq!(last, &expected);
+        moved_between |= frames[..frames.len() - 1]
+            .iter()
+            .any(|f| *f != previous && f != last);
+        previous = expected;
+    }
+    assert!(moved_between, "no intermediate frame was drawn");
+}
+
+#[test]
+fn eased_tail_follow_tracks_new_output_until_the_user_scrolls_up() {
+    let mut a = result_app(100, ScrollMotion::Eased(DEFAULT_SCROLL_DURATION));
+    settle(&mut a);
+    key(&mut a, KeyCode::End);
+    settle(&mut a);
+    for i in 100..130 {
+        a.append(&format!("line-{i:03}\n"));
+    }
+    assert!(settle(&mut a).pop().unwrap().contains("line-129"));
+    key(&mut a, KeyCode::Up);
+    let held = settle(&mut a).pop().unwrap();
+    for i in 130..160 {
+        a.append(&format!("line-{i:03}\n"));
+    }
+    assert_eq!(settle(&mut a).pop().unwrap(), held);
 }
