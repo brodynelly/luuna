@@ -1,4 +1,4 @@
-//! A real runtime process hard-killed during an active stage (ADR 0015). The
+//! A real runtime process hard-killed during an active stage (ADR 0016). The
 //! built binary is SIGKILLed while a baseline check runs, so no in-process
 //! supervisor settles anything: the restarted process must recover from disk
 //! alone. The same data directory exercises the `backup` (while running),

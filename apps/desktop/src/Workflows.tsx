@@ -2,7 +2,7 @@ import { useEffect, useRef, useState } from "react";
 import type { FormEvent } from "react";
 import type { CandidateDiff, CandidateView, ComponentContext, CreatePlanRequest, LuunaClient, Operation, PlanBudgetRequest, PlanRevision, RunRecord, Ticket, TicketSourceStatus, WorktreeLease } from "@luuna/api-client";
 import { DEFAULT_PLAN_BUDGETS, planBudgetProblem, readEventPages } from "@luuna/api-client";
-import { allowedActions, canCancel, planBlocker, planSupersedes, settleAction, workflowNeedsRefresh, workflowReason } from "./workflow-state";
+import { advanceWorkflowReplay, allowedActions, canCancel, planBlocker, planSupersedes, settleAction, workflowNeedsRefresh } from "./workflow-state";
 import { CandidateReview } from "./CandidateReview";
 import { retryIdentity } from "./ProjectComponents";
 import { actionFailure, describeFailure, nextStep, utf8Bytes } from "./failures";
@@ -72,15 +72,17 @@ export async function readWorkflows(client: LuunaClient, projectId: string, know
   const stale = runs.filter((run) => transition || workflowNeedsRefresh(run, known.get(run.id)?.candidate));
   const [tickets, fresh] = await Promise.all([
     transition ? readTickets(client, projectId, signal) : Promise.resolve(null),
-    Promise.all(stale.map(async (run) => {
+    boundedMap(stale, async (run) => {
       const seen = known.get(run.id);
       const [leases, events, candidate] = await Promise.all([
         client.worktrees(run.id, signal),
         readEventPages((after, page) => client.events(run.id, after, signal, page), seen?.cursor ?? 0, EVENT_PAGE),
         client.candidate(run.id, signal),
       ]);
-      return { run, leases, events, candidate };
-    })),
+      // Only the cursor and displayed reason are kept; a gap or foreign event fails the whole read.
+      const replay = advanceWorkflowReplay(run.id, { cursor: seen?.cursor ?? 0, reason: seen?.reason ?? "" }, events);
+      return { run, leases, replay, candidate };
+    }),
   ]);
   if (signal.aborted) return null;
   const snapshots = new Map<string, RunSnapshot>();
@@ -88,17 +90,29 @@ export async function readWorkflows(client: LuunaClient, projectId: string, know
     const seen = known.get(run.id);
     const read = fresh.find((item) => item.run.id === run.id);
     if (!read) { if (seen) snapshots.set(run.id, seen); continue; }
-    snapshots.set(run.id, { revision: run.revision, updated: run.updated_at, cursor: read.events.at(-1)?.sequence ?? seen?.cursor ?? 0, reason: workflowReason(read.events) || seen?.reason || "", leases: read.leases, candidate: read.candidate });
+    snapshots.set(run.id, { revision: run.revision, updated: run.updated_at, cursor: read.replay.cursor, reason: read.replay.reason, leases: read.leases, candidate: read.candidate });
   }
   return { runs, snapshots, tickets };
 }
 
+/** Run `task` over `items` with at most four requests in flight, keeping input order. */
+export async function boundedMap<T, R>(items: T[], task: (item: T) => Promise<R>, limit = 4): Promise<R[]> {
+  const results = new Array<R>(items.length);
+  let next = 0;
+  await Promise.all(Array.from({ length: Math.min(limit, items.length) }, async () => {
+    while (next < items.length) { const index = next++; results[index] = await task(items[index]); }
+  }));
+  return results;
+}
+
 async function readTickets(client: LuunaClient, projectId: string, signal: AbortSignal): Promise<TicketState> {
   const list = await client.listTickets(projectId, signal);
-  const [planLists, sources] = await Promise.all([
-    Promise.all(list.map((ticket) => client.listPlans(ticket.id, signal))),
-    Promise.all(list.map((ticket) => ticket.source === "missions" ? client.ticketSource(ticket.id, signal) : Promise.resolve(null))),
-  ]);
+  const details = await boundedMap(list, (ticket) => Promise.all([
+    client.listPlans(ticket.id, signal),
+    ticket.source === "missions" ? client.ticketSource(ticket.id, signal) : Promise.resolve(null),
+  ]));
+  const planLists = details.map(([plans]) => plans);
+  const sources = details.map(([, source]) => source);
   return {
     list,
     sources: Object.fromEntries(list.flatMap((ticket, index) => sources[index] ? [[ticket.id, sources[index]!]] : [])),

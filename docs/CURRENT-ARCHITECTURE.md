@@ -26,6 +26,13 @@ README and AI-START-HERE are entry points, not alternative specifications. Exist
 
 ## Delivery and boundaries
 
+Runtime I/O isolation and bounded session history follow
+[ADR 0015](decisions/0015-bounded-runtime-and-history.md): synchronous transactions
+run under bounded blocking admission, SSE reads in pages, and the desktop keeps
+a bounded live event window with on-demand historical navigation. Check progress
+is lossy display data; private artifacts and durable runtime events remain the
+evidence. Windows check processes join owned Job Objects before execution.
+
 The initial client is Tauri 2 with React and TypeScript. An independent Rust service uses Tokio, an authenticated Axum API, and local SQLite persistence. Pi RPC subprocesses execute agent assignments. A client cannot directly authorize tools or decide that validation succeeded.
 
 ```text
@@ -55,7 +62,7 @@ Native execution uses host permissions. Stronger isolation requires an explicitl
 
 SQLite owns Luuna projects, immutable plan revisions, approvals, run/attempt lifecycle, sequenced events, check/review evidence, artifact references, and publication reconciliation. State mutation and emitted durable domain events must be committed consistently. Sensitive transcripts and provider data remain private artifacts with controlled access and retention.
 
-The schema is versioned and append-only. At startup the runtime refuses a database that fails SQLite's quick check or was written by a newer schema, before writing anything to it. It applies only missing migrations, after an automatic pre-migration snapshot under `<data>/backups/`. `luuna-runtime backup` takes a consistent online snapshot. `luuna-runtime restore` needs the runtime stopped, verifies the snapshot, and moves the current database and its `-wal`/`-shm` aside before installing it. `luuna-runtime check` reports integrity and schema version. A snapshot covers the database only; artifacts and worktrees are files, so a complete backup is the data directory copied after an orderly stop. Startup recovery skips records it cannot decode, logs them by table and ID, and still settles their state where it can. See [ADR 0015](decisions/0015-storage-backup-and-schema-compatibility.md).
+The schema is versioned and append-only. At startup the runtime refuses a database that fails SQLite's quick check or was written by a newer schema, before writing anything to it. It applies only missing migrations, after an automatic pre-migration snapshot under `<data>/backups/`. `luuna-runtime backup` takes a consistent online snapshot. `luuna-runtime restore` needs the runtime stopped, verifies the snapshot, and moves the current database and its `-wal`/`-shm` aside before installing it. `luuna-runtime check` reports integrity and schema version. A snapshot covers the database only; artifacts and worktrees are files, so a complete backup is the data directory copied after an orderly stop. Startup recovery skips records it cannot decode, logs them by table and ID, and still settles their state where it can. See [ADR 0016](decisions/0016-storage-backup-and-schema-compatibility.md).
 
 Baselines are runs: `POST /api/v1/projects/{id}/baselines` executes a repository's confirmed required recipes through the supervised executor and records `CheckResult` evidence bound to the manifest hash, exact commit and tree, and an environment fingerprint, with private hashed artifacts. `Implementing` is entered only through the transactional gate that re-checks the approval, the current manifest and a passed matching baseline per repository; see [ADR 0007](decisions/0007-baseline-executor.md). One baseline per repository runs at a time. Every check's process group is recorded; whatever a check leaves running is terminated before its result is recorded, and startup recovery terminates verified survivors of checks a hard-killed runtime left behind (Windows checks run in kill-on-close job objects). Missing tools or dependencies and checks cut short by the workflow budget are blocked infrastructure, never failures a repair is asked to fix (ADR 0007 amendment, 2026-10-21).
 

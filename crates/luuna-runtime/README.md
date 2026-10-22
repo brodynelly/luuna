@@ -243,7 +243,7 @@ While a validation or review stage runs, its durable heartbeat (`stage_checkpoin
 
 ## Backup and restore
 
-The database (`<data>/luuna.sqlite3`) runs in WAL mode: recent commits can sit in `luuna.sqlite3-wal` until a checkpoint. Never copy only the main file while the runtime runs, and never put an older main file back beside a `-wal`; SQLite would replay the newer log onto it and corrupt it. Use these commands. Each takes `--data-dir <dir>`; the default is the service's own (`LUUNA_DATA_DIR`, else `.luuna`). See [ADR 0015](../../docs/decisions/0015-storage-backup-and-schema-compatibility.md).
+The database (`<data>/luuna.sqlite3`) runs in WAL mode: recent commits can sit in `luuna.sqlite3-wal` until a checkpoint. Never copy only the main file while the runtime runs, and never put an older main file back beside a `-wal`; SQLite would replay the newer log onto it and corrupt it. Use these commands. Each takes `--data-dir <dir>`; the default is the service's own (`LUUNA_DATA_DIR`, else `.luuna`). See [ADR 0016](../../docs/decisions/0016-storage-backup-and-schema-compatibility.md).
 
 - `luuna-runtime backup --output <file>` writes a consistent snapshot while the runtime is running. It never overwrites a file, and it prints the schema version, size and SHA-256.
 - `luuna-runtime restore --input <file>` needs the runtime stopped; it is refused while a runtime owns the data directory. It verifies the snapshot's integrity and schema version, moves the current database and any `-wal`/`-shm` to `<data>/backups/replaced-<timestamp>/`, and installs the snapshot. On the next start, work that was active in the snapshot is recorded `interrupted`, never successful.

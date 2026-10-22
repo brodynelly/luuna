@@ -1,4 +1,4 @@
-//! Schema upgrade, refusal and backup drills (ADR 0015). A database is rebuilt
+//! Schema upgrade, refusal and backup drills (ADR 0016). A database is rebuilt
 //! at every earlier schema version from the shipped migration scripts and the
 //! rows that version could hold, then opened by the current store; newer and
 //! damaged databases are refused before they are written; a backup taken while

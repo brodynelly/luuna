@@ -29,12 +29,15 @@ describe("paged reads (contract 2)", () => {
     expect(fetcher).toHaveBeenCalledTimes(5);
   });
 
-  it("reads every event in pages from a cursor and tolerates a runtime that ignores the limit", async () => {
+  it("reads every event in pages until an empty page and tolerates a runtime that ignores or caps the limit", async () => {
     const event = (sequence: number) => ({ sequence, event_id: `e${sequence}`, run_id: "r" }) as EventEnvelope;
     const all = Array.from({ length: 7 }, (_, index) => event(index + 1));
     const paged = vi.fn(async (after: number, page: { limit?: number }) => all.filter((item) => item.sequence > after).slice(0, page.limit));
     expect((await readEventPages(paged, 2, 2)).map((item) => item.sequence)).toEqual([3, 4, 5, 6, 7]);
-    expect(paged.mock.calls.map(([after]) => after)).toEqual([2, 4, 6]);
+    expect(paged.mock.calls.map(([after]) => after)).toEqual([2, 4, 6, 7]);
+    // A runtime that bounds a page below the requested limit still yields every event.
+    const capped = vi.fn(async (after: number) => all.filter((item) => item.sequence > after).slice(0, 2));
+    expect((await readEventPages(capped, 0, 5)).map((item) => item.sequence)).toEqual([1, 2, 3, 4, 5, 6, 7]);
     const unpaged = vi.fn(async (after: number) => all.filter((item) => item.sequence > after));
     expect((await readEventPages(unpaged, 0, 2)).map((item) => item.sequence)).toEqual([1, 2, 3, 4, 5, 6, 7]);
     expect(unpaged.mock.calls.map(([after]) => after)).toEqual([0, 7]);

@@ -51,25 +51,43 @@ async fn canonical_nested_worktree_runs_the_actual_test_module() {
 /// A process counts as alive only when it still runs; a killed child whose
 /// parent died is a zombie until the init process reaps it.
 fn alive(pid: u32) -> bool {
-    if cfg!(target_os = "linux") {
-        return std::fs::read_to_string(format!("/proc/{pid}/stat"))
+    #[cfg(windows)]
+    {
+        use windows_sys::Win32::{Foundation::CloseHandle, System::Threading::*};
+        // SAFETY: query-only handle, closed before returning.
+        unsafe {
+            let handle = OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, 0, pid);
+            if handle.is_null() {
+                return false;
+            }
+            let mut code = 0;
+            let running = GetExitCodeProcess(handle, &mut code) != 0 && code == 259;
+            CloseHandle(handle);
+            running
+        }
+    }
+    #[cfg(target_os = "linux")]
+    {
+        std::fs::read_to_string(format!("/proc/{pid}/stat"))
             .ok()
             .and_then(|stat| {
                 let after = stat.rsplit(')').next()?.trim_start();
                 after.chars().next()
             })
-            .is_some_and(|state| state != 'Z' && state != 'X');
+            .is_some_and(|state| state != 'Z' && state != 'X')
     }
-    if cfg!(unix) {
-        return std::process::Command::new("ps")
+    #[cfg(all(unix, not(target_os = "linux")))]
+    {
+        std::process::Command::new("ps")
             .args(["-o", "stat=", "-p", &pid.to_string()])
             .output()
             .map(|o| {
                 let state = String::from_utf8_lossy(&o.stdout);
                 !state.trim().is_empty() && !state.trim().starts_with('Z')
             })
-            .unwrap_or(false);
+            .unwrap_or(false)
     }
+    #[cfg(not(any(windows, unix)))]
     false
 }
 
@@ -77,7 +95,7 @@ fn alive(pid: u32) -> bool {
 async fn passing_and_failing_commands_record_exit_codes_hashes_and_excerpts() {
     let dir = tempfile::tempdir().unwrap();
     let (_tx, cancel) = watch::channel(false);
-    let (progress, mut events) = mpsc::unbounded_channel();
+    let (progress, mut events) = mpsc::channel(luuna_executor::PROGRESS_CAPACITY);
     let passed = Executor::default()
         .execute(
             &spec(
@@ -201,7 +219,7 @@ async fn deadline_and_cancellation_terminate_the_whole_process_group() {
         .unwrap();
     assert_eq!(timed_out.status, CheckStatus::Failed);
     assert!(timed_out.reason.as_deref().unwrap().contains("deadline"));
-    assert!(!alive(timed_out.pid.unwrap()) || cfg!(not(unix)));
+    assert!(!alive(timed_out.pid.unwrap()));
 
     // The child spawns a grandchild; cancelling must reap both.
     let marker = dir.path().join("grandchild.pid");
@@ -232,8 +250,8 @@ async fn deadline_and_cancellation_terminate_the_whole_process_group() {
     let cancelled = run.await.unwrap();
     assert_eq!(cancelled.status, CheckStatus::Cancelled);
     tokio::time::sleep(Duration::from_millis(200)).await;
-    assert!(!alive(cancelled.pid.unwrap()) || cfg!(not(unix)));
-    if cfg!(unix) {
+    assert!(!alive(cancelled.pid.unwrap()));
+    {
         assert!(
             !alive(grandchild),
             "grandchild must be terminated with the process group"
@@ -293,6 +311,24 @@ async fn secrets_and_luuna_variables_never_reach_the_command() {
     assert!(!stdout.contains("secret-value"));
     assert!(stdout.contains("true"));
     let _ = PathBuf::new();
+}
+
+#[tokio::test]
+async fn a_stalled_progress_consumer_cannot_block_or_grow_command_output() {
+    let dir = tempfile::tempdir().unwrap();
+    let (_tx, cancel) = watch::channel(false);
+    let (progress, events) = mpsc::channel(luuna_executor::PROGRESS_CAPACITY);
+    let result = Executor::default().execute(&spec(dir.path(), &["-c",
+        "import sys; sys.stdout.write('x' * (20 * 1024 * 1024)); sys.stderr.write('y' * (20 * 1024 * 1024))"], 30), cancel, Some(progress)).await.unwrap();
+    assert_eq!(result.status, CheckStatus::Passed, "{result:?}");
+    assert!(events.len() <= luuna_executor::PROGRESS_CAPACITY);
+    for artifact in result.artifacts {
+        assert!(artifact.truncated);
+        assert_eq!(
+            std::fs::metadata(&artifact.path).unwrap().len(),
+            16 * 1024 * 1024
+        );
+    }
 }
 
 #[cfg(unix)]
@@ -365,7 +401,7 @@ async fn a_descendant_holding_the_pipes_cannot_keep_the_check_open() {
     assert_eq!(execution.status, CheckStatus::Failed, "{execution:?}");
     let reason = execution.reason.clone().unwrap_or_default();
     assert!(reason.contains("descendant"), "{reason}");
-    if cfg!(unix) {
+    {
         let grandchild: u32 = std::fs::read_to_string(&marker)
             .unwrap()
             .trim()
@@ -448,7 +484,7 @@ async fn a_background_process_left_by_a_passing_check_is_reaped_and_named() {
         marker = marker.to_string_lossy()
     );
     let (_tx, cancel) = watch::channel(false);
-    let (progress, mut events) = mpsc::unbounded_channel();
+    let (progress, mut events) = mpsc::channel(luuna_executor::PROGRESS_CAPACITY);
     let execution = Executor::default()
         .execute(
             &spec(dir.path(), &["-c", &script], 60),
@@ -795,8 +831,8 @@ async fn windows_lookup_prefers_the_cmd_shim_over_an_extensionless_script() {
 }
 
 #[cfg(target_os = "linux")]
-#[tokio::test]
-async fn restart_recovery_reaps_only_verified_survivors_of_a_recorded_group() {
+#[test]
+fn restart_recovery_reaps_only_verified_survivors_of_a_recorded_group() {
     use luuna_executor::GroupReconciliation;
     let dir = tempfile::tempdir().unwrap();
     let marker = dir.path().join("orphan.pid");
@@ -804,21 +840,35 @@ async fn restart_recovery_reaps_only_verified_survivors_of_a_recorded_group() {
         "import subprocess, sys, time\np = subprocess.Popen([sys.executable, '-c', 'import time; time.sleep(60)'], stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)\nopen({marker:?}, 'w').write(str(p.pid))\ntime.sleep(60)",
         marker = marker.to_string_lossy()
     );
+    // A dying supervisor runs no destructors, so the execution is frozen
+    // rather than dropped: dropping it would stop the group through its owner.
+    let runtime = tokio::runtime::Builder::new_current_thread()
+        .enable_all()
+        .build()
+        .unwrap();
     let (_tx, cancel) = watch::channel(false);
-    let (progress, mut events) = mpsc::unbounded_channel();
+    let (progress, mut events) = mpsc::channel(luuna_executor::PROGRESS_CAPACITY);
     let recipe = spec(dir.path(), &["-c", &script], 120);
-    let running = tokio::spawn(async move {
+    let mut running = Box::pin(async move {
         Executor::default()
             .execute(&recipe, cancel, Some(progress))
             .await
     });
-    let group = loop {
-        match events.recv().await {
-            Some(Progress::Started { group, .. }) => break group,
-            Some(_) => continue,
-            None => panic!("the check never started"),
+    let group = runtime.block_on(async {
+        tokio::select! {
+            biased;
+            group = async {
+                loop {
+                    match events.recv().await {
+                        Some(Progress::Started { group, .. }) => break group,
+                        Some(_) => continue,
+                        None => panic!("the check never started"),
+                    }
+                }
+            } => group,
+            finished = &mut running => panic!("the check finished early: {finished:?}"),
         }
-    };
+    });
     assert!(group.leader_start.is_some() && group.boot_id.is_some());
     for _ in 0..200 {
         if !std::fs::read_to_string(&marker)
@@ -827,7 +877,7 @@ async fn restart_recovery_reaps_only_verified_survivors_of_a_recorded_group() {
         {
             break;
         }
-        tokio::time::sleep(Duration::from_millis(25)).await;
+        std::thread::sleep(Duration::from_millis(25));
     }
     let orphan: u32 = std::fs::read_to_string(&marker)
         .unwrap()
@@ -836,9 +886,14 @@ async fn restart_recovery_reaps_only_verified_survivors_of_a_recorded_group() {
         .unwrap();
     // The supervisor dies without settling the check: the direct child goes
     // with it (as the parent-death signal does) and the grandchild survives.
-    running.abort();
-    let _ = running.await;
-    tokio::time::sleep(Duration::from_millis(200)).await;
+    std::mem::forget(running);
+    std::mem::forget(runtime);
+    // SAFETY: signal and reap the direct child this test process started.
+    unsafe {
+        libc::kill(group.pgid as libc::pid_t, libc::SIGKILL);
+        libc::waitpid(group.pgid as libc::pid_t, std::ptr::null_mut(), 0);
+    }
+    std::thread::sleep(Duration::from_millis(200));
     assert!(alive(orphan), "the grandchild outlives its supervisor");
 
     // A record whose marker and start time do not match is never acted on,

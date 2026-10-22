@@ -3,6 +3,73 @@
 Date: October 21, 2026. This is Windows evidence, separate from the historical
 Linux reports and the original documentation validation report.
 
+## Strict M3 harness portability follow-up
+
+The clean-revision fixture attempt on performance commit `839e46a` passed all
+workflow scenarios but only 65/68 total assertions. Windows had no harness-wide
+descendant owner, making the final leak scan untrusted. The ignored-file audit
+also exceeded its byte bound because Git collapsed `.tools/` into one ignored
+parent and the documented dependency exclusions were not applied recursively.
+
+The harness now starts under `scripts/windows-m3-job.py`: a fresh kill-on-close
+Job Object owns Node before it resumes, including detached descendants and
+descendants of a hard-killed runtime. Before scanning artifacts, the helper
+verifies membership on opened handles, stops owned survivors and waits for the
+job to contain only the harness and its short-lived inspection helper. Missing
+ownership or failure to drain remains a failed acceptance check. Tests cover
+detached grandchildren, breakaway requests, supervisor death, an unrelated
+live process and missing ownership. This is test-process ownership, not a
+sandbox or a change to approval/runtime policy.
+
+Ignored-file hashing now applies the existing target/node_modules/dist
+exclusion at every depth, while retaining other ignored configuration and the
+original entry/byte/depth bounds. Git metadata and fixture snapshots retain
+every file by default. `npm run test:smoke-harness` covers both fixes; results
+from fresh committed acceptance runs are recorded separately below.
+
+### Strict M3 acceptance result
+
+Both strict suites passed on clean commit
+`974ff0e464919055c9566a1b3daf25565a98d55c` after the performance changes were
+committed as `839e46a`. Fixture mode passed **68/68** assertions; genuine
+OpenRouter / `openai/gpt-4.1` mode passed **61/61**. Each invocation built its
+own runtime from the recorded revision with pinned Rust 1.90.0 and ran with
+Node 24.19.0. Real mode verified all 16,480 installed Pi tree entries against
+a fresh integrity-checked install of the tracked lockfile (Pi 1.3.0).
+
+Coverage includes exact approval, a scoped feature, failing checks followed by
+manual repair and fresh independent review, blocking findings with bounded
+automatic repair, in-flight review cancellation, hard-kill/restart recovery,
+conservative spend reservation and orderly authenticated shutdown. The real
+blocking probe produced no fresh repair candidate and correctly paused with
+repair closed; it was not counted as a successfully implemented requirement.
+Fixture mode additionally exercises malformed review output and re-validation.
+Both runs preserved the developer and Luuna checkout audits, drained owned
+Windows descendants, and completed their artifact scans with zero credential
+leaks or unreadable files. Windows uses checked paths rather than Linux's held
+directory handles; this recorded platform distinction remains unchanged.
+
+Reproduction from a clean checkout, with pinned Node first on PATH and an
+existing DPAPI-saved provider configuration:
+
+```powershell
+node scripts/m3-smoke.mjs --mode fixture --out "$env:USERPROFILE/.luuna/verification/strict-m3-fixture-974ff0e"
+.\scripts\with-windows-provider.ps1 -Smoke m3 -Model 'openai/gpt-4.1' -Out "$env:USERPROFILE/.luuna/verification/strict-m3-real-974ff0e"
+```
+
+Use new, empty output directories when repeating these commands. Private
+`report.json` and `report.md` files are retained in those directories; no real
+transcripts or credentials are committed. `npm test` also passed: 24 contract,
+6 scope-guard, 8 component-pin, 5 smoke-harness, 221 desktop and 28 API-client
+checks. JavaScript syntax, repository hygiene and diff checks passed. The
+acceptance results identify the code revision above; the subsequent evidence
+documentation commit does not change executable code or harness behavior.
+
+This closes strict Windows M3 acceptance for these scenarios. It does not
+establish signed installation, packaged service supervision, other operating
+systems or full-v1 completion. The installed optimized app/runtime were not
+replaced by the disposable acceptance builds.
+
 ## Latest result: merged design system and component workflows
 
 The component work was combined with current `main` and its desktop design

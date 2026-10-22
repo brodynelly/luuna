@@ -25,6 +25,14 @@ use tokio::{
     process::{Child, Command},
     sync::{mpsc, watch},
 };
+mod process;
+
+/// Display-only progress is bounded and never backpressures a child's pipes.
+pub const PROGRESS_CAPACITY: usize = 64;
+
+/// Progress slots output chunks never take, so the final `Reaped` record
+/// still fits when both streams filled the channel.
+const PROGRESS_RESERVED: usize = 2;
 
 /// Bytes kept per output stream in the private artifact; the rest is drained and counted.
 pub const MAX_ARTIFACT_BYTES: u64 = 16 * 1024 * 1024;
@@ -35,6 +43,8 @@ pub const EXCERPT_BYTES: usize = 4096;
 /// unrelated one that reused its process-group ID.
 pub const GROUP_MARKER_VARIABLE: &str = "LUUNA_CHECK_GROUP";
 const VERSION_PROBE_TIMEOUT: Duration = Duration::from_secs(15);
+/// Bytes of version output read per stream; more fails the probe.
+const VERSION_PROBE_OUTPUT_LIMIT: u64 = 64 * 1024;
 const REAP_TIMEOUT: Duration = Duration::from_secs(10);
 /// How long terminated survivors are given to disappear before the result is recorded.
 #[cfg_attr(not(unix), allow(dead_code))]
@@ -557,25 +567,34 @@ impl Executor {
             .stdout(Stdio::piped())
             .stderr(Stdio::piped())
             .kill_on_drop(true);
-        #[cfg(unix)]
-        command.process_group(0);
-        let child = match command.spawn() {
-            Ok(child) => child,
+        let (mut child, mut owner) = match process::spawn(&mut command).await {
+            Ok(owned) => owned,
             Err(error) => return ToolVersion::Failed(format!("could not start: {}", error.kind())),
         };
-        let pid = child.id();
-        let output = tokio::time::timeout(VERSION_PROBE_TIMEOUT, child.wait_with_output()).await;
+        let (Some(stdout), Some(stderr)) = (child.stdout.take(), child.stderr.take()) else {
+            owner.stop();
+            let _ = child.kill().await;
+            return ToolVersion::Failed("output pipes unavailable".into());
+        };
+        // Version output is read with a hard bound so a misbehaving tool
+        // cannot grow the runtime's memory.
+        let mut stdout = stdout.take(VERSION_PROBE_OUTPUT_LIMIT + 1);
+        let mut stderr = stderr.take(VERSION_PROBE_OUTPUT_LIMIT + 1);
+        let capture = async {
+            let mut out = Vec::new();
+            let mut err = Vec::new();
+            let (status, _, _) = tokio::try_join!(
+                child.wait(),
+                stdout.read_to_end(&mut out),
+                stderr.read_to_end(&mut err)
+            )?;
+            Ok::<_, std::io::Error>((status, out, err))
+        };
+        let result = tokio::time::timeout(VERSION_PROBE_TIMEOUT, capture).await;
         // Nothing a probe started may outlive it.
-        #[cfg(unix)]
-        if let Some(pid) = pid {
-            // SAFETY: killpg on a process-group ID we created with process_group(0).
-            unsafe {
-                libc::killpg(pid as libc::pid_t, libc::SIGKILL);
-            }
-        }
-        #[cfg(not(unix))]
-        let _ = pid;
-        let output = match output {
+        owner.stop();
+        let _ = child.kill().await;
+        let (status, out, err) = match result {
             Err(_) => {
                 return ToolVersion::Failed(format!(
                     "timed out after {}s",
@@ -583,19 +602,19 @@ impl Executor {
                 ))
             }
             Ok(Err(error)) => return ToolVersion::Failed(format!("failed: {}", error.kind())),
-            Ok(Ok(output)) => output,
+            Ok(Ok(captured)) => captured,
         };
-        if !output.status.success() {
-            return ToolVersion::Failed(match output.status.code() {
+        let limit = VERSION_PROBE_OUTPUT_LIMIT as usize;
+        if out.len() > limit || err.len() > limit {
+            return ToolVersion::Failed(format!("version output exceeded {limit} bytes"));
+        }
+        if !status.success() {
+            return ToolVersion::Failed(match status.code() {
                 Some(code) => format!("exit status {code}"),
                 None => "terminated by signal".into(),
             });
         }
-        let text = if output.stdout.is_empty() {
-            output.stderr
-        } else {
-            output.stdout
-        };
+        let text = if out.is_empty() { err } else { out };
         ToolVersion::Reported(
             String::from_utf8_lossy(&text)
                 .lines()
@@ -680,7 +699,7 @@ impl Executor {
         &self,
         spec: &CommandSpec,
         mut cancel: watch::Receiver<bool>,
-        progress: Option<mpsc::UnboundedSender<Progress>>,
+        progress: Option<mpsc::Sender<Progress>>,
     ) -> Result<Execution, ExecutorError> {
         let started_at = now();
         let mut command_line = vec![spec.executable.clone()];
@@ -769,8 +788,8 @@ impl Executor {
                 Ok(())
             });
         }
-        let mut child = match command.spawn() {
-            Ok(child) => child,
+        let (mut child, owner) = match process::spawn(&mut command).await {
+            Ok(owned) => owned,
             Err(error) => {
                 let hint = if error.kind() == std::io::ErrorKind::NotFound {
                     "; an interpreter or dependency it needs may be missing"
@@ -785,9 +804,9 @@ impl Executor {
             }
         };
         let pid = child.id();
-        let tree = Tree::new(&child, pid);
+        let tree = Tree::new(owner, pid);
         if let (Some(sender), Some(pid)) = (&progress, pid) {
-            let _ = sender.send(Progress::Started {
+            let _ = sender.try_send(Progress::Started {
                 pid,
                 command: command_line.clone(),
                 group: ProcessGroup::capture(pid, marker, tree.contained_on_exit()),
@@ -878,7 +897,7 @@ impl Executor {
             tree.reap_survivors().await
         };
         if let (Some(sender), false) = (&progress, reaped_descendants.is_empty()) {
-            let _ = sender.send(Progress::Reaped {
+            let _ = sender.try_send(Progress::Reaped {
                 descendants: reaped_descendants.clone(),
             });
         }
@@ -1085,19 +1104,15 @@ impl ProcessGroup {
 struct Tree {
     #[cfg_attr(not(unix), allow(dead_code))]
     pid: Option<u32>,
-    #[cfg(windows)]
-    job: Option<job::Job>,
+    /// Ownership established at spawn (strict on Windows, see `process`):
+    /// dropping it stops the whole tree.
+    #[cfg_attr(not(windows), allow(dead_code))]
+    owner: process::Owner,
 }
 
 impl Tree {
-    fn new(child: &Child, pid: Option<u32>) -> Self {
-        #[cfg(not(windows))]
-        let _ = child;
-        Self {
-            pid,
-            #[cfg(windows)]
-            job: child.raw_handle().and_then(job::Job::contain),
-        }
+    fn new(owner: process::Owner, pid: Option<u32>) -> Self {
+        Self { pid, owner }
     }
 
     /// Whether stopping the tree reaches descendants, not only the direct child.
@@ -1108,7 +1123,7 @@ impl Tree {
         }
         #[cfg(windows)]
         {
-            self.job.is_some()
+            self.owner.job().is_some()
         }
         #[cfg(not(any(unix, windows)))]
         {
@@ -1120,7 +1135,7 @@ impl Tree {
     fn contained_on_exit(&self) -> bool {
         #[cfg(windows)]
         {
-            self.job.is_some()
+            self.owner.job().is_some()
         }
         #[cfg(not(windows))]
         {
@@ -1149,7 +1164,7 @@ impl Tree {
             }
         }
         #[cfg(windows)]
-        if let Some(job) = &self.job {
+        if let Some(job) = self.owner.job() {
             job.terminate();
         }
         let _ = child.start_kill();
@@ -1191,7 +1206,7 @@ impl Tree {
         }
         #[cfg(windows)]
         {
-            let Some(job) = &self.job else {
+            let Some(job) = self.owner.job() else {
                 return Vec::new();
             };
             let active = job.active_processes();
@@ -1506,9 +1521,9 @@ mod job {
 
     /// A kill-on-close job object holding one check's process tree. Closing
     /// its handle, when the execution ends or when the runtime itself dies,
-    /// terminates every process still assigned to it. Processes the child
-    /// starts before it is assigned (a few instructions after spawn) are not
-    /// contained.
+    /// terminates every process still assigned to it. The child is created
+    /// suspended and assigned before it runs (see `process::spawn`), so every
+    /// descendant it starts is contained.
     pub(super) struct Job(HANDLE);
 
     // SAFETY: a job handle may be used and closed from any thread.
@@ -1606,7 +1621,7 @@ async fn capture(
     mut pipe: impl tokio::io::AsyncRead + Unpin,
     path: PathBuf,
     stream: &'static str,
-    progress: Option<mpsc::UnboundedSender<Progress>>,
+    progress: Option<mpsc::Sender<Progress>>,
 ) -> Result<Captured, String> {
     let mut file = create_private_file(&path)
         .await
@@ -1617,6 +1632,7 @@ async fn capture(
     let mut truncated = false;
     let mut tail: Vec<u8> = Vec::new();
     let mut scan = OutputScan::default();
+    let mut emitted = 0;
     let mut buffer = vec![0u8; 64 * 1024];
     loop {
         let read = pipe.read(&mut buffer).await.map_err(|e| e.to_string())?;
@@ -1644,15 +1660,23 @@ async fn capture(
             let drop = tail.len() - EXCERPT_BYTES;
             tail.drain(..drop);
         }
-        if let Some(sender) = &progress {
+        if let Some(sender) = progress
+            .as_ref()
+            .filter(|sender| emitted < 100 && sender.capacity() > PROGRESS_RESERVED)
+        {
             let text = String::from_utf8_lossy(chunk)
                 .chars()
                 .take(EXCERPT_BYTES)
                 .collect();
-            let _ = sender.send(Progress::Output {
-                stream,
-                chunk: text,
-            });
+            if sender
+                .try_send(Progress::Output {
+                    stream,
+                    chunk: text,
+                })
+                .is_ok()
+            {
+                emitted += 1;
+            }
         }
     }
     file.flush().await.map_err(|e| e.to_string())?;

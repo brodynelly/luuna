@@ -4,13 +4,26 @@ You are continuing an executable foundation, not starting an empty repository. R
 
 ## Settled decisions
 
+Performance follow-up (October 21, 2026): ADR 0015 adds bounded blocking request
+dispatch, paged session history, bounded desktop replay, workflow snapshot reuse
+and Windows check-process ownership. See [PERFORMANCE-REVIEW.md](docs/PERFORMANCE-REVIEW.md)
+for current-tree tests, optimized Windows installation verification and explicit
+scaling limits. Performance commit `839e46a` and harness fix `974ff0e` are
+committed locally. Strict Windows M3 acceptance passed on clean `974ff0e`:
+68/68 fixture and 61/61 genuine-provider checks. See the exact commands,
+scope and retained failure evidence in [Windows verification](docs/WINDOWS-VERIFICATION.md#strict-m3-acceptance-result).
+The installed Windows development paths now contain verified optimized release
+binaries; the app is open and its history/credential identity was preserved.
+Never treat cached display data as authority for an action.
+
 Windows development evidence (October 21, 2026, after the Linux handoff below):
 authenticated shutdown, DPAPI provider setup, the bundled Tauri/WebView2 app and
 automatic runtime startup/connection are implemented and verified. See
 [Windows verification](docs/WINDOWS-VERIFICATION.md) and ADRs 0010/0011 for
 commands, results and remaining limits. The historical Linux host statements
 below do not describe the later Windows run. Signed installation, installed
-service supervision and strict clean-revision Windows M3 acceptance remain open.
+service supervision remain open; strict clean-revision Windows M3 acceptance
+has since passed as recorded above.
 
 The component-enabled Windows development build is now installed and connected.
 Final bundled native checks passed 27 component, 46 lifecycle/recovery and 17

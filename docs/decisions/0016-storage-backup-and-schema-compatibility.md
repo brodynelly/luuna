@@ -1,4 +1,4 @@
-# ADR 0015: storage schema compatibility, integrity checks and backup/restore
+# ADR 0016: storage schema compatibility, integrity checks and backup/restore
 
 Date: 2026-10-21. Status: accepted; implements the MVP gate's backup and
 migration-recovery drill, the consistent SQLite backup procedure required by

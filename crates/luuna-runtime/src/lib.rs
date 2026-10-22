@@ -173,6 +173,8 @@ pub struct AppState {
     shutting_down: Arc<std::sync::atomic::AtomicBool>,
     shutdown_requested: Arc<Notify>,
     admission: Arc<RwLock<()>>,
+    request_slots: Arc<tokio::sync::Semaphore>,
+    stream_slots: Arc<tokio::sync::Semaphore>,
     _owner_lock: Arc<RuntimeOwnership>,
 }
 
@@ -212,6 +214,7 @@ fn restrict_to_owner(directory: &std::path::Path) -> Result<(), Box<dyn std::err
 
 mod baselines;
 mod candidates;
+mod dispatch;
 mod integrations;
 mod missions;
 mod projects;
@@ -294,6 +297,8 @@ impl AppState {
             shutting_down: Arc::new(std::sync::atomic::AtomicBool::new(false)),
             shutdown_requested: Arc::new(Notify::new()),
             admission: Arc::new(RwLock::new(())),
+            request_slots: Arc::new(tokio::sync::Semaphore::new(32)),
+            stream_slots: Arc::new(tokio::sync::Semaphore::new(16)),
             _owner_lock: Arc::new(owner_lock),
         })
     }
@@ -421,7 +426,9 @@ impl AppState {
         tokio::spawn(async move {
             // The task drops the worker future, and every clone it owns,
             // before its handle resolves.
-            if let Err(error) = tokio::spawn(worker).await {
+            // Workers run on the bounded blocking pool (ADR 0015) because
+            // they hold synchronous SQLite transactions.
+            if let Err(error) = dispatch::worker(worker).await {
                 if error.is_panic() {
                     eprintln!(
                         "luuna-runtime: the worker for run {run_id} panicked; settling the run as failed"
@@ -763,19 +770,7 @@ async fn authenticate(
         )
             .into_response();
     }
-    if request.method() != axum::http::Method::GET && request.uri().path() != "/api/v1/shutdown" {
-        let _admission = state.admission.read().await;
-        if state.shutting_down() {
-            return (
-                StatusCode::SERVICE_UNAVAILABLE,
-                Json(json!({"error":"runtime is shutting down"})),
-            )
-                .into_response();
-        }
-        next.run(request).await
-    } else {
-        next.run(request).await
-    }
+    dispatch::request(state, request, next).await
 }
 
 /// Authenticated, idempotent service stop. Client disconnect is never shutdown.
@@ -906,12 +901,19 @@ pub(crate) fn deadline_after(duration: Duration) -> tokio::time::Instant {
 /// The largest page a client may request; omitting `limit` stays unbounded.
 const MAX_PAGE: u64 = 10_000;
 
+/// Bounded history reads (ADR 0015) answer at most this many runs or events
+/// per page, and run events at most about 1 MiB, whatever `limit` asked for;
+/// clients continue from the last record until a page comes back empty.
+const HISTORY_PAGE: usize = 200;
+
 /// Event replay paging for run and project streams: `?after=` and `?limit=`.
 #[derive(Deserialize)]
 pub(crate) struct EventPage {
     #[serde(default)]
     after: u64,
     limit: Option<u64>,
+    /// Read the page that ends just before this sequence (newest history first).
+    before: Option<u64>,
 }
 
 impl EventPage {
@@ -919,15 +921,21 @@ impl EventPage {
     pub(crate) fn bounds(&self) -> Result<(u64, Option<usize>), ApiError> {
         Ok((cursor(self.after)?, page_limit(self.limit)?))
     }
-}
 
-/// The first `limit` records; an event client continues from the last
-/// sequence it received.
-pub(crate) fn first<T>(mut records: Vec<T>, limit: Option<usize>) -> Vec<T> {
-    if let Some(limit) = limit {
-        records.truncate(limit);
+    /// The validated `before` cursor; it is only meaningful with `limit`.
+    pub(crate) fn before(&self) -> Result<Option<u64>, ApiError> {
+        match self.before {
+            Some(before) if before == 0 || before > i64::MAX as u64 => Err(ApiError(
+                StatusCode::BAD_REQUEST,
+                format!("before must be an integer from 1 to {}", i64::MAX),
+            )),
+            Some(_) if self.limit.is_none() => Err(ApiError(
+                StatusCode::BAD_REQUEST,
+                "before requires limit".into(),
+            )),
+            before => Ok(before),
+        }
     }
-    records
 }
 
 /// Event sequences are SQLite integers; a larger cursor is a client error,
@@ -956,21 +964,38 @@ fn page_limit(limit: Option<u64>) -> Result<Option<usize>, ApiError> {
 #[derive(Deserialize)]
 struct RunPage {
     limit: Option<u64>,
+    /// Keyset cursor: the id of the last run of the previous page.
+    before: Option<String>,
+    project: Option<String>,
 }
 
-/// Run records, newest first; `?limit=N` returns the most recent N.
+/// Run records, newest first. `?limit=N` reads one bounded keyset page
+/// (`before`, `project`) of at most `HISTORY_PAGE` runs (ADR 0015); without
+/// `limit` every run is returned.
 async fn list_runs(
     State(state): State<AppState>,
     Query(page): Query<RunPage>,
 ) -> Result<Json<Vec<RunRecord>>, ApiError> {
     let limit = page_limit(page.limit)?;
-    let runs = state
-        .store
-        .lock()
-        .map_err(internal)?
-        .runs()
-        .map_err(internal)?;
-    Ok(Json(first(runs, limit)))
+    let store = state.store.lock().map_err(internal)?;
+    Ok(Json(match limit {
+        Some(limit) => store
+            .runs_page(page.before.as_deref(), page.project.as_deref(), limit)
+            .map_err(|error| match error {
+                luuna_storage::StorageError::NotFound(_) => ApiError(
+                    StatusCode::BAD_REQUEST,
+                    "history cursor names no run".into(),
+                ),
+                error => internal(error),
+            })?,
+        None if page.before.is_some() || page.project.is_some() => {
+            return Err(ApiError(
+                StatusCode::BAD_REQUEST,
+                "before and project require limit".into(),
+            ))
+        }
+        None => store.runs().map_err(internal)?,
+    }))
 }
 async fn get_run(
     State(state): State<AppState>,
@@ -1068,10 +1093,15 @@ async fn events(
         .get_run(&id)
         .map_err(internal)?
         .ok_or_else(not_found)?;
-    Ok(Json(first(
-        store.events_after(&id, after).map_err(internal)?,
-        limit,
-    )))
+    Ok(Json(match limit {
+        Some(limit) => store
+            .events_page(&id, after, page.before()?, limit)
+            .map_err(internal)?,
+        None => {
+            page.before()?;
+            store.events_after(&id, after).map_err(internal)?
+        }
+    }))
 }
 
 /// Whether a run's event stream is complete, so its SSE follower may stop:
@@ -1098,6 +1128,16 @@ async fn stream(
     Query(query): Query<Cursor>,
     headers: HeaderMap,
 ) -> Result<impl IntoResponse, ApiError> {
+    let stream_permit = state
+        .stream_slots
+        .clone()
+        .try_acquire_owned()
+        .map_err(|_| {
+            ApiError(
+                StatusCode::TOO_MANY_REQUESTS,
+                "event stream capacity is busy; retry shortly".into(),
+            )
+        })?;
     state
         .store
         .lock()
@@ -1113,26 +1153,34 @@ async fn stream(
             .unwrap_or(query.after),
     )?;
     let records = async_stream::stream! {
+        let _stream_permit = stream_permit;
         loop {
             // Observe ownership before the read: a worker persists its last
             // event before it leaves the active map.
             let owned = recover(&state.active).contains_key(&id);
-            let batch = {
-                let store = state.store.lock();
+            let Ok(permit) = state.request_slots.clone().acquire_owned().await else { break; };
+            let database = state.store.clone();
+            let run_id = id.clone();
+            let batch = tokio::task::spawn_blocking(move || {
+                let _permit = permit;
+                let store = database.lock();
                 store.ok().and_then(|store| {
-                    let run = store.get_run(&id).ok().flatten()?;
-                    Some((store.events_after(&id, after).ok()?, stream_complete(&run, owned)))
+                    let run = store.get_run(&run_id).ok().flatten()?;
+                    Some((store.events_page(&run_id, after, None, HISTORY_PAGE).ok()?, stream_complete(&run, owned)))
                 })
-            };
+            }).await.ok().flatten();
             let Some((events, complete)) = batch else { break; };
+            let empty = events.is_empty();
             for record in events {
                 after = record.sequence;
                 let event = Event::default().id(after.to_string()).event("run_event").json_data(record);
                 match event { Ok(event) => yield Ok::<Event, Infallible>(event), Err(_) => break }
             }
-            // Shutdown ends every stream, so graceful HTTP shutdown never waits
-            // on a follower of an idle or resumable run.
-            if complete || state.shutting_down() { break; }
+            // A complete stream still drains every remaining page; shutdown
+            // ends every stream, so graceful HTTP shutdown never waits on a
+            // follower of an idle or resumable run.
+            if (complete && empty) || state.shutting_down() { break; }
+            if !empty { continue; }
             tokio::time::sleep(Duration::from_millis(200)).await;
         }
     };
@@ -1378,6 +1426,65 @@ mod ownership_tests {
         }
     }
 
+    #[tokio::test]
+    async fn blocked_database_does_not_block_io_and_admission_is_bounded() {
+        use axum::{body::Body, http::Request};
+        use tower::ServiceExt;
+        let root = tempfile::tempdir().unwrap();
+        let state = AppState::open(config(root.path())).unwrap();
+        let app = router(state.clone());
+        let request = |path: &str, method: &str| {
+            Request::builder()
+                .uri(path)
+                .method(method)
+                .header("authorization", format!("Bearer {}", state.config.token))
+                .body(Body::empty())
+                .unwrap()
+        };
+        let database = state.store.clone();
+        let (held_tx, held_rx) = tokio::sync::oneshot::channel();
+        let (release_tx, release_rx) = std::sync::mpsc::channel();
+        let thread = std::thread::spawn(move || {
+            let _guard = database.lock().unwrap();
+            held_tx.send(()).unwrap();
+            release_rx.recv_timeout(Duration::from_secs(5)).unwrap();
+        });
+        held_rx.await.unwrap();
+        let blocked = tokio::spawn(
+            app.clone()
+                .oneshot(request("/api/v1/runs?limit=200", "GET")),
+        );
+        tokio::time::sleep(Duration::from_millis(20)).await;
+        let health = tokio::time::timeout(
+            Duration::from_millis(250),
+            app.clone().oneshot(request("/health", "GET")),
+        )
+        .await
+        .unwrap()
+        .unwrap();
+        assert_eq!(health.status(), StatusCode::OK);
+        assert!(!blocked.is_finished());
+        release_tx.send(()).unwrap();
+        assert_eq!(blocked.await.unwrap().unwrap().status(), StatusCode::OK);
+        thread.join().unwrap();
+        let _capacity = state.request_slots.acquire_many(32).await.unwrap();
+        assert_eq!(
+            app.clone()
+                .oneshot(request("/api/v1/runs", "GET"))
+                .await
+                .unwrap()
+                .status(),
+            StatusCode::SERVICE_UNAVAILABLE
+        );
+        assert_eq!(
+            app.oneshot(request("/api/v1/shutdown", "POST"))
+                .await
+                .unwrap()
+                .status(),
+            StatusCode::ACCEPTED
+        );
+    }
+
     #[test]
     fn runtime_ownership_is_retained_until_the_last_state_clone_drops() {
         let root = tempfile::tempdir().unwrap();
@@ -1388,6 +1495,75 @@ mod ownership_tests {
         assert!(AppState::open(settings.clone()).is_err());
         drop(active_owner);
         assert!(AppState::open(settings).is_ok());
+    }
+
+    #[tokio::test]
+    async fn terminal_sse_drains_all_pages_and_http_pages_preserve_cursors() {
+        use axum::{
+            body::{to_bytes, Body},
+            http::Request,
+        };
+        use tower::ServiceExt;
+        let root = tempfile::tempdir().unwrap();
+        let state = AppState::open(config(root.path())).unwrap();
+        let count = {
+            let mut store = state.store.lock().unwrap();
+            let run = store.create_run("paged", "p", json!({})).unwrap();
+            for _ in 0..250 {
+                store.append_event("paged", "fixture", json!({})).unwrap();
+            }
+            let run = store
+                .transition_run(
+                    "paged",
+                    run.revision,
+                    RunState::Running,
+                    "run.running",
+                    json!({}),
+                )
+                .unwrap();
+            store
+                .transition_run(
+                    "paged",
+                    run.revision,
+                    RunState::Completed,
+                    "run.completed",
+                    json!({}),
+                )
+                .unwrap();
+            store.events_after("paged", 0).unwrap().len()
+        };
+        let app = router(state.clone());
+        let request = |path: &str| {
+            Request::builder()
+                .uri(path)
+                .header("authorization", format!("Bearer {}", state.config.token))
+                .body(Body::empty())
+                .unwrap()
+        };
+        let response = app
+            .clone()
+            .oneshot(request("/api/v1/runs/paged/events?after=0&limit=200"))
+            .await
+            .unwrap();
+        let values: Vec<Value> =
+            serde_json::from_slice(&to_bytes(response.into_body(), 2_000_000).await.unwrap())
+                .unwrap();
+        assert_eq!(values.len(), 200);
+        assert_eq!(values[199]["sequence"], 200);
+        let response = app
+            .oneshot(request("/api/v1/runs/paged/stream"))
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::OK);
+        let body = tokio::time::timeout(
+            Duration::from_secs(5),
+            to_bytes(response.into_body(), 2_000_000),
+        )
+        .await
+        .unwrap()
+        .unwrap();
+        let body = String::from_utf8(body.to_vec()).unwrap();
+        assert_eq!(body.matches("event: run_event").count(), count);
     }
 
     #[test]

@@ -508,6 +508,16 @@ async fn event_pages_are_bounded_and_cursors_validated() {
         )
         .await;
     assert_eq!(page.as_array().unwrap()[..], all[2..3]);
+    let before = all[2]["sequence"].as_u64().unwrap();
+    let (status, page) = service
+        .request(
+            "GET",
+            &format!("/api/v1/runs/{id}/events?limit=1&before={before}"),
+            None,
+        )
+        .await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(page.as_array().unwrap()[..], all[1..2]);
     let (_, project) = service
         .request("GET", "/api/v1/projects/fixture/events?limit=1", None)
         .await;
@@ -521,6 +531,11 @@ async fn event_pages_are_bounded_and_cursors_validated() {
         "/api/v1/projects/fixture/events?after=18446744073709551615".to_owned(),
         "/api/v1/projects/fixture/events?limit=0".to_owned(),
         "/api/v1/runs?limit=0".to_owned(),
+        // History cursors (ADR 0015) are validated and only meaningful with a limit.
+        format!("/api/v1/runs/{id}/events?before=2"),
+        format!("/api/v1/runs/{id}/events?limit=2&before=0"),
+        "/api/v1/runs?before=missing".to_owned(),
+        "/api/v1/runs?limit=2&before=missing".to_owned(),
     ] {
         let (status, body) = service.request("GET", &path, None).await;
         assert_eq!(status, StatusCode::BAD_REQUEST, "{path}: {body}");

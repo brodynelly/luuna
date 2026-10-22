@@ -1,5 +1,5 @@
 //! Consistent online backups, verified restores and the read-only inspection
-//! that gates opening a database (ADR 0015).
+//! that gates opening a database (ADR 0016).
 //!
 //! The database runs in WAL mode, so committed state can live in the `-wal`
 //! file until a checkpoint: copying the main file alone while the runtime runs

@@ -1,10 +1,10 @@
 import { expect, test, vi } from "vitest";
 import { renderToStaticMarkup } from "react-dom/server";
-import { ByteCount, PlanReview, TEXT_LIMITS, TicketCard, Workflows, parseBudgets, planRetryIdentity, readWorkflows, ticketTextSizes } from "./Workflows";
+import { ByteCount, boundedMap, PlanReview, TEXT_LIMITS, TicketCard, Workflows, parseBudgets, planRetryIdentity, readWorkflows, ticketTextSizes } from "./Workflows";
 import type { RunSnapshot, TicketActions } from "./Workflows";
 import { planBudgetProblem } from "@luuna/api-client";
 import type { CandidateView, EventEnvelope, LuunaClient, PlanRevision, RunRecord, RunState, Ticket } from "@luuna/api-client";
-import { canCancel, planBlocker, planSupersedes, settleAction, workflowReason } from "./workflow-state";
+import { advanceWorkflowReplay, canCancel, planBlocker, planSupersedes, settleAction, workflowReason } from "./workflow-state";
 
 test("approval presents every immutable field and full hash before acknowledgment", () => {
   const plan = { id: "plan-1", revision: 7, hash: `sha256:${"abcdef01".repeat(8)}`, permissions: { operations: ["write"] }, required_checks: [{ command: "private-check" }], tasks: [{ acceptance_criteria: ["all criteria visible"] }], manifest_hash: "manifest-identity", future_field: "also visible", component_context: { memory: [{ id: "memory-1", scope: "user", hash: "sha256:memory", content: "Explicitly selected knowledge", provenance: "Developer supplied note" }], prompt: { name: "guidance", version: 2, hash: "sha256:prompt", body: "Exact selected prompt content" } } } as unknown as PlanRevision;
@@ -139,7 +139,9 @@ test("polling reads only what moved: events after each cursor, settled candidate
   const first = (await readWorkflows(client as unknown as LuunaClient, "p", new Map(), true, signal))!;
   expect(first.tickets?.list).toEqual([ticket]);
   expect(first.snapshots.get("done")).toMatchObject({ cursor: 2, reason: "writer exceeded cost budget" });
-  expect(client.events.mock.calls.map(([id, after]) => [id, after])).toEqual([["done", 0], ["live", 0]]);
+  // Each read continues until an empty page: a short page is not the end of a bounded log.
+  const reads = () => client.events.mock.calls.map(([id, after]) => [id, after]).sort((a, b) => String(a).localeCompare(String(b)));
+  expect(reads()).toEqual([["done", 0], ["done", 2], ["live", 0], ["live", 1]]);
   for (const mock of Object.values(client)) mock.mockClear();
 
   log.live.push(event("live", 2));
@@ -147,7 +149,7 @@ test("polling reads only what moved: events after each cursor, settled candidate
   expect(poll.tickets).toBeNull();
   expect(client.listTickets).not.toHaveBeenCalled();
   expect(client.candidate.mock.calls.map(([id]) => id)).toEqual(["live"]);
-  expect(client.events.mock.calls.map(([id, after]) => [id, after])).toEqual([["live", 1]]);
+  expect(reads()).toEqual([["live", 1], ["live", 2]]);
   expect(poll.snapshots.get("done")).toBe(first.snapshots.get("done"));
   expect(poll.snapshots.get("live")?.cursor).toBe(2);
   for (const mock of Object.values(client)) mock.mockClear();
@@ -158,7 +160,7 @@ test("polling reads only what moved: events after each cursor, settled candidate
   const moved = (await readWorkflows(client as unknown as LuunaClient, "p", poll.snapshots, false, signal))!;
   expect(client.listTickets).toHaveBeenCalledTimes(1);
   expect(client.candidate.mock.calls.map(([id]) => id).sort()).toEqual(["done", "live"]);
-  expect(client.events.mock.calls.map(([id, after]) => [id, after])).toEqual([["done", 2], ["live", 2]]);
+  expect(reads()).toEqual([["done", 2], ["live", 2], ["live", 3]]);
   expect(moved.snapshots.get("done")?.reason).toBe("writer exceeded cost budget");
   expect(moved.snapshots.get("live")?.reason).toBe("candidate recorded");
 });
@@ -180,4 +182,30 @@ test("an action that settles after a disconnect reports nothing into the current
   await settleAction(new AbortController(), async () => {}, report);
   expect(report.succeeded).toHaveBeenCalledTimes(1);
   expect(report.settled).toHaveBeenCalledTimes(1);
+});
+
+test("workflow cursor retains reasons through empty pages and rejects incomplete replay atomically", () => {
+  const event = (sequence: number, payload = {}) => ({ run_id: "run", event_id: `e${sequence}`, sequence, payload }) as EventEnvelope;
+  const first = advanceWorkflowReplay("run", { cursor: 0, reason: "" }, [event(1, { reason: "blocked" }), event(2)]);
+  expect(first).toEqual({ cursor: 2, reason: "blocked" });
+  expect(advanceWorkflowReplay("run", first, [])).toEqual(first);
+  expect(advanceWorkflowReplay("run", first, [event(3)])).toEqual({ cursor: 3, reason: "blocked" });
+  expect(advanceWorkflowReplay("run", first, [event(3, { reason: "" })])).toEqual({ cursor: 3, reason: "" });
+  expect(() => advanceWorkflowReplay("run", first, [event(3), event(5)])).toThrow("gap");
+  expect(() => advanceWorkflowReplay("other", first, [event(3)])).toThrow("identity");
+  expect(first).toEqual({ cursor: 2, reason: "blocked" });
+});
+
+test("bounded reads keep input order with at most four requests in flight", async () => {
+  let inFlight = 0;
+  let peak = 0;
+  const results = await boundedMap([1, 2, 3, 4, 5, 6, 7, 8, 9], async (value) => {
+    inFlight++;
+    peak = Math.max(peak, inFlight);
+    await new Promise((resolve) => setTimeout(resolve, 10 - value));
+    inFlight--;
+    return value * 2;
+  });
+  expect(results).toEqual([2, 4, 6, 8, 10, 12, 14, 16, 18]);
+  expect(peak).toBeLessThanOrEqual(4);
 });

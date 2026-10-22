@@ -232,12 +232,13 @@ pub(crate) fn relay_progress(
     run_id: &str,
     recipe_id: &str,
     output: bool,
-) -> (mpsc::UnboundedSender<Progress>, tokio::task::JoinHandle<()>) {
-    let (progress, mut updates) = mpsc::unbounded_channel::<Progress>();
+) -> (mpsc::Sender<Progress>, tokio::task::JoinHandle<()>) {
+    // Display progress is bounded and never backpressures the child's pipes.
+    let (progress, mut updates) = mpsc::channel::<Progress>(luuna_executor::PROGRESS_CAPACITY);
     let relay_state = state.clone();
     let relay_run = run_id.to_owned();
     let relay_recipe = recipe_id.to_owned();
-    let relay = tokio::spawn(async move {
+    let relay = crate::dispatch::worker(async move {
         let mut emitted = 0usize;
         while let Some(update) = updates.recv().await {
             match update {
@@ -258,7 +259,7 @@ pub(crate) fn relay_progress(
                         let _ = relay_state.event(
                             &relay_run,
                             "check.output",
-                            json!({"recipe_id": relay_recipe, "stream": stream, "chunk": chunk, "truncated_stream": emitted == MAX_OUTPUT_EVENTS}),
+                            json!({"recipe_id": relay_recipe, "stream": stream, "chunk": chunk, "truncated_stream": emitted == MAX_OUTPUT_EVENTS, "display_only": true}),
                         );
                     }
                 }

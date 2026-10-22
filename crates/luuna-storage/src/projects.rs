@@ -139,18 +139,12 @@ impl Store {
     }
 
     pub fn projects(&self) -> Result<Vec<ProjectRecord>> {
-        let mut query = self
-            .connection
-            .prepare("SELECT id FROM projects ORDER BY created_at DESC,id")?;
-        let ids = query
-            .query_map([], |row| row.get::<_, String>(0))?
-            .collect::<std::result::Result<Vec<_>, _>>()?;
-        ids.iter()
-            .map(|id| {
-                self.get_project(id)?
-                    .ok_or_else(|| StorageError::NotFound(id.clone()))
-            })
-            .collect()
+        let mut query = self.connection.prepare(
+            "SELECT id,name,revision,manifest_hash,created_at,updated_at FROM projects ORDER BY created_at DESC,id",
+        )?;
+        let rows = query.query_map([], project_row)?;
+        rows.collect::<std::result::Result<Vec<_>, _>>()
+            .map_err(Into::into)
     }
 
     pub fn repositories(&self, project_id: &str) -> Result<Vec<RepositoryRegistration>> {
@@ -583,19 +577,21 @@ fn get_project(connection: &Connection, id: &str) -> Result<Option<ProjectRecord
         .query_row(
             "SELECT id,name,revision,manifest_hash,created_at,updated_at FROM projects WHERE id=?1",
             [id],
-            |r| {
-                Ok(ProjectRecord {
-                    id: r.get(0)?,
-                    name: r.get(1)?,
-                    revision: r.get(2)?,
-                    manifest_hash: r.get(3)?,
-                    created_at: r.get(4)?,
-                    updated_at: r.get(5)?,
-                })
-            },
+            project_row,
         )
         .optional()
         .map_err(Into::into)
+}
+
+fn project_row(r: &rusqlite::Row<'_>) -> rusqlite::Result<ProjectRecord> {
+    Ok(ProjectRecord {
+        id: r.get(0)?,
+        name: r.get(1)?,
+        revision: r.get(2)?,
+        manifest_hash: r.get(3)?,
+        created_at: r.get(4)?,
+        updated_at: r.get(5)?,
+    })
 }
 
 pub(crate) fn repositories_in(

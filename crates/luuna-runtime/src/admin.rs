@@ -1,4 +1,4 @@
-//! Offline maintenance commands for the runtime's data directory (ADR 0015):
+//! Offline maintenance commands for the runtime's data directory (ADR 0016):
 //!
 //! - `luuna-runtime backup --output <file>` writes a consistent snapshot of the
 //!   database while the runtime may be running;

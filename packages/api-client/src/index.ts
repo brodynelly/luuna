@@ -614,8 +614,9 @@ function pageQuery(page: PageOptions, separator: "?" | "&"): string {
 }
 
 /**
- * Every event after `after`, read in pages of `limit` from a cursor; it stops at the first short
- * page. A runtime that ignores `limit` answers with one long page and an empty one.
+ * Every event after `after`, read in pages of `limit` from a cursor until a page comes back empty.
+ * A short page is not the end: the runtime bounds run-event pages by count and bytes (ADR 0015).
+ * A runtime that ignores `limit` answers with one long page and an empty one.
  */
 export async function readEventPages(read: (after: number, page: PageOptions) => Promise<EventEnvelope[]>, after: number, limit = 1000): Promise<EventEnvelope[]> {
   const events: EventEnvelope[] = [];
@@ -624,7 +625,7 @@ export async function readEventPages(read: (after: number, page: PageOptions) =>
     const page = await read(cursor, { limit });
     events.push(...page);
     const last = page.at(-1)?.sequence;
-    if (page.length < limit || last === undefined || last <= cursor) return events;
+    if (last === undefined || last <= cursor) return events;
     cursor = last;
   }
 }
@@ -698,6 +699,13 @@ export class LuunaClient {
     return this.request(`/runs${pageQuery(page, "?")}`, { signal });
   }
 
+  runsPage(before?: string, project?: string, signal?: AbortSignal): Promise<RunRecord[]> {
+    const query = new URLSearchParams({ limit: "200" });
+    if (before) query.set("before", before);
+    if (project) query.set("project", project);
+    return this.request(`/runs?${query}`, { signal });
+  }
+
   run(id: string, signal?: AbortSignal): Promise<RunRecord> {
     return this.request(`/runs/${encodeURIComponent(id)}`, { signal });
   }
@@ -713,6 +721,11 @@ export class LuunaClient {
   events(id: string, after = 0, signal?: AbortSignal, page: PageOptions = {}): Promise<EventEnvelope[]> {
     if (!Number.isSafeInteger(after) || after < 0) throw new Error("Invalid event cursor.");
     return this.request(`/runs/${encodeURIComponent(id)}/events?after=${after}${pageQuery(page, "&")}`, { signal });
+  }
+
+  eventPage(id: string, after = 0, before?: number, signal?: AbortSignal): Promise<EventEnvelope[]> {
+    if (!Number.isSafeInteger(after) || after < 0 || (before !== undefined && (!Number.isSafeInteger(before) || before < 1))) throw new Error("Invalid event cursor.");
+    return this.request(`/runs/${encodeURIComponent(id)}/events?after=${after}&limit=200${before === undefined ? "" : `&before=${before}`}`, { signal });
   }
 
   listProjects(signal?: AbortSignal): Promise<ProjectRecord[]> {
@@ -973,7 +986,90 @@ export function mergeEvents<T extends { sequence: number; event_id: string; run_
   return ordered;
 }
 
+/** Incremental replay for a single subscription. A rejected page never advances its cursor. */
+export class EventReplay<T extends { sequence: number; event_id: string; run_id: string }> {
+  private records: T[] = [];
+  private identities = new Map<string, number>();
+
+  get cursor(): number { return this.records.length; }
+
+  append(incoming: T[]): T[] {
+    const added: T[] = [];
+    const identities = new Map<string, number>();
+    const runId = this.records[0]?.run_id ?? incoming[0]?.run_id;
+    for (const event of [...incoming].sort((a, b) => a.sequence - b.sequence)) {
+      if (!Number.isSafeInteger(event.sequence) || event.sequence < 1) {
+        throw new Error("Runtime returned an invalid event sequence.");
+      }
+      if (!event.event_id || !event.run_id || event.run_id !== runId) {
+        throw new Error("Runtime returned an event for a different run or with no identity.");
+      }
+      const existing = this.records[event.sequence - 1] ?? added[event.sequence - this.records.length - 1];
+      const sequenceForId = this.identities.get(event.event_id) ?? identities.get(event.event_id);
+      if ((existing && existing.event_id !== event.event_id) || (sequenceForId !== undefined && sequenceForId !== event.sequence)) {
+        throw new Error("Runtime returned conflicting event identities.");
+      }
+      if (existing) continue;
+      if (event.sequence !== this.records.length + added.length + 1) {
+        throw new Error("Runtime event replay has a gap; retrying from the last contiguous sequence.");
+      }
+      added.push(event);
+      identities.set(event.event_id, event.sequence);
+    }
+    if (added.length) {
+      this.records = this.records.concat(added);
+      for (const [id, sequence] of identities) this.identities.set(id, sequence);
+    }
+    // Empty/overlapping replay is a no-op, including the React state identity.
+    return this.records;
+  }
+}
+
 /** Pi text deltas are display data; completion remains the runtime's RunState. */
+export class EventWindow {
+  cursor = 0;
+  records: EventEnvelope[] = [];
+  private deltas = "";
+  private finalText = "";
+  private runId?: string;
+  private readonly textLimit = 1024 * 1024;
+  get text(): string { return this.finalText || this.deltas; }
+
+  append(incoming: EventEnvelope[]): EventEnvelope[] {
+    const runId = this.runId ?? incoming[0]?.run_id;
+    const ids = new Set<string>();
+    // Validate the complete page before advancing any display state.
+    incoming.forEach((event, index) => {
+      if (!event.event_id || ids.has(event.event_id) || event.run_id !== runId || event.sequence !== this.cursor + index + 1) throw new Error("Runtime event replay has a gap or invalid identity.");
+      ids.add(event.event_id);
+    });
+    if (!incoming.length) return this.records;
+    this.runId = runId;
+    for (const event of incoming) {
+      if (event.type === "pi.message_update") this.deltas = this.clip(this.deltas + assistantText([event]));
+      if (event.type === "pi.message_end") {
+        const text = assistantText([event]);
+        if (text) this.finalText = this.clip(text);
+      }
+    }
+    this.cursor = incoming[incoming.length - 1].sequence;
+    const records = this.records.concat(incoming).slice(-200);
+    let bytes = 0;
+    let first = records.length - 1;
+    for (; first >= 0; first--) {
+      bytes += JSON.stringify(records[first]).length * 2;
+      if (bytes > 1024 * 1024 && first < records.length - 1) break;
+    }
+    this.records = records.slice(first + 1);
+    return this.records;
+  }
+
+  private clip(text: string): string {
+    const suffix = "\n[Display limit reached. Full output remains in durable events.]";
+    return text.length > this.textLimit ? text.slice(0, this.textLimit - suffix.length) + suffix : text;
+  }
+}
+
 export function assistantText(events: EventEnvelope[]): string {
   let deltas = "";
   let finalText = "";
