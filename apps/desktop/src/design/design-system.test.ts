@@ -17,7 +17,7 @@ const TOKENS = "design/tokens.css";
 const MANIFEST = "styles.css";
 // Tailwind CSS v4 utilities (ADR 0030): last layer, its theme a reference to the tokens.
 const TAILWIND = "design/tailwind.css";
-const EXPECTED_SHEETS = [MANIFEST, TOKENS, "design/base.css", "design/components.css", "design/overlays.css", "screens/app.css", "screens/home.css", "screens/board.css", "screens/projects.css", "screens/workflows.css", "screens/candidate-review.css", "screens/project-components.css", "screens/help.css", "screens/settings.css", "design/tailwind.css"];
+const EXPECTED_SHEETS = [MANIFEST, TOKENS, "design/fonts.css", "design/base.css", "design/components.css", "design/overlays.css", "screens/app.css", "screens/home.css", "screens/board.css", "screens/projects.css", "screens/workflows.css", "screens/candidate-review.css", "screens/project-components.css", "screens/help.css", "screens/settings.css", "design/tailwind.css"];
 const MEDIA = ["(max-width: 920px)", "(max-width: 680px)", "(prefers-reduced-motion: reduce)", "(prefers-color-scheme: light)", "(prefers-contrast: more)", "(forced-colors: active)"];
 
 const STATES = [...new Set([runTone, candidateTone, checkTone, baselineTone, verdictTone, severityTone, leaseTone, connectionTone].flatMap((map) => Object.keys(map)))];
@@ -38,7 +38,7 @@ describe("stylesheets", () => {
     for (const sheet of sheets.filter((name) => name !== MANIFEST)) expect(rules(read(sheet)).length, `${sheet} has no rules`).toBeGreaterThan(0);
     const manifest = read(MANIFEST).trim().split(/;\s*/).filter(Boolean);
     expect(manifest[0]).toBe("@layer tokens, base, components, screens, utilities");
-    expect(manifest.slice(1)).toEqual(EXPECTED_SHEETS.slice(1).map((sheet) => `@import "./${sheet}" layer(${sheet === TOKENS ? "tokens" : sheet === TAILWIND ? "utilities" : sheet.startsWith("screens/") ? "screens" : sheet === "design/overlays.css" ? "components" : sheet.replace(/^design\/|\.css$/g, "")})`));
+    expect(manifest.slice(1)).toEqual(EXPECTED_SHEETS.slice(1).map((sheet) => `@import "./${sheet}" layer(${sheet === TOKENS || sheet === "design/fonts.css" ? "tokens" : sheet === TAILWIND ? "utilities" : sheet.startsWith("screens/") ? "screens" : sheet === "design/overlays.css" ? "components" : sheet.replace(/^design\/|\.css$/g, "")})`));
   });
 
   for (const file of EXPECTED_SHEETS.filter((name) => name !== TOKENS && name !== MANIFEST)) {

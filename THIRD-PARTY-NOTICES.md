@@ -17,3 +17,10 @@ original Luuna commit. Original source remains recoverable from that Git history
 Pi remains an external pinned dependency, not a rewritten or bundled agent engine.
 Other dependencies retain their own licenses in their package distributions and
 lockfiles. This file records source provenance, not a complete legal dependency audit.
+
+## Bundled fonts
+
+- **Söhne** is a commercial typeface by Klim Type Foundry (https://klim.co.nz). It is bundled in `apps/desktop/src/assets/fonts/soehne/` at the sole user's direction, for personal, non-distributed use on non-Apple platforms.
+- Söhne is **not** covered by Luuna's MIT license or any Luuna license grant.
+- The fonts must be removed or properly licensed before any distribution, publication or packaging of the desktop app.
+- Apple platforms use the system SF stack; SF Pro is not bundled.
