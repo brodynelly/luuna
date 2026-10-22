@@ -8,7 +8,9 @@ explains every refusal with the same shared text (`packages/api-client/src/failu
 export LUUNA_URL=http://127.0.0.1:4242          # loopback only; this is the default
 export LUUNA_API_TOKEN=...                       # never echoed; prompted (hidden) on a terminal when unset
 npm run tui                                      # interactive workbench: arrows/j/k move, Enter selects, Esc back, r reload, q quit
-npm run tui -- help                              # every command with its usage
+npm run tui -- help                              # the overview: commands grouped by workflow, the component CLIs, flags, environment
+npm run tui -- plan --help                       # one command's page: arguments, every flag, the runtime route, an example (also `help plan`)
+npm run tui -- help --all                        # the complete reference
 npm run tui -- projects --json                   # one cataloged action for scripts; --json prints the runtime's record unchanged
 npm run tui -- approve <plan> --acknowledge-hash sha256:<complete plan hash>
 npm run tui -- follow <run>                      # live events over SSE, resumed after an outage from the last sequence
@@ -24,6 +26,11 @@ On Windows, `bin\luuna.cmd` (and `bin/luuna` for Git Bash) run the same client t
 `scripts/start-terminal.ps1`, which supplies `LUUNA_URL` and the token in memory: with the
 checkout's `bin` folder on PATH, `luuna` opens the workbench and `luuna projects --json` runs one
 command. `-DataDirectory <dir>` is accepted only by name; every other word goes to the client.
+The launcher names the client `lu` in its help (`LUUNA_CLI_NAME`), answers every help form
+(`help`, `-h`, `<command> --help`, `help <command>`) without starting the runtime, and runs
+`lu missions|atlas|beacon …` (and `lu help missions`) as the component CLIs themselves. The help
+is rendered by `src/help.mjs` from the command table and the catalog; `HELP_GROUPS` only decides
+where a command is listed, and `test/help.test.mjs` fails when a command has no group.
 
 Exit codes: 0 done, 1 refused or failed (`<Action> refused: <reason> <next step>` on stderr), 2 usage.
 Transport failures and 5xx responses are plain sentences; a server body is never shown.

@@ -3,9 +3,10 @@
 // Rust workbench opens. Exit codes: 0 done, 1 refused or failed, 2 usage.
 import { readFileSync, writeFileSync } from "node:fs";
 import { LuunaClient, describeFailure, explainFailure } from "@luuna/api-client";
-import { COMMANDS, ClientRefusal, PROJECTIONS, UsageError, commandsByName, usage } from "./commands.mjs";
+import { ClientRefusal, UsageError, commandsByName, usage } from "./commands.mjs";
 import { catalog } from "./catalog.mjs";
 import { colourEnabled, format } from "./format.mjs";
+import { DEFAULT_NAME, commandHelp, overview, reference, suggestions } from "./help.mjs";
 
 export const DEFAULT_URL = "http://127.0.0.1:4242";
 
@@ -85,23 +86,9 @@ export async function connect(env, { stdin, stdout, fetcher } = {}) {
   return new LuunaClient(url, token, fetcher);
 }
 
-export function help() {
-  const byContext = new Map();
-  for (const command of COMMANDS) byContext.set(command.context, [...(byContext.get(command.context) ?? []), command]);
-  const sections = [...byContext].map(([context, commands]) => [`${context} commands:`, ...commands.map((command) => `  ${usage(command)}\n      ${catalog.capabilities.find((capability) => capability.id === command.id)?.title ?? ""}`)].join("\n"));
-  sections.push(["projections (read-only views over the cataloged actions; the desktop's Home and Kanban panels show the same):", ...PROJECTIONS.map((command) => `  ${usage(command)}\n      ${command.action}: reads ${command.projects.join(", ")}`)].join("\n"));
-  return [
-    "luuna-tui — terminal client for the Luuna runtime",
-    "",
-    "  luuna-tui                      open the interactive workbench (keyboard driven)",
-    "  luuna-tui <command> [args] [--flag value] [--json]",
-    "",
-    "Connection: LUUNA_URL (default http://127.0.0.1:4242) and LUUNA_API_TOKEN (never echoed; prompted when missing on a terminal).",
-    "Every command is one catalog action (schemas/capability-catalog.json); --json prints the runtime's record unchanged.",
-    "",
-    ...sections,
-    "",
-  ].join("\n");
+/** The overview help (src/help.mjs); `name` is the program name the developer typed. */
+export function help(options = {}) {
+  return overview(options);
 }
 
 /** Runs one command; returns the process exit code. Output goes to `stdout`, refusals to `stderr`. */
@@ -147,10 +134,29 @@ export async function main(argv, { env, stdin, stdout, stderr, fetcher, nativeLa
     const launch = nativeLauncher ?? (await import("./native.mjs")).launchNative;
     return launch({ env, stdin, stdout, stderr });
   }
-  if (name === undefined || name === "help" || name === "--help" || name === "-h") { stdout.write(help()); return name === undefined ? 2 : 0; }
+  const program = env?.LUUNA_CLI_NAME?.trim() || DEFAULT_NAME;
+  const helpOptions = { name: program, colour: colourEnabled({ env, stdout }), width: stdout?.isTTY ? stdout.columns : undefined };
+  const unknown = (word) => {
+    const close = suggestions(word);
+    stderr.write(`Unknown command ${word}.${close.length ? ` Did you mean ${close.join(", ")}?` : ""} Run ${program} help for the commands.\n`);
+    return 2;
+  };
+  if (name === undefined || name === "--help" || name === "-h") { stdout.write(help(helpOptions)); return name === undefined ? 2 : 0; }
+  if (name === "help") {
+    const [topic, ...extra] = rest;
+    if (topic === undefined) { stdout.write(help(helpOptions)); return 0; }
+    if (topic === "--all" || topic === "all") { stdout.write(reference(helpOptions)); return 0; }
+    const described = commandsByName.get(topic);
+    if (!described || extra.length) return unknown([topic, ...extra].join(" "));
+    stdout.write(commandHelp(described, helpOptions));
+    return 0;
+  }
   if (name === "catalog") { stdout.write(`${JSON.stringify(catalog, null, 2)}\n`); return 0; }
   const command = commandsByName.get(name);
-  if (!command) { stderr.write(`Unknown command ${name}. Run luuna-tui help for the catalog of commands.\n`); return 2; }
+  if (!command) return unknown(name);
+  // `<command> --help` needs no token; a `--help` after `--` is an argument.
+  const ended = rest.indexOf("--");
+  if ((ended === -1 ? rest : rest.slice(0, ended)).some((token) => token === "--help" || token === "-h")) { stdout.write(commandHelp(command, helpOptions)); return 0; }
   let input;
   try { input = parseArguments(rest, command); } catch (failure) { stderr.write(`${failure.message}\n`); return 2; }
   let client;

@@ -440,14 +440,14 @@ async function readProjects(client, io, only) {
  * they carry no catalog entry of their own and `scripts/check-contracts.mjs` traces them by name.
  */
 export const PROJECTIONS = [
-  { id: "projection.home", name: "home", action: "Home summary", context: "runtime", projects: ["projects.list", "projects.show", "baselines.list", "tickets.list", "runs.list"], args: [],
+  { id: "projection.home", name: "home", action: "Home summary", context: "runtime", title: "What needs attention: each project's readiness, open tickets and active runs", projects: ["projects.list", "projects.show", "baselines.list", "tickets.list", "runs.list"], args: [],
     flags: { project: { description: "only this project" } },
     example: { args: [], flags: {} },
     run: async (client, { flags }, io) => {
       const [{ views, baselines, tickets }, runs] = await Promise.all([readProjects(client, io, flags.project && String(flags.project)), client.listRuns(io.signal)]);
       return homeSummary({ projects: views, baselines, tickets, runs });
     } },
-  { id: "projection.board", name: "board", action: "Kanban projection", context: "runtime", projects: ["projects.list", "projects.show", "tickets.list", "runs.list"], args: [],
+  { id: "projection.board", name: "board", action: "Kanban projection", context: "runtime", title: "Tickets on a board by workflow state, with their runs", projects: ["projects.list", "projects.show", "tickets.list", "runs.list"], args: [],
     flags: { project: { description: "only this project" } },
     example: { args: [], flags: {} },
     run: async (client, { flags }, io) => {
