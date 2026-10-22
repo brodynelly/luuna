@@ -1,5 +1,280 @@
 /*
- * Sidebar, nav pill, page header, view transitions. Owned by item C (run stripe-ui-20261022-0905); filled in wave 2.
- * Placeholder: the manifest test requires one rule. Item C replaces this file's content.
+ * Screen: shell. The window chrome, tokens only (docs/DESIGN-SYSTEM.md, ADR 0032): the sidebar, its
+ * sliding nav pill, the connection chip, the palette trigger, the content column, every page's
+ * header, Home's wash and the view change. Owned by item C of run stripe-ui-20261022-0905.
+ * Every selector is scoped by a class unique to the shell (.app, .sidebar, .nav-section, .view ...).
+ * The current view shows by fill, accent text and weight, never by colour alone. Motion is
+ * transform and opacity only; text ancestors keep no transform or opacity at rest, so every
+ * entrance uses a backwards fill. Under reduced motion everything here is instant.
  */
-:root {}
+.app {
+  display: grid;
+  grid-template-columns: var(--sidebar-width) minmax(0, 1fr);
+  align-items: start;
+  min-height: var(--viewport-height);
+}
+
+/* Sidebar: window chrome. It stays in view while the content scrolls. Critical actions never sit at its bottom. */
+.sidebar {
+  position: sticky;
+  top: 0;
+  height: var(--viewport-height);
+  padding: var(--space-5) var(--space-3);
+  border-right: var(--border-width) solid var(--color-border);
+  background: var(--color-sidebar);
+}
+.sidebar-top > .wordmark {
+  flex: 1 1 auto;
+  min-width: 0;
+  padding-inline: var(--space-2);
+  color: var(--color-text-heading);
+  font-family: var(--font-display);
+  font-size: var(--text-wordmark);
+  font-weight: var(--weight-strong);
+  letter-spacing: var(--tracking-tight);
+  line-height: var(--leading-none);
+}
+/* The brand mark: a lavender disc whose leading half is cut from the sidebar's own surface. */
+.wordmark-mark { flex: none; overflow: visible; width: var(--space-5); height: var(--space-5); }
+.wordmark-mark > circle { fill: var(--color-accent); }
+.wordmark-mark > path { fill: var(--color-sidebar); stroke: var(--color-accent); stroke-width: var(--focus-width); vector-effect: non-scaling-stroke; }
+
+.sidebar-top > .sidebar-toggle {
+  flex: none;
+  min-height: var(--control-height-sm);
+  padding: 0 var(--space-1-5);
+  border-color: transparent;
+  background: transparent;
+  color: var(--color-text-muted);
+}
+.sidebar-top > .sidebar-toggle:hover:not(:disabled) { background: var(--color-control-hover); color: var(--color-text); }
+.sidebar .icon {
+  flex: none;
+  width: var(--icon-size);
+  height: var(--icon-size);
+  fill: none;
+  stroke: currentColor;
+  stroke-width: var(--icon-stroke);
+  stroke-linecap: round;
+  stroke-linejoin: round;
+}
+
+/* Palette trigger: a field-like affordance with its shortcut chip. */
+.sidebar > .sidebar-search {
+  justify-content: flex-start;
+  gap: var(--space-2-5);
+  width: 100%;
+  min-height: var(--nav-height);
+  margin-top: calc(var(--space-2) - var(--space-5));
+  padding: 0 var(--space-2);
+  border-color: var(--color-border);
+  border-radius: var(--radius-input);
+  background: var(--color-surface);
+  color: var(--color-text-muted);
+  font-size: var(--text-sm);
+  font-weight: var(--weight-regular);
+  transition: border-color var(--duration-fast) var(--ease), box-shadow var(--duration-fast) var(--ease);
+}
+.sidebar > .sidebar-search:hover:not(:disabled) { border-color: var(--color-border-strong); background: var(--color-surface); box-shadow: var(--shadow-card); color: var(--color-text); }
+.sidebar-search > kbd {
+  margin-left: auto;
+  padding: 0 var(--space-1-5);
+  border-radius: var(--radius-chip);
+  background: var(--color-surface-sunken);
+  box-shadow: var(--shadow-kbd);
+  color: var(--color-text-muted);
+  font-size: var(--text-label);
+  line-height: var(--leading-label);
+}
+
+/* Navigation: sections of icon items, with one pill that slides to the current item. */
+.sidebar-nav { position: relative; }
+.nav-section { position: relative; }
+.nav-section + .nav-section { margin-top: var(--space-4); }
+.nav-section > ul { margin: 0; padding: 0; list-style: none; }
+.nav-section-label {
+  display: block;
+  padding: var(--space-1) var(--space-2);
+  color: var(--color-text-subtle);
+  font-size: var(--text-label);
+  font-weight: var(--weight-semibold);
+  letter-spacing: var(--tracking-label);
+  line-height: var(--leading-label);
+  text-transform: uppercase;
+}
+.sidebar-nav button.nav-item {
+  justify-content: flex-start;
+  gap: var(--space-2-5);
+  width: 100%;
+  min-height: var(--nav-height);
+  padding: 0 var(--space-2);
+  border-color: transparent;
+  border-radius: var(--radius-button);
+  background: transparent;
+  color: var(--color-text-muted);
+  font-size: var(--text-md);
+  font-weight: var(--weight-medium);
+  transition: background-color var(--duration-fast) var(--ease), color var(--duration-fast) var(--ease);
+}
+.sidebar-nav button.nav-item:hover:not(:disabled) { background: var(--color-control-hover); color: var(--color-text); }
+.sidebar-nav button.nav-item[aria-current="page"] { background: var(--color-selected); color: var(--color-accent); font-weight: var(--weight-strong); }
+.sidebar-nav button.nav-item[aria-current="page"] > .icon { stroke: var(--color-accent); }
+.sidebar-nav .nav-count {
+  margin-left: auto;
+  padding: 0 var(--space-1-5);
+  border-radius: var(--radius-full);
+  background: var(--color-surface);
+  color: var(--color-text-muted);
+  font-size: var(--text-2xs);
+  font-variant-numeric: tabular-nums;
+}
+/* The pill is measured by the shell; until then (or without ResizeObserver) the static fill above shows. */
+.sidebar-nav > .nav-pill {
+  position: absolute;
+  top: 0;
+  inset-inline: 0;
+  display: none;
+  height: var(--pill-h);
+  border-radius: var(--radius-button);
+  background: var(--color-selected);
+  transform: translateY(var(--pill-y));
+  transition: transform var(--duration-standard) var(--ease-out);
+  pointer-events: none;
+}
+.sidebar-nav[data-pill="ready"] > .nav-pill { display: block; }
+.sidebar-nav[data-pill="ready"] button.nav-item[aria-current="page"] { background: transparent; }
+
+/* Footer: the connection chip, with a live pulse only while connected. */
+.sidebar-footer { margin-top: auto; }
+.sidebar-footer > .connection {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  min-height: var(--control-height-sm);
+  padding: 0 var(--space-2-5);
+  border: var(--border-width) solid var(--color-border);
+  border-radius: var(--radius-full);
+  background: var(--color-surface);
+  color: var(--color-text-muted);
+  font-size: var(--text-xs);
+  font-weight: var(--weight-medium);
+  line-height: var(--leading-caption);
+}
+.sidebar-footer > .connection[data-tone] { color: var(--tone-fg); }
+.sidebar-footer > .connection[data-live] > .tone-mark[data-tone] { position: relative; }
+.sidebar-footer > .connection[data-live] > .tone-mark[data-tone]::after {
+  content: "";
+  position: absolute;
+  inset: 0;
+  border-radius: inherit;
+  background: var(--tone-mark);
+  pointer-events: none;
+  animation: live-pulse var(--duration-pulse) var(--ease-out) infinite;
+}
+@keyframes live-pulse {
+  from { transform: scale(1); opacity: 0.6; }
+  to { transform: scale(var(--pulse-scale)); opacity: 0; }
+}
+
+/* Content: one left-aligned column of a readable maximum width. The wash can never scroll it sideways. */
+.app > main {
+  width: 100%;
+  max-width: calc(var(--content-max) + 2 * var(--gutter));
+  min-width: 0;
+  padding: var(--space-6) var(--gutter) var(--space-7);
+  overflow-x: clip;
+}
+.app > main > .view[hidden] { display: none; }
+
+/* A view's own panel is the page: no card, a large title, its description under it. */
+.view > .page { gap: var(--space-5); padding: 0; border: 0; background: transparent; box-shadow: none; }
+.view > .page > .panel-heading { align-items: baseline; gap: var(--space-2) var(--space-4); }
+.view > .page > .panel-heading > h2 {
+  color: var(--color-text-heading);
+  font-family: var(--font-display);
+  font-size: var(--text-title);
+  font-weight: var(--weight-strong);
+  letter-spacing: var(--tracking-h1);
+  line-height: var(--leading-h1);
+}
+.view > .page > .panel-heading + .scope { max-width: var(--measure); margin-top: calc(var(--space-1) - var(--space-5)); color: var(--color-text-muted); font-size: var(--text-md); }
+
+/* Entrance: the header opens once per visit (the slot goes from hidden to shown), leaving nothing animated at rest. */
+.view[data-entering] > .page > :is(.panel-heading, .scope) { animation: header-reveal var(--duration-standard) var(--ease-out) backwards; }
+.view[data-entering] > .page > .scope { animation-delay: var(--duration-stagger); }
+@keyframes header-reveal {
+  from { opacity: 0; transform: translateY(var(--reveal-offset)); }
+}
+
+/* Home alone: a pale decorative wash behind the header; it fades into the page and never carries text. */
+.view > .page[data-surface="home"] { position: relative; isolation: isolate; }
+.view > .page[data-surface="home"]::before {
+  content: "";
+  position: absolute;
+  z-index: -1;
+  inset: calc(-1 * var(--space-6)) 0 auto;
+  height: calc(var(--space-7) * 3);
+  background: var(--gradient-wash-scrim), var(--gradient-aurora);
+  filter: blur(var(--blur-aurora));
+  pointer-events: none;
+  animation: aurora-drift var(--duration-ambient) var(--ease-linear) infinite alternate;
+}
+@keyframes aurora-drift {
+  to { transform: translateX(var(--space-6)) scale(1.1); }
+}
+
+/* View change: the browser's transition where supported, otherwise an opacity enter from the data-entering slot. */
+.app[data-view-motion="css"] > main > .view[data-entering] { animation: view-enter var(--duration-standard) var(--ease-out) backwards; }
+@keyframes view-enter {
+  from { opacity: 0; }
+}
+@keyframes view-exit {
+  to { opacity: 0; }
+}
+@supports (view-transition-name: none) {
+  .app[data-view-motion="native"] > main { view-transition-name: luuna-view; }
+  ::view-transition { pointer-events: none; }
+  ::view-transition-old(root), ::view-transition-new(root) { animation: none; mix-blend-mode: normal; }
+  ::view-transition-group(luuna-view) { animation: none; }
+  ::view-transition-old(luuna-view) { animation: view-exit var(--duration-micro) var(--ease-in) both; }
+  ::view-transition-new(luuna-view) { animation: view-enter var(--duration-standard) var(--ease-out) both; }
+}
+
+/* The icon rail: chosen with the sidebar toggle (Ctrl+backslash), and automatic at 920 px and below. */
+.app[data-sidebar="collapsed"] { grid-template-columns: var(--sidebar-compact) minmax(0, 1fr); }
+.app[data-sidebar="collapsed"] > .sidebar { padding-inline: var(--space-2); }
+.app[data-sidebar="collapsed"] .sidebar-top { flex-direction: column; }
+.app[data-sidebar="collapsed"] :is(.wordmark, .connection, .nav-item, .sidebar-search) { justify-content: center; padding-inline: 0; }
+.app[data-sidebar="collapsed"] .sidebar-label { position: absolute; width: var(--border-width); height: var(--border-width); overflow: hidden; clip-path: inset(50%); white-space: nowrap; }
+.app[data-sidebar="collapsed"] .nav-item { position: relative; }
+.app[data-sidebar="collapsed"] .nav-count { position: absolute; top: 0; right: var(--space-0-5); }
+
+@media (max-width: 920px) {
+  .app { grid-template-columns: var(--sidebar-compact) minmax(0, 1fr); }
+  .sidebar { padding-inline: var(--space-2); }
+  .sidebar-top { flex-direction: column; }
+  .sidebar :is(.wordmark, .connection, .nav-item, .sidebar-search) { justify-content: center; padding-inline: 0; }
+  .sidebar .sidebar-label { position: absolute; width: var(--border-width); height: var(--border-width); overflow: hidden; clip-path: inset(50%); white-space: nowrap; }
+  .sidebar-nav button.nav-item { position: relative; }
+  .sidebar-nav .nav-count { position: absolute; top: 0; right: var(--space-0-5); }
+  .app > main { padding-block: var(--space-5) var(--space-6); }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .sidebar-nav > .nav-pill { display: none; }
+  .sidebar-nav[data-pill] button.nav-item[aria-current="page"] { background: var(--color-selected); }
+  .sidebar-footer > .connection[data-live] > .tone-mark[data-tone]::after,
+  .view > .page[data-surface="home"]::before,
+  .app[data-view-motion="css"] > main > .view[data-entering],
+  .view[data-entering] > .page > :is(.panel-heading, .scope),
+  ::view-transition-old(luuna-view),
+  ::view-transition-new(luuna-view) { animation: none; }
+}
+
+@media (forced-colors: active) {
+  .wordmark-mark > circle { fill: CanvasText; }
+  .wordmark-mark > path { fill: Canvas; stroke: CanvasText; }
+  .sidebar-nav > .nav-pill { display: none; }
+  .sidebar-nav[data-pill] button.nav-item[aria-current="page"] { forced-color-adjust: none; background: SelectedItem; color: SelectedItemText; }
+  .sidebar-nav button.nav-item[aria-current="page"] { forced-color-adjust: none; background: SelectedItem; color: SelectedItemText; }
+}
