@@ -21,3 +21,11 @@
 .prompt-preview small { overflow-wrap: anywhere; }
 .component-context { border-top: var(--border-width) solid var(--color-border); padding-top: var(--space-3); }
 @media (max-width: 920px) { .component-columns { grid-template-columns: minmax(0, 1fr); } }
+
+/* Depth: the two columns are raised cards, records are table-like rows, and the not-enabled block sits on a wash. */
+.component-columns > section { padding: var(--space-4); border: var(--border-width) solid var(--color-border); border-radius: var(--radius-card); background: var(--color-surface-raised); box-shadow: var(--shadow-card); }
+.component-records { gap: 0; border-top: var(--border-width) solid var(--color-border); }
+.component-records > li { min-height: var(--row-height); padding: var(--space-2) var(--space-3); border: 0; border-bottom: var(--border-width) solid var(--color-border); border-radius: 0; }
+.component-records > li:hover, .component-records > li:focus-within { background: var(--color-surface); }
+.component-record-meta { font-variant-numeric: tabular-nums; }
+.project-components > .component-disabled { display: grid; justify-items: start; gap: var(--space-3); padding: var(--space-4); border: var(--border-width) solid var(--color-border); border-radius: var(--radius-card); background: var(--color-surface); }

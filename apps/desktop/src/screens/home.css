@@ -8,11 +8,11 @@
 
 /* Project records: name and chips on the first line, repositories and counts below. */
 .home-projects { gap: var(--space-3); }
-.home-project > .home-project-head { display: flex; flex-wrap: wrap; align-items: baseline; gap: var(--space-1-5) var(--space-3); min-width: 0; }
-.home-project > .home-project-head > strong { min-width: 0; font-size: var(--text-sm); overflow-wrap: anywhere; }
-.home-project > .home-repositories { display: grid; gap: var(--space-1-5); margin: 0; padding: 0; list-style: none; }
-.home-project > .home-repositories > li { display: flex; flex-wrap: wrap; align-items: baseline; gap: var(--space-1-5) var(--space-2); min-width: 0; }
-.home-project > .home-project-actions { padding-top: var(--space-1); }
+.home-project-card > .home-project-head { display: flex; flex-wrap: wrap; align-items: baseline; gap: var(--space-1-5) var(--space-3); min-width: 0; }
+.home-project-card > .home-project-head > strong { min-width: 0; font-size: var(--text-sm); overflow-wrap: anywhere; }
+.home-project-card > .home-repositories { display: grid; gap: var(--space-1-5); margin: 0; padding: 0; list-style: none; }
+.home-project-card > .home-repositories > li { display: flex; flex-wrap: wrap; align-items: baseline; gap: var(--space-1-5) var(--space-2); min-width: 0; }
+.home-project-card > .home-project-actions { padding-top: var(--space-1); }
 
 /* Blockers: a leaf record per blocker, ruled in the tone of the state it reports. */
 .home-blockers > .home-blocker { grid-template-columns: auto minmax(0, 1fr); align-items: baseline; gap: var(--space-1-5) var(--space-2); }
@@ -21,3 +21,18 @@
 /* Sections: "Waiting on you" first, then the projects, each a titled group on the page. */
 .home-section > .panel-heading > h3 { display: flex; align-items: baseline; gap: var(--space-2); }
 .home-section .home-count { color: var(--color-text-subtle); font-size: var(--text-xs); font-variant-numeric: tabular-nums; }
+
+/* Hero: a soft wash behind a row of count tiles. Each tile is a solid surface, so no text sits on the wash. */
+.home-hero { padding: var(--space-4); border: var(--border-width) solid var(--color-border); border-radius: var(--radius-card); background: var(--color-surface); }
+.home-hero .stat-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(min(100%, var(--facts-term)), 1fr)); gap: var(--space-3); margin: 0; }
+.stat-grid > .stat-tile { display: grid; gap: var(--space-1); min-width: 0; padding: var(--space-3) var(--space-4); border: var(--border-width) solid var(--color-border); border-radius: var(--radius-card); background: var(--color-surface-raised); box-shadow: var(--shadow-card); }
+.stat-tile > dt { color: var(--color-text-muted); font-size: var(--text-xs); }
+.stat-tile > dd { margin: 0; color: var(--color-text-heading); font-family: var(--font-display); font-size: var(--text-xl); font-weight: var(--weight-medium); font-variant-numeric: tabular-nums; line-height: var(--leading-tight); }
+
+/* A project is a feature card: the record is only the list slot, the glow surface carries the chrome. */
+.home-projects > .home-project { padding: 0; border: 0; background: transparent; box-shadow: none; }
+.home-project-card { transition: box-shadow var(--duration-standard) var(--ease-out); }
+@media (hover: hover) and (pointer: fine) {
+  .home-project-card:hover { box-shadow: var(--shadow-popover); }
+}
+.home-project-card:focus-within { box-shadow: var(--shadow-popover); }

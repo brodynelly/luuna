@@ -6,8 +6,8 @@
  * screen and the panel grid spaces the sections.
  */
 
-.help-sections { display: grid; grid-template-columns: repeat(auto-fit, minmax(min(100%, var(--hint-min)), 1fr)); gap: var(--space-5); min-width: 0; }
-.help-section { display: grid; grid-template-columns: minmax(0, 1fr); align-content: start; gap: var(--space-2); min-width: 0; }
+.help-sections { display: grid; grid-template-columns: repeat(auto-fit, minmax(min(100%, var(--hint-min)), 1fr)); gap: var(--space-4); min-width: 0; max-width: var(--layout-max); }
+.help-section { display: grid; grid-template-columns: minmax(0, 1fr); align-content: start; gap: var(--space-2); min-width: 0; padding: var(--space-4); border: var(--border-width) solid var(--color-border); border-radius: var(--radius-card); background: var(--color-surface-raised); box-shadow: var(--shadow-card); }
 .help-section > .panel-heading > h3 { margin: 0; }
 .help-section > :is(ol, ul) { display: grid; gap: var(--space-1-5); margin: 0; padding-left: var(--space-5); color: var(--color-text); font-size: var(--text-xs); line-height: var(--leading); }
 .help-section > ul.help-plain { padding-left: 0; list-style: none; }
@@ -15,3 +15,11 @@
 .help-section > .help-states > div { display: grid; grid-template-columns: minmax(0, 1fr); gap: var(--space-0-5); }
 .help-states .help-state-term { display: flex; flex-wrap: wrap; align-items: baseline; gap: var(--space-1-5); color: var(--color-text); font-weight: var(--weight-medium); }
 .help-states .help-state-meaning { margin: 0; color: var(--color-text-muted); }
+/* Onboarding steps: the list markup is unchanged; a counter draws the numbered badge. */
+.help-section > ol { padding-left: 0; list-style: none; counter-reset: help-step; }
+.help-section > ol > li { position: relative; min-height: var(--space-5); padding-left: var(--space-6); counter-increment: help-step; }
+.help-section > ol > li::before { content: counter(help-step); position: absolute; inset-block-start: 0; inset-inline-start: 0; display: grid; place-items: center; width: var(--space-5); height: var(--space-5); border-radius: var(--radius-pill); background: var(--color-accent-tint); color: var(--color-accent); font-size: var(--text-2xs); font-variant-numeric: tabular-nums; font-weight: var(--weight-medium); }
+/* Shortcuts: a key cap and its action on one line. */
+.help-shortcuts > li { display: flex; align-items: baseline; gap: var(--space-3); min-height: var(--row-height); padding-block: var(--space-1); border-bottom: var(--border-width) solid var(--color-border); }
+.help-shortcuts > li:last-child { border-bottom: 0; }
+.help-shortcuts .kbd { min-width: var(--number-width); padding: var(--space-0-5) var(--space-1-5); font-family: var(--font-mono); font-variant-numeric: tabular-nums; text-align: center; }

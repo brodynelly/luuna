@@ -8,15 +8,16 @@
  */
 
 .board-columns { display: grid; grid-template-columns: repeat(auto-fill, minmax(min(100%, var(--field-min)), 1fr)); gap: var(--space-3); min-width: 0; margin: 0; padding: 0; list-style: none; }
-.board-column { display: grid; grid-template-columns: minmax(0, 1fr); align-content: start; gap: var(--space-2); min-width: 0; padding: var(--space-3); border: var(--border-width) solid var(--color-border); border-radius: var(--radius-md); background: var(--color-surface-raised); }
+.board-column { display: grid; grid-template-columns: minmax(0, 1fr); align-content: start; gap: var(--space-2); min-width: 0; padding: var(--space-3); border: var(--border-width) solid var(--color-border); border-radius: var(--radius-card); background: var(--color-surface-raised); box-shadow: var(--shadow-card); }
 .board-column > .panel-heading > h3 { display: flex; align-items: baseline; gap: var(--space-2); margin: 0; font-size: var(--text-sm); }
-.board-column .board-count { color: var(--color-text-subtle); font-size: var(--text-2xs); font-variant-numeric: tabular-nums; }
+.board-column .board-count { padding: 0 var(--space-1-5); border-radius: var(--radius-pill); background: var(--color-surface-sunken); color: var(--color-text-muted); font-size: var(--text-2xs); font-variant-numeric: tabular-nums; }
 .board-column > .board-column-scope { color: var(--color-text-muted); font-size: var(--text-2xs); }
 .board-column > .board-cards { display: grid; gap: var(--space-1); min-width: 0; margin: 0; padding: 0; list-style: none; }
 .board-column > .board-cards > li { min-width: 0; }
 /* A card is a selectable card on the column's raised surface, so its own surface is the panel's. */
 .board-column > .board-cards > li > button.run-card { padding: var(--space-2); border-color: var(--color-border); background: var(--color-surface); }
-.board-column > .board-cards > li > button.run-card:hover:not(:disabled) { background: var(--color-control-hover); }
+.board-column > .board-cards > li > button.run-card { border-radius: var(--radius-button); box-shadow: var(--shadow-button); transition: box-shadow var(--duration-micro) var(--ease-out), transform var(--duration-micro) var(--ease-out), background-color var(--duration-micro) var(--ease-out); }
+.board-column > .board-cards > li > button.run-card:hover:not(:disabled), .board-column > .board-cards > li > button.run-card:focus-visible { background: var(--color-control-hover); box-shadow: var(--shadow-button-hover); transform: translateY(var(--lift-y)); }
 
 @media (max-width: 680px) {
   .board-columns { grid-template-columns: minmax(0, 1fr); }

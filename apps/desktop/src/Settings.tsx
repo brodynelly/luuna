@@ -4,7 +4,7 @@ import type { DoctorItem, DoctorReport, DoctorStatus, LuunaClient } from "@luuna
 import { describeFailure } from "./failures";
 import type { Tone } from "./design/tone";
 import { viewInfo } from "./content/views";
-import { Box, Button, Callout, EmptyState, ErrorBanner, Id, Item, List, Loading, Page, Section, StatusBadge, Tag } from "./ui";
+import { Box, Button, Callout, CheckDraw, EmptyState, ErrorBanner, Id, Item, List, Loading, Page, Section, StatusBadge, Tag } from "./ui";
 
 /**
  * The doctor statuses on the six tones: `ok` is passed evidence of the environment, `warning`
@@ -18,7 +18,7 @@ export function readDoctor(client: Pick<LuunaClient, "doctor">, signal: AbortSig
 }
 
 /** The report as a list: status badge, item name, the required marker and the runtime's one-line detail, then the verdict. */
-export function DoctorReportView({ report }: { report: DoctorReport }) {
+export function DoctorReportView({ report, tick = 0 }: { report: DoctorReport; tick?: number }) {
   return <Box className="settings-report">
     <List className="settings-items" label="Runtime environment and credential presence">{report.items.map((item: DoctorItem) => <Item key={item.name} className="settings-item">
       <StatusBadge tone={doctorTone[item.status]}>{item.status}</StatusBadge>
@@ -26,7 +26,10 @@ export function DoctorReportView({ report }: { report: DoctorReport }) {
       {item.required && <Tag>required</Tag>}
       <span className="settings-detail">{item.detail}</span>
     </Item>)}</List>
-    <Callout className="settings-verdict" tone={report.ok ? "success" : "danger"} status>{report.ok ? "doctor: ok. Every required item is present and the database is usable." : "doctor: FAILED. A required item is missing or the database is unusable; the items above say which."}</Callout>
+    <Box className="settings-verdict-row">
+      {report.ok && <CheckDraw key={tick} />}
+      <Callout className="settings-verdict" tone={report.ok ? "success" : "danger"} status>{report.ok ? "doctor: ok. Every required item is present and the database is usable." : "doctor: FAILED. A required item is missing or the database is unusable; the items above say which."}</Callout>
+    </Box>
   </Box>;
 }
 
@@ -64,8 +67,8 @@ export function Settings({ client, connectionEpoch = 0, refreshEpoch = 0, childr
     {children}
     <Section id="environment-heading" title="Environment" className="settings-environment" accessory={refresh}>
       {error && <ErrorBanner message={error} onDismiss={() => setError("")} />}
-      {client ? report ? <DoctorReportView report={report} /> : !error && <Loading label="Reading the runtime's doctor report…" rows={6} />
-        : <EmptyState boxed>Connect to the runtime to see its environment and which credentials are configured.</EmptyState>}
+      {client ? report ? <DoctorReportView report={report} tick={tick} /> : !error && <Loading label="Reading the runtime's doctor report…" rows={6} />
+        : <EmptyState boxed wash>Connect to the runtime to see its environment and which credentials are configured.</EmptyState>}
     </Section>
   </Page>;
 }
