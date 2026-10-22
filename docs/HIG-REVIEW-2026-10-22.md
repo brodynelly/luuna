@@ -91,5 +91,21 @@ Apple uses title-style capitalization for buttons. Windows, the client's first p
 
 ## Open (Medium or lower)
 
-- **Native verification.** The menu bar compiles (`cargo check`, `cargo clippy`), but it has not yet been exercised in the Tauri window on Windows or macOS.
-- **Native verification.** The menu bar compiles (`cargo check`, `cargo clippy`), but it has not yet been exercised in the Tauri window on Windows or macOS.
+- **macOS.** Nothing has run on a Mac yet. That includes the native menu bar, and the standard Edit menu that copy and paste in the web view depend on.
+- **Windows stop-and-restart lifecycle smoke.** `scripts/windows-native-startup-smoke.mjs` stops and restarts the shared development runtime on port 4242, so it has not been run against this tree.
+
+## Native verification (Windows, 2026-10-22)
+
+The debug desktop (`npm run tauri --workspace @luuna/desktop -- build --debug --no-bundle --ci -- --locked`) was launched in WebView2 against an isolated runtime on port 4343, without touching the shared one on 4242. The window's Win32 menu (`GetMenu`) carries:
+- Luuna: About, Settings… (Ctrl+,), Exit.
+- Edit: Undo, Redo, Cut, Copy, Paste, Select All.
+- View: the six views (Ctrl+1–6), Go to… (Ctrl+K), Toggle Sidebar (Ctrl+\).
+- Help: Luuna Help.
+
+Posting each item's `WM_COMMAND` drove the page:
+- View › Board switched the view to Board.
+- View › Go to… opened the palette.
+- View › Toggle Sidebar collapsed the sidebar.
+- Help › Luuna Help opened Help.
+
+In the same window, the sidebar listed the six views and Ctrl+K opened the palette. Automatic startup refused, correctly, to attach to a runtime started from another checkout's executable ("Port 4242 belongs to another executable").
