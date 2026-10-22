@@ -15,6 +15,20 @@ development distribution with unverified portable component evidence.**
 
 ## What the installer carries
 
+The terminal payload includes `luuna-tui.exe` built with `cargo build --locked
+-p luuna-tui` in the selected profile. Node remains required for the local JSONL
+bridge and script commands. The installed launcher always selects this staged
+binary; it never selects a checkout's debug executable or falls back to the old
+JavaScript interactive renderer. The package report includes its SHA-256.
+
+To stage only this payload for testing, first build the native terminal and run
+`npm run build --workspace @luuna/api-client`, then use
+`node scripts/stage-terminal.mjs --out <new-stage-directory> --binary <absolute-luuna-tui.exe>`.
+This creates the same terminal payload used by the packager without installing
+an application. A staged `--help` check only proves command startup: actual
+interactive acceptance must launch this directory's public entry in ConPTY
+against a disposable runtime, from an unrelated working directory.
+
 The bundle's `luuna/` folder beside `luuna-desktop.exe` contains:
 
 | Path | Origin | Purpose |

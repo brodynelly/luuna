@@ -31,6 +31,19 @@ environment (`LUUNA_API_TOKEN`, `LUUNA_GITHUB_TOKEN`, the provider variables); t
 
 ## Interactive workbench
 
+The production interactive renderer is the Rust application (`crates/luuna-tui`),
+built with `npm run build:tui` at the repository root. The Node entry passes an
+absolute local JSONL bridge path and the current Node executable; all commands
+continue using the shared client. No JavaScript-renderer fallback is used.
+Development launches select `target/debug/luuna-tui[.exe]` (or the explicit
+`CARGO_TARGET_DIR`); installed launches select the binary in the installed root.
+Node 24.19.0 and Rust 1.90.0 are the tested repository toolchain pins.
+
+The legacy interaction description below records the earlier renderer; native
+view-specific controls and its full UI evidence are updated with the component
+view integration. `npm run test:tui-terminal` currently verifies the real ConPTY
+driver, VT screen model and console restoration, separately from native UI proof.
+
 `luuna-tui` alone opens the workbench on the terminal's alternate screen: menus generated from the
 command table (every cataloged action is reachable), each item showing the action, the command name
 and the catalog title. Keys: `↑`/`↓` (or `j`/`k`) move, `PgUp`/`PgDn`/`Home`/`End` jump, `Enter`

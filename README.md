@@ -60,6 +60,20 @@ With a private `LUUNA_API_TOKEN` of at least 32 bytes set, start the service wit
 
 Linux cloud checks cannot establish Mac or Windows installation support. A frontend build cannot establish a working Tauri distribution. Report the commands and platforms actually exercised.
 
+## Terminal workbench
+
+Build the Rust terminal with `npm run build:tui` (Rust 1.90.0, locked dependencies),
+then run `npm run tui` with a local runtime and private `LUUNA_API_TOKEN`. A missing
+token is entered without echo. `npm run tui -- help` and named commands such as
+`npm run tui -- projects --json` remain available without the Rust build.
+
+The interactive application uses the DOS palette and component layout from
+`luuna-ai`; Node runs the shared local command bridge. The checkout launcher
+resolves `target/debug/luuna-tui.exe` on Windows, or `luuna-tui` on Unix, and honors
+an explicit `CARGO_TARGET_DIR`. Installed Windows distributions carry their own
+native executable. See [the terminal package](packages/tui/README.md) and
+[ADR 0029](docs/decisions/0029-rust-terminal-workbench.md).
+
 ## Design references and licensing
 
 The [desktop/Pi RPC proposal](LUUNA-Desktop-Pi-RPC-Full-Development-Proposal.md) supplies detailed rationale. The thirteen numbered chapters under `docs/`, [the complete reference](LUUNA-COMPLETE-REFERENCE.md), diagrams, examples, HTML, and PDF remain historical source material. Their original browser/TUI delivery order and conflicting API examples are superseded by the current architecture and decisions. Browser/TUI capability parity remains a full-v1 obligation.
