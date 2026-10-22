@@ -1,6 +1,8 @@
 # ADR 0027: the advertised v1 acceptance scope for optional and host-bound capabilities
 
-Date: 2026-10-22. Status: **proposed; the owner's decision is required.**
+Date: 2026-10-22. Status: **accepted on the maintainer's best estimate
+(2026-10-22, see "Decision taken" below); the owner may revise any point, and
+a revised point returns to the backlog with its original wording.**
 The October 22 specification audit ([SPEC-AUDIT-2026-10-22.md](../SPEC-AUDIT-2026-10-22.md),
 findings 6 and 7) asked that several capabilities the specification advertises
 as optional, host-bound or experience-level be resolved explicitly in the
@@ -80,7 +82,42 @@ runtime guard; it only states what the release report may count as complete.
 
 The items of point 4 were implemented as client work the same day, as projections of existing routes (no catalog entry was added): the desktop **Home** summary (`apps/desktop/src/Home.tsx`: projects, validation health as the latest baseline per repository, blockers as testing-setup prerequisites and failed, paused, interrupted or testing-blocked workflows, a create-ticket shortcut into the Projects panel), the **Kanban** projection (`Board.tsx`: the chapter's columns backlog, testing prerequisite, discovery/plan, approval, implementation, checks, review and PRs over the recorded run states through `RUN_COLUMN`; cards are read-only and open the ticket's own panel, and the view says that dragging is not implemented), the **Help** panel (`Help.tsx`: onboarding steps, what each state means through the six tones, where evidence lives, links to the documents) and the **external-editor handoff** on the candidate view (`CandidateReview.tsx`: each worktree path of the run with a copy control, no editor integration). The projections live in `packages/api-client/src/projections.ts` and the TUI prints the same ones through `luuna-tui home` and `luuna-tui board`; `scripts/check-contracts.mjs` traces each surface (`REQUIRED_SURFACES`) to the catalog entries it projects, a `data-surface` desktop panel and the TUI projection. **Settings** stay as decided: the runtime's `doctor` output, not an in-app editor. The interactive terminal audit of point 5 remains open.
 
+## Decision taken, 2026-10-22
+
+The owner asked that each of the six points be resolved on the maintainer's
+best estimate rather than left open. Each proposed decision above is taken as
+written, with these estimates recorded so a later owner can see what they
+rest on:
+
+1. **Container execution: out of v1 scope.** Native execution is what every
+   piece of evidence used and what the contract records; an unreviewed
+   container profile would advertise confinement the runtime cannot prove.
+   The `container` refusal stays. A32 is counted established for the native
+   profile.
+2. **Native Android and iOS: import plus capability-gated checks.** No host
+   here or in the recorded runs had Android Studio or Xcode; generated
+   projects for those toolchains cannot be verified and would be the least
+   trustworthy part of the release. R13 counts complete for them once an
+   imported project baselines on a capable runner.
+3. **Go, Flutter, React/Next.js: capable-runner evidence required.** No
+   change in scope; the report may not claim them from offline proposals
+   alone.
+4. **Home, Kanban and Help are required and exist; editor handoff is the
+   worktree path shown and copied; settings is the runtime's `doctor`
+   output.** The first four surfaces exist on this branch (dated note
+   below); the settings surface is delivered as a read-only doctor report in
+   both clients (a `doctor` route and catalog entry, the desktop `Settings`
+   panel and `luuna-tui doctor`), never an in-app credential editor.
+5. **The interactive terminal mode is in v1 parity scope and its audit is
+   required.** The audit is delivered as a reproducible harness
+   (`scripts/tui-interactive-audit.mjs`, ADR 0020 third amendment) with the
+   defects it found fixed; R02 counts complete for both modes once it passes.
+6. **Mac ARM64 and Windows x64 remain the release targets; Linux is
+   development evidence only.** Unchanged.
+
 ## What remains
 
-- The owner's acceptance of each proposed decision; any item rejected returns
-  to the implementation backlog with its original wording.
+- The owner's review of the estimates above; a rejected point returns to the
+  implementation backlog with its original wording.
+- Capable-runner evidence for points 2 and 3 and fresh-host evidence for
+  point 6 still need those hosts (see RELEASE-EVIDENCE.md).

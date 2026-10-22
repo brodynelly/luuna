@@ -43,12 +43,13 @@ The October 21 tables are kept unchanged as the Windows-host record.
 | R08 / A06 testing prerequisite | offered prerequisite, approved `testing_setup` workflow admitted without a baseline, real-test pass rule (ADR 0022); both clients show the offer and send the setup plan | `testing_setup.rs` 3 scenarios; desktop, client and TUI tests |
 | R10 / A24 CI-failure repair | bounded repair from an observed CI failure invalidates the published candidate; the repaired revision publishes a superseding pull request (ADR 0018 second amendment) | `publication.rs` |
 | R11 / A22 / A25 linked sets | three-repository linked publication, partial-set recovery without duplicates, one-of-several merged is not integrated | `publication_multirepo.rs` 5 scenarios; real GitHub still **not established** |
-| R13 / A05 stacks | Next.js scaffold profile; scope for Android/iOS/Go/Flutter/React proposed in ADR 0027 | `scaffold.rs`; capable runners still absent |
+| R13 / A05 stacks | Next.js scaffold profile; Android and iOS advertised as import plus capability-gated checks, Go/Flutter/React complete only with capable-runner evidence (ADR 0027 points 2 and 3, accepted on best estimate) | `scaffold.rs`; capable runners still absent, so those profiles stay **blocked** |
 | R14 / A29 memory and portability | project import on another machine (ADR 0021 amendment), memory correction, personal export, retention policy (ADR 0026) | `projects.rs` synthetic import tests; real-CLI runtime tests 9/9, Missions 3/3, adapter 1/1, component smoke 14/14 with Bun 1.4.3 |
 | R01 / A02 packaging | portable component layout with digest verification, Bun and the terminal client with a compiled API client staged by the packager (ADR 0024) | `stage-components` tests, `luuna-components` portable-layout tests, doctor; the installer was **not built** and no clean machine ran it (no Windows host here) |
 | A14 / A26 drift after review | reproduced probe now refused; candidate invalidated, nothing pushed | `publication.rs` |
 | A09 superseded revision | reproduced probe now refused for publication and reconciliation | `publication.rs` |
-| A32 container profile | out of v1 scope by proposed decision (ADR 0027), awaiting the owner | — |
+| Acceptance chapter measurements (pilot) | first pilot on a real repository (a fresh Luuna Beacon clone, 459 real tests) with the synthetic model: map, latency, large log, cancellation, overhead, memory, usage and SIGKILL recovery measured and inside the proposed targets ([PILOT-2026-10-22.md](PILOT-2026-10-22.md)) | `scripts/pilot-measurements.mjs` 8/8; genuine-provider pilot on a release host still owed |
+| A32 container profile | out of v1 scope (ADR 0027 point 1, accepted on best estimate): established for the native profile, the `container` refusal stays as a scope decision, not a gap | execution-profile tests |
 
 Checks on the branch's final revision, all local (hosted CI could not start):
 
@@ -136,7 +137,7 @@ owner's decision on ADR 0027 and the interactive terminal audit it names (its po
 | A29 | Project export without credentials or paths | export guard refuses credentials, host paths and user memory (ADR 0021) | established (real CLIs) |
 | A30 | External Missions edit during a run | ADR 0014 source drift tests | established (real CLIs) |
 | A31 | Required iOS check on an incapable host | capability probing marks `xcode` missing and blocks with an explanation | established on Windows; a Mac has not run the positive case |
-| A32 | Native and container profiles | only `native` executes; `container` is accepted by the contract and refused at execution | partial: container execution **not implemented** |
+| A32 | Native and container profiles | only `native` executes; `container` is accepted by the contract and refused at execution | established for the native profile; container execution is out of v1 scope by ADR 0027 point 1 (October 22) |
 | A33 | Every client capability | catalog-driven parity tests | established for the cataloged actions |
 | A34 | Automatic PR completion keeps human merge | publisher without a merge path | established against a fake server |
 
@@ -164,6 +165,9 @@ owner's decision on ADR 0027 and the interactive terminal audit it names (its po
 - Import of a project export on another machine is not implemented.
 - Pilot measurements (task completion, repairs, failures by cause, resource use)
   exist only for the bounded harnesses; no real-project pilot has run.
+  (October 22: a synthetic-model pilot on a real repository has since run,
+  [PILOT-2026-10-22.md](PILOT-2026-10-22.md); the genuine-provider pilot is
+  still owed.)
 
 ## Blocking the v1 label
 
@@ -173,4 +177,6 @@ owner's decision on ADR 0027 and the interactive terminal audit it names (its po
 4. Capable-runner evidence for Flutter, Android and iOS profiles (R13, A31).
 5. A genuine-provider run of the M3 harness on the current tree, and a genuine
    multi-repository feature.
-6. A real-project pilot with the measurements the acceptance chapter asks for.
+6. A real-project pilot with the measurements the acceptance chapter asks for
+   (October 22: done with the synthetic model on a real repository; owed with
+   a genuine provider on a release host).

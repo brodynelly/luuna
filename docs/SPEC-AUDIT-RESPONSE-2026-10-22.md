@@ -178,5 +178,8 @@ condition and the local verification are also recorded on the pull request.
    need a repository and token the owner provides.
 3. Fresh-host Mac and clean-machine Windows installation, signing and update
    strategy, and the capable-runner stack evidence need those hosts.
-4. The real-project pilot with the acceptance chapter's measurements.
-5. The owner's decision on ADR 0027.
+4. The real-project pilot with a genuine provider on a release host; the
+   synthetic-model pilot on a real repository with every measurement of the
+   acceptance chapter is recorded in [PILOT-2026-10-22.md](PILOT-2026-10-22.md).
+5. ADR 0027 was accepted on the maintainer's best estimate at the owner's
+   request; the owner may still revise any point.
