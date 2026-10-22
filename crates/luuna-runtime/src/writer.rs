@@ -656,6 +656,18 @@ pub async fn create_plan(
     let mut permissions = request.permissions.clone();
     let mut operations: Vec<Operation> = Vec::new();
     let earlier_revisions = store.plans_for_ticket(&ticket.id).map_err(internal)?;
+    // The candidate set is the writer tasks' repositories; an advisory-only
+    // repository has no candidate commit, so its checks are never run and
+    // must not be required of the candidate (its base commit is still
+    // recorded for the advisory worktree).
+    let writer_repositories: std::collections::BTreeSet<String> = requested
+        .iter()
+        .filter(|task| {
+            purpose == TicketPurpose::TestingSetup
+                || TaskRole::parse(&task.role).is_none_or(|role| !role.is_advisory())
+        })
+        .map(|task| task.repository_id.clone())
+        .collect();
     for task in &requested {
         luuna_domain::require_granted_operations(&task.operations)
             .map_err(|e| unprocessable(e.to_string()))?;
@@ -751,7 +763,7 @@ pub async fn create_plan(
                     .iter()
                     .map(|check| CheckRecipe::from_manifest(&proposed, check)),
             );
-        } else {
+        } else if writer_repositories.contains(&task.repository_id) {
             required_checks.extend(
                 repository
                     .checks
@@ -1006,6 +1018,11 @@ pub(crate) struct WriterJob {
     pub(crate) provider: Option<String>,
     pub(crate) model: Option<String>,
     pub(crate) previous_candidate: Option<CandidateSet>,
+    /// The previous candidate was refused by the pre-push policy: the repair
+    /// worktree starts at the approved base holding that candidate's tree as
+    /// uncommitted content, so the refused commit is never pushed as an
+    /// ancestor of the repaired one.
+    pub(crate) history_clean: bool,
     pub(crate) repair_feedback: Option<String>,
     /// Seconds spent preparing the attempt (the repair feedback read), charged to
     /// the workflow's durable elapsed time like the writer's own run.
@@ -1346,6 +1363,9 @@ async fn schedule_writer(
     let previous_candidate = previous_evidence
         .as_ref()
         .map(|evidence| evidence.candidate.clone());
+    let history_clean = previous_evidence
+        .as_ref()
+        .is_some_and(|evidence| evidence.policy_refused);
     let (run, plan, task, ticket, registration, manifest) = {
         let store = state.store.lock().map_err(internal)?;
         let run = store
@@ -1578,6 +1598,7 @@ async fn schedule_writer(
         provider,
         model,
         previous_candidate,
+        history_clean,
         repair_feedback: None,
         preparation_seconds: 0,
         component_resources,
@@ -2675,8 +2696,20 @@ fn open_without_following(path: &FsPath) -> Option<std::fs::File> {
 
 /// Where the writer's worktree starts and, for a repair, what it already
 /// holds: a repair worktree is created from the previous candidate's commit,
-/// whose changes sit on top of the approved base.
-fn worktree_origin(base: &str, previous: Option<(u64, &str)>) -> (String, String) {
+/// whose changes sit on top of the approved base; after a pre-push policy
+/// refusal it is created at the base holding that candidate's changes
+/// uncommitted, so the refused commit is never published.
+fn worktree_origin(
+    base: &str,
+    previous: Option<(u64, &str)>,
+    history_clean: bool,
+) -> (String, String) {
+    if let (Some((revision, _)), true) = (previous, history_clean) {
+        return (
+            base.to_owned(),
+            format!(" It holds the changes of candidate revision {revision} as uncommitted content on the approved base {base}: the pre-push policy refused that candidate, so remove every credential and out-of-scope change it names and keep the rest; do not start over."),
+        );
+    }
     match previous {
         Some((revision, commit)) => (
             commit.to_owned(),
@@ -2704,6 +2737,7 @@ fn writer_system_prompt(job: &WriterJob, worktree: &FsPath) -> String {
                 .get(&job.task.repository_id)
                 .map(|commit| (candidate.revision, commit.as_str()))
         }),
+        job.history_clean,
     );
     let operations: Vec<String> = job
         .task
@@ -2832,12 +2866,17 @@ pub(crate) async fn writer_worker(
     let preparation_seconds = job.preparation_seconds;
     let attempt_id = job.attempt.id.clone();
     let repository_id = job.task.repository_id.clone();
-    let base = job
+    let previous_commit = job
         .previous_candidate
         .as_ref()
         .and_then(|candidate| candidate.repository_commits.get(&repository_id))
-        .or_else(|| job.plan.base_commits.get(&repository_id))
-        .cloned()
+        .cloned();
+    // A history-clean repair starts at the approved base and restores the
+    // refused candidate's tree as uncommitted content below.
+    let restored_tree = previous_commit.clone().filter(|_| job.history_clean);
+    let base = previous_commit
+        .filter(|_| !job.history_clean)
+        .or_else(|| job.plan.base_commits.get(&repository_id).cloned())
         .unwrap_or_default();
     let settle = |state: &AppState,
                   attempt_state: AttemptState,
@@ -2998,6 +3037,13 @@ pub(crate) async fn writer_worker(
                 .add_detached_worktree(&root, &worktree, &base)
                 .await
                 .map_err(|error| format!("cannot create worktree: {error}"))?;
+            if let Some(commit) = &restored_tree {
+                state
+                    .git
+                    .restore_tree(&worktree, commit)
+                    .await
+                    .map_err(|error| format!("cannot restore the refused candidate's tree: {error}"))?;
+            }
             crate::candidates::index_inspector(&state)
                 .unseen_state(&worktree).await.map_err(|error| {
                 format!("cannot record the worktree's links: {error}; worktree preserved")
@@ -4521,14 +4567,27 @@ mod redaction_tests {
     #[test]
     fn a_repair_writer_is_told_it_starts_from_the_previous_candidate() {
         let base = "a".repeat(40);
-        assert_eq!(worktree_origin(&base, None), (base.clone(), String::new()));
+        assert_eq!(
+            worktree_origin(&base, None, false),
+            (base.clone(), String::new())
+        );
         let commit = "b".repeat(40);
-        let (start, note) = worktree_origin(&base, Some((2, &commit)));
+        let (start, note) = worktree_origin(&base, Some((2, &commit)), false);
         assert_eq!(start, commit);
         assert!(
             note.contains("candidate revision 2")
                 && note.contains("already contains the previous attempt's changes")
                 && note.contains(&base),
+            "{note}"
+        );
+        // After a policy refusal the repair starts at the base with the
+        // refused candidate's changes uncommitted.
+        let (start, note) = worktree_origin(&base, Some((2, &commit)), true);
+        assert_eq!(start, base);
+        assert!(
+            note.contains("uncommitted content")
+                && note.contains("pre-push policy refused")
+                && !note.contains(&commit),
             "{note}"
         );
     }

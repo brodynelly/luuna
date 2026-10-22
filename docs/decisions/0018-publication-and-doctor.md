@@ -195,6 +195,18 @@ deterministic secrets/path policy ran before the push
    matched text; the refusal is `422`, and because the refused content is
    the candidate itself, the reviewed candidate is invalidated (failed, not
    drift) so the bounded repair path of `POST …/repair` is open.
+   Every commit the push would publish is scanned on its own patch
+   (`rev-list base..candidate`, each against its parent), not only the net
+   base-to-candidate patch: a repair that removes a credential still pushes
+   the earlier commit that added it, so such a finding names the ancestor
+   commit. The candidate a policy refused is marked `policy_refused`, and
+   its repair starts *history-clean*: the repair worktree is created at the
+   approved base holding the refused candidate's tree as uncommitted content
+   (`restore_tree`), so the repaired commit sits directly on the base and the
+   refused commit is never an ancestor of anything pushed. An ordinary repair
+   (a failed check, a blocking review, a CI failure) keeps starting from the
+   previous candidate's commit; the per-commit scan is the guard for its
+   history.
 4. **Drift after review invalidates the candidate.** When the worktree no
    longer holds the frozen candidate, `Store::invalidate_reviewed_candidate`
    marks the candidate failed with content drift (never re-validated in

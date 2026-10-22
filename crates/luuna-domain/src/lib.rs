@@ -660,7 +660,13 @@ impl PlanRevision {
         }
         self.validate_task_graph()?;
         self.validate_overrides()?;
-        if self.required_checks.is_empty() || !self.required_checks.iter().any(|c| c.required) {
+        // An advisory-only plan writes no candidate, so it has no check to
+        // run; every plan with a writer task needs a required check for the
+        // repositories its candidate covers.
+        let writes = self.tasks.iter().any(|task| !task.is_advisory());
+        if writes
+            && (self.required_checks.is_empty() || !self.required_checks.iter().any(|c| c.required))
+        {
             return invalid("at least one required check is necessary");
         }
         self.validate_purpose()?;

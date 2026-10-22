@@ -1127,6 +1127,7 @@ async fn the_pre_push_policy_refuses_credentials_without_naming_their_values() {
     assert!(events
         .iter()
         .any(|e| e["type"] == "candidate.invalidated" && e["payload"]["content_drift"] == false));
+    assert_eq!(view["evidence"]["policy_refused"], true, "{view}");
     // A repair is admitted from here: the next revision replaces the finding.
     let (status, repair) = harness
         .request(
@@ -1136,6 +1137,150 @@ async fn the_pre_push_policy_refuses_credentials_without_naming_their_values() {
         )
         .await;
     assert_eq!(status, StatusCode::ACCEPTED, "{repair}");
+    // The repair starts history-clean: its commit sits directly on the
+    // approved base, so the refused commit is never an ancestor of what is
+    // pushed, and the repaired candidate publishes with no credential in any
+    // published commit.
+    assert_eq!(harness.settled(&run_id).await["state"], "validating");
+    let pending = harness.candidate(&run_id).await;
+    let repaired = pending["evidence"]["candidate"].clone();
+    assert_eq!(repaired["revision"], 2, "{pending}");
+    let base = git(repo.path(), &["rev-parse", "HEAD"]);
+    let repaired_commit = repaired["repository_commits"]["app"].as_str().unwrap();
+    assert_eq!(
+        git(repo.path(), &["rev-parse", &format!("{repaired_commit}^")]),
+        base,
+        "the repaired commit's parent is the approved base, not the refused commit"
+    );
+    let (status, response) = harness
+        .request(
+            "POST",
+            &format!("/api/v1/runs/{run_id}/validate"),
+            Some(json!({"candidate_hash": repaired["hash"], "provider": "test", "model": "synthetic"})),
+        )
+        .await;
+    assert_eq!(status, StatusCode::ACCEPTED, "{response}");
+    let reviewed = harness.candidate_settled(&run_id).await;
+    assert_eq!(reviewed["evidence"]["status"], "reviewed", "{reviewed}");
+    let (status, accepted) = harness
+        .publish(&run_id, &repaired["hash"], "publish-repaired")
+        .await;
+    assert_eq!(status, StatusCode::ACCEPTED, "{accepted}");
+    let record = harness.publication_settled(&run_id).await;
+    assert_eq!(record["publication_state"], "pr_open", "{record}");
+    let branch = record["repositories"]["app"]["branch"].as_str().unwrap();
+    let pushed = remote_branch(repo.path(), branch).expect("branch pushed");
+    assert_eq!(pushed, repaired_commit);
+    let history = Command::new("git")
+        .args(["-C", &bare_path(repo.path()), "log", "-p", "--all"])
+        .output()
+        .unwrap();
+    let history = String::from_utf8_lossy(&history.stdout);
+    assert!(
+        !history.contains("ghp_a1b2") && !history.contains("Xk9f2mQ8"),
+        "no published commit carries the credential"
+    );
+}
+
+/// The pre-push policy scans every commit a push would publish, not only
+/// the net patch: a repair that starts from a failed candidate's commit keeps
+/// that commit as an ancestor, and a credential it added is pushed with it
+/// even though the repaired tree no longer holds the file.
+#[tokio::test]
+async fn a_credential_in_an_ancestor_commit_is_refused_even_when_the_net_patch_is_clean() {
+    let harness = Harness::new().await;
+    let repo = Repo::new();
+    clean_repository(repo.path());
+    let (status, view) = harness
+        .request(
+            "POST",
+            "/api/v1/projects",
+            Some(json!({"id":"fixture","name":"Fixture","repositories":[{"id":"app","path":repo.path().to_string_lossy()}]})),
+        )
+        .await;
+    assert_eq!(status, StatusCode::CREATED, "{view}");
+    // The check fails while the credential file exists, so the first
+    // candidate fails its check (not the policy) and its repair starts from
+    // that commit.
+    let check = json!({"id": "unit", "executable": python(), "args": ["-c",
+        "import os, sys; bad = os.path.exists('src/config.py'); print('running 1 tests'); print('test result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured' if bad else 'test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured'); sys.exit(1 if bad else 0)"],
+        "required": true, "timeout_seconds": 30, "capabilities": ["python"], "cwd": "."});
+    harness.confirm(0, vec![check]).await;
+    harness.baseline().await;
+    let ticket = harness.ticket("secret_then_repair").await;
+    let opened = harness.plan(ticket["id"].as_str().unwrap()).await;
+    harness.approve(&opened["plan"]).await;
+    let run_id = opened["run"]["id"].as_str().unwrap().to_owned();
+    let (status, run) = harness
+        .request(
+            "POST",
+            &format!("/api/v1/runs/{run_id}/implement"),
+            Some(json!({"provider": "test", "model": "synthetic"})),
+        )
+        .await;
+    assert_eq!(status, StatusCode::ACCEPTED, "{run}");
+    assert_eq!(harness.settled(&run_id).await["state"], "validating");
+    let first = harness.candidate(&run_id).await["evidence"]["candidate"].clone();
+    let (status, response) = harness
+        .request(
+            "POST",
+            &format!("/api/v1/runs/{run_id}/validate"),
+            Some(
+                json!({"candidate_hash": first["hash"], "provider": "test", "model": "synthetic"}),
+            ),
+        )
+        .await;
+    assert_eq!(status, StatusCode::ACCEPTED, "{response}");
+    let failed = harness.candidate_settled(&run_id).await;
+    assert_eq!(failed["evidence"]["status"], "failed", "{failed}");
+    assert_ne!(failed["evidence"]["policy_refused"], true);
+    assert_eq!(failed["repair_allowed"], true, "{failed}");
+    let (status, repair) = harness
+        .request(
+            "POST",
+            &format!("/api/v1/runs/{run_id}/repair"),
+            Some(
+                json!({"candidate_hash": first["hash"], "provider": "test", "model": "synthetic"}),
+            ),
+        )
+        .await;
+    assert_eq!(status, StatusCode::ACCEPTED, "{repair}");
+    assert_eq!(harness.settled(&run_id).await["state"], "validating");
+    let repaired = harness.candidate(&run_id).await["evidence"]["candidate"].clone();
+    let repaired_commit = repaired["repository_commits"]["app"].as_str().unwrap();
+    // An ordinary repair keeps the failed candidate's commit as its parent.
+    assert_eq!(
+        git(repo.path(), &["rev-parse", &format!("{repaired_commit}^")]),
+        first["repository_commits"]["app"].as_str().unwrap()
+    );
+    let (status, response) = harness
+        .request(
+            "POST",
+            &format!("/api/v1/runs/{run_id}/validate"),
+            Some(json!({"candidate_hash": repaired["hash"], "provider": "test", "model": "synthetic"})),
+        )
+        .await;
+    assert_eq!(status, StatusCode::ACCEPTED, "{response}");
+    let reviewed = harness.candidate_settled(&run_id).await;
+    assert_eq!(reviewed["evidence"]["status"], "reviewed", "{reviewed}");
+    // The net patch is clean; the ancestor is not. Nothing is pushed.
+    let (status, refused) = harness
+        .publish(&run_id, &repaired["hash"], "publish-ancestor")
+        .await;
+    assert_eq!(status, StatusCode::UNPROCESSABLE_ENTITY, "{refused}");
+    let reason = refused["error"].as_str().unwrap();
+    assert!(reason.starts_with("pre-push policy refused"), "{reason}");
+    assert!(
+        reason.contains("src/config.py [credential-token]"),
+        "{reason}"
+    );
+    assert!(reason.contains("in ancestor commit"), "{reason}");
+    assert!(!reason.contains("ghp_a1b2"), "{reason}");
+    assert!(remote_branch(repo.path(), "luuna").is_none());
+    assert_eq!(harness.requests("POST", "/pulls"), 0);
+    let view = harness.candidate(&run_id).await;
+    assert_eq!(view["evidence"]["status"], "failed", "{view}");
+    assert_eq!(view["evidence"]["policy_refused"], true, "{view}");
 }
 
 /// The check runs the fake reports for the fixture repository's pull request head.

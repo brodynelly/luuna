@@ -53,6 +53,12 @@ pub struct CandidateEvidence {
     /// Such a candidate is never re-validated in place: repair or re-plan.
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub content_drift: bool,
+    /// The pre-push policy refused this candidate's content at publication.
+    /// Its repair starts history-clean from the approved base (the previous
+    /// candidate's tree, uncommitted) so the refused commit is never an
+    /// ancestor of what is pushed.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub policy_refused: bool,
 }
 
 impl CandidateEvidence {

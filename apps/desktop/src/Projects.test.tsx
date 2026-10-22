@@ -48,12 +48,13 @@ test("every registered repository gets its own baseline control and shows its ow
   const app = { ...baseline("passed", [result("unit", "passed", ["unit.stdout"])]), id: "b-app-1", run_id: "run-app-1", identity: { manifest_hash: "sha256:m", repository_id: "app", commit: "a".repeat(40), tree: "t".repeat(40) } };
   const appLater = { ...app, id: "b-app-2", run_id: "run-app-2", status: "failed" as const, reason: "required check unit failed" };
   const web = { ...app, id: "b-web", run_id: "run-web", identity: { ...app.identity, repository_id: "web", commit: "b".repeat(40) } };
-  const latest = latestBaselines([app, web, appLater], ["app", "web", "shared"]);
+  // The API lists baselines newest first; the later (failed) record comes before the older passed one.
+  const latest = latestBaselines([appLater, web, app], ["app", "web", "shared"]);
   expect(latest.app?.id).toBe("b-app-2");
   expect(latest.web?.id).toBe("b-web");
   expect(latest.shared).toBeUndefined();
   const started: string[] = [];
-  const html = renderToStaticMarkup(<RepositoryBaselines repositoryIds={["app", "web", "shared"]} baselines={[app, web, appLater]} running={{ web: "run-web-live" }} busy={false} manifestConfirmed onRun={(id) => started.push(id)} onCancel={() => {}} />);
+  const html = renderToStaticMarkup(<RepositoryBaselines repositoryIds={["app", "web", "shared"]} baselines={[appLater, web, app]} running={{ web: "run-web-live" }} busy={false} manifestConfirmed onRun={(id) => started.push(id)} onCancel={() => {}} />);
   expect(html.match(/data-capability="baselines.start"/g)).toHaveLength(3);
   for (const label of ["Run baseline for app", "Run baseline for web", "Run baseline for shared"]) expect(html).toContain(label);
   expect(html).toContain("Cancel baseline for web");

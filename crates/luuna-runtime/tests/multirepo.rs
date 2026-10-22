@@ -1847,6 +1847,26 @@ async fn an_advisory_only_repository_is_not_part_of_the_candidate_set() {
         "{candidate}"
     );
     assert_eq!(fixture.snapshot(), before, "developer checkouts untouched");
+    // The plan requires only the candidate repositories' checks: validation
+    // of the two writer commits reaches review instead of failing for the
+    // advisory-only repository's check that never ran.
+    let required = plan["required_checks"].as_array().unwrap();
+    assert!(
+        required.iter().all(|c| c["repository_id"] != "api") && required.len() == 2,
+        "{required:?}"
+    );
+    let set = &candidate["evidence"]["candidate"];
+    let (status, body) = harness
+        .candidate_action(&run_id, "validate", &set["hash"])
+        .await;
+    assert_eq!(status, StatusCode::ACCEPTED, "{body}");
+    let reviewed = harness.candidate_settled(&run_id).await;
+    assert_eq!(reviewed["evidence"]["status"], "reviewed", "{reviewed}");
+    let results = reviewed["evidence"]["results"].as_array().unwrap();
+    assert_eq!(results.len(), 2, "{results:?}");
+    assert!(results
+        .iter()
+        .all(|r| r["status"] == "passed" && r["repository_id"] != "api"));
 
     // Permissions merge across tasks sharing a repository in either order.
     let ticket = harness.ticket().await;

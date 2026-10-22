@@ -651,6 +651,7 @@ impl Scheduler {
             provider: self.provider.clone(),
             model: self.model.clone(),
             previous_candidate: None,
+            history_clean: false,
             repair_feedback: None,
             preparation_seconds: 0,
             component_resources: self.component_resources.clone(),

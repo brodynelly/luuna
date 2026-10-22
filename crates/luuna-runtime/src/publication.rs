@@ -370,6 +370,8 @@ fn prepare(state: &AppState, id: &str, expected_hash: &str) -> Result<Prepared, 
 
 /// The scan budget for the pre-push policy check: a candidate whose patch
 /// does not fit is refused as unscanned rather than pushed unchecked.
+/// Git's empty tree: the parent a root commit's patch is read against.
+const EMPTY_TREE: &str = "4b825dc642cb6eb9a060e54bf8d69288fbee4904";
 const POLICY_DIFF_BYTES: usize = 16 * 1024 * 1024;
 
 fn refused(state: &AppState, id: &str, kind: &str, payload: Value) -> Result<(), ApiError> {
@@ -438,7 +440,7 @@ async fn admit(state: &AppState, id: &str, prepared: &mut Prepared) -> Result<()
                 .store
                 .lock()
                 .map_err(internal)?
-                .invalidate_reviewed_candidate(id, &evidence.candidate.hash, &reason, true)
+                .invalidate_reviewed_candidate(id, &evidence.candidate.hash, &reason, true, false)
                 .map_err(storage_error)?;
             refused(
                 state,
@@ -458,37 +460,71 @@ async fn admit(state: &AppState, id: &str, prepared: &mut Prepared) -> Result<()
                 "the plan has no base commit for repository {repository_id}; create the next plan revision before publishing"
             )));
         };
-        let diff = state
+        // Every commit the push would publish is scanned on its own patch,
+        // not only the net base-to-candidate patch: a repair that removes a
+        // credential still pushes the earlier commit that added it. (A repair
+        // after a policy refusal starts history-clean, so this is the guard
+        // for every other way a secret can sit in an ancestor.)
+        let commits = state
             .git
-            .review_diff(worktree, base, commit, POLICY_DIFF_BYTES)
+            .commits_between(worktree, base, commit)
             .await
             .map_err(|error| {
                 ApiError(
                     StatusCode::INTERNAL_SERVER_ERROR,
-                    format!("repository {repository_id}: cannot read the candidate patch for the pre-push policy check: {error}"),
+                    format!("repository {repository_id}: cannot list the commits the publication would push: {error}"),
                 )
             })?;
-        // Files the patch could only summarize are read from their blobs so
-        // a binary or non-UTF-8 file never carries unscanned content.
-        let mut binary = Vec::new();
-        for file in diff
-            .files
-            .iter()
-            .filter(|file| file.shown == luuna_git::DiffShown::Summary && file.status != "D")
-        {
-            let bytes = state.git.blob_bytes(worktree, &file.new_blob).await.ok();
-            binary.push(crate::policy::BinaryContent {
-                path: file.path.clone(),
-                bytes,
-            });
+        if commits.is_empty() {
+            return Err(conflict(format!(
+                "repository {repository_id}: candidate commit {commit} adds nothing beyond the base {base}; nothing to publish"
+            )));
         }
-        findings.extend(crate::policy::scan_repository(
-            repository_id,
-            &prepared.plan,
-            &diff,
-            &known,
-            &binary,
-        ));
+        for (published, parent) in &commits {
+            let parent = parent.as_deref().unwrap_or(EMPTY_TREE);
+            let diff = state
+                .git
+                .review_diff(worktree, parent, published, POLICY_DIFF_BYTES)
+                .await
+                .map_err(|error| {
+                    ApiError(
+                        StatusCode::INTERNAL_SERVER_ERROR,
+                        format!("repository {repository_id}: cannot read commit {published} for the pre-push policy check: {error}"),
+                    )
+                })?;
+            // Files the patch could only summarize are read from their blobs so
+            // a binary or non-UTF-8 file never carries unscanned content.
+            let mut binary = Vec::new();
+            for file in diff
+                .files
+                .iter()
+                .filter(|file| file.shown == luuna_git::DiffShown::Summary && file.status != "D")
+            {
+                let bytes = state.git.blob_bytes(worktree, &file.new_blob).await.ok();
+                binary.push(crate::policy::BinaryContent {
+                    path: file.path.clone(),
+                    bytes,
+                });
+            }
+            for mut finding in crate::policy::scan_repository(
+                repository_id,
+                &prepared.plan,
+                &diff,
+                &known,
+                &binary,
+            ) {
+                if published != commit {
+                    finding.detail = format!(
+                        "{} (in ancestor commit {}, which the push would publish)",
+                        finding.detail,
+                        &published[..12]
+                    );
+                }
+                if !findings.contains(&finding) {
+                    findings.push(finding);
+                }
+            }
+        }
     }
     if !findings.is_empty() {
         let reason = format!(
@@ -502,7 +538,7 @@ async fn admit(state: &AppState, id: &str, prepared: &mut Prepared) -> Result<()
             .store
             .lock()
             .map_err(internal)?
-            .invalidate_reviewed_candidate(id, &evidence.candidate.hash, &reason, false)
+            .invalidate_reviewed_candidate(id, &evidence.candidate.hash, &reason, false, true)
             .map_err(storage_error)?;
         refused(
             state,
@@ -932,7 +968,7 @@ pub async fn repair(
         .store
         .lock()
         .map_err(internal)?
-        .invalidate_reviewed_candidate(&id, &hash, &reason, false)
+        .invalidate_reviewed_candidate(&id, &hash, &reason, false, false)
         .map_err(storage_error)?;
     let now = luuna_git_now();
     record.superseded_by_repair = true;

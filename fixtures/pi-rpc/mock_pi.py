@@ -62,6 +62,16 @@ def writer_scenario():
     return name
 
 
+def remove_file(relative):
+    path = os.path.join(os.getcwd(), relative)
+    if os.path.isfile(path):
+        os.remove(path)
+    send({"type": "tool_execution_start", "toolCallId": "call-2", "toolName": "delete",
+          "args": {"path": relative}})
+    send({"type": "tool_execution_end", "toolCallId": "call-2", "toolName": "delete",
+          "result": {"content": [{"type": "text", "text": "removed"}]}, "isError": False})
+
+
 def write_file(relative, content):
     path = os.path.join(os.getcwd(), relative)
     os.makedirs(os.path.dirname(path) or ".", exist_ok=True)
@@ -316,13 +326,23 @@ def run_writer(request_id, kind, scenario, prompt):
         send({"type": "extension_error", "extensionPath": "luuna-scope-guard.js",
               "event": "tool_call", "error": "synthetic scope guard failure"})
         write_file("src/main.py", "print('must not become a candidate')\n")
-    elif scenario == "write_secret":
+    elif scenario in ("write_secret", "secret_then_repair"):
         # M7 pre-push policy: an in-scope change that passes its check and the
         # synthetic review but carries a credential-shaped literal and a
         # credential store by name; publication must refuse it before any push.
-        write_file("src/main.py", "print('implemented by the synthetic writer')\n")
-        write_file("src/config.py", "GITHUB_TOKEN = 'ghp_" + "a1b2c3d4e5f6g7h8i9j0k1l2m3n4o5p6q7r8s9t0" + "'\n")
-        write_file("src/.env", "DB_PASSWORD=Xk9f2mQ8vL3pR7wZq1\n")
+        # The synthetic repair writer removes both files and keeps the change.
+        # `secret_then_repair` fails its check first (the check refuses the
+        # config file), so the repair starts from the refused commit and the
+        # publication scan must find the credential in that ancestor.
+        repairing = "Repair feedback:" in prompt or "Repair feedback:" in (flag("--system-prompt") or "")
+        if repairing:
+            write_file("src/main.py", "print('repaired without the credential')\n")
+            remove_file("src/config.py")
+            remove_file("src/.env")
+        else:
+            write_file("src/main.py", "print('implemented by the synthetic writer')\n")
+            write_file("src/config.py", "GITHUB_TOKEN = 'ghp_" + "a1b2c3d4e5f6g7h8i9j0k1l2m3n4o5p6q7r8s9t0" + "'\n")
+            write_file("src/.env", "DB_PASSWORD=Xk9f2mQ8vL3pR7wZq1\n")
     elif scenario == "write_out_of_scope":
         write_file("src/main.py", "print('changed')\n")
         write_file("README.md", "tampered outside the task paths\n")

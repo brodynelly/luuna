@@ -469,6 +469,58 @@ impl GitInspector {
         Ok(())
     }
 
+    /// Every commit `head` would publish beyond `base`, oldest first, each
+    /// with its first parent (`None` for a root commit). A pre-push policy
+    /// scans each of them: a secret removed by a later commit is still pushed
+    /// with the earlier one.
+    pub async fn commits_between(
+        &self,
+        worktree: &Path,
+        base: &str,
+        head: &str,
+    ) -> Result<Vec<(String, Option<String>)>, GitError> {
+        require_object_id(base)?;
+        require_object_id(head)?;
+        let range = format!("{base}..{head}");
+        let listed = self
+            .bound_expect(
+                worktree,
+                &["rev-list", "--reverse", "--parents", &range, "--"],
+                &[],
+            )
+            .await?;
+        listed
+            .lines()
+            .filter(|line| !line.trim().is_empty())
+            .map(|line| {
+                let mut ids = line.split_whitespace();
+                let commit = ids.next().unwrap_or_default();
+                let parent = ids.next();
+                if require_object_id(commit).is_err()
+                    || parent.is_some_and(|p| require_object_id(p).is_err())
+                {
+                    return Err(GitError::Command {
+                        command: "rev-list".into(),
+                        detail: "unexpected rev-list output".into(),
+                    });
+                }
+                Ok((commit.to_owned(), parent.map(str::to_owned)))
+            })
+            .collect()
+    }
+
+    /// Make a Luuna-owned worktree (fresh at its base) hold `commit`'s tree as
+    /// uncommitted content: index and files match the tree, HEAD stays where
+    /// it is. A repair of a candidate the pre-push policy refused starts this
+    /// way, so the refused commit is never an ancestor of the repaired one.
+    pub async fn restore_tree(&self, worktree: &Path, commit: &str) -> Result<(), GitError> {
+        require_object_id(commit)?;
+        let spec = format!("{commit}^{{tree}}");
+        self.bound_expect(worktree, &["read-tree", "-u", "--reset", &spec], &[])
+            .await?;
+        Ok(())
+    }
+
     /// Exact HEAD of a Luuna-owned worktree, read through its verified binding.
     pub async fn head_commit(&self, worktree: &Path) -> Result<String, GitError> {
         let output = self

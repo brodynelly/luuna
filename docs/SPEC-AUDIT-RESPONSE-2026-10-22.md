@@ -38,9 +38,14 @@ policy scenario, ticket editing after review as `source_changed`, and the CI
 repair of finding 5) and `crates/luuna-runtime/tests/publication_multirepo.rs`
 (5 linked-set scenarios). Codex's review of the scanner found five defects
 (multibyte key boundary, quoted JSON keys, Git-quoted headers, binary
-summaries, no repair after refusal) and three more on the second round (hunk
+summaries, no repair after refusal), three more on the second round (hunk
 content that looks like a header, advisory task selected for scope, packaged
-TypeScript under `node_modules`); all eight are fixed with unit tests.
+TypeScript under `node_modules`) and, on the fourth round, that a repair of a
+refused candidate kept the credential-bearing commit as a published ancestor:
+the policy now scans every commit the push would publish on its own patch, and
+a repair after a policy refusal starts history-clean from the approved base
+(`policy_refused` on the candidate). All are fixed with tests (the ancestor
+case is reproduced end to end in `publication.rs`).
 
 ### 2. Client parity — implemented at behaviour level; interactive audit open
 
@@ -54,10 +59,14 @@ and a per-project retention policy with explicit application. The catalog grew
 from 50 to 58 actions, every entry carries `required_by`, and
 `scripts/check-contracts.mjs` traces 14 specification obligations to cataloged
 actions with desktop and TUI controls. Behaviour-level tests assert request
-bodies and state-specific controls. Still open: the interactive terminal
-keyboard and width audit (ADR 0027 point 5) and the Home, Kanban and Help
-surfaces (ADR 0027 point 4; client work in progress on this branch is noted in
-the release report when it lands).
+bodies and state-specific controls. The desktop and terminal clients also
+surface the testing-setup offer and setup plan (finding 3), task roles,
+derivation and dependency overrides with assignment traces and advisory
+results (finding 4), and the Home summary, the Kanban projection, the Help
+panel and the editor handoff (ADR 0027 point 4, dated note) through a shared
+projection module and read-only cataloged reads; `check-contracts` traces 16
+required actions and 4 required surfaces. Still open: the interactive terminal
+keyboard and width audit (ADR 0027 point 5).
 
 ### 3. Testing-setup prerequisite workflow — done
 
@@ -73,7 +82,8 @@ The handoff to the baseline (confirm the manifest with the recipes, merge, run
 the baseline) is explicit on the candidate view; feature plans made before that
 remain refused. Evidence: `crates/luuna-runtime/tests/testing_setup.rs` (3
 scenarios, full loop from refusal to a feature writer admitted with a real
-baseline). Client wiring of the offer and the setup plan form is in progress.
+baseline). Both clients show the offer, create the setup ticket and send the
+setup plan with its check recipes through the shared request builder.
 
 ### 4. Delegated roles and dependency overrides — done for v1 scope
 
@@ -146,6 +156,13 @@ not been executed: no Windows host and no PowerShell were available here.
 - A `node_modules` symlink committed by a worktree was not covered by the
   ignore rule (`**/node_modules/` matches directories only); the rule now
   covers links.
+- Found by the fourth review round: a Missions ticket edit whose response was
+  lost was refused on retry as an external edit before its ledger entry was
+  consulted (now reconciled from the recorded intent); a mixed plan required
+  the checks of an advisory-only repository that has no candidate commit (now
+  only candidate repositories' checks are required, and an advisory-only plan
+  needs none); the desktop's per-repository baseline control chose the oldest
+  record because the API lists newest first.
 
 ## Checks run on this branch (Linux x64)
 

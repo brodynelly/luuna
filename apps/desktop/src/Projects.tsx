@@ -48,9 +48,12 @@ export function registrationRequest(name: string, projectId: string, rows: Repos
   return registerProjectRequest(name, rows, projectId);
 }
 
-/** The latest recorded baseline of each registered repository, by record order (newest last). */
+/**
+ * The latest recorded baseline of each registered repository. The runtime lists baselines newest
+ * first (`ORDER BY rowid DESC`) and the client keeps that order, so the first match is the latest.
+ */
 export function latestBaselines(baselines: BaselineEvidence[], repositoryIds: string[]): Record<string, BaselineEvidence | undefined> {
-  return Object.fromEntries(repositoryIds.map((id) => [id, baselines.filter((baseline) => baseline.identity.repository_id === id).at(-1)]));
+  return Object.fromEntries(repositoryIds.map((id) => [id, baselines.find((baseline) => baseline.identity.repository_id === id)]));
 }
 
 /**

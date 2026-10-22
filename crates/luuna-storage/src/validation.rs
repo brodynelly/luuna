@@ -130,6 +130,7 @@ impl Store {
             finished_at: None,
             reason: None,
             content_drift: false,
+            policy_refused: false,
         };
         evidence.validate()?;
         tx.execute(
@@ -540,9 +541,11 @@ impl Store {
 
     /// Invalidate a reviewed candidate whose inputs changed after the review:
     /// the owned worktree drifted from the frozen candidate when publication
-    /// was requested, or the developer sends a CI failure to repair. The
-    /// candidate is marked failed with the reason (content drift marked so it
-    /// is never re-validated in place), the run leaves `reviewed` for
+    /// was requested, the pre-push policy refused its content, or the
+    /// developer sends a CI failure to repair. The candidate is marked failed
+    /// with the reason (content drift marked so it is never re-validated in
+    /// place; a policy refusal marked so its repair starts history-clean from
+    /// the base), the run leaves `reviewed` for
     /// `failed`, and `candidate.invalidated` records it; repair or the next
     /// plan revision follow as for any failed candidate.
     pub fn invalidate_reviewed_candidate(
@@ -551,6 +554,7 @@ impl Store {
         hash: &str,
         reason: &str,
         content_drift: bool,
+        policy_refused: bool,
     ) -> Result<CandidateEvidence> {
         if reason.trim().is_empty() {
             return invalid("candidate invalidation needs a reason");
@@ -569,6 +573,7 @@ impl Store {
         evidence.stage_started_at = None;
         evidence.stage_checkpoint_at = None;
         evidence.content_drift |= content_drift;
+        evidence.policy_refused |= policy_refused;
         save_candidate(&tx, &evidence)?;
         transition(
             &tx,
@@ -576,7 +581,7 @@ impl Store {
             run.revision,
             RunState::Failed,
             "candidate.invalidated",
-            json!({"candidate_hash":hash,"reason":reason,"content_drift":content_drift,"review_retained_as_history":true}),
+            json!({"candidate_hash":hash,"reason":reason,"content_drift":content_drift,"policy_refused":policy_refused,"review_retained_as_history":true}),
         )?;
         tx.commit()?;
         Ok(evidence)
