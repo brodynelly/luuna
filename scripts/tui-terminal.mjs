@@ -3,7 +3,7 @@ import { createInterface } from "node:readline";
 import { StringDecoder } from "node:string_decoder";
 import { fileURLToPath } from "node:url";
 
-const blank = () => ({ text: " ", sgr: "0" });
+const blank = (sgr = "0") => ({ text: " ", sgr });
 const width = (char) => /\p{Mark}/u.test(char) ? 0 : /[\u1100-\u115f\u2e80-\ua4cf\uac00-\ud7a3\uf900-\ufaff\ufe10-\ufe6f\uff00-\uff60\u{1f300}-\u{1faff}]/u.test(char) ? 2 : 1;
 
 // Consume extended colors as atomic groups: a zero RGB channel is not SGR reset.
@@ -42,14 +42,15 @@ export class TerminalScreen {
     this.top = 0; this.bottom = rows - 1; this.pending = ""; this.decoder = new StringDecoder("utf8");
     this.unknown = new Set(); this.grid = this.empty(); this.events = [];
   }
-  empty() { return Array.from({ length: this.rows }, () => Array.from({ length: this.columns }, blank)); }
+  blank() { return blank(this.sgr); }
+  empty() { return Array.from({ length: this.rows }, () => Array.from({ length: this.columns }, () => this.blank())); }
   resize(columns, rows) {
     const old = this.grid; this.columns = columns; this.rows = rows; this.grid = this.empty();
     for (let y = 0; y < Math.min(old.length, rows); y++) for (let x = 0; x < Math.min(old[y].length, columns); x++) this.grid[y][x] = old[y][x];
     this.x = Math.min(this.x, columns - 1); this.y = Math.min(this.y, rows - 1); this.top = 0; this.bottom = rows - 1;
   }
   scroll(count = 1) {
-    for (let n = 0; n < count; n++) { this.grid.splice(this.top, 1); this.grid.splice(this.bottom, 0, Array.from({ length: this.columns }, blank)); }
+    for (let n = 0; n < count; n++) { this.grid.splice(this.top, 1); this.grid.splice(this.bottom, 0, Array.from({ length: this.columns }, () => this.blank())); }
   }
   newline() { if (this.y === this.bottom) this.scroll(); else this.y = Math.min(this.y + 1, this.rows - 1); }
   feed(bytes) {
@@ -72,10 +73,10 @@ export class TerminalScreen {
         if (next === "(" || next === ")") { if (i + 2 >= this.pending.length) break; i += 3; continue; }
         if (next === "7") this.saved = [this.x, this.y];
         else if (next === "8") [this.x, this.y] = this.saved;
-        else if (next === "M") { if (this.y > this.top) this.y--; else { this.grid.splice(this.bottom, 1); this.grid.splice(this.top, 0, Array.from({ length: this.columns }, blank)); } }
+        else if (next === "M") { if (this.y > this.top) this.y--; else { this.grid.splice(this.bottom, 1); this.grid.splice(this.top, 0, Array.from({ length: this.columns }, () => this.blank())); } }
         else if (next === "D") this.newline();
         else if (next === "E") { this.x = 0; this.newline(); }
-        else if (next === "c") { this.grid = this.empty(); this.x = 0; this.y = 0; this.sgr = "0"; }
+        else if (next === "c") { this.sgr = "0"; this.grid = this.empty(); this.x = 0; this.y = 0; }
         else if (next !== "=" && next !== ">") this.unknown.add(`ESC ${next}`);
         i += 2; continue;
       }
@@ -115,12 +116,12 @@ export class TerminalScreen {
     else if (final === "m") this.sgr = rendition(this.sgr, args);
     else if (final === "J") {
       if (args[0] === 2 || args[0] === 3) this.grid = this.empty();
-      else for (let y = 0; y < this.rows; y++) for (let x = 0; x < this.columns; x++) if (args[0] === 1 ? y < this.y || y === this.y && x <= this.x : y > this.y || y === this.y && x >= this.x) this.grid[y][x] = blank();
-    } else if (final === "K") { for (let x = 0; x < this.columns; x++) if (args[0] === 2 || (args[0] === 1 ? x <= this.x : x >= this.x)) this.grid[this.y][x] = blank(); }
-    else if (final === "X") { for (let x = this.x; x < Math.min(this.columns, this.x + n); x++) this.grid[this.y][x] = blank(); }
-    else if (final === "P") { this.grid[this.y].splice(this.x, n); while (this.grid[this.y].length < this.columns) this.grid[this.y].push(blank()); }
-    else if (final === "@") { this.grid[this.y].splice(this.x, 0, ...Array.from({ length: Math.min(n, this.columns) }, blank)); this.grid[this.y].length = this.columns; }
-    else if (final === "L" || final === "M") { for (let i = 0; i < Math.min(n, this.rows); i++) { if (final === "L") { this.grid.splice(this.y, 0, Array.from({ length: this.columns }, blank)); this.grid.splice(this.bottom + 1, 1); } else { this.grid.splice(this.y, 1); this.grid.splice(this.bottom, 0, Array.from({ length: this.columns }, blank)); } } }
+      else for (let y = 0; y < this.rows; y++) for (let x = 0; x < this.columns; x++) if (args[0] === 1 ? y < this.y || y === this.y && x <= this.x : y > this.y || y === this.y && x >= this.x) this.grid[y][x] = this.blank();
+    } else if (final === "K") { for (let x = 0; x < this.columns; x++) if (args[0] === 2 || (args[0] === 1 ? x <= this.x : x >= this.x)) this.grid[this.y][x] = this.blank(); }
+    else if (final === "X") { for (let x = this.x; x < Math.min(this.columns, this.x + n); x++) this.grid[this.y][x] = this.blank(); }
+    else if (final === "P") { this.grid[this.y].splice(this.x, n); while (this.grid[this.y].length < this.columns) this.grid[this.y].push(this.blank()); }
+    else if (final === "@") { this.grid[this.y].splice(this.x, 0, ...Array.from({ length: Math.min(n, this.columns) }, () => this.blank())); this.grid[this.y].length = this.columns; }
+    else if (final === "L" || final === "M") { for (let i = 0; i < Math.min(n, this.rows); i++) { if (final === "L") { this.grid.splice(this.y, 0, Array.from({ length: this.columns }, () => this.blank())); this.grid.splice(this.bottom + 1, 1); } else { this.grid.splice(this.y, 1); this.grid.splice(this.bottom, 0, Array.from({ length: this.columns }, () => this.blank())); } } }
     else if (final === "S") this.scroll(Math.min(n, this.rows));
     else if (final === "r") { this.top = n - 1; this.bottom = (args[1] || this.rows) - 1; this.x = 0; this.y = 0; }
     else if ((final === "h" || final === "l") && privateMode) {
@@ -199,6 +200,7 @@ export class ConptyTerminal {
   async open({ columns = 80, rows = 24, ...options }) { this.screen = new TerminalScreen(columns, rows); return this.request("open", { columns, rows, ...options }); }
   async send(text) { const bytes = Buffer.from(text); for (let offset = 0; offset < bytes.length; offset += 4096) await this.request("send", { data: bytes.subarray(offset, offset + 4096).toString("base64") }); }
   async resize(columns, rows) { this.screen.resize(columns, rows); return this.request("resize", { columns, rows }); }
+  async processes() { return this.request("processes"); }
   async capture() {
     const result = await this.request("poll"); if (result.truncated) throw new Error("ConPTY output overflow; evidence is incomplete");
     const data = Buffer.from(result.data, "base64"); this.raw = Buffer.concat([this.raw, data]).subarray(-8 * 1024 * 1024); this.screen.feed(data); this.exit = result.exit;

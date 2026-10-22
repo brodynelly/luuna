@@ -44,6 +44,16 @@ test("zero RGB/indexed channels preserve existing rendition and reconstructed HT
   assert.ok(html.includes("&lt;capture&gt;"));
 });
 
+test("VT erasures, inserted cells and scrolling retain the current background", () => {
+  for (const erase of ["\x1b[2J", "\x1b[2K", "\x1b[8X", "\x1b[8P", "\x1b[8@", "\x1b[2L", "\x1b[2M", "\x1b[2S"]) {
+    const screen = new TerminalScreen(8, 2);
+    screen.feed(`\x1b[48;2;0;0;170m\x1b[2Jtext\x1b[H${erase}`);
+    const result = screen.snapshot();
+    assert.ok(result.colors.flat().every((sgr) => sgr.includes("48;2;0;0;170")), erase);
+    assert.ok(!terminalSnapshotHtml(result).includes("background:#000000;"), erase);
+  }
+});
+
 test("staging refuses incomplete payload before copying", (t) => {
   const root = mkdtempSync(path.join(tmpdir(), "luuna-stage-test-")); t.after(() => rmSync(root, { recursive: true, force: true }));
   assert.throws(() => stageTerminal({ root, out: path.join(root, "stage"), binary: path.join(root, "missing.exe") }), /prerequisite missing/);
@@ -71,6 +81,8 @@ test("Windows ConPTY runs real Node terminal input, resize, screen rendering and
     const wait = async (predicate) => { for (let i = 0; i < 100; i++) { const state = await terminal.capture(); if (predicate(state)) return state; await sleep(50); } assert.fail("Timed out waiting for real terminal state"); };
     const ready = await wait((state) => state.lines.join("\n").includes("READY true true"));
     assert.equal(ready.alternate, true); assert.equal(ready.cursorVisible, false);
+    const processes = await terminal.processes();
+    assert.ok(processes.some((row) => row.name.toLowerCase() === "node.exe" && row.executable.toLowerCase() === process.execPath.toLowerCase()));
     await terminal.send("x"); await wait((state) => state.lines[1].includes("INPUT x"));
     await terminal.resize(40, 12); await sleep(250); await terminal.send("r");
     const resized = await wait((state) => state.lines.join("\n").includes("SIZE 40x12"));
@@ -80,7 +92,9 @@ test("Windows ConPTY runs real Node terminal input, resize, screen rendering and
     assert.equal(closed.lines[0].trim(), "main"); assert.deepEqual(closed.unknown, []);
     const consoleResult = JSON.parse(readFileSync(result, "utf8"));
     assert.equal(consoleResult.exit, 7);
+    assert.ok(consoleResult.after, JSON.stringify(consoleResult));
     assert.equal(consoleResult.after[0], consoleResult.before[0], "input console mode restored");
+    assert.equal(consoleResult.after[1], consoleResult.before[1], "output console mode restored");
     assert.throws(() => process.kill(consoleResult.child_pid, 0), { code: "ESRCH" });
   } finally { await terminal.close(); }
 });
