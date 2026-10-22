@@ -1,0 +1,24 @@
+# ADR 0034: an owned component library, `@luuna/ui`, for the web and desktop clients
+
+Date: 2026-10-22. Status: Accepted. Amends [ADR 0013](0013-desktop-design-system.md) (alternatives: a component library was rejected for dependencies and class soup) and [ADR 0030](0030-desktop-shell-and-tailwind.md) (where the shared components live). [ADR 0033](0033-ledger-design-system.md) stays the visual source of truth.
+
+## Context
+
+The owner wants every page, screen, layout and piece of scaffolding of the web and desktop clients rebuilt on one component library that Luuna writes and owns, with the breadth of a catalog such as Mantine UI (app shells, navbars, headers, tables, forms, cards, stats, feedback, overlays), and without importing a third-party UI library. Today the shared components live in `apps/desktop/src/ui/` and `apps/desktop/src/design/`, so a browser client could not reuse them without importing from the desktop app. There is no separate web client yet: the browser surface is the desktop's Vite app served in a browser. Root `components/` is reserved for exact-commit Git submodules ([ADR 0012](0012-independent-component-repositories.md)) and cannot hold this library.
+
+## Decisions
+
+1. **A new npm workspace `packages/ui`, published as `@luuna/ui`, source-only** (`exports` point at `src/`, like `@luuna/api-client`; private, MIT, no registry publication). Its only runtime import is `react` (peer dependency). It imports nothing else: no UI kit, headless library, icon set, CSS-in-JS or class-name helper. Focus management, dialogs, listboxes, menus and tabs keyboard behaviour are written in-repo on native elements (`<dialog>`, native controls) and tested.
+2. **Mantine UI is a catalog of patterns, not source.** No Mantine code, styles or assets are copied. Components are written from their behaviour and from Ledger. If anything derived is ever added, attribution goes in `THIRD-PARTY-NOTICES.md`. Looks that Ledger forbids (gradients, coloured left borders, decorative glow) are excluded on purpose.
+3. **Tokens and layered CSS move with the library.** The five token sheets, `fonts.css`, `base.css`, component, overlay, control and motion sheets, `tone.ts`, `StatusBadge`, `Icon`, the lints (`lint.ts`) and their tests move to `packages/ui` (`src/styles/`, `src/tone/`, and so on). Ledger values stay exact and pinned. The desktop keeps `styles.css` as its manifest and imports library sheets by package path, then its own screen sheets, so the layer order of ADR 0030 is unchanged. `tokens-legacy.css` shrinks as screens migrate and is deleted when empty.
+4. **Product policy stays out of the library.** The library renders what it is given. Tone maps over `@luuna/api-client` unions (`tone.ts`) and anything that knows a runtime concept stays in `apps/desktop`. Runtime authority, the six tones, `data-capability` and `data-surface` markers, smoke selectors, the motion budget, contrast and the 300-line file cap are unchanged and enforced by the moved tests, which also run over `apps/desktop/src`.
+5. **Migration in bounded slices, each green on its own.** (a) Scaffold the package and move the existing `ui/` and `design/` code with no behaviour change. (b) Add components by family in parallel, each family in its own files and with its own tests and a catalog entry: shell and navigation, forms and inputs, data display (tables with sort and pagination, lists, stats), feedback and overlays, typography and layout primitives. (c) Move screens to the library one view at a time (Home, Board, Projects, Sessions, Settings, Help, Candidate review, Workflows, Project components), keeping every smoke selector, `data-surface` and `data-capability` literal. (d) Delete the old paths, `tokens-legacy.css` and the barrels when nothing imports them.
+6. **A browser client is not created by this ADR.** The library is shaped so one can share it. Until then the web surface is the same Vite app.
+7. **Catalog.** A documented component catalog (`docs/COMPONENT-LIBRARY.md`, with a preview route only if it can stay inside the CSP and token rules) lists every component, its variants, states and accessibility notes. `docs/DESIGN-SYSTEM.md` links to it.
+
+## Consequences
+
+- Imports change from `./ui` to `@luuna/ui`; `components.test.ts` and the design tests change their roots to cover both packages and keep failing on raw elements in views.
+- Root `package.json` workspaces gain `packages/ui`; the lockfile changes once.
+- Alternatives rejected: placing the library in root `components/` (ADR 0012); keeping it in `apps/desktop/src/ui` (blocks a shared browser client); adopting Mantine, Radix or shadcn/ui (the owner wants owned code, and the dependencies conflict with ADR 0013); vendoring Mantine source (licence and ownership).
+- Not proven here: real-WebView rendering, both schemes and Windows 125% scaling still need the real app. Unit tests and lints are not rendering evidence.

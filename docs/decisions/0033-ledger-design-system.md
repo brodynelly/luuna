@@ -1,6 +1,6 @@
 # ADR 0033: adopt the Ledger design system for the desktop (tokens, system fonts, light and dark themes)
 
-Date: 2026-10-22. Status: Accepted. Partly supersedes [ADR 0032](0032-stripe-inspired-desktop-visual-language.md) (palette, typography, colour and depth, gradients, aurora and glow); amends [ADR 0013](0013-desktop-design-system.md) decision 2 (tone colour families) and [ADR 0030](0030-desktop-shell-and-tailwind.md) (visual language). Rules in [DESIGN-SYSTEM.md](../DESIGN-SYSTEM.md) follow this ADR.
+Date: 2026-10-22. Status: Accepted; partly superseded by [ADR 0035](0035-mantine-theme-and-outfit.md) (the Ledger palette, the type styles and fonts, including the Söhne font and typography amendments). Partly supersedes [ADR 0032](0032-stripe-inspired-desktop-visual-language.md) (palette, typography, colour and depth, gradients, aurora and glow); amends [ADR 0013](0013-desktop-design-system.md) decision 2 (tone colour families) and [ADR 0030](0030-desktop-shell-and-tailwind.md) (visual language). Rules in [DESIGN-SYSTEM.md](../DESIGN-SYSTEM.md) follow this ADR.
 
 ## Context
 

@@ -25,8 +25,9 @@ lockfiles. This file records source provenance, not a complete legal dependency 
 
 ## Bundled fonts
 
-- **Söhne** is a commercial typeface by Klim Type Foundry (https://klim.co.nz). Ten hinted TrueType files taken from the sole user's installed copy are bundled in `apps/desktop/src/assets/fonts/soehne/` at the sole user's direction (ADR 0033 font amendment), for personal, non-distributed use on non-Apple platforms. The user accepted the licensing risk.
-- Söhne is **not** covered by Luuna's MIT license or any Luuna license grant.
-- The `Test Söhne Mono` trial files must never be included.
-- The fonts must be removed or properly licensed before any distribution, publication or packaging of the desktop app. Pushing this repository to a shared or public remote counts as publication, and the font files would then stay in Git history: removing them later needs a history purge.
-- Apple platforms and fallbacks use the system font stack; SF Pro is not bundled.
+- **Outfit** is bundled: two variable woff2 subsets (latin and latin-ext, weights 100 to 900) in `packages/ui/src/assets/fonts/outfit/`, with the license text in `OFL.txt`. Copyright 2021 The Outfit Project Authors (https://github.com/Outfitio/Outfit-Fonts). Licensed under the SIL Open Font License, Version 1.1 (https://scripts.sil.org/OFL). It is used for headings, titles and display only (ADR 0035). The OFL permits bundling and redistribution with software provided the license stays with the font and the font is not sold by itself. Outfit is not covered by Luuna's MIT grant.
+- **Mantine** (https://mantine.dev, `@mantine/core` 9.7.3, MIT): only design-token values (colours, type scale, radius, spacing, shadows, breakpoints) are used, recorded in `specs/mantine-theme-values.md` and `packages/ui/src/design/mantine-values.ts`. No Mantine source code or stylesheet is vendored, and no endorsement is implied.
+- **Söhne** is a commercial typeface by Klim Type Foundry (https://klim.co.nz). It is **no longer bundled or referenced**: ADR 0035 removed every reference from the stylesheets and tests. The ten hinted TrueType files from the sole user's installed copy were deleted from the working tree on 2026-10-22 at the owner's direction; they remain in Git history. A history purge is still the owner's decision.
+- Söhne is **not** covered by Luuna's MIT license or any Luuna license grant. The `Test Söhne Mono` trial files must never be included.
+- The Söhne files must be removed or properly licensed before any distribution, publication or packaging of the repository or desktop app. Pushing this repository to a shared or public remote counts as publication, and the font files would stay in Git history: removing them later needs a history purge.
+- Body and UI text use Mantine's system font stack; no system font is bundled.
