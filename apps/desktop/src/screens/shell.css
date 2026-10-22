@@ -44,6 +44,7 @@
   min-height: var(--control-height-sm);
   padding: 0 var(--space-1-5);
   border-color: transparent;
+  box-shadow: none;
   background: transparent;
   color: var(--color-text-muted);
 }
@@ -109,6 +110,7 @@
   min-height: var(--nav-height);
   padding: 0 var(--space-2);
   border-color: transparent;
+  box-shadow: none;
   border-radius: var(--radius-button);
   background: transparent;
   color: var(--color-text-muted);
@@ -261,7 +263,7 @@
 }
 
 @media (prefers-reduced-motion: reduce) {
-  .sidebar-nav > .nav-pill { display: none; }
+  .sidebar-nav[data-pill] > .nav-pill { display: none; }
   .sidebar-nav[data-pill] button.nav-item[aria-current="page"] { background: var(--color-selected); }
   .sidebar-footer > .connection[data-live] > .tone-mark[data-tone]::after,
   .view > .page[data-surface="home"]::before,
@@ -274,7 +276,7 @@
 @media (forced-colors: active) {
   .wordmark-mark > circle { fill: CanvasText; }
   .wordmark-mark > path { fill: Canvas; stroke: CanvasText; }
-  .sidebar-nav > .nav-pill { display: none; }
+  .sidebar-nav[data-pill] > .nav-pill { display: none; }
   .sidebar-nav[data-pill] button.nav-item[aria-current="page"] { forced-color-adjust: none; background: SelectedItem; color: SelectedItemText; }
   .sidebar-nav button.nav-item[aria-current="page"] { forced-color-adjust: none; background: SelectedItem; color: SelectedItemText; }
 }

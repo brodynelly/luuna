@@ -455,9 +455,13 @@ async function contrastAudit() {
   });
 }
 
-// A scheme switch starts colour transitions; measure only the settled colours.
+// A scheme switch starts colour transitions; measure only the settled colours. Ambient infinite
+// animations (ADR 0032: aurora drift, active pulse) never finish, so only finite ones are awaited.
 async function settle() {
-  await page.evaluate(() => Promise.all(document.getAnimations().map((animation) => animation.finished.catch(() => undefined))));
+  await page.evaluate(() => Promise.race([
+    Promise.all(document.getAnimations().filter((animation) => animation.effect?.getComputedTiming().iterations !== Infinity).map((animation) => animation.finished.catch(() => undefined))),
+    new Promise((resolve) => setTimeout(resolve, 4000)),
+  ]));
 }
 
 async function presentationAudit(label, { widths = false } = {}) {

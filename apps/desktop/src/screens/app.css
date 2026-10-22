@@ -87,7 +87,7 @@
   .history > :is(.panel-heading, .empty) { padding-inline: 0; }
   .history-list { grid-template-columns: repeat(auto-fill, minmax(min(100%, var(--field-min)), 1fr)); gap: var(--space-2); }
   .history-list > li { display: grid; min-width: 0; }
-  .history-list > li > button.run-card:not([aria-pressed="true"]) { border-color: var(--color-border); }
+  .history-list > li button.run-card:not([aria-pressed="true"]) { border-color: var(--color-border); }
 }
 
 @media (max-width: 680px) {

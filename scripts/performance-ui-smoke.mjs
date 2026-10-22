@@ -55,6 +55,8 @@ try {
       const before = Number(url.searchParams.get("before"));
       body = before ? events.slice(Math.max(0, before - 201), before - 1) : events.slice(cursor, cursor + 200);
     } else if (url.pathname === "/api/v1/runs/older/events") body = [];
+    // The client tries the SSE stream first and falls back to paged polling; this fixture serves the polled path only.
+    else if (url.pathname.endsWith("/stream")) return route.fulfill({ status: 404, json: { error: "no stream in this fixture" }, headers });
     else throw new Error(`Unexpected fixture route: ${url.pathname}`);
     await route.fulfill({ json: body, headers });
   });
