@@ -62,3 +62,20 @@ test("the Home summary projects validation health per repository and the blocker
   expect(renderToStaticMarkup(<HomeSummaryView summary={{ projects: [], blockers: [] }} busy={false} onOpen={() => {}} />)).toContain("No projects yet");
   expect(renderToStaticMarkup(<HomeSummaryView summary={{ ...summary, blockers: [] }} busy={false} onOpen={() => {}} />)).toContain("Nothing is waiting on you.");
 });
+
+test("Home shows four untoned stat tiles derived from the summary, with the final numbers in the markup", async () => {
+  const { client } = fixtureClient();
+  const summary = await readHome(client, new AbortController().signal);
+  const html = renderToStaticMarkup(<HomeSummaryView summary={summary} busy={false} onOpen={() => {}} />);
+  const sum = (pick: (project: (typeof summary.projects)[number]) => number) => summary.projects.reduce((total, project) => total + pick(project), 0);
+  expect(html).toContain('<dl class="stat-grid" aria-label="Home summary counts">');
+  const values = [...html.matchAll(/<div class="stat-tile"><dt>([^<]+)<\/dt><dd><span class="count-up">(\d+)<\/span>/g)].map((match) => [match[1], Number(match[2])]);
+  expect(values).toEqual([["Projects", summary.projects.length], ["Waiting on you", summary.blockers.length], ["Tickets", sum((project) => project.tickets)], ["Active workflows", sum((project) => project.active_workflows)]]);
+  expect(sum((project) => project.tickets)).toBe(3);
+  expect(html.match(/class="stat-tile"[^>]*data-tone/)).toBeNull();
+  expect(html).toContain('aria-label="Blockers waiting on you"');
+  const empty = renderToStaticMarkup(<HomeSummaryView summary={{ projects: [], blockers: [] }} busy={false} onOpen={() => {}} onAddProject={() => {}} />);
+  expect(empty).not.toContain("stat-grid");
+  expect(empty).toContain("No projects yet");
+  expect(empty.match(/<button/g)).toHaveLength(1);
+});

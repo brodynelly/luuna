@@ -211,3 +211,12 @@ test("the editor handoff shows each worktree path whole with a copy control, and
     Object.defineProperty(globalThis, "navigator", { value: previous, configurable: true, writable: true });
   }
 });
+
+test("only a passed verdict draws a check, and the review carries no motion wrapper", () => {
+  const review = (verdict: "passed" | "changes_required") => ({ ...view, evidence: { ...evidence, status: "reviewed" as const, review: { schema_version: "0.1", id: "r", candidate_hash: hash, reviewer_session: "review-1", verdict, findings: [], evidence: [], attention_paths: [], mutation_attempts: [], tool_calls: [], exact_candidate_bound: true } as never } });
+  const passed = render(review("passed"), { ...run, state: "reviewed" });
+  expect(passed.match(/class="check-draw"/g)).toHaveLength(1);
+  expect(passed).toMatch(/<\/strong><svg class="check-draw"[^>]*aria-hidden="true"/);
+  expect(render(review("changes_required"), { ...run, state: "reviewed" })).not.toContain("check-draw");
+  for (const html of [passed, render(view)]) for (const motion of ["reveal", "glow-surface", "aurora"]) expect(html).not.toContain(motion);
+});

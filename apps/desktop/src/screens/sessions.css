@@ -1,5 +1,29 @@
+/* Screen: sessions refinements. Layered after app.css (item C owns that sheet), tokens only (docs/DESIGN-SYSTEM.md). */
 /*
- * Sessions refinements. Owned by item D (run stripe-ui-20261022-0905); filled in wave 3.
- * Placeholder: the manifest test requires one rule. Item D replaces this file's content.
+ * Static depth only. The live output card never carries a transform, opacity, filter or
+ * will-change (ADR 0031: the sticky-scroll and caret contract), and event rows stream
+ * continuously, so they get no entrance animation and no transition.
  */
-:root {}
+
+/* History rail: cards lift on hover and focus; the selected card keeps its accent rule. */
+.history-list > li > button.run-card { border-radius: var(--radius-button); transition: box-shadow var(--duration-micro) var(--ease-out), transform var(--duration-micro) var(--ease-out), background-color var(--duration-micro) var(--ease-out); }
+.history-list > li > button.run-card:hover:not(:disabled), .history-list > li > button.run-card:focus-visible { box-shadow: var(--shadow-button-hover); transform: translateY(var(--lift-y)); }
+.history-list > li > button.run-card[aria-pressed="true"] { box-shadow: var(--shadow-card); }
+
+/* The run bar and its streaming dots sit above the response, outside the output region. */
+.event-panel > .run-detail { box-shadow: var(--shadow-card); border-radius: var(--radius-card); }
+.run-detail > .streaming-dots { flex: none; }
+
+/* Live output: a raised card; the response region inside is untouched. */
+.event-panel > .assistant-output { padding: var(--space-3); border: var(--border-width) solid var(--color-border); border-radius: var(--radius-card); background: var(--color-surface-raised); box-shadow: var(--shadow-card); }
+.assistant-output > .panel-heading { padding-bottom: var(--space-1-5); border-bottom: var(--border-width) solid var(--color-border); }
+.assistant-output > pre { border-radius: var(--radius-button); background: var(--color-surface); }
+
+/* Event rows: 40 px rows, hairlines and a hover tint. */
+ol.events > li { min-height: var(--row-height); border-bottom: var(--border-width) solid var(--color-border); }
+ol.events > li:last-child { border-bottom: 0; }
+ol.events > li:hover, ol.events > li:focus-within { background: var(--color-surface-raised); }
+ol.events .event-number { font-variant-numeric: tabular-nums; }
+
+/* Empty states: a soft wash behind the selection prompt. */
+.event-panel > .activity-empty { background: var(--gradient-aurora), var(--color-surface-raised); border-radius: var(--radius-card); }

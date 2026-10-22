@@ -56,3 +56,21 @@
   .recipe-record { grid-template-columns: minmax(0, 1fr); }
   .recipe-record > .state { justify-self: start; }
 }
+
+/* Rail: table-like project rows with a selected pill; actions are always visible. */
+.project-list > li > .run-card { min-height: var(--row-height); border-radius: var(--radius-pill); transition: box-shadow var(--duration-micro) var(--ease-out), background-color var(--duration-micro) var(--ease-out); }
+.project-list > li > .run-card:hover:not(:disabled), .project-list > li > .run-card:focus-visible { box-shadow: var(--shadow-card); }
+.project-list > li > .run-card[aria-pressed="true"] { box-shadow: var(--shadow-card); }
+
+/* Detail: the elevated panel. Its header stays in view while a long ticket scrolls (stacked layouts do not stick). */
+.projects-layout > .project-detail { border-radius: var(--radius-card); box-shadow: var(--shadow-popover); }
+.project-detail > .project-header { position: sticky; top: 0; padding-block: var(--space-2); background: var(--color-surface); }
+.project-detail > .empty-state { margin: calc(var(--panel-pad) * -1); padding: var(--space-6); }
+
+/* Baseline and discovery records are table-like rows with tabular numbers. */
+.project-detail .record-list.record-rows > .record, .repository-baselines .record { min-height: var(--row-height); font-variant-numeric: tabular-nums; }
+.recipe-record:hover { background: var(--color-surface-raised); }
+
+@media (max-width: 920px) {
+  .project-detail > .project-header { position: static; }
+}

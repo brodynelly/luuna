@@ -53,3 +53,11 @@ test("the panel says that values are never shown and that credentials are config
   for (const part of [...known].sort((a, b) => b.length - a.length)) rest = rest.split(part).join(" ");
   expect(rest.trim()).toBe("");
 });
+
+test("an ok doctor report draws one check beside the verdict and a failing report draws none", () => {
+  const ok = renderToStaticMarkup(<DoctorReportView report={{ ok: true, items: report.items.filter((item) => item.status !== "missing") }} />);
+  expect(ok.match(/class="check-draw"/g)).toHaveLength(1);
+  expect(ok).toMatch(/<div class="settings-verdict-row"><svg class="check-draw"[^>]*aria-hidden="true"/);
+  expect(ok).toContain('data-tone="success" role="status">doctor: ok.');
+  expect(renderToStaticMarkup(<DoctorReportView report={report} />)).not.toContain("check-draw");
+});

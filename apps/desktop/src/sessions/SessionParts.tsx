@@ -3,7 +3,7 @@ import { isTerminal, type EventEnvelope, type LuunaClient, type RunRecord } from
 import { canCancel } from "../workflow-state";
 import { runTone } from "../design/tone";
 import { localTime, runTitle, sessionStatus } from "../shell/runtime";
-import { Box, Button, ContextMenuArea, copyText, Disclosure, EmptyState, FieldRow, Form, FormFooter, HeadingRow, Id, Item, List, LiveOutput, Meta, Placeholder, ReasonNote, Section, SelectableCard, StatusBadge, submitted, Tag, TextArea, TextField, Toolbar, useNotify } from "../ui";
+import { Box, Button, ContextMenuArea, copyText, Disclosure, EmptyState, FieldRow, Form, FormFooter, HeadingRow, Id, Item, List, LiveOutput, Meta, Placeholder, ReasonNote, Section, SelectableCard, StatusBadge, StreamingDots, submitted, Tag, TextArea, TextField, Toolbar, useNotify } from "../ui";
 import { EventList } from "./EventList";
 
 /** The history rail: every recorded run as a selectable card, newest first, paged by 200. */
@@ -24,7 +24,7 @@ export function History({ runs, selected, connected, newer, onSelect, onRefresh,
             meta={<><StatusBadge tone={runTone[run.state]}>{run.state}</StatusBadge><time dateTime={run.created_at}>{localTime(run.created_at)}</time></>} />
         </ContextMenuArea>
       </Item>)}</List>
-      : <EmptyState>{connected ? "No sessions yet. Start one to create a durable run record." : "Connect to see sessions saved by your runtime."}</EmptyState>}
+      : connected ? <EmptyState wash title="No sessions yet">Start one to create a durable run record.</EmptyState> : <EmptyState>Connect to see sessions saved by your runtime.</EmptyState>}
     {connected && runs.length > 0 && <Toolbar>
       <Button disabled={!newer} onClick={onNewer}>Newer sessions</Button>
       <Button disabled={runs.length < 200} onClick={onOlder}>Older sessions</Button>
@@ -65,6 +65,7 @@ export function EventPanel({ client, active, events, output, live, candidateActi
       <Box className="run-detail meta">
         <Id>{active.id}</Id>
         <span role="status">{sessionStatus(live, active.state)}</span>
+        {!isTerminal(active.state) && <StreamingDots />}
         <span>event replay from sequence {events.at(-1)?.sequence ?? 0}</span>
         {canCancel(active.state, candidateActive) && <Button variant="danger" disabled={busy} data-capability="runs.cancel" onClick={onCancel}>Cancel session</Button>}
       </Box>
