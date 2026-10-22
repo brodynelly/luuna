@@ -5,6 +5,7 @@ use luuna_tui::{
     frame::{sync_from, FrameClock},
     input::{Input, INPUT_QUEUE},
     protocol::{safe_text, BridgeEvent, QUEUE_SIZE},
+    scroll::ScrollMotion,
     terminal::{draw_frame, install_panic_restore, Shutdown, TerminalGuard},
     theme::Theme,
     ui,
@@ -109,6 +110,7 @@ async fn run() -> io::Result<u8> {
     let mut bridge = Bridge::spawn(&node, &script, &token, url.as_deref())?;
     token.clear();
     let mut app = AppState::default();
+    app.set_scroll_motion(ScrollMotion::from_env());
     app.start();
     let mut transport_stopped = false;
     let mut bridge_open = true;

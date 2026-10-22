@@ -243,10 +243,10 @@ fn render_result(frame: &mut Frame, app: &mut AppState, area: Rect, theme: Theme
         .len()
         .saturating_sub(usize::from(inner.height))
         .min(usize::from(u16::MAX)) as u16;
-    app.scroll = app.scroll.min(maximum);
+    let shown = app.scroll.clamp(maximum);
     let lines = rows
         .into_iter()
-        .skip(usize::from(app.scroll))
+        .skip(usize::from(shown))
         .take(usize::from(inner.height))
         .map(Line::raw)
         .collect::<Vec<_>>();
@@ -353,12 +353,12 @@ mod tests {
             }
             app.mode = Mode::Result;
             app.output = "界 wide unbroken text ".repeat(1000);
-            app.scroll = u16::MAX;
+            app.scroll.to_bottom();
             terminal
                 .draw(|f| render(f, &mut app, Theme { color: false }))
                 .unwrap();
             if width >= 20 && height >= 8 {
-                assert!(app.scroll < u16::MAX);
+                assert!(app.scroll.displayed() < u16::MAX);
             }
             app.output = "x".repeat(MAX_OUTPUT);
             terminal

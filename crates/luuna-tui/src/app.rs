@@ -139,7 +139,7 @@ pub struct AppState {
     pub output: String,
     pub output_omitted: bool,
     pub events: VecDeque<Value>,
-    pub scroll: u16,
+    pub scroll: crate::scroll::ScrollState,
     pub status: String,
     pub connection: String,
     pub active_request: Option<String>,
@@ -168,7 +168,7 @@ impl Default for AppState {
             output: String::new(),
             output_omitted: false,
             events: VecDeque::new(),
-            scroll: 0,
+            scroll: crate::scroll::ScrollState::default(),
             status: "Connecting to the local runtime…".into(),
             connection: "connecting".into(),
             active_request: None,
@@ -183,14 +183,18 @@ impl Default for AppState {
 }
 
 impl AppState {
-    /// Frame-clock hook for eased scrolling: true while an animation needs frames at
-    /// cadence. Never animates until that work lands.
+    /// Frame-clock hook: true while an eased scroll still needs frames at cadence.
     pub fn animating(&self) -> bool {
-        false
+        self.scroll.animating()
     }
-    /// Frame-clock hook for eased scrolling: advance animation state by the clamped
-    /// time since the previous frame.
-    pub fn advance_animations(&mut self, _dt: std::time::Duration) {}
+    /// Frame-clock hook: advance animation state by the clamped time since the
+    /// previous frame.
+    pub fn advance_animations(&mut self, dt: std::time::Duration) {
+        self.scroll.advance(dt);
+    }
+    pub fn set_scroll_motion(&mut self, motion: crate::scroll::ScrollMotion) {
+        self.scroll.set_motion(motion);
+    }
     pub fn id(&mut self) -> String {
         self.next_id += 1;
         format!("ui-{}", self.next_id)
@@ -270,7 +274,7 @@ impl AppState {
         }
         self.output.clear();
         self.output_omitted = false;
-        self.scroll = 0;
+        self.scroll.reset();
         self.events.clear();
         self.mode = Mode::Result;
         self.status = format!("{name} · waiting for the runtime · Esc stops waiting");
@@ -509,30 +513,30 @@ impl AppState {
         if matches!(key.code, KeyCode::PageUp | KeyCode::PageDown)
             && (self.mode == Mode::Result || self.prompt.is_some())
         {
-            self.scroll = if key.code == KeyCode::PageUp {
-                self.scroll.saturating_sub(8)
+            if key.code == KeyCode::PageUp {
+                self.scroll.scroll_up(8);
             } else {
-                self.scroll.saturating_add(8)
-            };
+                self.scroll.scroll_down(8);
+            }
             return;
         }
         if let Some(prompt) = &mut self.prompt {
             if prompt.kind == "hash" {
                 match key.code {
                     KeyCode::Up => {
-                        self.scroll = self.scroll.saturating_sub(1);
+                        self.scroll.scroll_up(1);
                         return;
                     }
                     KeyCode::Down => {
-                        self.scroll = self.scroll.saturating_add(1);
+                        self.scroll.scroll_down(1);
                         return;
                     }
                     KeyCode::Home => {
-                        self.scroll = 0;
+                        self.scroll.to_top();
                         return;
                     }
                     KeyCode::End => {
-                        self.scroll = u16::MAX;
+                        self.scroll.to_bottom();
                         return;
                     }
                     _ => {}
@@ -602,7 +606,7 @@ impl AppState {
             KeyCode::F(1) if self.active_request.is_none() => {
                 self.mode = Mode::Result;
                 self.output = HELP.into();
-                self.scroll = 0;
+                self.scroll.reset();
             }
             KeyCode::F(2) if self.active_request.is_none() => {
                 self.mode = Mode::Catalog;
@@ -611,28 +615,28 @@ impl AppState {
             KeyCode::F(5) | KeyCode::Char('r') => self.refresh(),
             KeyCode::Up | KeyCode::Char('k') => {
                 if self.mode == Mode::Result {
-                    self.scroll = self.scroll.saturating_sub(1);
+                    self.scroll.scroll_up(1);
                 } else {
                     self.selected = self.selected.saturating_sub(1);
                 }
             }
             KeyCode::Down | KeyCode::Char('j') => {
                 if self.mode == Mode::Result {
-                    self.scroll = self.scroll.saturating_add(1);
+                    self.scroll.scroll_down(1);
                 } else {
                     self.selected =
                         (self.selected + 1).min(self.filtered().len().saturating_sub(1));
                 }
             }
             KeyCode::Home => {
-                self.scroll = 0;
+                self.scroll.to_top();
                 self.selected = 0;
             }
             KeyCode::End => {
                 if self.mode == Mode::Catalog {
                     self.selected = self.filtered().len().saturating_sub(1);
                 } else {
-                    self.scroll = u16::MAX;
+                    self.scroll.to_bottom();
                 }
             }
             KeyCode::PageDown => {
