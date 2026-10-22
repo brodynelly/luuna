@@ -17,15 +17,34 @@ export function readDoctor(client: Pick<LuunaClient, "doctor">, signal: AbortSig
   return client.doctor(signal);
 }
 
-/** The report as a list: status badge, item name, the required marker and the runtime's one-line detail, then the verdict. */
+/** The sections the doctor items read under, in order; an item the runtime adds later lands under "Other". */
+export const DOCTOR_GROUPS: readonly { label: string; names: readonly string[] }[] = [
+  { label: "Required tools", names: ["git", "pi", "data_dir"] },
+  { label: "Optional tools", names: ["python", "node", "bun", "components"] },
+  { label: "Runtime", names: ["database", "port"] },
+  { label: "Credentials", names: ["api_token", "github_token", "provider_credentials"] },
+];
+
+/** The items split into the labelled sections, each in the runtime's own order; empty sections are dropped. */
+export function groupDoctorItems(items: readonly DoctorItem[]): { label: string; items: DoctorItem[] }[] {
+  const known = new Set(DOCTOR_GROUPS.flatMap((group) => group.names));
+  const groups = DOCTOR_GROUPS.map((group) => ({ label: group.label, items: items.filter((item) => group.names.includes(item.name)) }));
+  groups.push({ label: "Other", items: items.filter((item) => !known.has(item.name)) });
+  return groups.filter((group) => group.items.length > 0);
+}
+
+/** The report as a list: status badge, item name, the required marker and the runtime's one-line detail under section labels, then the verdict. */
 export function DoctorReportView({ report, tick = 0 }: { report: DoctorReport; tick?: number }) {
   return <Box className="settings-report">
-    <List className="settings-items" label="Runtime environment and credential presence">{report.items.map((item: DoctorItem) => <Item key={item.name} className="settings-item">
-      <StatusBadge tone={doctorTone[item.status]}>{item.status}</StatusBadge>
-      <Id>{item.name}</Id>
-      {item.required && <Tag>required</Tag>}
-      <span className="settings-detail">{item.detail}</span>
-    </Item>)}</List>
+    <List className="settings-items" label="Runtime environment and credential presence">{groupDoctorItems(report.items).flatMap((group) => [
+      <Item key={`group-${group.label}`} className="settings-group">{group.label}</Item>,
+      ...group.items.map((item: DoctorItem) => <Item key={item.name} className="settings-item">
+        <StatusBadge tone={doctorTone[item.status]}>{item.status}</StatusBadge>
+        <Id>{item.name}</Id>
+        {item.required && <Tag>required</Tag>}
+        <span className="settings-detail">{item.detail}</span>
+      </Item>),
+    ])}</List>
     <Box className="settings-verdict-row">
       {report.ok && <CheckDraw key={tick} />}
       <Callout className="settings-verdict" tone={report.ok ? "success" : "danger"} status>{report.ok ? "doctor: ok. Every required item is present and the database is usable." : "doctor: FAILED. A required item is missing or the database is unusable; the items above say which."}</Callout>

@@ -1,6 +1,6 @@
 import { expect, test } from "vitest";
 import { renderToStaticMarkup } from "react-dom/server";
-import { Aurora, Button, CheckDraw, CountUp, EmptyState, GlowSurface, Loading, Placeholder, ProgressBar, RecordList, Reveal, StreamingDots, Switch, TabPanel, Table, Tabs } from "./index";
+import { Aurora, Button, CheckDraw, CountUp, EmptyState, GlowSurface, Loading, Placeholder, ProgressBar, RecordList, Reveal, StreamingDots, SelectField, Switch, TabPanel, Table, Tabs, TextArea, TextField, Checkbox } from "./index";
 
 const html = (node: React.ReactElement) => renderToStaticMarkup(node);
 
@@ -53,7 +53,20 @@ test("Tabs have tablist semantics, one selected tab, a roving tabindex, paired i
 });
 
 test("Switch is a checkbox with the switch role inside its label", () => {
-  expect(html(<Switch label="Follow output" defaultChecked />)).toBe('<label class="switch"><input type="checkbox" role="switch" checked=""/> Follow output</label>');
+  expect(html(<Switch label="Follow output" defaultChecked id="follow" />)).toBe('<label class="switch"><input type="checkbox" role="switch" id="follow" name="follow-output" checked=""/> Follow output</label>');
+});
+
+test("every field control carries a unique id and a name, and keeps an explicit one", () => {
+  const markup = html(<><TextField label="Project name" /><TextField label={<>Checkout of <code>app</code></>} /><TextArea label="Notes" /><SelectField label="Mode" options={[{ value: "a", label: "A" }]} /><Checkbox label="Agree" /><Switch label="Follow output" /><TextField label="Token" id="token" name="api-token" /></>);
+  const fields = [...markup.matchAll(/<(?:input|textarea|select)\b[^>]*>/g)].map((match) => match[0]);
+  expect(fields).toHaveLength(7);
+  for (const field of fields) { expect(field).toMatch(/ id="[^"]+"/); expect(field).toMatch(/ name="[^"]+"/); }
+  const ids = fields.map((field) => /id="([^"]+)"/.exec(field)![1]);
+  expect(new Set(ids).size).toBe(ids.length);
+  expect(fields[0]).toContain('name="project-name"');
+  expect(fields[1]).toContain('name="checkout-of-app"');
+  expect(fields[6]).toContain('id="token"');
+  expect(fields[6]).toContain('name="api-token"');
 });
 
 test("Table has labelled columns, scoped headers and numeric cells", () => {

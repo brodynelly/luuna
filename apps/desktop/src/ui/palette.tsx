@@ -69,7 +69,7 @@ export function CommandPalette({ open, commands, loading = false, onClose }: { o
     onClick={(event) => { if (event.target === dialog.current) onClose(); }}>
     <label className="palette-field">
       <span className="visually-hidden">Find a view, project, ticket or command</span>
-      <input ref={field} type="search" role="combobox" aria-expanded="true" aria-controls={listId} aria-autocomplete="list"
+      <input ref={field} id={`${listId}-query`} name="palette-query" type="search" role="combobox" aria-expanded="true" aria-controls={listId} aria-autocomplete="list"
         aria-activedescendant={shown[active] ? option(active) : undefined} placeholder="Find a view, project, ticket or command…"
         value={query} onChange={(event) => setQuery(event.target.value)} onKeyDown={key} autoComplete="off" spellCheck={false} />
     </label>

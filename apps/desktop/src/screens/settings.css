@@ -8,11 +8,19 @@
 
 .settings-report { display: grid; gap: var(--space-3); min-width: 0; }
 .settings-report > .settings-items { display: grid; margin: 0; padding: 0; list-style: none; min-width: 0; border: var(--border-width) solid var(--color-border); border-radius: var(--radius-card); background: var(--color-surface-raised); box-shadow: var(--shadow-card); }
-/* One row per item, ruled like a grouped list: badge, name, the required chip, then the detail. */
-.settings-report > .settings-items > .settings-item { display: flex; flex-wrap: wrap; align-items: baseline; gap: var(--space-1-5) var(--space-2); min-width: 0; min-height: var(--row-height); padding: var(--space-2-5) var(--space-4); border-top: var(--border-width) solid var(--color-border); font-size: var(--text-xs); }
-.settings-report > .settings-items > .settings-item:first-child { border-top: 0; }
+/* A small label opens each section (required tools, optional tools, runtime, credentials). */
+.settings-report > .settings-items > .settings-group { padding: var(--space-4) var(--space-4) var(--space-2); border-top: var(--border-width) solid var(--color-border); color: var(--color-text-subtle); font-size: var(--text-label); font-weight: var(--weight-semibold); letter-spacing: var(--tracking-label); line-height: var(--leading-label); text-transform: uppercase; }
+.settings-report > .settings-items > .settings-group:first-child { border-top: 0; padding-top: var(--space-3); }
+/* One row per item on aligned columns: badge, name, the required chip, then the detail. */
+.settings-report > .settings-items > .settings-item { display: grid; grid-template-columns: calc(var(--space-6) * 2) calc(var(--space-7) * 3) auto minmax(0, 1fr); align-items: baseline; gap: var(--space-1-5) var(--space-3); min-width: 0; min-height: var(--row-height); padding: var(--space-3) var(--space-4); border-top: var(--border-width) solid var(--color-border); font-size: var(--text-xs); line-height: var(--leading-h3); }
+.settings-report > .settings-items > .settings-group + .settings-item { border-top: 0; }
+.settings-item > .settings-detail { grid-column: 4; }
+@media (max-width: 680px) {
+  .settings-report > .settings-items > .settings-item { grid-template-columns: auto minmax(0, 1fr); }
+  .settings-item > .settings-detail { grid-column: 1 / -1; }
+}
 .settings-item > code { color: var(--color-text); font-weight: var(--weight-medium); }
-.settings-item > .settings-detail { flex: 1 1 var(--hint-min); min-width: 0; color: var(--color-text-muted); overflow-wrap: anywhere; }
+.settings-item > .settings-detail { min-width: 0; color: var(--color-text-muted); overflow-wrap: anywhere; }
 .settings-report > .settings-items > .settings-item:hover { background: var(--color-surface); }
 /* The verdict keeps its own callout; a success check draws once beside it. */
 .settings-report > .settings-verdict-row { display: flex; align-items: center; gap: var(--space-3); min-width: 0; }
