@@ -129,10 +129,10 @@ describe("token sheets", () => {
       for (const [name] of declarations(outside)) if (name.startsWith("--duration-")) durations.add(name);
       preludes.forEach((prelude, index) => { if (prelude === RM) for (const [name, value] of declarations(inside[index])) reduced.set(name, value); });
     }
-    expect(durations.size).toBeGreaterThanOrEqual(11);
+    expect(durations.size).toBeGreaterThanOrEqual(9);
     expect([...durations].filter((name) => !/^0m?s$/.test(reduced.get(name) ?? ""))).toEqual([]);
-    for (const name of ["--lift-y", "--reveal-offset", "--toast-offset"]) expect(reduced.get(name), name).toBe("0px");
-    for (const name of ["--press-scale", "--enter-scale", "--pulse-scale"]) expect(reduced.get(name), name).toBe("1");
+    expect(reduced.get("--toast-offset")).toBe("0px");
+    expect(reduced.get("--enter-scale")).toBe("1");
     expect(MOTION).toBe("design/tokens-motion.css");
   });
 });

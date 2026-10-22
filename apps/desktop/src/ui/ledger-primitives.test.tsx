@@ -23,6 +23,7 @@ test("a switch can be the row control and is named by the row title", () => {
   const id = "row-title";
   const markup = html(<SettingsRow title="Follow output" control={<Switch label={<span className="visually-hidden">Follow output</span>} aria-labelledby={id} />} />);
   expect(markup).toContain('role="switch"');
+  expect(markup).toContain(`aria-labelledby="${id}"`);
   expect(markup).toContain('class="settings-row-control"');
 });
 

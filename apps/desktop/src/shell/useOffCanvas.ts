@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from "react";
-import { NARROW_QUERY, navKey } from "./offCanvas";
+import { closeTarget, NARROW_QUERY, navKey, settleFocus, watchNarrow } from "./offCanvas";
+import type { FocusTarget } from "./offCanvas";
 
 export interface CloseOptions { restoreFocus?: boolean; focusMain?: boolean }
 
@@ -13,26 +14,11 @@ const narrowNow = () => typeof matchMedia === "function" && matchMedia(NARROW_QU
 export function useOffCanvas() {
   const [narrow, setNarrow] = useState(narrowNow);
   const [open, setOpen] = useState(false);
-  const pending = useRef<"menu" | "main" | null>(null);
-  useEffect(() => {
-    if (typeof matchMedia !== "function") return;
-    const query = matchMedia(NARROW_QUERY);
-    const change = () => { setNarrow(query.matches); if (!query.matches) setOpen(false); };
-    change();
-    query.addEventListener("change", change);
-    return () => query.removeEventListener("change", change);
-  }, []);
-  useEffect(() => {
-    if (open) {
-      document.querySelector<HTMLElement>("#app-sidebar [aria-current=\"page\"]")?.focus();
-      return;
-    }
-    const target = pending.current;
-    pending.current = null;
-    if (target) document.getElementById(target === "menu" ? "nav-menu" : "main")?.focus();
-  }, [open]);
+  const pending = useRef<FocusTarget>(null);
+  useEffect(() => watchNarrow(typeof matchMedia === "function" ? matchMedia : undefined, (now) => { setNarrow(now); if (!now) setOpen(false); }), []);
+  useEffect(() => { pending.current = settleFocus(document, open, pending.current); }, [open]);
   const close = useCallback((options: CloseOptions = {}) => {
-    pending.current = options.restoreFocus ? "menu" : options.focusMain ? "main" : null;
+    pending.current = closeTarget(options);
     setOpen(false);
   }, []);
   useEffect(() => {
@@ -41,6 +27,7 @@ export function useOffCanvas() {
     window.addEventListener("keydown", key);
     return () => window.removeEventListener("keydown", key);
   }, [open, close]);
-  const toggle = useCallback(() => setOpen((value) => !value), []);
+  // Ctrl+\ while open closes like Escape does, returning focus to the menu button.
+  const toggle = useCallback(() => { if (open) close({ restoreFocus: true }); else setOpen(true); }, [open, close]);
   return { open, narrow, toggle, close };
 }

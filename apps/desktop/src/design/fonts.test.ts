@@ -72,6 +72,7 @@ describe("Söhne font declarations", () => {
     const tauri = readFileSync(new URL("../../src-tauri/tauri.conf.json", import.meta.url), "utf8");
     expect(tauri).toContain("font-src 'self';");
     const vite = readFileSync(new URL("../../vite.config.ts", import.meta.url), "utf8");
-    expect(vite).toMatch(/assetsInlineLimit[^\n]*ttf\|woff2/);
+    expect(vite).toMatch(/assetsInlineLimit[^\n]*\\\.ttf\$\//);
+    expect(vite).not.toContain("woff2");
   });
 });

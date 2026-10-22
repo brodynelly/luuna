@@ -68,7 +68,7 @@ The tokens are the Ledger design system's, exactly (ADR 0033): `design/tokens.cs
 
 **Colour roles** (Ledger names, in `tokens.css`; each has a light and a dark value): surfaces `--surface`, `--surface-raised`, `--surface-muted`, `--surface-overlay`, `--field`; fills `--fill`, `--fill-strong`, `--control-selected`; lines `--separator`, `--border` (decorative), `--border-strong` (3:1 control edges); text `--ink`, `--ink-body`, `--ink-muted`, `--ink-subdued` (surfaces only), `--ink-disabled`, `--ink-on-accent`, `--ink-on-danger`, `--ink-on-banner`, `--ink-on-toast`; accent `--accent`, `--accent-hover`, `--accent-text` (links), `--accent-soft`, `--focus-ring`; status `--success`, `--danger`, `--warning`, `--info` each with a `-soft` ground; `--scrim`, `--banner`, `--toast`, `--toast-action`, `--chart-1` to `-5`, `--chart-muted`, `--chart-grid`, and `--ai` (reserved for AI output).
 
-**Other Ledger tokens.** `tokens-depth.css`: `--radius-sm/md/lg/xl/full` (4, 6, 8, 12, 9999 px), `--z-sticky/menu/drawer/dialog/toast`, `--shadow-button/card/popover` (the first two are `none` in dark: depth comes from surface steps), and the `--shadow-focus` field ring. `tokens-scale.css`: `--font-sans` and `--font-mono` (system stacks; `--font-display` aliases sans), type styles as `--text-*`, `--leading-*` and `--weight-*` for page-title 28/36/700, metric-lg 24/32/600, section-title and metric 20/28/600, body-strong 14/20/600, body 14/20/400, label 13/18/500, caption and overline 12/16, mono 13/20; `--space-1` 4, `-2` 8, `-3` 12, `-4` 16, `-5` 20, `-6` 24, `-8` 32, `-12` 48 px (plus 2, 6 and 10 px half steps); `--control-sm/md/lg` 28, 32, 40 px; `--sidebar-width` 240, `--drawer-width` 440, `--dialog-width` 480, `--banner-height` 40, `--topbar-height` 56, `--content-max-width` 1200, `--fold-reference` 768 px. Luuna-only layout tokens (`--layout-max`, `--gutter`, `--palette-*`, `--menu-*`, `--aside-width`, the bounded-region sizes and the rest) keep their values in `tokens-scale.css`. `tokens-motion.css` is unchanged: easings `--ease-standard/-out/-in/-spring/-linear`; durations press 80, micro 140, standard 220, large 340 ms, plus count, draw, shimmer, pulse, ambient and stagger; `--lift-y`, `--press-scale`, `--enter-scale`, `--reveal-offset`, `--toast-offset`, `--pulse-scale`, all zero or neutral under reduced motion. `tokens.css` keeps `--duration-fast` 120 ms, `--duration-follow` 160 ms (the live-output glide), `--follow-threshold` 48 px and the tail caret tokens.
+**Other Ledger tokens.** `tokens-depth.css`: `--radius-sm/md/lg/xl/full` (4, 6, 8, 12, 9999 px), `--z-sticky/menu/drawer/dialog/toast`, `--shadow-button/card/popover` (the first two are `none` in dark: depth comes from surface steps), and the `--shadow-focus` field ring. `tokens-scale.css`: `--font-sans` and `--font-mono` (system stacks; `--font-display` aliases sans), type styles as `--text-*`, `--leading-*` and `--weight-*` for page-title 28/36/700, metric-lg 24/32/600, section-title and metric 20/28/600, body-strong 14/20/600, body 14/20/400, label 13/18/500, caption and overline 12/16, mono 13/20; `--space-1` 4, `-2` 8, `-3` 12, `-4` 16, `-5` 20, `-6` 24, `-8` 32, `-12` 48 px (plus 2, 6 and 10 px half steps); `--control-sm/md/lg` 28, 32, 40 px; `--sidebar-width` 240, `--drawer-width` 440, `--dialog-width` 480, `--banner-height` 40, `--topbar-height` 56, `--content-max-width` 1200, `--fold-reference` 768 px. Luuna-only layout tokens (`--layout-max`, `--gutter`, `--palette-*`, `--menu-*`, `--aside-width`, the bounded-region sizes and the rest) keep their values in `tokens-scale.css`. `tokens-motion.css` is unchanged: easings `--ease-standard/-out/-in/-linear`; durations press 80, micro 140, standard 220, large 340 ms, plus shimmer, pulse and stagger; `--enter-scale` and `--toast-offset`, all zero or neutral under reduced motion. The unused `--lift-y`, `--press-scale`, `--reveal-offset`, `--pulse-scale`, `--ease-spring`, `--duration-count`, `--duration-draw` and `--pill-*` tokens were removed. `tokens.css` keeps `--duration-fast` 120 ms, `--duration-follow` 160 ms (the live-output glide), `--follow-threshold` 48 px and the tail caret tokens.
 
 **Legacy aliases** (`tokens-legacy.css`, the last token sheet) keep every old name working by pointing it at a Ledger role. A component that still reads an old name gets the Ledger value; migrate it to the Ledger name and delete the alias. The sheet is deleted when it is empty. The final old-to-new mapping:
 
@@ -80,9 +80,7 @@ The tokens are the Ledger design system's, exactly (ADR 0033): `design/tokens.cs
 | `--color-surface-sunken` | `--surface-muted` |
 | `--color-field` | `--field` |
 | `--color-selected`, `--color-accent-tint`, `--color-selection` | `--accent-soft` |
-| `--color-selected-border`, `--color-accent` | `--accent` |
-| `--color-accent-hover`, `--color-accent-active` | `--accent-hover` |
-| `--color-on-accent` | `--ink-on-accent` |
+| `--color-accent` | `--accent` |
 | `--color-focus` | `--focus-ring` |
 | `--color-border` | `--separator` (`--border-strong` under Increase Contrast) |
 | `--color-border-strong`, `--color-scrollbar` | `--border` |
@@ -91,14 +89,13 @@ The tokens are the Ledger design system's, exactly (ADR 0033): `design/tokens.cs
 | `--color-text-heading` | `--ink` |
 | `--color-text-muted`, `--color-text-subtle` | `--ink-muted` (not `ink-subdued`: subtle text sits on fills and fields) |
 | `--color-text-disabled` | `--ink-disabled` |
-| `--color-scrim` | `--scrim` |
 | `--tone-success-{fg,bg,border,mark}` | `--success`, `--success-soft`, `--success-soft`, `--success` |
 | `--tone-active-*` | `--info`, `--info-soft`, `--info-soft`, `--info` |
 | `--tone-danger-*` | `--danger`, `--danger-soft`, `--danger-soft`, `--danger` |
 | `--tone-attention-*` | `--warning`, `--warning-soft`, `--warning-soft`, `--warning` |
 | `--tone-neutral-*`, `--tone-interrupted-*` | `--ink-body`, `--fill-strong`, `--fill-strong`, `--ink-muted` |
-| `--radius-chip` / `-input`, `-button` / `-card`, `-menu` / `-dialog` / `-pill` | `--radius-sm` / `-md` / `-lg` / `-xl` / `-full` |
-| `--shadow-panel` / `-dialog`, `-overlay` / `-button-hover` / `-kbd` | `--shadow-card` / `--shadow-popover` / `--shadow-button` / `none` |
+| `--radius-chip` / `-input`, `-button` / `-card` / `-pill` | `--radius-sm` / `-md` / `-lg` / `-full` |
+| `--shadow-button-hover` | `--shadow-button` |
 | `--control-height`, `--control-height-sm`, `--content-max`, `--space-7` | `--control-md`, `--control-sm`, `--content-max-width`, `--space-12` |
 | `--text-display`, `-h1`, `-title` (and their leading and tracking) | `--text-page-title` |
 | `--text-h2`, `--text-h3`, `--text-xl` | `--text-section-title`, `--text-body-strong`, `--text-metric-lg` |
@@ -186,7 +183,7 @@ Presentation only; the runtime still decides every state.
 
 ADR 0033 supersedes ADR 0032's decorative motion: only functional motion remains. Overlay, menu and toast entrances, the skeleton pulse, the indeterminate progress bar and the streaming dots animate (`design/motion.css`); state changes are colour transitions of `--duration-micro`. There is no hover lift, press scale, reveal, count-up, tab indicator slide, drawn check, glow or aurora. Only `transform` and `opacity` animate and entrances fill `backwards`, so nothing is left transformed at rest. Evidence, the tail caret and approvals never pulse, fade out or auto-dismiss. Optional features (view transitions, `@starting-style`) are gated by `@supports` with a complete static fallback. No `will-change`.
 
-- **Buttons.** Hover is a background change; there is no lift or scale. `--lift-y` survives only as an unused legacy token and no screen sheet may use it (`design/screens-ledger.test.ts`).
+- **Buttons.** Hover is a background change; there is no lift or scale. The `--lift-y` token is gone and no screen sheet may reintroduce a lift (`design/screens-ledger.test.ts`).
 - **Measuring.** `menus.tsx` sizes a menu with `offsetWidth` and `offsetHeight`, not `getBoundingClientRect`, because the entrance scales it. Marker: `data-entering` (a view that just became current).
 - **Shell.** No sliding pill, pulse or wash. A view change uses View Transitions where `document.startViewTransition` exists; otherwise a CSS opacity fade plays from `data-entering` (`data-view-motion="css"`); the off-canvas panel slides in with transform. Under reduced motion every one of these is instant.
 

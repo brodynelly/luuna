@@ -15,7 +15,7 @@ export function AppShell({ collapsed, sidebar, banner, topbar, rail, navOpen, on
   collapsed: boolean; sidebar: ReactNode; banner?: ReactNode; topbar?: ReactNode; rail?: ReactNode; navOpen?: boolean; onDismissNav?: () => void; children: ReactNode; motion?: ViewMotion;
 }) {
   return <div className="app" data-sidebar={collapsed ? "collapsed" : undefined} data-nav={navOpen ? "open" : undefined} data-banner={banner ? "" : undefined} data-rail={rail ? "" : undefined} data-view-motion={motion}>
-    <a className="skip-link" href="#main">Skip to main content</a>
+    <a className="skip-link" href="#main" inert={navOpen}>Skip to main content</a>
     {banner && <div className="shell-banner" inert={navOpen}>{banner}</div>}
     {sidebar}
     {navOpen && <button type="button" className="sidebar-scrim" aria-label="Close navigation" tabIndex={-1} onClick={onDismissNav} />}
@@ -33,8 +33,8 @@ export function Mark({ className }: { className: string }) {
 }
 
 /** The app-wide state strip (Ledger Banner): only for state that changes what every action means, one at a time. */
-export function Banner({ label, children, action, className }: { label: string; children: ReactNode; action?: ReactNode; className?: string }) {
-  return <div className={["banner", className].filter(Boolean).join(" ")} role="status">
+export function Banner({ label, children, action, className, title }: { label: string; children: ReactNode; action?: ReactNode; className?: string; title?: string }) {
+  return <div className={["banner", className].filter(Boolean).join(" ")} role="status" title={title}>
     <strong className="banner-label">{label}</strong><span className="banner-message">{children}</span>{action}
   </div>;
 }

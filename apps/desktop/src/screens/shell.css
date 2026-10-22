@@ -24,14 +24,15 @@
 .shell-main { grid-column: 2; grid-row: 2; min-width: 0; }
 .shell-rail { grid-column: 3; grid-row: 2; min-width: 0; padding: var(--space-4) var(--space-8) var(--space-8) 0; }
 
-/* Banner: the one app-wide notice, full width above the shell. */
+/* Banner: the one app-wide notice, full width above the shell. Above 768 px it is exactly --banner-height tall (one line, cut with an
+   ellipsis, the whole text in its title) so the sticky sidebar and top bar offsets never depend on how the text wraps. */
 .banner {
   display: flex;
   align-items: center;
   justify-content: center;
   gap: var(--space-2);
-  min-height: var(--banner-height);
-  padding: var(--space-2) var(--space-4);
+  height: var(--banner-height);
+  padding: 0 var(--space-4);
   background: var(--banner);
   color: var(--ink-on-banner);
   font-size: var(--text-body);
@@ -39,6 +40,7 @@
   overflow-wrap: anywhere;
 }
 .banner-label { flex: none; font-weight: var(--weight-body-strong); }
+.banner-message { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 
 /* Sidebar: window chrome. It stays in view while the content scrolls. Critical actions never sit at its bottom. */
 .sidebar {
@@ -111,6 +113,7 @@
   transition: background-color var(--duration-micro) var(--ease), color var(--duration-micro) var(--ease);
 }
 .sidebar-nav button.nav-item > .icon { color: var(--ink-muted); }
+/* Intentional: hover also sets the ink colour, so on the current item it replaces the accent text until the pointer leaves. */
 .sidebar-nav button.nav-item:hover:not(:disabled) { background: var(--fill); color: var(--ink); }
 .sidebar-nav button.nav-item[aria-current="page"] { color: var(--accent-text); font-weight: var(--weight-bold); }
 .sidebar-nav button.nav-item[aria-current="page"] > .icon { color: var(--accent-text); }
@@ -229,7 +232,9 @@
   .app[data-banner] .topbar { top: 0; }
   .app[data-banner] > .sidebar { top: 0; height: auto; }
   .shell-banner { position: static; }
-  .banner { justify-content: flex-start; }
+  /* Not sticky here, so the whole text may wrap. */
+  .banner { justify-content: flex-start; height: auto; min-height: var(--banner-height); padding: var(--space-2) var(--space-4); }
+  .banner-message { overflow: visible; white-space: normal; }
   .shell-main, .shell-rail { grid-column: 1; }
   .shell-rail { grid-row: 3; padding: 0 var(--space-4) var(--space-8); }
   .sidebar {

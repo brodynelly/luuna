@@ -31,7 +31,11 @@ describe("Ledger component sheets", () => {
 
   test("buttons do not lift or scale", () => {
     expect(everything).not.toMatch(/translateY\(var\(--lift-y\)\)|--press-scale|--lift-y/);
-    expect(everything).not.toMatch(/button:not\([^)]*\):hover:not\(:disabled\) \{[^}]*transform/);
+    for (const sheet of SHEETS) {
+      for (const { selector, body } of rulesOf(sheet)) {
+        if (/button/.test(selector) && /:hover/.test(selector)) expect(declarations(`${body};`).map(([property]) => property), `${sheet}: ${selector}`).not.toContain("transform");
+      }
+    }
   });
 
   test("the field focus rule keeps the shared 2 px outline offset", () => {

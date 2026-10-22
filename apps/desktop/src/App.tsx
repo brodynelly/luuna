@@ -80,14 +80,14 @@ function useWindowNavigation() {
     window.addEventListener("luuna:command", command);
     return () => { window.removeEventListener("keydown", shortcut); window.removeEventListener("luuna:command", command); };
   }, []);
-  return { view, navigate, entering, motion, collapsed, toggle: () => setCollapsed((value) => !value), palette, setPalette, nav };
+  return { view, navigate, entering, motion, collapsed, toggle: () => setCollapsed((value) => !value), toggleSidebar: () => sidebarRef.current(), palette, setPalette, nav };
 }
 
 /** The window: a sidebar of views beside the content (ADR 0030). The token stays in memory only. */
 export function App() {
   const runtime = useRuntime();
   const { client, connectionEpoch, refresh, error, setError, outage } = runtime;
-  const { view, navigate, entering, motion, collapsed, toggle, palette, setPalette, nav } = useWindowNavigation();
+  const { view, navigate, entering, motion, collapsed, toggle, toggleSidebar, palette, setPalette, nav } = useWindowNavigation();
   // A Home or Board control opens a project (and a ticket, or the ticket form) in Projects.
   const [requested, setRequested] = useState<ProjectRequest | null>(null);
   const open = (request: OpenRequest) => navigate("projects", () => setRequested({ ...request, nonce: Date.now() }));
@@ -96,9 +96,9 @@ export function App() {
   const activeRuns = runtime.runs.filter((run) => ACTIVE_STATES.includes(run.state)).length;
   const sidebar = <WindowSidebar view={view} onSelect={navigate} connection={runtime.connectionState} address={client?.baseUrl} activeRuns={activeRuns} collapsed={collapsed} onToggle={toggle} />;
   // The one app-wide notice: the runtime is unreachable (the connect page covers having no runtime).
-  const banner = client && outage ? <Banner label={OUTAGE_LABEL} className="outage">{outage} {OUTAGE_NOTE}</Banner> : undefined;
+  const banner = client && outage ? <Banner label={OUTAGE_LABEL} className="outage" title={`${OUTAGE_LABEL}: ${outage} ${OUTAGE_NOTE}`}>{outage} {OUTAGE_NOTE}</Banner> : undefined;
   const topbar = <TopBar onMenu={nav.toggle} menuOpen={nav.open} onSearch={() => setPalette(true)} />;
-  const finder = usePalette({ client, open: palette, onView: navigate, onOpen: open, onToggleSidebar: toggle, onDisconnect: runtime.disconnect });
+  const finder = usePalette({ client, open: palette, onView: navigate, onOpen: open, onToggleSidebar: toggleSidebar, onDisconnect: runtime.disconnect });
 
   return <NoticeProvider scope={client}>
     <AppShell collapsed={collapsed && !nav.narrow} sidebar={sidebar} banner={banner} topbar={topbar} navOpen={nav.open} onDismissNav={() => nav.close({ restoreFocus: true })} motion={motion}>
