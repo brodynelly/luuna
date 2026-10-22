@@ -91,7 +91,9 @@ impl Drop for Shutdown {
 
 thread_local! {
     /// True between `BeginSynchronizedUpdate` and its matching End on this thread, so
-    /// restoration paths (guard drop, panic hook) can close an open update.
+    /// restoration paths (guard drop, panic hook) can close an open update. The flag is
+    /// thread-local: the panic hook only sees it when the panic occurs on the thread that
+    /// drew (the main thread); panics on other threads cannot close the update.
     static SYNC_OPEN: Cell<bool> = const { Cell::new(false) };
 }
 
@@ -275,6 +277,21 @@ mod tests {
         assert_eq!(String::from_utf8(out.clone()).unwrap(), END);
         close_sync(&mut out);
         assert_eq!(out.len(), END.len());
+        assert!(!SYNC_OPEN.with(Cell::get));
+    }
+
+    #[test]
+    fn panic_in_render_leaves_sync_open_so_close_sync_emits_end() {
+        let capture = Capture::default();
+        let mut term = terminal(capture.clone());
+        let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            let _ = draw_frame(&mut term, true, |_| panic!("render panic"));
+        }));
+        assert!(result.is_err());
+        assert!(SYNC_OPEN.with(Cell::get));
+        let mut out = Vec::new();
+        close_sync(&mut out);
+        assert_eq!(String::from_utf8(out).unwrap(), END);
         assert!(!SYNC_OPEN.with(Cell::get));
     }
 }

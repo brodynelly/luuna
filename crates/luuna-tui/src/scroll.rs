@@ -112,6 +112,7 @@ impl ScrollState {
         self.displayed = 0;
         self.follow = false;
         self.down_intent = false;
+        self.max = None;
         self.elapsed = None;
     }
 
@@ -233,6 +234,18 @@ mod tests {
                 }
             }
         }
+    }
+
+    #[test]
+    fn reset_clears_max_so_the_next_pane_snaps_until_rendered() {
+        let mut s = eased();
+        s.clamp(100);
+        s.scroll_down(50);
+        assert_ne!(s.displayed(), s.target());
+        s.reset();
+        assert_eq!((s.target(), s.displayed()), (0, 0));
+        s.scroll_down(40);
+        assert_eq!(s.displayed(), 40, "unknown bound must snap, not ease");
     }
 
     #[test]

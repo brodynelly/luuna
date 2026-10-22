@@ -20,6 +20,15 @@ pub const INPUT_QUEUE: usize = 64;
 /// Only bounds how quickly the thread notices the stop flag; input is delivered on arrival.
 pub const INPUT_POLL: Duration = Duration::from_millis(50);
 
+/// Forward only non-Release keys, paste and resize; mouse/focus events are dropped.
+fn forwards(event: &Event) -> bool {
+    match event {
+        Event::Key(key) => key.kind != KeyEventKind::Release,
+        Event::Paste(_) | Event::Resize(..) => true,
+        _ => false,
+    }
+}
+
 pub struct Input {
     receiver: mpsc::Receiver<io::Result<Event>>,
     stop: Arc<AtomicBool>,
@@ -38,12 +47,7 @@ impl Input {
                     match event::poll(INPUT_POLL) {
                         Ok(true) => match event::read() {
                             Ok(event) => {
-                                let wanted = match &event {
-                                    Event::Key(key) => key.kind != KeyEventKind::Release,
-                                    Event::Paste(_) | Event::Resize(..) => true,
-                                    _ => false,
-                                };
-                                if wanted && sender.blocking_send(Ok(event)).is_err() {
+                                if forwards(&event) && sender.blocking_send(Ok(event)).is_err() {
                                     return;
                                 }
                             }
@@ -84,5 +88,70 @@ impl Drop for Input {
         if let Some(thread) = self.thread.take() {
             let _ = thread.join();
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crossterm::event::{
+        KeyCode, KeyEvent, KeyEventState, KeyModifiers, MouseEvent, MouseEventKind,
+    };
+
+    fn key(kind: KeyEventKind) -> Event {
+        Event::Key(KeyEvent {
+            code: KeyCode::Char('a'),
+            modifiers: KeyModifiers::NONE,
+            kind,
+            state: KeyEventState::NONE,
+        })
+    }
+
+    #[test]
+    fn filter_forwards_only_press_repeat_paste_and_resize() {
+        assert!(forwards(&key(KeyEventKind::Press)));
+        assert!(forwards(&key(KeyEventKind::Repeat)));
+        assert!(!forwards(&key(KeyEventKind::Release)));
+        assert!(forwards(&Event::Paste("x".into())));
+        assert!(forwards(&Event::Resize(1, 1)));
+        assert!(!forwards(&Event::FocusGained));
+        assert!(!forwards(&Event::FocusLost));
+        assert!(!forwards(&Event::Mouse(MouseEvent {
+            kind: MouseEventKind::Moved,
+            column: 0,
+            row: 0,
+            modifiers: KeyModifiers::NONE,
+        })));
+    }
+
+    /// A thread blocked in `blocking_send` on a full queue must be released by drop.
+    #[test]
+    fn dropping_input_with_a_full_queue_joins_without_hanging() {
+        let (sender, receiver) = mpsc::channel(1);
+        sender.try_send(Ok(Event::Resize(1, 1))).unwrap();
+        let stop = Arc::new(AtomicBool::new(false));
+        let blocked = std::thread::spawn(move || sender.blocking_send(Ok(Event::Resize(2, 2))));
+        std::thread::sleep(Duration::from_millis(50));
+        let input = Input {
+            receiver,
+            stop,
+            thread: Some(blocked_as_unit(blocked)),
+        };
+        let (done_tx, done_rx) = std::sync::mpsc::channel();
+        std::thread::spawn(move || {
+            drop(input);
+            let _ = done_tx.send(());
+        });
+        done_rx
+            .recv_timeout(Duration::from_secs(5))
+            .expect("dropping Input hung while the queue was full");
+    }
+
+    fn blocked_as_unit(
+        handle: JoinHandle<Result<(), mpsc::error::SendError<io::Result<Event>>>>,
+    ) -> JoinHandle<()> {
+        std::thread::spawn(move || {
+            let _ = handle.join();
+        })
     }
 }

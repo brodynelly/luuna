@@ -610,7 +610,6 @@ fn eased_scroll_settles_to_the_instant_frame() {
     let mut eased = result_app(200, ScrollMotion::Eased(DEFAULT_SCROLL_DURATION));
     let mut previous = draw(&mut instant, 60, 20, false);
     settle(&mut eased);
-    let mut moved_between = false;
     for code in [
         KeyCode::PageDown,
         KeyCode::PageDown,
@@ -625,12 +624,14 @@ fn eased_scroll_settles_to_the_instant_frame() {
         let frames = settle(&mut eased);
         let last = frames.last().unwrap();
         assert_eq!(last, &expected);
-        moved_between |= frames[..frames.len() - 1]
-            .iter()
-            .any(|f| *f != previous && f != last);
+        assert!(
+            frames[..frames.len() - 1]
+                .iter()
+                .any(|f| *f != previous && f != last),
+            "no intermediate frame was drawn for {code:?}"
+        );
         previous = expected;
     }
-    assert!(moved_between, "no intermediate frame was drawn");
 }
 
 #[test]
