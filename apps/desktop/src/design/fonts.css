@@ -1,0 +1,29 @@
+/*
+ * Platform fonts (ADR 0033, font amendment 2026-10-22). Söhne is a commercial typeface (Klim Type
+ * Foundry). The hinted TrueType files from the sole user's installed copy are bundled at the sole
+ * user's direction for non-Apple platforms; see THIRD-PARTY-NOTICES.md. They keep their fpgm, prep and
+ * cvt hinting tables, which is why they are TTF and not unhinted woff2 subsets (those rendered soft at
+ * 125% scaling on Windows). Apple platforms, and any platform where Söhne fails to load, keep Ledger's
+ * system stack from tokens-scale.css, whose token values stay exactly Ledger's: only this sheet's
+ * :root[data-platform="other"] override puts Söhne first. This sheet is the last import of the tokens
+ * layer: the selector (0,2,0) beats :root (0,1,0) there. It is not a token sheet: it holds @font-face
+ * descriptors, the one place a url() and a font name are legitimate. --font-mono is untouched.
+ */
+@font-face { font-family: "Söhne"; src: url("../assets/fonts/soehne/Soehne-leicht.ttf") format("truetype"); font-weight: 300; font-style: normal; font-display: swap; }
+@font-face { font-family: "Söhne"; src: url("../assets/fonts/soehne/Soehne-leicht-kursiv.ttf") format("truetype"); font-weight: 300; font-style: italic; font-display: swap; }
+@font-face { font-family: "Söhne"; src: url("../assets/fonts/soehne/Soehne-buch.ttf") format("truetype"); font-weight: 400; font-style: normal; font-display: swap; }
+@font-face { font-family: "Söhne"; src: url("../assets/fonts/soehne/Soehne-buch-kursiv.ttf") format("truetype"); font-weight: 400; font-style: italic; font-display: swap; }
+@font-face { font-family: "Söhne"; src: url("../assets/fonts/soehne/Soehne-kraftig.ttf") format("truetype"); font-weight: 500; font-style: normal; font-display: swap; }
+@font-face { font-family: "Söhne"; src: url("../assets/fonts/soehne/Soehne-kraftig-kursiv.ttf") format("truetype"); font-weight: 500; font-style: italic; font-display: swap; }
+@font-face { font-family: "Söhne"; src: url("../assets/fonts/soehne/Soehne-halbfett.ttf") format("truetype"); font-weight: 600; font-style: normal; font-display: swap; }
+@font-face { font-family: "Söhne"; src: url("../assets/fonts/soehne/Soehne-halbfett-kursiv.ttf") format("truetype"); font-weight: 600; font-style: italic; font-display: swap; }
+@font-face { font-family: "Söhne"; src: url("../assets/fonts/soehne/Soehne-dreiviertelfett.ttf") format("truetype"); font-weight: 700; font-style: normal; font-display: swap; }
+@font-face { font-family: "Söhne"; src: url("../assets/fonts/soehne/Soehne-dreiviertelfett-kursiv.ttf") format("truetype"); font-weight: 700; font-style: italic; font-display: swap; }
+
+/* Metric-matched fallback (Söhne ascent 1171, descent 423, lineGap 0 on 1000 upem) to limit layout shift. */
+@font-face { font-family: "Söhne Fallback"; src: local("Segoe UI"), local("Arial"), local("Liberation Sans"); ascent-override: 117.1%; descent-override: 42.3%; line-gap-override: 0%; }
+
+:root[data-platform="other"] {
+  --font-sans: "Söhne", "Söhne Fallback", -apple-system, BlinkMacSystemFont, "SF Pro Text", "Segoe UI", "Helvetica Neue", Arial, sans-serif;
+  --font-display: "Söhne", "Söhne Fallback", -apple-system, BlinkMacSystemFont, "SF Pro Text", "Segoe UI", "Helvetica Neue", Arial, sans-serif;
+}

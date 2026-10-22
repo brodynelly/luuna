@@ -10,10 +10,12 @@ import { ALLOWED_SELECTORS, DARK_MEDIA, DARK_MEDIA_SELECTOR, MANIFEST, TOKENS, T
 
 // Tailwind CSS v4 utilities (ADR 0030): last layer, its theme a reference to the tokens.
 const TAILWIND = "design/tailwind.css";
+// Platform fonts (ADR 0033 font amendment): @font-face descriptors plus the Söhne-first override. Last import of the tokens layer, but not a token sheet.
+const FONTS = "design/fonts.css";
 // Every sheet is registered once (ADR 0032); later items replace a sheet's content, never this list.
-const EXPECTED_SHEETS = [MANIFEST, ...TOKEN_SHEETS, "design/base.css", "design/components.css", "design/overlays.css", "design/controls.css", "design/motion.css", "screens/app.css", "screens/shell.css", "screens/home.css", "screens/board.css", "screens/projects.css", "screens/workflows.css", "screens/candidate-review.css", "screens/project-components.css", "screens/help.css", "screens/settings.css", "screens/sessions.css", "design/tailwind.css"];
+const EXPECTED_SHEETS = [MANIFEST, ...TOKEN_SHEETS, FONTS, "design/base.css", "design/components.css", "design/overlays.css", "design/controls.css", "design/motion.css", "screens/app.css", "screens/shell.css", "screens/home.css", "screens/board.css", "screens/projects.css", "screens/workflows.css", "screens/candidate-review.css", "screens/project-components.css", "screens/help.css", "screens/settings.css", "screens/sessions.css", "design/tailwind.css"];
 function layerOf(sheet: string): string {
-  if (TOKEN_SHEETS.includes(sheet)) return "tokens";
+  if (TOKEN_SHEETS.includes(sheet) || sheet === FONTS) return "tokens";
   if (sheet === "design/base.css") return "base";
   if (sheet === TAILWIND) return "utilities";
   if (sheet.startsWith("screens/")) return "screens";

@@ -28,3 +28,14 @@ Luuna keeps what Ledger does not model: runtime authority, the six outcome tones
    - The lint adds a gradient ban and a left-rule ban with a pending allowlist that item L2 must empty.
    - Known interim gaps and all rendering evidence belong to later items (L2, L3, L4 and the real-render QA item).
    - Alternatives rejected: importing `ledger.mjs`, because it would drop Luuna roles, markers and policy UI; `light-dark()`, because of uneven support in the WKWebView and WebView2 versions and because it breaks the hex contrast parser; keeping Söhne opt-in, which the owner rejected.
+
+## Font amendment (2026-10-22)
+
+**Söhne first on non-Apple platforms, bundled at the sole user's direction.** This is a recorded deviation from Ledger's no-webfont rule and from decision 3 above, which removed Söhne. The sole user installed Söhne (commercial, Klim Type Foundry), accepted the licensing risk, and asked for the hinted TrueType files from their installed copy to be bundled: ten TTFs (leicht 300, buch 400, kraftig 500, halbfett 600, dreiviertelfett 700, each upright and kursiv) in `apps/desktop/src/assets/fonts/soehne/`, about 95 to 105 KB each, 692 glyphs, with the `fpgm`, `prep`, `cvt ` and `gasp` hinting tables. The `Test Söhne Mono` trial files and the 543-glyph `Sohne-Buch.ttf` duplicate are never bundled.
+
+- **Rule.** `design/fonts.css` declares one family, "Söhne", with those ten faces (`font-display: swap`) and a metric-matched fallback face. Only `:root[data-platform="other"]` sets `--font-sans` and `--font-display` to Söhne first, followed by Ledger's exact system stack. `--font-mono` is untouched. The Ledger token values in `tokens-scale.css` stay exactly Ledger's and the token-value test still pins them; the Söhne-first override lives only in `fonts.css`.
+- **Fallback and Apple.** The fallback is Ledger's system stack (SF Pro, Segoe UI, and so on). Apple platforms keep that stack unchanged: `design/platform.ts` sets `data-platform` ("apple" or "other") before the first render and SF Pro is never bundled.
+- **Why TTF with hinting.** The earlier unhinted 509-glyph woff2 subsets (commit 097758f, removed by item L1) rendered soft on Windows at 125% scaling. The installed TTFs carry TrueType hinting, and a test asserts every bundled file contains `fpgm`, `prep` and `cvt `, so a swap to unhinted files fails.
+- **Safeguards.** The CSP keeps `font-src 'self'`. Vite never inlines `.ttf` or `.woff2` as `data:` URIs (`assetsInlineLimit`). `fonts.css` is registered as the last import of the tokens layer but is not a token sheet; it passes the tokens-only lint without an exemption.
+- **Licensing.** Söhne is not covered by Luuna's MIT grant. `THIRD-PARTY-NOTICES.md` records that the fonts must be removed or licensed before any distribution.
+- **Not proven.** Sharpness on Windows at 125% scaling needs the sole user's eyes. WebView2 is expected to honour TrueType hinting for web fonts, but that is unverified here.
