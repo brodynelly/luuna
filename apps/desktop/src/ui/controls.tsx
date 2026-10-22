@@ -1,3 +1,4 @@
+import { isValidElement, useId } from "react";
 import type { ButtonHTMLAttributes, FormEvent, InputHTMLAttributes, ReactNode, SelectHTMLAttributes, TextareaHTMLAttributes } from "react";
 
 /**
@@ -24,6 +25,26 @@ export function Button({ variant = "secondary", submit = false, className, child
   return <button type={submit ? undefined : "button"} className={classes} {...rest}>{children}</button>;
 }
 
+/** The plain text of a label, for the default `name` of its field. */
+function labelText(node: ReactNode): string {
+  if (typeof node === "string" || typeof node === "number") return String(node);
+  if (Array.isArray(node)) return node.map(labelText).join(" ");
+  if (isValidElement<{ children?: ReactNode }>(node)) return labelText(node.props.children);
+  return "";
+}
+
+/**
+ * Every control carries a stable unique `id` (useId) and a `name`, so the browser's autofill and
+ * form audits see an identified field. An explicit `id` or `name` from the caller always wins; the
+ * default name is a slug of the label, or the id when the label has no text.
+ */
+function useIdentity(label: ReactNode, id?: string, name?: string): { id: string; name: string } {
+  const generated = useId();
+  const slug = labelText(label).toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-+|-+$/g, "").slice(0, 48);
+  const fieldId = id ?? generated;
+  return { id: fieldId, name: name ?? (slug || fieldId) };
+}
+
 interface LabelledProps { label: ReactNode; labelClassName?: string }
 
 export type TextFieldProps = LabelledProps & InputHTMLAttributes<HTMLInputElement> & {
@@ -32,15 +53,17 @@ export type TextFieldProps = LabelledProps & InputHTMLAttributes<HTMLInputElemen
 };
 
 /** A single-line field under its label. */
-export function TextField({ label, labelClassName, mono = false, ...input }: TextFieldProps) {
-  return <label className={labelClassName}>{label}<input {...input} spellCheck={mono ? false : input.spellCheck} /></label>;
+export function TextField({ label, labelClassName, mono = false, id, name, ...input }: TextFieldProps) {
+  const identity = useIdentity(label, id, name);
+  return <label className={labelClassName}>{label}<input {...input} {...identity} spellCheck={mono ? false : input.spellCheck} /></label>;
 }
 
 export type TextAreaProps = LabelledProps & TextareaHTMLAttributes<HTMLTextAreaElement> & { mono?: boolean };
 
 /** A multi-line field under its label. */
-export function TextArea({ label, labelClassName, mono = false, ...area }: TextAreaProps) {
-  return <label className={labelClassName}>{label}<textarea {...area} spellCheck={mono ? false : area.spellCheck} /></label>;
+export function TextArea({ label, labelClassName, mono = false, id, name, ...area }: TextAreaProps) {
+  const identity = useIdentity(label, id, name);
+  return <label className={labelClassName}>{label}<textarea {...area} {...identity} spellCheck={mono ? false : area.spellCheck} /></label>;
 }
 
 export interface Option { value: string; label: ReactNode }
@@ -48,8 +71,9 @@ export interface Option { value: string; label: ReactNode }
 export type SelectFieldProps = LabelledProps & SelectHTMLAttributes<HTMLSelectElement> & { options: readonly Option[] };
 
 /** A pop-up button of fixed choices; prefer it to typing when the choices are known. */
-export function SelectField({ label, labelClassName, options, ...select }: SelectFieldProps) {
-  return <label className={labelClassName}>{label}<select {...select}>{options.map((option) => <option key={option.value} value={option.value}>{option.label}</option>)}</select></label>;
+export function SelectField({ label, labelClassName, options, id, name, ...select }: SelectFieldProps) {
+  const identity = useIdentity(label, id, name);
+  return <label className={labelClassName}>{label}<select {...select} {...identity}>{options.map((option) => <option key={option.value} value={option.value}>{option.label}</option>)}</select></label>;
 }
 
 /** The options of a select from plain values, each shown as its value or a mapped label. */
@@ -60,15 +84,17 @@ export function options(values: readonly string[], label: (value: string) => Rea
 export type CheckboxProps = { label: ReactNode; className?: string } & Omit<InputHTMLAttributes<HTMLInputElement>, "type" | "className">;
 
 /** A checkbox on one row with its label. */
-export function Checkbox({ label, className, ...input }: CheckboxProps) {
-  return <label className={className}><input type="checkbox" {...input} /> {label}</label>;
+export function Checkbox({ label, className, id, name, ...input }: CheckboxProps) {
+  const identity = useIdentity(label, id, name);
+  return <label className={className}><input type="checkbox" {...input} {...identity} /> {label}</label>;
 }
 
 export type SwitchProps = { label: ReactNode; className?: string } & Omit<InputHTMLAttributes<HTMLInputElement>, "type" | "role" | "className">;
 
 /** An on/off setting that applies at once: a checkbox with the switch role. Use a Checkbox for a choice submitted with a form. */
-export function Switch({ label, className, ...input }: SwitchProps) {
-  return <label className={["switch", className].filter(Boolean).join(" ")}><input type="checkbox" role="switch" {...input} /> {label}</label>;
+export function Switch({ label, className, id, name, ...input }: SwitchProps) {
+  const identity = useIdentity(label, id, name);
+  return <label className={["switch", className].filter(Boolean).join(" ")}><input type="checkbox" role="switch" {...input} {...identity} /> {label}</label>;
 }
 
 export interface FormProps {

@@ -30,7 +30,7 @@ test("a new plan revision is held back while the latest revision's work is activ
   const waiting = card(runOf("run-1", "validating"), { evidence: pendingEvidence, active: false, repair_allowed: false, revalidate_allowed: false, validate_allowed: false, decision_reasons: { validate: "manifest changed; re-plan", repair: null, revalidate: null } });
   expect(planButton(waiting)).toContain("disabled");
   expect(waiting).not.toContain("is available once");
-  expect(waiting).toMatch(/<label class="plan-supersede"><input type="checkbox"\/> Plan r2 anyway: r1&#x27;s candidate is waiting for validation and can no longer be validated once r2 exists.<\/label>/);
+  expect(waiting).toMatch(/<label class="plan-supersede"><input type="checkbox"[^>]*\/> Plan r2 anyway: r1&#x27;s candidate is waiting for validation and can no longer be validated once r2 exists.<\/label>/);
   for (const [state, left] of [["approved", "approval no longer authorizes"], ["reviewed", "reviewed candidate keeps its evidence"]] as const) {
     const html = card(runOf("run-1", state), { evidence: state === "reviewed" ? { ...pendingEvidence, status: "reviewed" } : null, active: false, repair_allowed: false, revalidate_allowed: false });
     expect(planButton(html), state).toContain("disabled");
@@ -69,7 +69,7 @@ test("a recorded reason under the ticket names the refusal instead of a refused 
 
 test("plan budgets are entered with the runtime's defaults and bounds", () => {
   const html = renderToStaticMarkup(<Workflows client={null} projectId="p" repositoryId="app" manifestConfirmed onChanged={() => {}} />);
-  for (const field of ["Writer attempts<input type=\"number\" inputMode=\"numeric\" min=\"1\" max=\"10\" step=\"1\" value=\"2\"", "Time budget (seconds)<input type=\"number\" inputMode=\"numeric\" min=\"1\" max=\"86400\" step=\"1\" value=\"600\"", "Cost budget (USD)<input type=\"number\" inputMode=\"decimal\" min=\"0.000001\" max=\"1000\" step=\"any\" value=\"1.00\""]) expect(html).toContain(field);
+  for (const field of ["Writer attempts<input type=\"number\" inputMode=\"numeric\" min=\"1\" max=\"10\" step=\"1\" value=\"2\"", "Time budget (seconds)<input type=\"number\" inputMode=\"numeric\" min=\"1\" max=\"86400\" step=\"1\" value=\"600\"", "Cost budget (USD)<input type=\"number\" inputMode=\"decimal\" min=\"0.000001\" max=\"1000\" step=\"any\" value=\"1.00\""]) expect(html.replace(/ id="[^"]*" name="[^"]*"/g, "")).toContain(field);
   expect(html).toContain("cumulative across the writer, checks, independent review and repairs");
   expect(parseBudgets("3", "1800", "2.5")).toEqual({ max_attempts: 3, timeout_seconds: 1800, cost_usd_micros: 2_500_000 });
   expect(parseBudgets("2", "600", "1.00")).toEqual({ max_attempts: 2, timeout_seconds: 600, cost_usd_micros: 1_000_000 });
@@ -108,8 +108,8 @@ test("the task-graph editor and the ticket scope appear only for a multi-reposit
   expect(multi).toContain("Writer paths (comma separated)");
   expect(multi).toContain("Plan a task graph across repositories");
   expect(multi).toContain('aria-label="Repositories the ticket may touch"');
-  expect(multi).toMatch(/<input type="checkbox" checked=""\/> app/);
-  expect(multi).toMatch(/<input type="checkbox"\/> web/);
+  expect(multi).toMatch(/<input type="checkbox"[^>]*checked=""[^>]*\/> app/);
+  expect(multi).toMatch(/<input type="checkbox"[^>]*\/> web/);
 });
 
 test("a ticket edit sends only the changed fields at the displayed revision, and the editor names the plans it stales", () => {
@@ -122,8 +122,8 @@ test("a ticket edit sends only the changed fields at the displayed revision, and
   expect(html).toContain('data-capability="tickets.update"');
   expect(html).toMatch(/<button class="primary" disabled=""[^>]*>Save ticket r2<\/button>/);
   expect(html).toContain("plan r2 was made for r1 and must be re-planned");
-  expect(html).toMatch(/<input type="checkbox" checked=""\/> app/);
-  expect(html).toMatch(/<input type="checkbox"\/> web/);
+  expect(html).toMatch(/<input type="checkbox"[^>]*checked=""[^>]*\/> app/);
+  expect(html).toMatch(/<input type="checkbox"[^>]*\/> web/);
   const card = renderToStaticMarkup(<TicketCard ticket={ticket} revisions={[]} snapshots={new Map()} diffs={{}} logs={{}} busy={false} connected actions={noActions} />);
   expect(card).toContain('data-capability="tickets.update"');
 });

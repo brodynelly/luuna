@@ -1,7 +1,7 @@
 import { expect, test, vi } from "vitest";
 import { renderToStaticMarkup } from "react-dom/server";
 import type { DoctorReport } from "@luuna/api-client";
-import { DoctorReportView, Settings, doctorTone, readDoctor } from "./Settings";
+import { DOCTOR_GROUPS, DoctorReportView, Settings, doctorTone, groupDoctorItems, readDoctor } from "./Settings";
 
 /** A report as the runtime serves it: presence by name, never a value. */
 const report: DoctorReport = { ok: false, items: [
@@ -48,7 +48,7 @@ test("the panel says that values are never shown and that credentials are config
   const view = renderToStaticMarkup(<DoctorReportView report={report} />);
   expect(view).not.toMatch(/<(input|textarea|form)\b/);
   const text = view.replace(/<[^>]+>/g, " ").replace(/&#x27;/g, "'").replace(/\s+/g, " ").trim();
-  const known = new Set([...report.items.flatMap((item) => [item.status, item.name, item.detail, "required"]), "doctor: FAILED. A required item is missing or the database is unusable; the items above say which."]);
+  const known = new Set([...report.items.flatMap((item) => [item.status, item.name, item.detail, "required"]), ...DOCTOR_GROUPS.map((group) => group.label), "Other", "doctor: FAILED. A required item is missing or the database is unusable; the items above say which."]);
   let rest = text;
   for (const part of [...known].sort((a, b) => b.length - a.length)) rest = rest.split(part).join(" ");
   expect(rest.trim()).toBe("");
@@ -60,4 +60,14 @@ test("an ok doctor report draws one check beside the verdict and a failing repor
   expect(ok).toMatch(/<div class="settings-verdict-row"><svg class="check-draw"[^>]*aria-hidden="true"/);
   expect(ok).toContain('data-tone="success" role="status">doctor: ok.');
   expect(renderToStaticMarkup(<DoctorReportView report={report} />)).not.toContain("check-draw");
+});
+
+test("doctor items sit under section labels in order, and an unknown item lands under Other", () => {
+  const items = [...report.items, { name: "future_item", required: false, status: "ok" as const, detail: "added later" }];
+  expect(groupDoctorItems(items).map((group) => [group.label, group.items.map((item) => item.name)])).toEqual([
+    ["Required tools", ["git", "pi"]], ["Optional tools", ["python"]], ["Runtime", ["port"]], ["Credentials", ["api_token", "provider_credentials"]], ["Other", ["future_item"]],
+  ]);
+  const html = renderToStaticMarkup(<DoctorReportView report={{ ok: true, items }} />);
+  expect(html).toMatch(/<li class="settings-group">Required tools<\/li><li class="settings-item">/);
+  expect(html.match(/class="check-draw"/g)).toHaveLength(1);
 });

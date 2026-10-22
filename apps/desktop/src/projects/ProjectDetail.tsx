@@ -45,7 +45,7 @@ export function ProjectDetail({ client, connectionEpoch, state, actions }: { cli
   return <Card className="project-detail">
     <HeadingRow level={3} id="project-detail-heading" className="project-header" title={view.project.name} accessory={<><ManifestBadge revision={view.project.revision} /><Id>{view.project.id}</Id></>} />
     <ProjectFacts state={state} />
-    <RebindForm key={view.project.id} view={view} busy={busy} onRebind={actions.rebind} />
+    <RebindForm key={`rebind-${view.project.id}`} view={view} busy={busy} onRebind={actions.rebind} />
     <Actions className="project-actions">
       <Button disabled={busy} data-capability="projects.discover" onClick={actions.discover}>Discover proposed map</Button>
       <Button disabled={busy} data-capability="projects.export" onClick={actions.exportProject}>Export project</Button>
@@ -61,7 +61,7 @@ export function ProjectDetail({ client, connectionEpoch, state, actions }: { cli
       <CodeBlock label="Baseline log">{shownLog.text || "Empty log."}</CodeBlock>
     </Disclosure>}
     {discovery && <DiscoveryReview discovery={discovery} view={view} draft={state.draft} busy={busy} onDraft={state.setDraft} onConfirm={actions.confirm} />}
-    <ProjectComponents key={view.project.id} client={client} projectId={view.project.id} connectionEpoch={connectionEpoch} onContextChange={state.setComponentContext} onStatusChange={state.setComponentStatus} onChanged={() => state.setComponentEpoch((value) => value + 1)} />
+    <ProjectComponents key={`components-${view.project.id}`} client={client} projectId={view.project.id} connectionEpoch={connectionEpoch} onContextChange={state.setComponentContext} onStatusChange={state.setComponentStatus} onChanged={() => state.setComponentEpoch((value) => value + 1)} />
     <Workflows focusTicket={state.requested?.projectId === view.project.id ? state.requested : null} client={client} projectId={view.project.id} repositoryId={registration.repository_id} repositoryIds={repositoryIds} prerequisites={view.prerequisites ?? []}
       manifestConfirmed={manifestConfirmed} connectionEpoch={connectionEpoch} componentContext={state.componentContext} componentsEnabled={state.componentStatus?.enabled ?? false} componentEpoch={state.componentEpoch}
       onChanged={() => { if (selected) void state.guarded("Refresh", (signal) => state.refresh(selected, signal)); }} />
