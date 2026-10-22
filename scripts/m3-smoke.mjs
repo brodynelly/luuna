@@ -22,6 +22,7 @@ import { tmpdir, platform, release, arch, devNull } from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import process from "node:process";
+import { pathsDigest } from "./m3-checkout-digest.mjs";
 import { setTimeout as sleep } from "node:timers/promises";
 
 // Linux: the harness runs under a child subreaper, so every process of the run that outlives its
@@ -98,6 +99,18 @@ if (process.platform === "linux" && process.env.LUUNA_M3_REAPER !== String(proce
     process.exit(2);
   }
   process.exit(reaped.status ?? 1);
+}
+
+// Windows needs the equivalent ownership boundary before any process runs.
+// The Python supervisor assigns this Node process while suspended; descendants
+// inherit its non-breakaway Job Object even if they detach or the runtime dies.
+const windowsJobHelper = fileURLToPath(new URL("./windows-m3-job.py", import.meta.url));
+if (process.platform === "win32" && process.env.LUUNA_M3_JOB_PARENT !== String(process.ppid)) {
+  const interpreter = resolveOnPath("python.exe");
+  if (!interpreter) { console.error("m3-smoke: Python 3 is required for Windows process ownership"); process.exit(2); }
+  const owned = spawnSync(interpreter, ["-I", windowsJobHelper, "run", process.execPath, ...process.execArgv, fileURLToPath(import.meta.url), ...process.argv.slice(2)], { stdio: "inherit", env: process.env, windowsHide: true });
+  if (owned.error) { console.error("m3-smoke: Windows Job Object supervisor did not start"); process.exit(2); }
+  process.exit(owned.status ?? 1);
 }
 
 const options = parseArguments(process.argv.slice(2));
@@ -381,7 +394,7 @@ try {
   evidence.pre_build = { git_revision: preBuild.git_revision, git_dirty: preBuild.git_dirty, git_dirty_paths: preBuild.git_dirty_paths, cargo_config_overrides: preBuildOverrides };
   if (preBuild.git_dirty !== false || preBuildOverrides.length > 0) throw new Error(`the checkout is not the clean recorded revision (${preBuild.git_dirty === null ? "status unknown" : preBuild.git_dirty ? `modified: ${preBuild.git_dirty_paths}` : "clean"}) or a Cargo config file declares an override (${preBuildOverrides.join(", ") || "none"}); nothing was built or run`);
   evidence.runtime_build = buildRuntime();
-  evidence.subreaper = process.platform === "linux" ? { interpreter: process.env.LUUNA_M3_REAPER_PYTHON ?? "unknown", pid: process.ppid } : null;
+  evidence.subreaper = process.platform === "linux" ? { interpreter: process.env.LUUNA_M3_REAPER_PYTHON ?? "unknown", pid: process.ppid } : process.platform === "win32" ? { mechanism: "Windows Job Object", interpreter: process.env.LUUNA_M3_JOB_PYTHON, pid: process.ppid, helper_sha256: createHash("sha256").update(readFileSync(windowsJobHelper)).digest("hex") } : null;
   evidence.environment = environment();
   const pi = evidence.environment.pi_provenance;
   record("the Pi tree is byte-identical to a fresh install of tools/pi/package-lock.json (every tarball integrity-checked by npm)", mode === "fixture" ? true : pi?.verified === true, mode === "fixture" ? "synthetic fixture tracked in the clean checkout; not provider evidence" : pi?.verified ? `@earendil-works/pi-coding-agent ${pi.package.version}, ${pi.package.tree_entries} entries, tree ${pi.package.tree_digest.slice(0, 16)}…, launcher sha256 ${pi.launcher.sha256.slice(0, 16)}…` : `not verified: ${pi?.error ?? "no provenance recorded"}`);
@@ -453,10 +466,10 @@ const sameMetadata = checkoutAfter.git_metadata_digest.startsWith("sha256:") && 
 const sameIgnored = checkoutAfter.ignored_digest.startsWith("sha256:") && checkoutAfter.ignored_digest === evidence.environment?.ignored_digest;
 const sameObjects = checkoutAfter.git_objects_digest.startsWith("sha256:") && checkoutAfter.git_objects_digest === evidence.environment?.git_objects_digest;
 record("the Luuna checkout was still the recorded revision, clean, with the same build inputs, Git metadata, history and ignored files once every process of the run had stopped", checkoutAfter.git_revision === evidence.environment?.git_revision && checkoutAfter.git_dirty === false && checkoutAfter.build_identity === evidence.environment?.expected_build_identity && sameMetadata && sameObjects && sameIgnored, `revision ${checkoutAfter.git_revision}, ${checkoutAfter.git_dirty === false ? "clean" : checkoutAfter.git_dirty === null ? "status unknown" : `modified: ${checkoutAfter.git_dirty_paths}`}, build inputs ${checkoutAfter.build_identity === evidence.environment?.expected_build_identity ? "unchanged" : "changed"}, Git metadata (config, HEAD, refs, reflogs, hooks, info, alternates, index) ${sameMetadata ? "unchanged" : "changed or unreadable"}, objects reachable from every ref ${sameObjects ? "unchanged and intact (fsck --full)" : "changed, corrupt or unreadable"}, ignored files outside target/node_modules/dist ${sameIgnored ? `unchanged (${checkoutAfter.ignored_files})` : "changed or unreadable"}`);
-// Containment is required on every platform: without a subreaper (macOS, Windows) a detached
+// Containment is required on every platform: without an owner (currently macOS) a detached
 // descendant of a check could keep writing under the output tree after the scan, so the check
 // fails there and the scan below is marked untrusted rather than accepted.
-record("no process of the run outlived it before the leak scan (Linux child subreaper; survivors killed)", strays.contained, strays.contained ? `${strays.killed} surviving process(es) killed and reaped` : process.platform === "linux" ? `not contained: ${strays.reason}` : `unavailable on ${process.platform}: descendants that detach from the runtime are not tracked, so this run cannot establish containment`);
+record("no process of the run outlived it before the leak scan (owned descendants; survivors killed)", strays.contained, strays.contained ? `${strays.killed} surviving process(es) killed and reaped; ${strays.mechanism ?? "Linux child subreaper"}` : `not contained on ${process.platform}: ${strays.reason}`);
 evidence.leak_scan = scanForCredentialValues();
 // Held handles are required where they exist (Linux); elsewhere the weaker fallback is recorded, not hidden.
 record("the leak scan and quarantine resolved paths through held directory handles where the platform provides them", evidence.leak_scan.held_handles || process.platform !== "linux", evidence.leak_scan.held_handles ? "/proc/self/fd handles" : `unavailable on ${process.platform}: pinned-root path checks only, recursive cleanup refused`);
@@ -1169,6 +1182,12 @@ function childrenOf(pid) {
  * child left. Every PID found here is a descendant of the run, so none can be a recycled stranger.
  */
 async function reapStrays() {
+  if (process.platform === "win32") {
+    if (process.env.LUUNA_M3_JOB_PARENT !== String(process.ppid) || !process.env.LUUNA_M3_JOB || !process.env.LUUNA_M3_JOB_PYTHON) return { contained: false, killed: 0, reason: "Windows job supervisor identity is missing" };
+    try {
+      return JSON.parse(execFileSync(process.env.LUUNA_M3_JOB_PYTHON, ["-I", windowsJobHelper, "reap", process.env.LUUNA_M3_JOB, String(process.pid)], { env: toolEnv(), encoding: "utf8", windowsHide: true, timeout: 20_000, maxBuffer: 64 * 1024, stdio: ["ignore", "pipe", "pipe"] }));
+    } catch { return { contained: false, killed: 0, reason: "Windows job membership or drain verification failed" }; }
+  }
   if (process.platform !== "linux") return { contained: false, killed: 0, reason: "no child subreaper on this platform" };
   const reaper = Number(process.env.LUUNA_M3_REAPER);
   if (!Number.isInteger(reaper) || reaper !== process.ppid) return { contained: false, killed: 0, reason: "the harness is not running under its child subreaper" };
@@ -1270,36 +1289,12 @@ function checkoutState() {
     // `--directory` lists an ignored directory as one entry (hashed recursively below), which keeps
     // the listing small; the build and dependency output directories are left out.
     const ignored = git(repository, "ls-files", "--others", "--ignored", "--exclude-standard", "--directory", "-z").split("\0").filter(Boolean).map((rel) => rel.replace(/\/$/, "")).filter((rel) => !/(^|\/)(target|node_modules|dist)(\/|$)/.test(rel));
-    state.ignored_digest = pathsDigest(repository, ignored);
+    state.ignored_digest = pathsDigest(repository, ignored, { excludeBuildOutputs: true });
     state.ignored_files = ignored.length;
   } catch (error) { state.ignored_digest = `unavailable: ${error.message}`; }
   return state;
 }
 
-/** SHA-256 over the given relative paths under `root` (each file, or every file under a directory), bounded like the Pi tree digest. */
-function pathsDigest(root, rels) {
-  const LIMITS = { entries: 20_000, bytes: 256 * 1024 * 1024, depth: 32 };
-  const entries = [];
-  let visited = 0;
-  let bytes = 0;
-  const visit = (rel, depth) => {
-    if (++visited > LIMITS.entries) throw new Error(`more than ${LIMITS.entries} entries`);
-    if (depth > LIMITS.depth) throw new Error(`nests deeper than ${LIMITS.depth} levels`);
-    const full = path.join(root, rel);
-    let stat;
-    try { stat = lstatSync(full); } catch { entries.push(`${rel}\0absent`); return; }
-    if (stat.isSymbolicLink()) entries.push(`${rel}\0link\0${readlinkSync(full)}`);
-    else if (stat.isDirectory()) for (const name of readdirSync(full)) visit(`${rel}/${name}`, depth + 1);
-    else if (stat.isFile()) {
-      bytes += stat.size;
-      if (bytes > LIMITS.bytes) throw new Error(`more than ${LIMITS.bytes} bytes`);
-      entries.push(`${rel}\0${createHash("sha256").update(readFileSync(full)).digest("hex")}`);
-    } else entries.push(`${rel}\0special`);
-  };
-  for (const rel of rels) visit(rel, 0);
-  entries.sort();
-  return `sha256:${createHash("sha256").update(entries.join("\n")).digest("hex")}`;
-}
 
 function environment() {
   const info = { platform: `${platform()} ${release()} ${arch()}`, node: process.version, pi_launcher: profile.pi, pi_launcher_args: profile.piArgs, provider: profile.provider, model: profile.model, required_check: profile.checks.map((check) => [check.executable, ...check.args.map((arg) => truncate(arg, 40))].join(" ")) };

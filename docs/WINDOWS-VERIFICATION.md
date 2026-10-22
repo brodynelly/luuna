@@ -3,6 +3,30 @@
 Date: October 21, 2026. This is Windows evidence, separate from the historical
 Linux reports and the original documentation validation report.
 
+## Strict M3 harness portability follow-up
+
+The clean-revision fixture attempt on performance commit `839e46a` passed all
+workflow scenarios but only 65/68 total assertions. Windows had no harness-wide
+descendant owner, making the final leak scan untrusted. The ignored-file audit
+also exceeded its byte bound because Git collapsed `.tools/` into one ignored
+parent and the documented dependency exclusions were not applied recursively.
+
+The harness now starts under `scripts/windows-m3-job.py`: a fresh kill-on-close
+Job Object owns Node before it resumes, including detached descendants and
+descendants of a hard-killed runtime. Before scanning artifacts, the helper
+verifies membership on opened handles, stops owned survivors and waits for the
+job to contain only the harness and its short-lived inspection helper. Missing
+ownership or failure to drain remains a failed acceptance check. Tests cover
+detached grandchildren, breakaway requests, supervisor death, an unrelated
+live process and missing ownership. This is test-process ownership, not a
+sandbox or a change to approval/runtime policy.
+
+Ignored-file hashing now applies the existing target/node_modules/dist
+exclusion at every depth, while retaining other ignored configuration and the
+original entry/byte/depth bounds. Git metadata and fixture snapshots retain
+every file by default. `npm run test:smoke-harness` covers both fixes; results
+from fresh committed acceptance runs are recorded separately below.
+
 ## Latest result: merged design system and component workflows
 
 The component work was combined with current `main` and its desktop design
