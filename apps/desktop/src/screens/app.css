@@ -1,140 +1,5 @@
-/* Screen: app. The shell and the Sessions view, tokens only (docs/DESIGN-SYSTEM.md). */
-
-/*
- * A desktop window: a sidebar of views on the leading edge and one content column. Every view
- * stays mounted (its state survives navigation) and only the selected one is shown. A view's
- * top-level panel is the page itself: no card, a large title, and its cards inside. Every
- * selector is scoped by a class unique to the shell (.app, .sidebar, .view, .connect-page,
- * .sessions-panel, .workspace, .history, .event-panel, ...). Flex and gap utilities in App.tsx
- * come from Tailwind and resolve to the same tokens.
- */
-.app {
-  display: grid;
-  grid-template-columns: var(--sidebar-width) minmax(0, 1fr);
-  align-items: start;
-  min-height: var(--viewport-height);
-}
-
-/* Sidebar: window chrome. It stays in view while the content scrolls; the current view shows by
-   fill and weight, never by colour alone. Critical actions never sit at its bottom. */
-.sidebar {
-  position: sticky;
-  top: 0;
-  height: var(--viewport-height);
-  padding: var(--space-5) var(--space-3);
-  border-right: var(--border-width) solid var(--color-border);
-  background: var(--color-sidebar);
-}
-.sidebar-top > .wordmark {
-  flex: 1 1 auto;
-  min-width: 0;
-  padding-inline: var(--space-2);
-  color: var(--color-text);
-  font-family: var(--font-display);
-  font-size: var(--text-wordmark);
-  font-weight: var(--weight-strong);
-  letter-spacing: var(--tracking-tight);
-  line-height: var(--leading-none);
-}
-/* The brand mark: a lavender disc whose leading half is cut from the sidebar's own surface. */
-.wordmark-mark, .connect-mark { flex: none; overflow: visible; }
-.wordmark-mark { width: var(--space-5); height: var(--space-5); }
-:is(.wordmark-mark, .connect-mark) > circle { fill: var(--color-accent); }
-.wordmark-mark > path { fill: var(--color-sidebar); stroke: var(--color-accent); stroke-width: var(--focus-width); vector-effect: non-scaling-stroke; }
-
-/* Connection status: one quiet line under the wordmark, led by the shared tone mark. */
-.sidebar > .connection {
-  display: flex;
-  align-items: center;
-  gap: var(--space-2);
-  min-height: var(--control-height-sm);
-  margin-top: calc(var(--space-2) - var(--space-5));
-  padding: 0 var(--space-2);
-  color: var(--color-text-muted);
-  font-size: var(--text-xs);
-  font-weight: var(--weight-medium);
-  line-height: var(--leading-tight);
-}
-.sidebar > .connection[data-tone] { color: var(--tone-fg); }
-
-.sidebar-top > .sidebar-toggle {
-  flex: none;
-  min-height: var(--control-height-sm);
-  padding: 0 var(--space-1-5);
-  border-color: transparent;
-  background: transparent;
-  color: var(--color-text-muted);
-}
-.sidebar-top > .sidebar-toggle:hover:not(:disabled) { background: var(--color-control-hover); color: var(--color-text); }
-.sidebar > .sidebar-search {
-  justify-content: flex-start;
-  gap: var(--space-2-5);
-  width: 100%;
-  min-height: var(--nav-height);
-  margin-top: calc(var(--space-2) - var(--space-5));
-  padding: 0 var(--space-2);
-  border-color: var(--color-border);
-  background: var(--color-surface);
-  color: var(--color-text-muted);
-  font-size: var(--text-sm);
-  font-weight: var(--weight-regular);
-}
-.sidebar > .sidebar-search > kbd { margin-left: auto; }
-.sidebar .icon { flex: none; }
-.sidebar-nav > ul { margin: 0; padding: 0; list-style: none; }
-.sidebar-nav button.nav-item {
-  justify-content: flex-start;
-  gap: var(--space-2-5);
-  width: 100%;
-  min-height: var(--nav-height);
-  padding: 0 var(--space-2);
-  border-color: transparent;
-  background: transparent;
-  color: var(--color-text-muted);
-  font-size: var(--text-md);
-  font-weight: var(--weight-medium);
-}
-.sidebar-nav button.nav-item:hover:not(:disabled) { background: var(--color-control-hover); color: var(--color-text); }
-.sidebar-nav button.nav-item[aria-current="page"] { background: var(--color-selected); color: var(--color-text); font-weight: var(--weight-strong); }
-.sidebar-nav button.nav-item[aria-current="page"] > .icon { stroke: var(--color-accent); }
-.sidebar-nav .nav-count {
-  margin-left: auto;
-  padding: 0 var(--space-1-5);
-  border-radius: var(--radius-full);
-  background: var(--color-surface);
-  color: var(--color-text-muted);
-  font-size: var(--text-2xs);
-  font-variant-numeric: tabular-nums;
-}
-.sidebar .icon {
-  flex: none;
-  width: var(--icon-size);
-  height: var(--icon-size);
-  fill: none;
-  stroke: currentColor;
-  stroke-width: var(--icon-stroke);
-  stroke-linecap: round;
-  stroke-linejoin: round;
-}
-
-/* Content: one left-aligned column of a readable maximum width. */
-.app > main {
-  width: 100%;
-  max-width: calc(var(--content-max) + 2 * var(--gutter));
-  min-width: 0;
-  padding: var(--space-6) var(--gutter) var(--space-7);
-}
-.app > main > .view[hidden] { display: none; }
-
-/* A view's own panel is the page: no card, a large title, its description under it. */
-.view > .page { gap: var(--space-5); padding: 0; border: 0; background: transparent; box-shadow: none; }
-.page > .panel-heading > h2 {
-  font-family: var(--font-display);
-  font-size: var(--text-title);
-  font-weight: var(--weight-strong);
-  letter-spacing: var(--tracking-title);
-}
-.view > .page > .panel-heading + .scope { margin-top: calc(var(--space-1) - var(--space-5)); color: var(--color-text-muted); font-size: var(--text-md); }
+/* Screen: app. The connect page, Settings › Runtime and the Sessions view, tokens only (docs/DESIGN-SYSTEM.md).
+   The window chrome (sidebar, page header, view change) is in shell.css. */
 
 /* Cards inside a view share one elevation. */
 .app .panel :is(.panel, .form-group) { box-shadow: var(--shadow-card); }
@@ -149,9 +14,11 @@
   text-align: center;
   box-shadow: var(--shadow-card);
 }
+.connect-mark { flex: none; overflow: visible; }
 .connect-page > .connect-mark { order: -1; width: var(--space-7); height: var(--space-7); }
 .connect-page > .panel-heading { justify-content: center; }
 .connect-page > .panel-heading > h2 { margin: 0; }
+.connect-mark > circle { fill: var(--color-accent); }
 .connect-mark > path { fill: var(--color-surface); stroke: var(--color-accent); stroke-width: var(--focus-width); vector-effect: non-scaling-stroke; }
 .connect-page > .scope { font-size: var(--text-sm); }
 .connect-page > .connection-form { width: 100%; text-align: left; }
@@ -213,26 +80,8 @@
   font-variant-ligatures: common-ligatures;
 }
 
-/* At 920 px the sidebar becomes an icon rail (names stay as accessible names and tooltips), and
-   the Sessions workspace stacks with the history as a card grid. */
-/* The icon rail: chosen with the sidebar toggle (Ctrl+backslash), and automatic at 920 px and below. */
-.app[data-sidebar="collapsed"] { grid-template-columns: var(--sidebar-compact) minmax(0, 1fr); }
-.app[data-sidebar="collapsed"] > .sidebar { padding-inline: var(--space-2); }
-.app[data-sidebar="collapsed"] .sidebar-top { flex-direction: column; }
-.app[data-sidebar="collapsed"] :is(.wordmark, .connection, .nav-item, .sidebar-search) { justify-content: center; padding-inline: 0; }
-.app[data-sidebar="collapsed"] .sidebar-label { position: absolute; width: var(--border-width); height: var(--border-width); overflow: hidden; clip-path: inset(50%); white-space: nowrap; }
-.app[data-sidebar="collapsed"] .nav-item { position: relative; }
-.app[data-sidebar="collapsed"] .nav-count { position: absolute; top: 0; right: var(--space-0-5); }
-
+/* At 920 px the Sessions workspace stacks with the history as a card grid. */
 @media (max-width: 920px) {
-  .app { grid-template-columns: var(--sidebar-compact) minmax(0, 1fr); }
-  .sidebar { padding-inline: var(--space-2); }
-  .sidebar-top { flex-direction: column; }
-  .sidebar :is(.wordmark, .connection, .nav-item, .sidebar-search) { justify-content: center; padding-inline: 0; }
-  .sidebar .sidebar-label { position: absolute; width: var(--border-width); height: var(--border-width); overflow: hidden; clip-path: inset(50%); white-space: nowrap; }
-  .sidebar-nav button.nav-item { position: relative; }
-  .sidebar-nav .nav-count { position: absolute; top: 0; right: var(--space-0-5); }
-  .app > main { padding-block: var(--space-5) var(--space-6); }
   .workspace { grid-template-columns: minmax(0, 1fr); }
   .history { padding-inline: var(--panel-pad); }
   .history > :is(.panel-heading, .empty) { padding-inline: 0; }
@@ -246,7 +95,6 @@
 }
 
 @media (forced-colors: active) {
-  :is(.wordmark-mark, .connect-mark) > circle { fill: CanvasText; }
-  :is(.wordmark-mark, .connect-mark) > path { fill: Canvas; stroke: CanvasText; }
-  .sidebar-nav button.nav-item[aria-current="page"] { forced-color-adjust: none; background: SelectedItem; color: SelectedItemText; }
+  .connect-mark > circle { fill: CanvasText; }
+  .connect-mark > path { fill: Canvas; stroke: CanvasText; }
 }
