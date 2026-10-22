@@ -69,7 +69,7 @@ export function EventPanel({ client, active, events, output, live, candidateActi
         {canCancel(active.state, candidateActive) && <Button variant="danger" disabled={busy} data-capability="runs.cancel" onClick={onCancel}>Cancel session</Button>}
       </Box>
       {active.state === "failed" && <ReasonNote block tone="danger" reason="This session failed. Open the final events below for the runtime’s recorded reason." />}
-      {output && <Box className="assistant-output"><HeadingRow level={4} title="Pi response" /><LiveOutput label="Pi response" live={!isTerminal(active.state)} followKey={output.length}>{output}</LiveOutput></Box>}
+      {output && <Box className="assistant-output"><HeadingRow level={4} title="Pi response" /><LiveOutput key={active.id} label="Pi response" live={!isTerminal(active.state)} followKey={output.length}>{output}</LiveOutput></Box>}
       <EventList key={active.id} events={events} client={client} runId={active.id} />
       {!events.length && <EmptyState>Waiting for the runtime’s event record…</EmptyState>}
       <Meta block className="event-caption">Events replay from the last received sequence after an interruption. A completed session is not a validation result.</Meta>

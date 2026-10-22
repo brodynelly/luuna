@@ -14,7 +14,7 @@ function event(sequence: number, delta = "", run = RUN): EventEnvelope {
   } as unknown as EventEnvelope;
 }
 
-function harness(options: { state?: RunState; workflow?: boolean } = {}) {
+function harness(options: { state?: RunState; workflow?: boolean; tick?: boolean } = {}) {
   const controller = new AbortController();
   const frames = new Map<number, () => void>();
   let id = 0;
@@ -39,7 +39,7 @@ function harness(options: { state?: RunState; workflow?: boolean } = {}) {
       isWorkflow: options.workflow ?? false,
       runState: () => state.current,
       now: () => clock,
-      wait: async (ms) => { waits.push(ms); if (waits.length >= stopAfterWaits) controller.abort(); },
+      wait: async (ms) => { waits.push(ms); if (options.tick) clock += ms; if (waits.length >= stopAfterWaits) controller.abort(); },
       createCoalescer: (commit, onError) => createFrameCoalescer<EventEnvelope>({ scheduler, commit, onError }),
     }, sink);
   return { controller, frames, waits, commits, live, candidates, state, run, advance: (ms: number) => { clock += ms; } };
@@ -112,6 +112,53 @@ describe("followSession", () => {
     again.advance(2500);
     await again.run(client({ streamEvents: resumed }), 1);
     expect(resumed).toHaveBeenCalledTimes(1);
+  });
+
+  it("drives one loop through the 2500 ms backoff and resumes the stream from the committed cursor", async () => {
+    const h = harness({ tick: true });
+    const waitsAtCall: number[] = [];
+    const streamEvents = vi.fn()
+      .mockImplementationOnce(() => { waitsAtCall.push(h.waits.length); return stream(event(1, "a"), new Error("offline")); })
+      .mockImplementation(() => { waitsAtCall.push(h.waits.length); return stream(); });
+    await h.run(client({ streamEvents }), 5);
+    expect(h.waits).toEqual([700, 700, 700, 700, 700]);
+    expect(streamEvents).toHaveBeenCalledTimes(2);
+    expect(waitsAtCall).toEqual([0, 4]);
+    expect(streamEvents).toHaveBeenNthCalledWith(2, RUN, 1, expect.anything());
+  });
+
+  it("polls an unsettled run inside the stream backoff with 0 then 700 ms waits", async () => {
+    const h = harness({ state: "running" as RunState });
+    const eventPage = vi.fn().mockResolvedValueOnce([event(1, "a")]).mockResolvedValue([]);
+    await h.run(client({ streamEvents: () => stream(new Error("no stream")), eventPage }), 2);
+    expect(h.waits).toEqual([0, 700]);
+  });
+
+  it("announces Connected again on the first record after reconnecting", async () => {
+    const h = harness({ tick: true });
+    const streamEvents = vi.fn()
+      .mockImplementationOnce(() => stream(event(1, "a"), new Error("offline")))
+      .mockImplementation(() => stream(event(2, "b")));
+    const eventPage = vi.fn().mockRejectedValue(new Error("down"));
+    await h.run(client({ streamEvents, eventPage }), 2);
+    expect(h.live.filter((text) => text === "Connected")).toHaveLength(2);
+    expect(h.live.map((text) => text.split(" ")[0])).toEqual(["Connected", "Reconnecting", "Reconnecting", "Connected", "Reconnecting"]);
+  });
+
+  it("does not commit when an already-captured frame callback runs after abort", async () => {
+    const h = harness();
+    let captured = () => {};
+    async function* aborting() {
+      yield event(1, "a");
+      yield event(2, "b");
+      captured = [...h.frames.values()][0];
+      h.controller.abort();
+      yield event(3, "c");
+    }
+    await h.run(client({ streamEvents: () => aborting() }), 99);
+    expect(typeof captured).toBe("function");
+    captured();
+    expect(h.commits).toHaveLength(0);
   });
 
   it("flushes records received before a mid-stream failure, without loss or duplication", async () => {
