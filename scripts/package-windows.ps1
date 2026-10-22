@@ -145,6 +145,8 @@ $terminalLauncher = @(
     'powershell -NoProfile -ExecutionPolicy Bypass -File "%~dp0scripts\start-terminal.ps1" %*'
 ) -join "`r`n"
 Set-Content -LiteralPath (Join-Path $stage 'Luuna Terminal.cmd') -Value $terminalLauncher -Encoding ascii
+# The same launcher under the short name `luuna` for a PATH entry on the install folder.
+Set-Content -LiteralPath (Join-Path $stage 'luuna.cmd') -Value $terminalLauncher -Encoding ascii
 
 Step 'Bundle configuration overlay'
 $stageRelative = ('target/stage-' + $profile)
@@ -175,7 +177,7 @@ try {
 Step 'Verifying the packaged layout'
 $built = Join-Path $tauriDirectory ('target\' + $profile)
 $copied = Join-Path $built 'luuna'
-foreach ($required in @('luuna-runtime.exe', 'luuna-tui.exe', 'scripts\ensure-windows-runtime.ps1', 'scripts\windows-common.ps1', 'scripts\start-terminal.ps1', 'Configure Luuna.cmd', 'Luuna Terminal.cmd', 'packages\tui\bin\luuna-tui.mjs', 'packages\tui\src\bridge.mjs', 'packages\tui\src\catalog.mjs', 'node_modules\@luuna\api-client\dist\index.js', 'schemas\capability-catalog.json')) {
+foreach ($required in @('luuna-runtime.exe', 'luuna-tui.exe', 'scripts\ensure-windows-runtime.ps1', 'scripts\windows-common.ps1', 'scripts\start-terminal.ps1', 'Configure Luuna.cmd', 'Luuna Terminal.cmd', 'luuna.cmd', 'packages\tui\bin\luuna-tui.mjs', 'packages\tui\src\bridge.mjs', 'packages\tui\src\catalog.mjs', 'node_modules\@luuna\api-client\dist\index.js', 'schemas\capability-catalog.json')) {
     if (!(Test-Path -LiteralPath (Join-Path $copied $required))) { throw ('Packaged resource missing after build: ' + $required) }
 }
 if (!$SkipPi -and !(Test-Path -LiteralPath (Join-Path $copied 'pi\node_modules\@earendil-works\pi-coding-agent\dist\cli.js'))) { throw 'Packaged Pi tree missing after build.' }
