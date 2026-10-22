@@ -27,3 +27,39 @@
   --font-sans: "Söhne", "Söhne Fallback", -apple-system, BlinkMacSystemFont, "SF Pro Text", "Segoe UI", "Helvetica Neue", Arial, sans-serif;
   --font-display: "Söhne", "Söhne Fallback", -apple-system, BlinkMacSystemFont, "SF Pro Text", "Segoe UI", "Helvetica Neue", Arial, sans-serif;
 }
+
+/*
+ * Measured typography for Söhne (ADR 0033, typography amendment). Evidence: weights, tracking and features
+ * measured from the typeface vendor's public marketing and sign-in CSS; the signed-in product's own CSS is
+ * not public, so that scale is the only Söhne evidence. Sizes and line heights are unchanged: Ledger's already
+ * match the measured use (14px body, 12 to 13px small text, 28px titles).
+ * ONE switch: setting data-type="ledger" on <html> (DevTools: document.documentElement.dataset.type = "ledger")
+ * reverts every rule below to Ledger's weights, tracking and features while keeping Söhne. Apple platforms and
+ * the system-stack fallback never match, and --font-mono is never touched.
+ * Weight remap (Ledger token -> Söhne face): regular 400->300 Leicht, medium 500->400 Buch, semibold 600->500
+ * Kraftig, bold 700->500, strong 600->500. Role tokens follow their generic weight: body and caption read
+ * regular, label and overline medium, page title, section title, metrics and body-strong semibold or bold.
+ * Tracking: page title -0.02em, section title and h2 -0.01em (half of --tracking-title); body and labels 0.
+ * Features: ss01 on text (present in all ten faces), reset on monospace. Tabular figures stay opt-in through
+ * font-variant-numeric on numbers, never global.
+ */
+:root[data-platform="other"]:not([data-type="ledger"]) {
+  --weight-regular: 300;
+  --weight-medium: 400;
+  --weight-semibold: 500;
+  --weight-bold: 500;
+  --weight-strong: 500;
+  --weight-body: var(--weight-regular);
+  --weight-caption: var(--weight-regular);
+  --weight-label: var(--weight-medium);
+  --weight-overline: var(--weight-medium);
+  --weight-body-strong: var(--weight-semibold);
+  --weight-section-title: var(--weight-semibold);
+  --weight-metric: var(--weight-semibold);
+  --weight-metric-lg: var(--weight-semibold);
+  --weight-page-title: var(--weight-bold);
+  --tracking-page-title: var(--tracking-title);
+  --tracking-h2: calc(var(--tracking-title) / 2);
+}
+:root[data-platform="other"]:not([data-type="ledger"]) body { font-feature-settings: "ss01" on; }
+:root[data-platform="other"]:not([data-type="ledger"]) :is(code, kbd, samp, pre, input[spellcheck="false"], textarea[spellcheck="false"], ol.events summary, .baseline-results) { font-feature-settings: normal; }

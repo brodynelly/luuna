@@ -26,7 +26,7 @@ body {
   -moz-osx-font-smoothing: grayscale;
 }
 
-/* Tabular figures keep columns and counters steady. Never font-feature-settings: it would re-enable mono ligatures. */
+/* Tabular figures keep columns and counters steady. font-feature-settings is only set in fonts.css (Söhne ss01), and reset there on monospace. */
 time, data, output, td, th, kbd, [data-numeric] { font-variant-numeric: tabular-nums; }
 
 ::selection { background: var(--color-selection); color: var(--color-text-heading); }
