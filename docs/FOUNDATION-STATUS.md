@@ -9,8 +9,12 @@ the manual history benchmark and native Tauri unit test. Browser/native MVP
 checks passed 57/55 respectively, and native component UI passed 27. Genuine
 M1 passed 20 checks; a fresh Windows writer/repair/reviewer diagnostic passed 16.
 An earlier diagnostic's model repair was correctly rejected by independent
-review and remains recorded. Strict M3 refused the uncommitted checkout; no
-clean-revision acceptance, remote CI, commit or publication is implied. The
+review and remains recorded. After committing the performance changes and
+fixing strict-harness Windows ownership and recursive dependency exclusions,
+clean commit `974ff0e` passed strict M3: **68/68 fixture and 61/61 genuine
+OpenRouter / openai/gpt-4.1 assertions**. See [commands, initial failures and
+evidence limits](WINDOWS-VERIFICATION.md#strict-m3-acceptance-result).
+These are local commits and local acceptance, not remote CI or publication. The
 installed Windows app/runtime were backed up and upgraded to release builds,
 then passed 17 native startup checks with history and credentials preserved.
 

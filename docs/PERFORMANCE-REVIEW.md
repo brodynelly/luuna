@@ -85,7 +85,7 @@ record bytes were verified unchanged. No plaintext credential was logged.
 | Optimized native WebView2 MVP | **55/55**, same lifecycle plus native independent-runtime lifetime. Synthetic Pi. |
 | Genuine-provider M1 | **20/20**, OpenRouter with `openai/gpt-4.1-mini`, pinned Pi 1.3.0, optimized runtime. Completion, cancellation/reap, failure and restart covered. |
 | Genuine writer/repair/reviewer diagnostic | First `gpt-4.1-mini` run 15/16: model repair hardcoded the greeting, tests passed, independent review correctly returned `changes_required`. Evidence retained. Fresh `openai/gpt-4.1` run **16/16**, including exact candidate identity, actual failing check, new repair revision, fresh review and untouched developer checkout. |
-| Strict M3 acceptance | **Blocked**, not passed: its clean-recorded-revision gate refuses this uncommitted checkout before execution. No gate was weakened and no commit made to manufacture acceptance. The Windows provider diagnostic is explicitly not strict M3 evidence. |
+| Strict M3 acceptance | Initially refused the uncommitted checkout. After authorized commits and Windows harness fixes, clean `974ff0e` passed **68/68 fixture and 61/61 genuine-provider assertions**. See [strict acceptance evidence](WINDOWS-VERIFICATION.md#strict-m3-acceptance-result); the earlier Windows diagnostic remains separate. |
 
 Two initial test invocations hit Windows linker file locks when another test
 process held the same executable; final checks were serialized appropriately.
