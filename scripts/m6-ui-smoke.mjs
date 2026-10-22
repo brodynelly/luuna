@@ -232,8 +232,10 @@ try {
   } else {
     const configFile = path.join(out, "vite.config.mjs");
     const react = pathToFileURL(require.resolve("@vitejs/plugin-react")).href;
+    // The desktop's stylesheet compiles Tailwind utilities at build time (ADR 0030).
+    const tailwind = pathToFileURL(require.resolve("@tailwindcss/vite")).href;
     const viteConfig = { root: path.join(repository, "apps/desktop"), envDir: path.join(out, "no-env"), server: { host: "127.0.0.1", port: uiPort, strictPort: true, watch: { ignored: ["**/src-tauri/**"] }, proxy: { "/api/v1": runtimeUrl, "/health": runtimeUrl } } };
-    writeFileSync(configFile, `import react from ${JSON.stringify(react)}; export default { ...${JSON.stringify(viteConfig)}, plugins: [react()] };`);
+    writeFileSync(configFile, `import react from ${JSON.stringify(react)}; import tailwindcss from ${JSON.stringify(tailwind)}; export default { ...${JSON.stringify(viteConfig)}, plugins: [react(), tailwindcss()] };`);
     vite = spawn(process.execPath, [path.join(repository, "node_modules/vite/bin/vite.js"), "--config", configFile], { cwd: repository, env: { ...env(), NODE_ENV: "development" }, stdio: ["ignore", "pipe", "pipe"] });
     viteExit = new Promise((resolve) => { vite.once("exit", resolve); vite.once("error", resolve); });
     for (const stream of [vite.stdout, vite.stderr]) stream.on("data", (chunk) => writeFileSync(path.join(out, "vite.log"), chunk, { flag: "a" }));
