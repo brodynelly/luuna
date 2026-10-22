@@ -14,15 +14,15 @@
 .run-detail > .streaming-dots { flex: none; }
 
 /* Live output: a raised card; the response region inside is untouched. */
-.event-panel > .assistant-output { padding: var(--space-3); border: var(--border-width) solid var(--color-border); border-radius: var(--radius-card); background: var(--color-surface-raised); box-shadow: var(--shadow-card); }
+.event-panel > .assistant-output { padding: var(--space-3); border: var(--border-width) solid var(--color-border); border-radius: var(--radius-card); background: var(--surface-muted); box-shadow: var(--shadow-card); }
 .assistant-output > .panel-heading { padding-bottom: var(--space-1-5); border-bottom: var(--border-width) solid var(--color-border); }
 .assistant-output > pre { border-radius: var(--radius-button); background: var(--color-surface); }
 
 /* Event rows: 40 px rows, hairlines and a hover tint. */
 ol.events > li { min-height: var(--row-height); border-bottom: var(--border-width) solid var(--color-border); }
 ol.events > li:last-child { border-bottom: 0; }
-ol.events > li:hover, ol.events > li:focus-within { background: var(--color-surface-raised); }
+ol.events > li:hover, ol.events > li:focus-within { background: var(--fill); }
 ol.events .event-number { font-variant-numeric: tabular-nums; }
 
 /* Empty states: a quiet ground behind the selection prompt. */
-.event-panel > .activity-empty { background: var(--color-surface-raised); border-radius: var(--radius-card); }
+.event-panel > .activity-empty { background: var(--surface-muted); border-radius: var(--radius-card); }

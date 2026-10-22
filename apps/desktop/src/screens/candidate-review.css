@@ -61,4 +61,4 @@
 .candidate-review .check-results > .check-record, .candidate-review .review-findings > .finding-record { min-height: var(--row-height); font-variant-numeric: tabular-nums; }
 .candidate-review > .candidate-verdict { border-radius: var(--radius-lg); background: var(--surface-raised); box-shadow: var(--shadow-card); }
 .candidate-review > .candidate-verdict > .verdict-line { display: flex; align-items: center; gap: var(--space-2); }
-.candidate-review > .editor-handoff, .candidate-review > .setup-handoff { padding: var(--space-3); border: var(--border-width) solid var(--color-border); border-radius: var(--radius-card); background: var(--color-surface-raised); box-shadow: var(--shadow-card); }
+.candidate-review > .editor-handoff, .candidate-review > .setup-handoff { padding: var(--space-3); border: var(--border-width) solid var(--color-border); border-radius: var(--radius-card); background: var(--surface-muted); box-shadow: var(--shadow-card); }

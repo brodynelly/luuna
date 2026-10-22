@@ -7,10 +7,10 @@
  */
 
 /* Counts: four metric cards on a muted tray, 4 across on a wide window and 2 x 2 below. */
-.home-hero { padding: var(--space-4); border-radius: var(--radius-lg); background: var(--surface-muted); }
-.home-hero .stat-grid { grid-template-columns: repeat(4, minmax(0, 1fr)); gap: var(--space-4); }
+.home-metrics { padding: var(--space-4); border-radius: var(--radius-lg); background: var(--surface-muted); }
+.home-metrics .stat-grid { grid-template-columns: repeat(4, minmax(0, 1fr)); gap: var(--space-4); }
 @media (max-width: 920px) {
-  .home-hero .stat-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  .home-metrics .stat-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
 }
 
 /* Project rows: name and chips on the first line, repositories and counts below, actions at the end. */

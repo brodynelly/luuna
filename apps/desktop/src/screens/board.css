@@ -8,14 +8,14 @@
  */
 
 .board-columns { display: grid; grid-template-columns: repeat(auto-fill, minmax(min(100%, var(--field-min)), 1fr)); gap: var(--space-3); min-width: 0; margin: 0; padding: 0; list-style: none; }
-.board-column { display: grid; grid-template-columns: minmax(0, 1fr); align-content: start; gap: var(--space-2); min-width: 0; padding: var(--space-3); border: var(--border-width) solid var(--color-border); border-radius: var(--radius-card); background: var(--color-surface-raised); box-shadow: var(--shadow-card); }
+.board-column { display: grid; grid-template-columns: minmax(0, 1fr); align-content: start; gap: var(--space-2); min-width: 0; padding: var(--space-3); border: var(--border-width) solid var(--color-border); border-radius: var(--radius-card); background: var(--surface-muted); box-shadow: none; }
 .board-column > .panel-heading > h3 { display: flex; align-items: baseline; gap: var(--space-2); margin: 0; font-size: var(--text-sm); }
 .board-column .board-count { padding: 0 var(--space-1-5); border-radius: var(--radius-sm); background: var(--fill-strong); color: var(--ink-body); font-size: var(--text-caption); font-variant-numeric: tabular-nums; }
 .board-column > .board-column-scope { color: var(--ink-muted); font-size: var(--text-caption); }
 .board-column > .board-cards { display: grid; gap: var(--space-1); min-width: 0; margin: 0; padding: 0; list-style: none; }
 .board-column > .board-cards > li { min-width: 0; }
 /* A card is a selectable card on the column's raised surface, so its own surface is the page's. Hover is a background change only. */
-.board-column > .board-cards > li button.run-card { padding: var(--space-2); border-color: var(--separator); border-radius: var(--radius-md); background: var(--surface); box-shadow: none; transition: background-color var(--duration-micro) var(--ease-standard); }
+.board-column > .board-cards > li button.run-card { padding: var(--space-2); border-color: var(--separator); border-radius: var(--radius-md); background: var(--surface-raised); box-shadow: none; transition: background-color var(--duration-micro) var(--ease-standard); }
 .board-column > .board-cards > li button.run-card:hover:not(:disabled), .board-column > .board-cards > li button.run-card:focus-visible { background: var(--fill); }
 
 @media (max-width: 680px) {

@@ -109,6 +109,8 @@ try {
   await page.getByRole("button", { name: "Newer sessions", exact: true }).click();
   await page.waitForFunction(() => document.querySelector(".run-detail code")?.textContent === "history");
   assert.equal(await page.getByRole("button", { name: "Cancel session", exact: true }).count(), 0);
+  // At 760 px the sidebar is the off-canvas panel (ADR 0033), so its views are not clickable; return to a desktop width first.
+  await page.setViewportSize({ width: 1280, height: 720 });
   await show("Settings");
   await page.getByRole("button", { name: "Disconnect", exact: true }).click();
   assert.equal(await page.locator("ol.events").count(), 0);
