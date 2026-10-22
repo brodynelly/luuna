@@ -482,6 +482,17 @@ async function walkthrough() {
   const baselineLog = await waitFor(async () => { const pre = page.locator('pre[aria-label="Baseline log"]'); return (await pre.count()) ? await pre.innerText() : null; }, 20_000);
   record("walkthrough: a baseline recipe's log opens from its record and shows the unittest summary", Boolean(baselineLog) && /Ran 1 test/.test(baselineLog), baselineLog ? baselineLog.split("\n").filter(Boolean).slice(-2).join(" · ") : "no log");
   await screenshot("02-baseline");
+  // A baseline rejected before its evidence record exists must release the UI.
+  git(fixtures.walkthrough.dir, "remote", "set-url", "origin", "https://example.invalid/changed.git");
+  await page.getByRole("button", { name: "Run baseline", exact: true }).click();
+  const earlyFailure = await waitFor(async () => {
+    const text = await alertText();
+    return text && /identity changed/.test(text) && await page.getByRole("button", { name: "Run baseline", exact: true }).isEnabled() ? text : null;
+  }, 20_000);
+  record("baseline failure before its record releases polling and shows a concrete rebind route", Boolean(earlyFailure) && earlyFailure.includes("/projects/walkthrough/repositories/app/rebind") && !earlyFailure.includes("{id}"), earlyFailure ?? "polling never settled");
+  git(fixtures.walkthrough.dir, "remote", "set-url", "origin", "https://example.invalid/walkthrough.git");
+  await dismissAlerts();
+
 
   // 4. Ticket, plan, approval, writer, validation with an invalid review, re-validation.
   const title = "Implement the greeting";
@@ -617,7 +628,10 @@ async function recovery() {
   const itemC = ticketItem(third);
   await itemC.getByRole("button", { name: "Validate and review" }).click();
   const reviewing = await waitCandidateState(third, ["reviewing"], 120_000);
-  record("recovery C: the independent reviewer is in flight", reviewing === "reviewing");
+  const reviewRun = (await api("GET", "/runs")).body.find((run) => run.state === "reviewing" && run.project_id === "walkthrough");
+  const prompted = reviewRun && await waitFor(async () => (await api("GET", `/runs/${reviewRun.id}/events`)).body?.some((event) => event.type === "review.prompt_sent"), 30_000);
+  record("recovery C: the independent reviewer is in flight with its durable prompt marker", reviewing === "reviewing" && Boolean(prompted));
+  if (!prompted) throw new Error("Reviewer was not prompted; cannot claim interrupted provider spend");
   await stopRuntime("SIGKILL");
   await waitConnection("Reconnecting to runtime", 20_000);
   await startRuntime("restart-after-review-kill");

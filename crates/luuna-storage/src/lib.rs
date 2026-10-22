@@ -139,6 +139,7 @@ impl Store {
         let path = path.as_ref();
         let memory = path == Path::new(":memory:");
         if !memory {
+            backup::recover_pending_restore(path)?;
             if let Some(parent) = path.parent().filter(|p| !p.as_os_str().is_empty()) {
                 let mut builder = fs::DirBuilder::new();
                 builder.recursive(true);
@@ -214,6 +215,40 @@ impl Store {
 
     pub fn get_run(&self, id: &str) -> Result<Option<RunRecord>> {
         get_run(&self.connection, id)
+    }
+
+    /// Startup-only process evidence, independent of damaged run metadata or
+    /// unrelated malformed events. Never infer ownership from an undecodable row.
+    pub fn recovery_check_events(&self) -> Result<Vec<(String, EventEnvelope)>> {
+        let mut query = self.connection.prepare(
+            "SELECT e.run_id,e.sequence,e.envelope FROM events e JOIN runs r ON r.id=e.run_id
+             WHERE r.state IN ('\"queued\"','\"running\"','\"exploring\"','\"implementing\"','\"validating\"','\"reviewing\"') ORDER BY e.run_id,e.sequence")?;
+        let rows = query.query_map([], |r| {
+            Ok((
+                r.get::<_, String>(0)?,
+                r.get::<_, u64>(1)?,
+                r.get::<_, String>(2)?,
+            ))
+        })?;
+        let mut result = Vec::new();
+        for row in rows {
+            let (run_id, sequence, encoded) = row?;
+            match serde_json::from_str::<EventEnvelope>(&encoded) {
+                Ok(event)
+                    if event.event_type == "check.spawned"
+                        && event.run_id == run_id
+                        && event.sequence == sequence =>
+                {
+                    result.push((run_id, event))
+                }
+                Ok(_) => {}
+                Err(error) => eprintln!(
+                    "luuna-storage: startup recovery skipped event {run_id}/{sequence}: {}",
+                    undecodable(&error)
+                ),
+            }
+        }
+        Ok(result)
     }
 
     pub fn runs(&self) -> Result<Vec<RunRecord>> {
@@ -458,6 +493,15 @@ impl Store {
             .transaction_with_behavior(TransactionBehavior::Immediate)?;
         let plan = latest_plan(&tx, &approval.plan_id)?;
         approval.authorize(&plan)?;
+        let registered: bool = tx.query_row(
+            "SELECT EXISTS(SELECT 1 FROM projects WHERE id=?1)",
+            [&plan.project_id],
+            |row| row.get(0),
+        )?;
+        if registered {
+            writer::check_manifest_binding(&tx, &plan)?;
+        }
+
         let bound: bool = tx.query_row("SELECT EXISTS(SELECT 1 FROM runs WHERE id=?1 AND plan_id=?2 AND plan_revision=?3 AND project_id=?4)",
             params![run_id,plan.id,plan.revision,plan.project_id], |r| r.get(0))?;
         if !bound {

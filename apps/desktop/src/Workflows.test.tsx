@@ -1,6 +1,6 @@
 import { expect, test, vi } from "vitest";
 import { renderToStaticMarkup } from "react-dom/server";
-import { ByteCount, boundedMap, PlanReview, TEXT_LIMITS, TicketCard, Workflows, parseBudgets, planRetryIdentity, readWorkflows, ticketTextSizes } from "./Workflows";
+import { ByteCount, boundedMap, PlanReview, TEXT_LIMITS, TicketCard, Workflows, parseBudgets, planRetryIdentity, readWorkflowReplay, readWorkflows, ticketTextSizes } from "./Workflows";
 import type { RunSnapshot, TicketActions } from "./Workflows";
 import { planBudgetProblem } from "@luuna/api-client";
 import type { CandidateView, EventEnvelope, LuunaClient, PlanRevision, RunRecord, RunState, Ticket } from "@luuna/api-client";
@@ -32,6 +32,23 @@ const ticket: Ticket = { schema_version: "0.1", id: "ticket-1", project_id: "p",
 const planOf = (revision: number) => ({ id: "plan-1", revision, hash: `sha256:${String(revision).repeat(64)}`, base_commits: { app: "c".repeat(40) }, tasks: [{ paths: ["src"] }], budgets: { max_workers: 1, max_attempts: 2, timeout_seconds: 600, cost_usd_micros: 1_000_000 } }) as unknown as PlanRevision;
 const runOf = (id: string, state: RunState, revision = 1, planRevision = 1): RunRecord => ({ id, project_id: "p", state, revision, metadata: { kind: "workflow", plan_id: "plan-1", plan_revision: planRevision }, created_at: "", updated_at: `t${revision}` });
 const noActions: TicketActions = { reconcile() {}, plan() {}, approve() {}, implement() {}, cancel() {}, validate() {}, repair() {}, diff() {}, artifact() {} };
+
+test("workflow replay reduces each page before fetching the next and stops on an invalid page", async () => {
+  let reduced = 0;
+  const events = vi.fn(async (_id: string, after: number) => {
+    expect(reduced).toBe(after);
+    if (after === 3000) return [];
+    return Array.from({ length: 1000 }, (_, index) => ({ schema_version: "0.1", timestamp: "", project_id: "p", type: "x", run_id: "r", event_id: `e-${after + index + 1}`, sequence: after + index + 1,
+      get payload() { reduced = after + index + 1; return { reason: `reason-${reduced}` }; },
+    } as EventEnvelope));
+  });
+  const signal = new AbortController().signal;
+  expect(await readWorkflowReplay({ events } as unknown as LuunaClient, "r", undefined, signal)).toEqual({ cursor: 3000, reason: "reason-3000" });
+  expect(events).toHaveBeenCalledTimes(4);
+  const gap = vi.fn(async () => [{ run_id: "r", sequence: 2, payload: {} } as EventEnvelope]);
+  await expect(readWorkflowReplay({ events: gap } as unknown as LuunaClient, "r", undefined, signal)).rejects.toThrow();
+  expect(gap).toHaveBeenCalledTimes(1);
+});
 const pendingEvidence = { candidate: { schema_version: "0.1", id: "c", revision: 1, plan_hash: "sha256:p", repository_commits: { app: "b".repeat(40) }, dependency_bindings: {}, hash: `sha256:${"a".repeat(64)}` }, run_id: "run-1", implementer_session: "w", repository_trees: {}, status: "pending" as const, results: [], started_at: "", elapsed_seconds: 1, cost_usd_micros: 1, validation_generation: 1 };
 const snapshot = (candidate: CandidateView, reason = ""): RunSnapshot => ({ revision: 1, updated: "t1", cursor: 0, reason, leases: [], candidate });
 function card(run: RunRecord, candidate: CandidateView, reason = "", earlier: { plan: PlanRevision; run?: RunRecord }[] = []) {
@@ -129,6 +146,7 @@ test("polling reads only what moved: events after each cursor, settled candidate
   const client = {
     listRuns: vi.fn(async () => runs),
     listTickets: vi.fn(async () => [ticket]),
+    ticket: vi.fn(async () => ticket),
     listPlans: vi.fn(async () => [planOf(1)]),
     ticketSource: vi.fn(),
     worktrees: vi.fn(async () => []),
@@ -208,4 +226,12 @@ test("bounded reads keep input order with at most four requests in flight", asyn
   });
   expect(results).toEqual([2, 4, 6, 8, 10, 12, 14, 16, 18]);
   expect(peak).toBeLessThanOrEqual(4);
+});
+
+test("the approver sees cumulative usage including unpriced provider work", () => {
+  const html = renderToStaticMarkup(<TicketCard ticket={{ ...ticket, usage: { workflows: 3, attempts: 4, repairs: 1, elapsed_seconds: 77, cost_usd_micros: 250000, cost_unreported: true } }} revisions={[{ plan: planOf(2), run: runOf("run-1", "plan_ready") }]} snapshots={new Map()} diffs={{}} logs={{}} busy={false} connected actions={noActions} />);
+  expect(html).toContain("3 workflow(s)");
+  expect(html).toContain("$0.2500 recorded or reserved");
+  expect(html).toContain("Some provider usage has no reported price");
+  expect(html.indexOf("Cumulative ticket usage")).toBeLessThan(html.indexOf("Approve r2"));
 });

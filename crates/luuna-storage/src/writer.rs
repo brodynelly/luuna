@@ -270,6 +270,21 @@ impl Store {
                 "repository {unknown} is outside the ticket's repositories"
             )));
         }
+        // The ticket, rather than a client-chosen plan ID, owns live work.
+        let active: Option<String> = tx.query_row(
+            "SELECT r.id FROM runs r JOIN plan_revisions p ON p.id=r.plan_id AND p.revision=r.plan_revision
+             WHERE json_extract(p.payload,'$.ticket_id')=?1 AND
+             (r.state IN ('\"implementing\"','\"reviewing\"','\"running\"','\"queued\"','\"exploring\"')
+              OR EXISTS(SELECT 1 FROM candidates c WHERE c.run_id=r.id AND c.status IN ('validating','reviewing'))
+              OR EXISTS(SELECT 1 FROM attempts a WHERE a.run_id=r.id AND a.state='running')
+              OR EXISTS(SELECT 1 FROM worktree_leases l WHERE l.run_id=r.id AND l.state='active')) LIMIT 1",
+            [&plan.ticket_id], |row| row.get(0)).optional()?;
+        if let Some(active) = active {
+            return Err(StorageError::AlreadyExists(format!(
+                "ticket {} has live workflow {active}; finish or cancel it before re-planning",
+                plan.ticket_id
+            )));
+        }
         check_manifest_binding(&tx, plan)?;
         let current: u64 = tx.query_row(
             "SELECT COALESCE(MAX(revision),0) FROM plan_revisions WHERE id=?1",

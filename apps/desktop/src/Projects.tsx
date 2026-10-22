@@ -207,8 +207,7 @@ export function Projects({ client, connectionEpoch = 0 }: { client: LuunaClient 
         pending ? client.run(pending, controller.signal) : Promise.resolve(null),
       ]).then(async ([recorded, run]) => {
         if (controller.signal.aborted) return;
-        setBaselines(recorded);
-        if (!pending) return;
+        if (!pending) { setBaselines(recorded); return; }
         const recordSettled = recorded.some((baseline) => baseline.run_id === pending && baseline.status !== "running");
         const runSettled = run !== null && isTerminal(run.state);
         if (recordSettled || runSettled) {
@@ -220,6 +219,9 @@ export function Projects({ client, connectionEpoch = 0 }: { client: LuunaClient 
           }
           setPendingBaselineRun(null);
         }
+        // Updating an effect dependency aborts this request. Do it only after
+        // the terminal reason has been read, otherwise polling livelocks.
+        setBaselines(recorded);
       }).catch(() => {
         // A poll that fails (the runtime restarting, for example) is retried;
         // otherwise the record would stay "running" until a manual refresh.

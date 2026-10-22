@@ -163,7 +163,11 @@ fn already_registered(path: &str, project_id: &str, repository_id: &str) -> ApiE
 }
 
 /// An identity mismatch with the recovery route spelled out for this repository.
-fn identity_changed(project_id: &str, repository_id: &str, error: DomainError) -> ApiError {
+pub(crate) fn identity_changed(
+    project_id: &str,
+    repository_id: &str,
+    error: DomainError,
+) -> ApiError {
     let detail = error
         .to_string()
         .replace("{id}", project_id)

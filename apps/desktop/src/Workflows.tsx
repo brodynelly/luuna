@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState } from "react";
 import type { FormEvent } from "react";
 import type { CandidateDiff, CandidateView, ComponentContext, CreatePlanRequest, LuunaClient, Operation, PlanBudgetRequest, PlanRevision, RunRecord, Ticket, TicketSourceStatus, WorktreeLease } from "@luuna/api-client";
-import { DEFAULT_PLAN_BUDGETS, planBudgetProblem, readEventPages } from "@luuna/api-client";
+import { DEFAULT_PLAN_BUDGETS, planBudgetProblem } from "@luuna/api-client";
 import { advanceWorkflowReplay, allowedActions, canCancel, planBlocker, planSupersedes, settleAction, workflowNeedsRefresh } from "./workflow-state";
 import { CandidateReview } from "./CandidateReview";
 import { retryIdentity } from "./ProjectComponents";
@@ -74,13 +74,11 @@ export async function readWorkflows(client: LuunaClient, projectId: string, know
     transition ? readTickets(client, projectId, signal) : Promise.resolve(null),
     boundedMap(stale, async (run) => {
       const seen = known.get(run.id);
-      const [leases, events, candidate] = await Promise.all([
+      const [leases, replay, candidate] = await Promise.all([
         client.worktrees(run.id, signal),
-        readEventPages((after, page) => client.events(run.id, after, signal, page), seen?.cursor ?? 0, EVENT_PAGE),
+        readWorkflowReplay(client, run.id, seen, signal),
         client.candidate(run.id, signal),
       ]);
-      // Only the cursor and displayed reason are kept; a gap or foreign event fails the whole read.
-      const replay = advanceWorkflowReplay(run.id, { cursor: seen?.cursor ?? 0, reason: seen?.reason ?? "" }, events);
       return { run, leases, replay, candidate };
     }),
   ]);
@@ -93,6 +91,20 @@ export async function readWorkflows(client: LuunaClient, projectId: string, know
     snapshots.set(run.id, { revision: run.revision, updated: run.updated_at, cursor: read.replay.cursor, reason: read.replay.reason, leases: read.leases, candidate: read.candidate });
   }
   return { runs, snapshots, tickets };
+}
+
+/** Reduce and release each bounded page before requesting more history. */
+export async function readWorkflowReplay(client: Pick<LuunaClient, "events">, runId: string, seen: Pick<RunSnapshot, "cursor" | "reason"> | undefined, signal: AbortSignal) {
+  let replay = { cursor: seen?.cursor ?? 0, reason: seen?.reason ?? "" };
+  for (;;) {
+    signal.throwIfAborted();
+    const page = await client.events(runId, replay.cursor, signal, { limit: EVENT_PAGE });
+    signal.throwIfAborted();
+    if (!page.length) return replay;
+    const next = advanceWorkflowReplay(runId, replay, page);
+    if (next.cursor <= replay.cursor) throw new Error("Workflow event page did not advance its cursor.");
+    replay = next;
+  }
 }
 
 /** Run `task` over `items` with at most four requests in flight, keeping input order. */
@@ -109,12 +121,13 @@ async function readTickets(client: LuunaClient, projectId: string, signal: Abort
   const list = await client.listTickets(projectId, signal);
   const details = await boundedMap(list, (ticket) => Promise.all([
     client.listPlans(ticket.id, signal),
+    client.ticket(ticket.id, signal),
     ticket.source === "missions" ? client.ticketSource(ticket.id, signal) : Promise.resolve(null),
   ]));
   const planLists = details.map(([plans]) => plans);
-  const sources = details.map(([, source]) => source);
+  const sources = details.map(([, , source]) => source);
   return {
-    list,
+    list: details.map(([, ticket]) => ticket),
     sources: Object.fromEntries(list.flatMap((ticket, index) => sources[index] ? [[ticket.id, sources[index]!]] : [])),
     plans: Object.fromEntries(list.map((ticket, index) => [ticket.id, planLists[index]])),
   };
@@ -422,6 +435,7 @@ export function TicketCard({ ticket, source, revisions, snapshots, diffs, logs, 
     </div>
     {supersedes && latest && <label className="plan-supersede"><input type="checkbox" checked={acknowledged === supersedes} disabled={busy || !connected} onChange={(event) => setAcknowledged(event.target.checked ? supersedes : "")} /> Plan r{latest.revision + 1} anyway: {supersedes}</label>}
     {writerActive && latest && <p className="callout writer-status" data-tone="active" role="status">The runtime is running the scoped writer for plan r{latest.revision}. Closing this view does not cancel the workflow.</p>}
+    <p className="meta" aria-label="Cumulative ticket usage">{ticket.usage ? <>All plan revisions: {ticket.usage.workflows} workflow(s), {ticket.usage.attempts} writer attempt(s), {ticket.usage.repairs} repair(s), {ticket.usage.elapsed_seconds}s, ${(ticket.usage.cost_usd_micros / 1_000_000).toFixed(4)} recorded or reserved.{ticket.usage.cost_unreported && " Some provider usage has no reported price; this is not the complete cost."} A new revision does not erase this usage.</> : "Cumulative ticket usage is unavailable from this runtime."}</p>
     {latest && <PlanReview key={latest.hash} plan={latest} canApprove={run?.state === "plan_ready" && !source?.reconciliation_required} busy={busy} onApprove={() => actions.approve(latest)} />}
     {latest && <small className="plan-meta meta">plan <code>{latest.id}</code> r{latest.revision} · base <code>{Object.values(latest.base_commits)[0]?.slice(0, 12)}</code> · paths {latest.tasks[0]?.paths.join(", ")} · budget {latest.budgets.max_attempts} attempt(s), {latest.budgets.timeout_seconds}s, ${(latest.budgets.cost_usd_micros / 1_000_000).toFixed(2)}</small>}
     {earlier.length > 0 && <small className="plan-history meta">Earlier revisions: {earlier.map(({ plan, run: earlierRun }, index) => <span key={plan.id}>{index > 0 && " · "}r{plan.revision} <StatusBadge tone={runTone[earlierRun.state]}>{earlierRun.state.replace(/_/g, " ")}</StatusBadge></span>)}</small>}

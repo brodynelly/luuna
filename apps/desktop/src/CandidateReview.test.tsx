@@ -141,3 +141,11 @@ test("workflow usage is shown against the approved budgets when the runtime repo
   expect(render({ ...view, usage: { ...usage, cost_unreported: true, max_repairs: null } })).toContain("1 repair(s). Some model spend was reported without a cost");
   expect(render(view)).toContain("Runtime usage recorded for this candidate: 3s · $0.0010.");
 });
+
+test("an oversized diff lists omissions instead of claiming there are no changes", () => {
+  const html = render(view, run, { candidate_hash: hash, repository_id: "app", base_commit: commit, commit, diff: "", truncated: true, files: [{ path: "src/large.ts", status: "M", shown: "omitted" }], worktree_drift: "worktree differs from frozen candidate" });
+  expect(html).not.toContain("No changes.");
+  expect(html).toContain("This diff is truncated");
+  expect(html).toContain("src/large.ts");
+  expect(html).toContain("worktree differs from frozen candidate");
+});

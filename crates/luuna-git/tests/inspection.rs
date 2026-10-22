@@ -399,14 +399,20 @@ async fn same_named_tags_do_not_disguise_branch_names() {
 }
 
 #[tokio::test]
-async fn a_root_directory_name_ending_in_whitespace_is_inspected() {
+async fn a_root_directory_name_with_platform_supported_whitespace_is_inspected() {
     let parent = tempfile::tempdir().unwrap();
-    let dir = parent.path().join("trailing ");
+    // Win32 normalizes trailing spaces, but leading spaces are valid.
+    let name = if cfg!(windows) {
+        " leading"
+    } else {
+        "trailing "
+    };
+    let dir = parent.path().join(name);
     fs::create_dir(&dir).unwrap();
     synthetic_repository(&dir);
     let observation = GitInspector::default().inspect(&dir).await.unwrap();
     assert!(
-        observation.local_path.ends_with("trailing "),
+        observation.local_path.ends_with(name),
         "{}",
         observation.local_path
     );

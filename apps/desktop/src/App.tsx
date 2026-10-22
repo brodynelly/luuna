@@ -14,6 +14,11 @@ const message = describeFailure;
 const HISTORY_LIMIT = 200;
 const ACTIVE_STATES: RunState[] = ["queued", "running", "implementing", "validating", "reviewing"];
 
+/** Keep selection on the displayed history page so its controls and replay agree. */
+export function historySelection(selected: string | null, runs: RunRecord[]): string | null {
+  return runs.some((run) => run.id === selected) ? selected : runs[0]?.id ?? null;
+}
+
 /** A rejected token never recovers by waiting: the developer has to enter the current one. */
 export function authenticationLost(failure: unknown): boolean {
   return failure instanceof ApiError && failure.status === 401;
@@ -186,7 +191,7 @@ export function App() {
         }
         // An unchanged listing keeps its identity, so the panels below do not re-render.
         setRuns((previous) => sameRuns(previous, next) ? previous : next);
-        setSelected((id) => id ?? next[0]?.id ?? null);
+        setSelected((id) => historySelection(id, next));
       },
       outage: (failure) => {
         setReachable(false);

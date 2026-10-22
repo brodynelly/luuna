@@ -15,12 +15,12 @@ use luuna_domain::{
     DirtyState, ExecutionProfile, ManifestCheck, RunState, SCHEMA_VERSION,
 };
 use luuna_executor::{
-    artifact_file_name, artifact_hashes, artifact_id, reconcile_process_group, CommandSpec,
-    Executor, GroupReconciliation, Probe, ProcessGroup, Progress,
+    artifact_hashes, artifact_id, reconcile_process_group, CommandSpec, Executor,
+    GroupReconciliation, Probe, ProcessGroup, Progress,
 };
 use luuna_storage::{ManifestRecord, RepositoryRegistration, RunRecord, Store};
 use serde::Deserialize;
-use serde_json::{json, Value};
+use serde_json::json;
 use std::{path::PathBuf, time::Duration};
 use tokio::sync::{mpsc, watch};
 
@@ -286,49 +286,29 @@ pub(crate) fn relay_progress(
 /// `check.orphans_unverified`, so a resumed validation never runs beside them
 /// unknowingly.
 pub(crate) fn reap_orphaned_checks(store: &mut Store) -> luuna_storage::Result<()> {
-    let runs: Vec<String> = store
-        .runs()?
-        .into_iter()
-        .filter(|run| {
-            matches!(
-                run.state,
-                RunState::Queued
-                    | RunState::Running
-                    | RunState::Exploring
-                    | RunState::Implementing
-                    | RunState::Validating
-                    | RunState::Reviewing
-            )
-        })
-        .map(|run| run.id)
-        .collect();
-    for run_id in runs {
-        let groups: Vec<(Value, ProcessGroup)> = store
-            .events_after(&run_id, 0)?
-            .into_iter()
-            .filter(|event| event.event_type == "check.spawned")
-            .filter_map(|event| {
-                let group = serde_json::from_value(event.payload["process_group"].clone()).ok()?;
-                Some((event.payload["recipe_id"].clone(), group))
-            })
-            .collect();
-        for (recipe_id, group) in groups {
-            match reconcile_process_group(&group) {
-                GroupReconciliation::Gone => {}
-                GroupReconciliation::Reaped(processes) => {
-                    store.append_event(
-                        &run_id,
-                        "check.orphans_reaped",
-                        json!({"recipe_id": recipe_id, "pgid": group.pgid, "processes": processes}),
-                    )?;
-                }
-                GroupReconciliation::Unverified { processes, reason } => {
-                    store.append_event(
+    for (run_id, event) in store.recovery_check_events()? {
+        let recipe_id = event.payload["recipe_id"].clone();
+        let Ok(group) =
+            serde_json::from_value::<ProcessGroup>(event.payload["process_group"].clone())
+        else {
+            eprintln!("luuna-runtime: skipped malformed process ownership for run {run_id}");
+            continue;
+        };
+        match reconcile_process_group(&group) {
+            GroupReconciliation::Gone => {}
+            GroupReconciliation::Reaped(processes) => {
+                store.append_event(
+                    &run_id,
+                    "check.orphans_reaped",
+                    json!({"recipe_id": recipe_id, "pgid": group.pgid, "processes": processes}),
+                )?;
+            }
+            GroupReconciliation::Unverified { processes, reason } => {
+                store.append_event(
                         &run_id,
                         "check.orphans_unverified",
                         json!({"recipe_id": recipe_id, "pgid": group.pgid, "processes": processes, "reason": reason}),
                     )?;
-                }
             }
         }
     }
@@ -484,7 +464,12 @@ async fn baseline_worker(state: AppState, job: BaselineJob, cancel: watch::Recei
     {
         fail(
             &state,
-            format!("repository identity changed since registration: {error}"),
+            crate::projects::identity_changed(
+                &job.manifest.manifest.id,
+                &job.registration.repository_id,
+                error,
+            )
+            .1,
             None,
         );
         return;
@@ -735,9 +720,14 @@ async fn baseline_worker(state: AppState, job: BaselineJob, cancel: watch::Recei
                     .identity
                     .matches(&after.identity)
                 {
-                    drift = Some(format!(
-                        "repository identity changed while checks ran: {error}"
-                    ));
+                    drift = Some(
+                        crate::projects::identity_changed(
+                            &job.manifest.manifest.id,
+                            &job.registration.repository_id,
+                            error,
+                        )
+                        .1,
+                    );
                 } else if after.dirty.untracked > 0 {
                     // Build caches and reports are untracked by definition and do not
                     // change the recorded commit or tree; they are recorded, not judged.
@@ -855,7 +845,7 @@ pub async fn artifact(
         .ok_or_else(not_found)?;
     // The executor's file naming keeps IDs that differ only in case, and
     // Windows device names, apart on every filesystem.
-    let path = artifact_dir(&state, &id).join(artifact_file_name(recipe_id, stream));
+    let path = luuna_executor::artifact_log_path(&artifact_dir(&state, &id), &artifact_id);
     let bytes = match tokio::fs::read(&path).await {
         Ok(bytes) => bytes,
         Err(_) => return Err(ApiError(StatusCode::NOT_FOUND, "artifact not found".into())),

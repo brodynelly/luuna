@@ -809,8 +809,8 @@ async fn an_explicit_rebind_recovers_a_changed_remote_or_a_moved_checkout() {
     assert_eq!(status, StatusCode::OK, "{view}");
     let canonical = fs::canonicalize(&moved).unwrap();
     assert_eq!(
-        view["repositories"][0]["local_path"],
-        canonical.to_string_lossy().as_ref()
+        fs::canonicalize(view["repositories"][0]["local_path"].as_str().unwrap()).unwrap(),
+        canonical
     );
     let (_, stream) = harness
         .request("GET", "/api/v1/projects/fixture/events", None, true)

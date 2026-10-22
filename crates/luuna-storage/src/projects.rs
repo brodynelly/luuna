@@ -235,6 +235,20 @@ impl Store {
                 repository_id
             ],
         )?;
+        let manifest_confirmation_required = manifest_remote_matches == Some(false)
+            || previous
+                .observation
+                .identity
+                .matches(&observation.identity)
+                .is_err();
+        if manifest_confirmation_required {
+            // Retain append-only manifest history and revision, but withdraw the
+            // current confirmation so all approval/execution gates fail closed.
+            tx.execute(
+                "UPDATE projects SET manifest_hash=NULL WHERE id=?1",
+                [project_id],
+            )?;
+        }
         let event = append_project_event(
             &tx,
             project_id,
@@ -251,6 +265,7 @@ impl Store {
                 },
                 "observation": observation,
                 "manifest_remote_matches": manifest_remote_matches,
+                "manifest_confirmation_required": manifest_confirmation_required,
             }),
         )?;
         tx.commit()?;
@@ -499,7 +514,7 @@ impl Store {
 
     pub fn current_manifest(&self, project_id: &str) -> Result<Option<ManifestRecord>> {
         match self.get_project(project_id)? {
-            Some(project) if project.revision > 0 => {
+            Some(project) if project.revision > 0 && project.manifest_hash.is_some() => {
                 self.get_manifest(project_id, project.revision)
             }
             _ => Ok(None),
@@ -558,7 +573,7 @@ fn registration_at(connection: &Connection, local_path: &str) -> Result<Option<(
 fn current_manifest(connection: &Connection, project_id: &str) -> Result<Option<ProjectManifest>> {
     let payload: Option<String> = connection
         .query_row(
-            "SELECT m.payload FROM manifest_revisions m JOIN projects p ON p.id=m.project_id AND p.revision=m.revision WHERE p.id=?1",
+            "SELECT m.payload FROM manifest_revisions m JOIN projects p ON p.id=m.project_id AND p.revision=m.revision AND p.manifest_hash=m.hash WHERE p.id=?1",
             [project_id],
             |r| r.get(0),
         )

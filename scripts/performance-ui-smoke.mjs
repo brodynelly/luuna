@@ -33,6 +33,8 @@ try {
   const errors = [];
   page.on("pageerror", (error) => errors.push(error.message));
   const run = { id: "history", project_id: "demo", state: "completed", revision: 3, metadata: { prompt: "Synthetic performance history" }, created_at: "2026-10-21T00:00:00Z", updated_at: "2026-10-21T00:00:01Z" };
+  const recent = [run, ...Array.from({ length: 199 }, (_, index) => ({ ...run, id: `recent-${index}`, metadata: { prompt: `Recent session ${index}` } }))];
+  const older = { ...run, id: "older", state: "running", metadata: { prompt: "Older active session" } };
   const events = Array.from({ length: 10_000 }, (_, index) => ({ schema_version: "0.1", run_id: run.id, project_id: "demo", event_id: `event-${index + 1}`, sequence: index + 1, type: "pi.message_update", timestamp: run.created_at, payload: { marker: `payload-${index + 1}`, text: "x".repeat(1024) } }));
   const cursors = [];
   await page.route("http://127.0.0.1:4243/**", async (route) => {
@@ -41,14 +43,15 @@ try {
     if (route.request().method() === "OPTIONS") return route.fulfill({ status: 204, headers });
     let body;
     if (url.pathname === "/api/v1/health") body = { pi_version: "synthetic" };
-    else if (url.pathname === "/api/v1/runs") body = [run];
+    else if (url.pathname === "/api/v1/runs") body = url.searchParams.has("before") ? [older] : recent;
     else if (url.pathname === "/api/v1/projects") body = [];
     else if (url.pathname === "/api/v1/runs/history/events") {
       const cursor = Number(url.searchParams.get("after"));
       cursors.push(cursor);
       const before = Number(url.searchParams.get("before"));
       body = before ? events.slice(Math.max(0, before - 201), before - 1) : events.slice(cursor, cursor + 200);
-    } else throw new Error(`Unexpected fixture route: ${url.pathname}`);
+    } else if (url.pathname === "/api/v1/runs/older/events") body = [];
+    else throw new Error(`Unexpected fixture route: ${url.pathname}`);
     await route.fulfill({ json: body, headers });
   });
   await page.goto(`http://127.0.0.1:${port}`);
@@ -66,7 +69,8 @@ try {
     new MutationObserver((records) => { window.performanceMutations += records.length; }).observe(document.querySelector("ol.events"), { subtree: true, childList: true, characterData: true, attributes: true });
   });
   await page.waitForFunction(() => document.querySelector(".run-detail").textContent.includes("10000"));
-  await sleep(3100);
+  const pollDeadline = Date.now() + 15_000;
+  while (!(cursors.length >= 2 && cursors.slice(-2).every((cursor) => cursor === 10_000)) && Date.now() < pollDeadline) await sleep(100);
   const idleMutations = await page.evaluate(() => window.performanceMutations);
   assert.equal(idleMutations, 0, "idle history polling must not change the event DOM");
   assert(cursors.slice(-2).every((cursor) => cursor === 10_000), "empty polls must resume after history");
@@ -91,10 +95,17 @@ try {
     await page.emulateMedia({ colorScheme });
     assert(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth), `${colorScheme}: paging must fit the minimum window width`);
   }
+  await page.getByRole("button", { name: "Older sessions", exact: true }).click();
+  await page.waitForFunction(() => document.querySelector(".run-detail code")?.textContent === "older");
+  assert(await page.getByRole("button", { name: "Cancel session", exact: true }).isEnabled(), "paging must keep selected run controls accessible");
+  assert.equal(await page.locator(".run-card[aria-pressed=true]").count(), 1);
+  await page.getByRole("button", { name: "Newer sessions", exact: true }).click();
+  await page.waitForFunction(() => document.querySelector(".run-detail code")?.textContent === "history");
+  assert.equal(await page.getByRole("button", { name: "Cancel session", exact: true }).count(), 0);
   await page.getByRole("button", { name: "Disconnect", exact: true }).click();
   assert.equal(await page.locator("ol.events").count(), 0);
   assert.deepEqual(errors, []);
-  console.log(JSON.stringify({ browser: browser.version(), initial_events: 10_000, visible_rows: 200, initial_render_ms: initialRenderMs, full_replay_ms: fullReplayMs, idle_event_dom_mutations: idleMutations, cursor_polls: cursors.length, payload_open_close: "passed", history_paging_during_append: "passed", minimum_width_both_schemes: "passed", disconnect: "passed" }, null, 2));
+  console.log(JSON.stringify({ browser: browser.version(), initial_events: 10_000, visible_rows: 200, initial_render_ms: initialRenderMs, full_replay_ms: fullReplayMs, idle_event_dom_mutations: idleMutations, cursor_polls: cursors.length, payload_open_close: "passed", history_paging_during_append: "passed", session_paging_controls: "passed", minimum_width_both_schemes: "passed", disconnect: "passed" }, null, 2));
 } finally {
   await browser?.close();
   vite.kill();

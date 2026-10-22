@@ -292,20 +292,21 @@ pub fn is_filesystem_remote(value: &str) -> bool {
 }
 
 /// The comparison key of a remote identity. Spellings that name the same
-/// repository agree: scp-like `user@host:path` and `ssh://user@host/path` (also
+/// repository agree: scp-like `user@host:/path` and `ssh://user@host/path` (also
 /// `git+ssh`/`ssh+git`), `http` and `https`, any user name, a default port, host
 /// case, and a trailing `/` or `.git`. A different transport family (HTTPS versus
 /// SSH), host, port or path is a different remote; `local:` identities and other
 /// forms compare exactly.
 pub fn remote_identity_key(remote: &str) -> String {
-    let (family, authority, path) = if let Some((scheme, rest)) = remote.split_once("://") {
+    let (family, authority, path, absolute) = if let Some((scheme, rest)) = remote.split_once("://")
+    {
         let family = match scheme.to_ascii_lowercase().as_str() {
             "ssh" | "git+ssh" | "ssh+git" => "ssh".to_owned(),
             "http" | "https" => "https".to_owned(),
             other => other.to_owned(),
         };
         let (authority, path) = rest.split_once('/').unwrap_or((rest, ""));
-        (family, authority, path)
+        (family, authority, path, true)
     } else {
         // scp-like syntax: a colon before any slash, and not a `local:` identity.
         match remote.split_once(':') {
@@ -314,7 +315,7 @@ pub fn remote_identity_key(remote: &str) -> String {
                     && !authority.contains('/')
                     && !authority.eq_ignore_ascii_case("local") =>
             {
-                ("ssh".to_owned(), authority, path)
+                ("ssh".to_owned(), authority, path, path.starts_with('/'))
             }
             _ => return remote.to_owned(),
         }
@@ -337,7 +338,12 @@ pub fn remote_identity_key(remote: &str) -> String {
     if let Some(stripped) = path.strip_suffix(".git") {
         path = stripped.trim_end_matches('/');
     }
-    format!("{family}://{}/{path}", host.to_ascii_lowercase())
+    if family == "ssh" {
+        let scope = if absolute { "absolute" } else { "relative" };
+        format!("{family}://{}/{scope}/{path}", host.to_ascii_lowercase())
+    } else {
+        format!("{family}://{}/{path}", host.to_ascii_lowercase())
+    }
 }
 
 /// Whether two remote identities name the same repository; see [`remote_identity_key`].
@@ -734,9 +740,9 @@ mod tests {
         );
         // Stored scheme URLs are already redacted of user information.
         for equivalent in [
-            "ssh://example.invalid/org/app.git",
-            "ssh://example.invalid:22/org/app",
-            "git+ssh://EXAMPLE.invalid/org/app.git/",
+            "git@example.invalid:org/app.git",
+            "example.invalid:org/app",
+            "deploy@EXAMPLE.invalid:org/app.git/",
             "deploy@example.invalid:org/app",
         ] {
             let observed = identity(Some(equivalent));
@@ -759,12 +765,28 @@ mod tests {
             "http://example.invalid/org/app",
             "https://example.invalid:443/org/app.git"
         ));
+        assert!(!remotes_equivalent(
+            "git@host:org/app.git",
+            "git@host:/org/app.git"
+        ));
+        assert!(!remotes_equivalent(
+            "git@host:org/app.git",
+            "ssh://host/org/app.git"
+        ));
+        assert!(remotes_equivalent(
+            "git@host:/org/app.git",
+            "ssh://host/org/app.git"
+        ));
+        assert!(!remotes_equivalent(
+            "git@host:org/app.git",
+            "ssh://host/~/org/app.git"
+        ));
         assert!(!remotes_equivalent("local:app", "local:api"));
         assert_eq!(remote_identity_key("local:app"), "local:app");
         let mut pushed = identity(Some("https://example.invalid/org/app.git"));
         pushed.push_remote = Some("git@example.invalid:org/app-push.git".into());
         let mut respelled = pushed.clone();
-        respelled.push_remote = Some("ssh://example.invalid/org/app-push".into());
+        respelled.push_remote = Some("deploy@example.invalid:org/app-push".into());
         pushed.matches(&respelled).unwrap();
     }
 }

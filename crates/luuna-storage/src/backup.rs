@@ -10,7 +10,7 @@
 //! moves the current database together with its `-wal`/`-shm` aside.
 use crate::{applied_versions, Result, StorageError, DATABASE_SCHEMA_VERSION};
 use rusqlite::{Connection, ErrorCode, OpenFlags};
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 use std::{
     fs,
     io::Write,
@@ -121,7 +121,16 @@ pub fn backup_database(source: &Path, output: &Path) -> Result<BackupReport> {
         if output.exists() {
             return Err(StorageError::AlreadyExists(output.display().to_string()));
         }
-        fs::rename(&partial, output)?;
+        // A hard link publishes a complete snapshot atomically without replacing
+        // a competing backup. Both names are on the output filesystem.
+        fs::hard_link(&partial, output).map_err(|error| {
+            if error.kind() == std::io::ErrorKind::AlreadyExists {
+                StorageError::AlreadyExists(output.display().to_string())
+            } else {
+                error.into()
+            }
+        })?;
+        let _ = fs::remove_file(&partial);
         sync_directory(output);
         Ok(BackupReport {
             path: output.to_path_buf(),
@@ -142,6 +151,7 @@ pub fn backup_database(source: &Path, output: &Path) -> Result<BackupReport> {
 /// are moved, never deleted, to `<directory>/backups/replaced-<timestamp>/`,
 /// so a stale log can never be replayed over the restored file.
 pub fn restore_database(input: &Path, database: &Path) -> Result<RestoreReport> {
+    recover_pending_restore(database)?;
     if !input.is_file() {
         return Err(StorageError::NotFound(format!(
             "backup file {}",
@@ -177,45 +187,131 @@ pub fn restore_database(input: &Path, database: &Path) -> Result<RestoreReport> 
             return Err(error);
         }
     };
-    let current: Vec<PathBuf> = std::iter::once(database.to_path_buf())
-        .chain(SIDECARS.map(|suffix| sidecar(database, suffix)))
-        .filter(|path| path.exists())
+    let files: Vec<String> = std::iter::once("")
+        .chain(SIDECARS)
+        .filter(|suffix| sidecar(database, suffix).exists())
+        .map(str::to_owned)
         .collect();
-    // On any failure the previous files return to their places together (a
-    // main file never loses the log it was paired with) and the copy is removed.
-    let undo = |moved: &[(PathBuf, PathBuf)], error: StorageError| {
-        for (original, target) in moved.iter().rev() {
-            let _ = fs::rename(target, original);
-        }
-        let _ = fs::remove_file(&staged);
-        Err(error)
-    };
-    let mut moved = Vec::new();
-    let replaced = if current.is_empty() {
-        None
-    } else {
-        let directory =
-            match backups_directory(database).and_then(|dir| unique_directory(&dir, "replaced")) {
-                Ok(directory) => directory,
-                Err(error) => return undo(&moved, error),
-            };
-        for path in &current {
-            let target = directory.join(path.file_name().unwrap_or_default());
-            if let Err(error) = fs::rename(path, &target) {
-                return undo(&moved, error.into());
+    let directory =
+        match backups_directory(database).and_then(|dir| unique_directory(&dir, "replaced")) {
+            Ok(directory) => directory,
+            Err(error) => {
+                let _ = fs::remove_file(&staged);
+                return Err(error);
             }
-            moved.push((path.clone(), target));
-        }
-        Some(directory)
+        };
+    let intent = RestoreIntent {
+        staged: staged.file_name().unwrap().to_string_lossy().into_owned(),
+        replaced: directory
+            .file_name()
+            .unwrap()
+            .to_string_lossy()
+            .into_owned(),
+        files,
+        schema_version,
     };
-    if let Err(error) = fs::rename(&staged, database) {
-        return undo(&moved, error.into());
+    let marker = sibling(database, ".restore-pending")?;
+    let temporary = sibling(database, ".restore-intent-partial")?;
+    // The marker is published only after the staged database and intent are
+    // durable. No database files move until publication has succeeded.
+    if temporary.exists() {
+        fs::remove_file(&temporary)?;
     }
+    let mut file = create_private_file(&temporary)?;
+    file.write_all(&serde_json::to_vec(&intent)?)?;
+    file.sync_all()?;
+    drop(file);
+    fs::hard_link(&temporary, &marker)?;
+    sync_directory(&marker);
+    fs::remove_file(&temporary)?;
+    finish_restore(database, &intent)
+}
+
+#[derive(Serialize, Deserialize)]
+struct RestoreIntent {
+    staged: String,
+    replaced: String,
+    files: Vec<String>,
+    schema_version: u32,
+}
+
+/// Complete a previously authorized restore before SQLite can open/create the
+/// main file. A process crash at any rename leaves the intent for roll-forward;
+/// an unreadable intent fails closed rather than creating an empty database.
+pub(crate) fn recover_pending_restore(database: &Path) -> Result<()> {
+    let marker = sibling(database, ".restore-pending")?;
+    if !marker.exists() {
+        return Ok(());
+    }
+    let intent: RestoreIntent = serde_json::from_slice(&fs::read(&marker)?)?;
+    finish_restore(database, &intent)?;
+    Ok(())
+}
+
+fn finish_restore(database: &Path, intent: &RestoreIntent) -> Result<RestoreReport> {
+    let safe_name =
+        |name: &str| !name.is_empty() && !name.contains(['/', '\\']) && name != "." && name != "..";
+    if !safe_name(&intent.staged)
+        || !safe_name(&intent.replaced)
+        || !intent.replaced.starts_with("replaced-")
+        || !intent.staged.starts_with(&format!(
+            "{}.restore-",
+            database.file_name().unwrap_or_default().to_string_lossy()
+        ))
+        || intent
+            .files
+            .iter()
+            .any(|suffix| !suffix.is_empty() && !SIDECARS.contains(&suffix.as_str()))
+    {
+        return Err(StorageError::Invalid(
+            "invalid pending restore; preserve the data directory for recovery".into(),
+        ));
+    }
+    let parent = database.parent().unwrap_or(Path::new("."));
+    let staged = parent.join(&intent.staged);
+    let replaced = parent.join("backups").join(&intent.replaced);
+    if staged.exists() {
+        inspect_read_only(&staged)?.require_usable()?;
+        for suffix in &intent.files {
+            let original = sidecar(database, suffix);
+            let target = replaced.join(original.file_name().unwrap());
+            if target.exists() {
+                if original.exists() {
+                    return Err(StorageError::Invalid("pending restore found both original and preserved files; refusing to overwrite either".into()));
+                }
+                continue;
+            }
+            fs::rename(&original, &target)?;
+            sync_directory(&original);
+            sync_directory(&target);
+        }
+        // Every old sidecar is now preserved, so only the verified new main
+        // file is installed. A crash after this rename is recognized below.
+        if database.exists()
+            || SIDECARS
+                .iter()
+                .any(|suffix| sidecar(database, suffix).exists())
+        {
+            return Err(StorageError::Invalid(
+                "unexpected files appeared during restore".into(),
+            ));
+        }
+        fs::rename(&staged, database)?;
+        sync_directory(database);
+    }
+    let status = inspect_read_only(database)?;
+    status.require_usable()?;
+    if status.schema_version != intent.schema_version {
+        return Err(StorageError::Invalid(
+            "pending restore schema does not match its intent".into(),
+        ));
+    }
+    fs::remove_file(sibling(database, ".restore-pending")?)?;
     sync_directory(database);
     Ok(RestoreReport {
         database: database.to_path_buf(),
-        schema_version,
-        replaced,
+        schema_version: intent.schema_version,
+        replaced: (!intent.files.is_empty()).then_some(replaced),
     })
 }
 
@@ -457,4 +553,95 @@ fn sync_directory(path: &Path) {
     }
     #[cfg(not(unix))]
     let _ = path;
+}
+
+#[cfg(test)]
+mod recovery_tests {
+    use super::*;
+    use crate::Store;
+
+    #[test]
+    fn restore_resumes_after_every_file_move_including_installation() {
+        for interrupted_after in 0..=5 {
+            let dir = tempfile::tempdir().unwrap();
+            let database = dir.path().join("luuna.sqlite3");
+            let input = dir.path().join("snapshot.sqlite3");
+            {
+                let mut store = Store::open(&input).unwrap();
+                store
+                    .create_run("preserved", "project", serde_json::json!({}))
+                    .unwrap();
+            }
+            let staged = sibling(&database, ".restore-test").unwrap();
+            let schema_version = stage(&input, &staged).unwrap();
+            let replaced =
+                unique_directory(&backups_directory(&database).unwrap(), "replaced").unwrap();
+            let files: Vec<String> = std::iter::once("")
+                .chain(SIDECARS)
+                .map(str::to_owned)
+                .collect();
+            for suffix in &files {
+                fs::write(sidecar(&database, suffix), format!("old{suffix}")).unwrap();
+            }
+            let intent = RestoreIntent {
+                staged: staged.file_name().unwrap().to_string_lossy().into_owned(),
+                replaced: replaced.file_name().unwrap().to_string_lossy().into_owned(),
+                files: files.clone(),
+                schema_version,
+            };
+            fs::write(
+                sibling(&database, ".restore-pending").unwrap(),
+                serde_json::to_vec(&intent).unwrap(),
+            )
+            .unwrap();
+            for suffix in files.iter().take(interrupted_after.min(4)) {
+                let original = sidecar(&database, suffix);
+                fs::rename(&original, replaced.join(original.file_name().unwrap())).unwrap();
+            }
+            if interrupted_after == 5 {
+                fs::rename(&staged, &database).unwrap();
+            }
+            let store = Store::open(&database).unwrap();
+            assert!(store.get_run("preserved").unwrap().is_some());
+            for suffix in &files {
+                assert_eq!(
+                    fs::read(replaced.join(sidecar(&database, suffix).file_name().unwrap()))
+                        .unwrap(),
+                    format!("old{suffix}").as_bytes()
+                );
+            }
+            assert!(!sibling(&database, ".restore-pending").unwrap().exists());
+            drop(store);
+            assert!(Store::open(&database)
+                .unwrap()
+                .get_run("preserved")
+                .unwrap()
+                .is_some());
+        }
+    }
+
+    #[test]
+    fn competing_backups_never_replace_the_winning_snapshot() {
+        let dir = tempfile::tempdir().unwrap();
+        let source = dir.path().join("source.sqlite3");
+        drop(Store::open(&source).unwrap());
+        let output = dir.path().join("backup.sqlite3");
+        let barrier = std::sync::Barrier::new(2);
+        let successes = std::thread::scope(|scope| {
+            let a = scope.spawn(|| {
+                barrier.wait();
+                backup_database(&source, &output).is_ok()
+            });
+            let b = scope.spawn(|| {
+                barrier.wait();
+                backup_database(&source, &output).is_ok()
+            });
+            usize::from(a.join().unwrap()) + usize::from(b.join().unwrap())
+        });
+        assert_eq!(successes, 1);
+        let bytes = fs::read(&output).unwrap();
+        assert!(backup_database(&source, &output).is_err());
+        assert_eq!(fs::read(&output).unwrap(), bytes);
+        inspect_database(&output).unwrap().require_usable().unwrap();
+    }
 }

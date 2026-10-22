@@ -319,6 +319,21 @@ async fn passing_baseline_records_bound_evidence_and_artifacts() {
         .await;
     assert_eq!(status, StatusCode::OK);
     assert!(String::from_utf8_lossy(&body).contains("test result: ok. 2 passed"));
+    let legacy_dir = harness.root.join("artifacts").join(&id);
+    fs::write(
+        legacy_dir.join("Unit.stdout.log"),
+        b"historical uppercase evidence",
+    )
+    .unwrap();
+    let (status, body) = harness
+        .raw(
+            "GET",
+            &format!("/api/v1/runs/{id}/artifacts/Unit.stdout"),
+            None,
+        )
+        .await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(&body[..], b"historical uppercase evidence");
     for bad in ["unit.stdin", "../../luuna.sqlite3.stdout", "missing.stdout"] {
         let (status, _) = harness
             .raw("GET", &format!("/api/v1/runs/{id}/artifacts/{bad}"), None)

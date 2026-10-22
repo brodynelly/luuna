@@ -848,11 +848,7 @@ async fn schedule_writer(
         .observation
         .identity
         .matches(&observation.identity)
-        .map_err(|e| {
-            conflict(format!(
-                "repository identity changed since registration: {e}"
-            ))
-        })?;
+        .map_err(|e| crate::projects::identity_changed(&plan.project_id, &task.repository_id, e))?;
     let base = plan
         .base_commits
         .get(&task.repository_id)
@@ -1338,7 +1334,7 @@ fn repair_check_output(
             };
             opened += 1;
             let Some(verified) = read_verified_tail(
-                &artifact_dir.join(luuna_executor::artifact_log_name(reference)),
+                &luuna_executor::artifact_log_path(artifact_dir, reference),
                 expected,
                 &mut read_budget,
                 secrets,
@@ -3388,6 +3384,28 @@ mod redaction_tests {
             body,
         )
         .unwrap();
+        let mut result = failed_result(dir.path(), 0, b"other");
+        result.recipe_id = "Unit".into();
+        result.artifact_refs = vec![reference.clone()];
+        result.artifact_hashes = [(reference.clone(), luuna_executor::sha256_hex(body))].into();
+        let output = repair_check_output(dir.path(), &[result], &[], &[]);
+        assert!(
+            output
+                .get(&reference)
+                .and_then(Value::as_str)
+                .is_some_and(|text| text.contains("expected the greeting")),
+            "{output:?}"
+        );
+    }
+
+    #[test]
+    fn feedback_reads_preserved_legacy_uppercase_logs() {
+        // Upper-case recipe IDs get escaped log names so case-insensitive
+        // filesystems keep them apart; feedback must still find the log.
+        let dir = tempfile::tempdir().unwrap();
+        let body = b"AssertionError: expected the greeting\n";
+        let reference = "c1-g1-Unit.stdout".to_owned();
+        std::fs::write(dir.path().join("c1-g1-Unit.stdout.log"), body).unwrap();
         let mut result = failed_result(dir.path(), 0, b"other");
         result.recipe_id = "Unit".into();
         result.artifact_refs = vec![reference.clone()];

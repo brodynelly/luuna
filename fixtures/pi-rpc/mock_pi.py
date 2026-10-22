@@ -65,8 +65,10 @@ def writer_scenario():
 def write_file(relative, content):
     path = os.path.join(os.getcwd(), relative)
     os.makedirs(os.path.dirname(path) or ".", exist_ok=True)
-    with open(path, "w", encoding="utf-8") as handle:
+    # OPEN_EXISTING also permits the hidden worktree gitfile on Windows.
+    with open(path, "r+" if os.path.isfile(path) else "w", encoding="utf-8") as handle:
         handle.write(content)
+        handle.truncate()
     send({"type": "tool_execution_start", "toolCallId": "call-1", "toolName": "write",
           "args": {"path": relative, "content": content}})
     send({"type": "tool_execution_end", "toolCallId": "call-1", "toolName": "write",

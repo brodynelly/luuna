@@ -118,3 +118,10 @@ The initial tool-free connectivity slice exposes authenticated run creation/hist
 Required foundation checks are schema validation, Rust formatting/tests/lint, frontend type/build checks, and relevant fixture integration tests. Native desktop compilation requires platform prerequisites. Real provider smoke tests require existing credentials/model access and are reported separately. Mac/Windows jobs provide compatibility evidence only when they have actually run.
 
 Luuna's original code and documentation are MIT licensed. Derived component distributions retain separate upstream notices. The original `VALIDATION-REPORT.md` validates a documentation delivery; keep product evidence separate. Package publication, signed installers, remote access, and production release still require explicit operational decisions and evidence.
+
+PR 11 preservation follow-up: historical artifact filenames remain readable;
+identity-changing rebinds withdraw manifest confirmation without deleting history;
+new plan revisions cannot bypass live-work guards. These guards are transactional
+runtime policy. The desktop exposes cumulative ticket usage and diff omissions.
+An interrupted restore resumes its durable intent before SQLite can open or create
+the main file, keeping original database files and sidecars together in backups.

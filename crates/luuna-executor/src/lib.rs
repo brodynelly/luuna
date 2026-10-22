@@ -1864,6 +1864,8 @@ fn missing_signature(line: &str) -> Option<Missing> {
 /// repository is the code's own import, which a repair can fix, so it stays
 /// an ordinary failure.
 fn missing_dependency(code: i32, scans: &[OutputScan], cwd: &Path, root: &Path) -> Option<String> {
+    let canonical_cwd = std::fs::canonicalize(cwd).unwrap_or_else(|_| cwd.to_path_buf());
+    let cwd = canonical_cwd.as_path();
     // `cwd` is canonical; compare it with the canonical root.
     let root = std::fs::canonicalize(root).unwrap_or_else(|_| root.to_path_buf());
     let src = root.join("src");
@@ -1879,7 +1881,7 @@ fn missing_dependency(code: i32, scans: &[OutputScan], cwd: &Path, root: &Path) 
             let local = [cwd, root.as_path(), src.as_path()]
                 .iter()
                 .any(|dir| dir.join(top).is_dir() || dir.join(format!("{top}.py")).is_file());
-            if local {
+            if local || !declared_python_dependency(top, cwd, &root) {
                 return None;
             }
             format!(
@@ -2165,6 +2167,57 @@ pub fn artifact_log_name(artifact_id: &str) -> String {
     }
 }
 
+/// Read old artifacts without renaming them. Only safe, ordinary files in the
+/// private artifact directory qualify; never follow a link to a legacy name.
+pub fn artifact_log_path(directory: &Path, artifact_id: &str) -> std::path::PathBuf {
+    let current = directory.join(artifact_log_name(artifact_id));
+    if current.exists() {
+        return current;
+    }
+    if !artifact_id.is_empty()
+        && artifact_id.len() <= 128
+        && !artifact_id.contains("..")
+        && artifact_id
+            .bytes()
+            .all(|b| b.is_ascii_alphanumeric() || b"-_.".contains(&b))
+    {
+        let legacy = directory.join(format!("{artifact_id}.log"));
+        if std::fs::symlink_metadata(&legacy).is_ok_and(|m| m.file_type().is_file()) {
+            return legacy;
+        }
+    }
+    current
+}
+
+// Absence alone cannot distinguish a deleted application module from an
+// uninstalled dependency. Only an explicit requirements declaration establishes
+// infrastructure here. Unknown import/distribution mappings stay ordinary failures.
+fn declared_python_dependency(module: &str, cwd: &Path, root: &Path) -> bool {
+    let cwd = std::fs::canonicalize(cwd).unwrap_or_else(|_| cwd.to_path_buf());
+    cwd.ancestors()
+        .take_while(|dir| dir.starts_with(root))
+        .any(|dir| {
+            ["requirements.txt", "requirements-dev.txt"]
+                .iter()
+                .any(|name| {
+                    let path = dir.join(name);
+                    if !std::fs::metadata(&path).is_ok_and(|m| m.len() <= 262_144) {
+                        return false;
+                    }
+                    std::fs::read_to_string(path).is_ok_and(|text| {
+                        text.lines().any(|line| {
+                            let name = line
+                                .trim()
+                                .split(|c: char| !(c.is_ascii_alphanumeric() || "-_.".contains(c)))
+                                .next()
+                                .unwrap_or("");
+                            !name.is_empty() && name.replace('-', "_").eq_ignore_ascii_case(module)
+                        })
+                    })
+                })
+        })
+}
+
 /// Artifact digests keyed by the artifact identities a result records.
 pub fn artifact_hashes(
     recipe_id: &str,
@@ -2434,6 +2487,14 @@ mod tests {
             "{reason}"
         );
         assert!(missing_dependency(127, &[scan("")], root, root).is_some());
+        assert!(missing_dependency(
+            1,
+            &[scan("ModuleNotFoundError: No module named 'greeting'\n")],
+            root,
+            root
+        )
+        .is_none());
+        std::fs::write(root.join("requirements.txt"), "dep==1.0\n").unwrap();
         let reason = missing_dependency(
             1,
             &[scan("ModuleNotFoundError: No module named 'dep'\n")],
@@ -2638,5 +2699,21 @@ mod tests {
         );
         assert_eq!(version_arguments("go"), ["version"]);
         assert_eq!(version_arguments("cargo"), ["--version"]);
+    }
+}
+
+#[cfg(test)]
+mod legacy_artifact_tests {
+    use super::*;
+    #[test]
+    fn legacy_logs_remain_readable_without_overwriting_or_escaping() {
+        let dir = tempfile::tempdir().unwrap();
+        let legacy = dir.path().join("Unit.stdout.log");
+        std::fs::write(&legacy, b"old evidence").unwrap();
+        assert_eq!(artifact_log_path(dir.path(), "Unit.stdout"), legacy);
+        let current = dir.path().join(artifact_log_name("Unit.stdout"));
+        std::fs::write(&current, b"new evidence").unwrap();
+        assert_eq!(artifact_log_path(dir.path(), "Unit.stdout"), current);
+        assert_eq!(std::fs::read(&legacy).unwrap(), b"old evidence");
     }
 }

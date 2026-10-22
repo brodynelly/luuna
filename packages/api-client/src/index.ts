@@ -227,7 +227,12 @@ export interface StartBaselineRequest {
 /** Legacy local records migrate to the authoritative Missions projection. */
 export type TicketSource = "luuna_sqlite_temporary" | "missions";
 
+export interface TicketUsage {
+  workflows: number; attempts: number; elapsed_seconds: number; cost_usd_micros: number; cost_unreported: boolean; repairs: number;
+}
+
 export interface Ticket {
+  usage?: TicketUsage;
   schema_version: string;
   id: string;
   project_id: string;
@@ -534,6 +539,9 @@ export interface CandidateDiff {
   base_commit: string;
   commit: string;
   diff: string;
+  truncated?: boolean;
+  files?: { path: string; status: string; shown: "text" | "summary" | "omitted" }[];
+  worktree_drift?: string | null;
 }
 
 export interface CandidateActionRequest {

@@ -1979,3 +1979,80 @@ fn drifted_candidates_never_revalidate_and_the_validate_decision_matches_the_cla
         .can_candidate_validate("workflow-1", &candidate.hash)
         .unwrap());
 }
+
+#[test]
+fn replanning_live_work_is_refused_even_with_a_different_plan_id() {
+    let (mut store, hash) = confirmed_store();
+    store.create_ticket(&ticket(), "key").unwrap();
+    let first = plan(&hash, 1, 1);
+    let run = store.open_plan_workflow("workflow-1", &first).unwrap();
+    let run = store
+        .approve_plan(&run.id, run.revision, &approval(&first))
+        .unwrap();
+    passed_baseline(&mut store, &first);
+    store
+        .begin_implementation(&run.id, run.revision, HOST)
+        .unwrap();
+    let mut next = plan(&hash, 2, 1);
+    assert!(store
+        .open_plan_workflow("workflow-2", &next)
+        .unwrap_err()
+        .to_string()
+        .contains("live workflow"));
+    next.id = "another-plan".into();
+    next.revision = 1;
+    next.hash = next.computed_hash().unwrap();
+    assert!(store
+        .open_plan_workflow("workflow-2", &next)
+        .unwrap_err()
+        .to_string()
+        .contains("live workflow"));
+    assert!(store.get_run("workflow-2").unwrap().is_none());
+}
+
+#[test]
+fn changed_remote_rebind_withdraws_confirmation_and_preserves_history() {
+    let (mut store, hash) = confirmed_store();
+    store.create_ticket(&ticket(), "key").unwrap();
+    let first = plan(&hash, 1, 1);
+    let run = store.open_plan_workflow("workflow-1", &first).unwrap();
+    let mut changed = observation();
+    changed.identity.remote = Some("https://example.invalid/other.git".into());
+    store.rebind_repository("project", "app", &changed).unwrap();
+    assert!(store.current_manifest("project").unwrap().is_none());
+    assert!(store.get_manifest("project", 1).unwrap().is_some());
+    assert!(store
+        .approve_plan(&run.id, run.revision, &approval(&first))
+        .is_err());
+    let mut revised = manifest(2);
+    revised.repositories[0].remote = changed.identity.remote.clone().unwrap();
+    store
+        .confirm_manifest(
+            "project",
+            1,
+            &revised,
+            &BTreeMap::from([("app".into(), changed)]),
+        )
+        .unwrap();
+    assert_eq!(
+        store.current_manifest("project").unwrap().unwrap().revision,
+        2
+    );
+}
+
+#[test]
+fn pending_candidate_can_be_superseded_but_running_checks_cannot() {
+    let (mut store, first, _) = candidate_fixture();
+    let next = super_plan(&first, 2);
+    store.open_plan_workflow("workflow-2", &next).unwrap();
+    let (mut store, first, candidate) = candidate_fixture();
+    let run = store.get_run("workflow-1").unwrap().unwrap();
+    store
+        .begin_candidate_validation(&run.id, run.revision, &candidate.hash)
+        .unwrap();
+    assert!(store
+        .open_plan_workflow("workflow-2", &super_plan(&first, 2))
+        .unwrap_err()
+        .to_string()
+        .contains("live workflow"));
+}

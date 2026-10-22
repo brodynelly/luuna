@@ -2,9 +2,17 @@ import { readFileSync } from "node:fs";
 import { expect, test, vi } from "vitest";
 import { ApiError } from "@luuna/api-client";
 import type { RunRecord } from "@luuna/api-client";
-import { authenticationLost, sessionStatus, watchRuns } from "./App";
+import { authenticationLost, historySelection, sessionStatus, watchRuns } from "./App";
 
 const immediately = () => Promise.resolve();
+
+test("paging and history eviction keep controls and event replay on a displayed run", () => {
+  const page = [{ id: "older-1" }, { id: "older-2" }] as RunRecord[];
+  expect(historySelection("newest", page)).toBe("older-1");
+  expect(historySelection("older-2", page)).toBe("older-2");
+  expect(historySelection("older-2", [])).toBeNull();
+  expect(historySelection(null, page)).toBe("older-1");
+});
 
 test("a rejected token stops background polling and asks for the current token", async () => {
   const listRuns = vi.fn().mockRejectedValue(new ApiError(401, "The service rejected this token. Reconnect using its current token."));

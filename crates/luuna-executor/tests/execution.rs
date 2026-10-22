@@ -628,6 +628,11 @@ async fn missing_tools_and_dependencies_are_blocked_infrastructure_not_failures(
         reason.contains("`vitest`") && reason.contains("dependency-preparation recipe"),
         "{reason}"
     );
+    std::fs::write(
+        dir.path().join("requirements.txt"),
+        "luuna_fixture_dependency_that_is_not_installed==1.0\n",
+    )
+    .unwrap();
     let module = run(vec![
         "-c".into(),
         "import luuna_fixture_dependency_that_is_not_installed".into(),
@@ -640,6 +645,10 @@ async fn missing_tools_and_dependencies_are_blocked_infrastructure_not_failures(
         .unwrap()
         .contains("Python module `luuna_fixture_dependency_that_is_not_installed`"));
     // A broken import of the repository's own package is the code's failure.
+    std::fs::write(dir.path().join("greeting.py"), "value=1").unwrap();
+    std::fs::remove_file(dir.path().join("greeting.py")).unwrap();
+    let deleted = run(vec!["-c".into(), "import greeting".into()]).await;
+    assert_eq!(deleted.status, CheckStatus::Failed, "{deleted:?}");
     let local = run(vec!["-c".into(), "import app.missing_module".into()]).await;
     assert_eq!(local.status, CheckStatus::Failed, "{local:?}");
     assert_eq!(local.reason.as_deref(), Some("exit code 1"));

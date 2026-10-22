@@ -26,7 +26,7 @@ implementation gate chose the latest baseline by wall-clock `started_at`.
 
 1. **Versioned, append-only migrations.** `schema_migrations` is the record of
    applied versions and `DATABASE_SCHEMA_VERSION` is the highest this build
-   knows (7). Opening applies only the versions the file lacks, in order. Each
+   knows (9). Opening applies only the versions the file lacks, in order. Each
    script commits its own version row and stays idempotent, because two
    processes may race to initialize a new file. A shipped script is never
    edited; a test pins their digests. A change that writes values an older
@@ -60,9 +60,13 @@ implementation gate chose the latest baseline by wall-clock `started_at`.
    version (1 to the supported version), and converts it to a single
    rollback-journal file. It then moves the current database and any `-wal`,
    `-shm` or `-journal` beside it to `<data>/backups/replaced-<timestamp>/`,
-   and installs the copy; if any of these steps fails, the moved files return
-   to their places and the copy is removed. A stale log therefore
-   never meets the restored file. The next start migrates an older snapshot,
+   and installs the copy. A synced restore intent is atomically published before
+   any original file moves. If the process stops or a move fails, the next open
+   or restore resumes that exact operation before SQLite may open or create the
+   main database. Already preserved files are not moved twice; unexpected files
+   or an unreadable intent fail closed. A stale log never meets the restored file.
+   This guarantees recovery from process interruption, not hardware power-loss
+   durability on filesystems that cannot sync directory entries. The next start migrates an older snapshot,
    with its own pre-migration snapshot. It also performs ordinary restart
    recovery, so work active when the snapshot was taken becomes `interrupted`,
    never successful.
@@ -148,3 +152,14 @@ implementation gate chose the latest baseline by wall-clock `started_at`.
 The process test and the file-permission assertions run on Unix only. Windows
 and macOS restore semantics (renaming files another process may hold) have not
 been exercised by these tests.
+
+## PR 11 follow-up: preservation and interrupted restore
+
+Backup publication uses an atomic no-replace hard link on the output filesystem;
+unsupported filesystems fail rather than falling back to overwrite. Restore keeps
+all original files and a durable intent until installation is verified, and
+startup completes an interrupted restore before database creation. Windows tests
+exercise every file-move boundary and the post-install/pre-finalization boundary.
+Orphan-process recovery reads only the state columns and individual event rows;
+damaged metadata or a malformed unrelated event cannot abort all startup recovery.
+No malformed ownership record authorizes terminating a process.

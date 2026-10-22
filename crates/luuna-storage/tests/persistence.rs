@@ -631,3 +631,33 @@ fn a_candidate_that_is_not_json_keeps_its_status_and_is_reported() {
         .iter()
         .any(|e| e.event_type == "candidate.interrupted"));
 }
+
+#[test]
+fn orphan_evidence_survives_damaged_metadata_and_an_unrelated_bad_event() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("state.sqlite3");
+    let mut store = Store::open(&path).unwrap();
+    store.create_run("orphan", "p", json!({})).unwrap();
+    store
+        .append_event(
+            "orphan",
+            "check.spawned",
+            json!({"recipe_id":"unit","process_group":{}}),
+        )
+        .unwrap();
+    let db = rusqlite::Connection::open(&path).unwrap();
+    db.execute(
+        "UPDATE runs SET metadata='invalid-json' WHERE id='orphan'",
+        [],
+    )
+    .unwrap();
+    db.execute(
+        "UPDATE events SET envelope='invalid-json' WHERE run_id='orphan' AND sequence=1",
+        [],
+    )
+    .unwrap();
+    let events = store.recovery_check_events().unwrap();
+    assert_eq!(events.len(), 1);
+    assert_eq!(events[0].0, "orphan");
+    assert_eq!(store.interrupt_active_runs().unwrap(), 1);
+}
