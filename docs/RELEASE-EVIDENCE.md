@@ -63,9 +63,9 @@ Checks on the branch's final revision, all local (hosted CI could not start):
 | `node scripts/tui-smoke.mjs --runtime <release>` | 51/51 |
 | `node scripts/m1-smoke.mjs --mode fixture` | 19/19 |
 | `node scripts/backup-recovery-drill.mjs --skip-migration-tests` | 30/30 |
-| `node scripts/mvp-ui-smoke.mjs` (Chromium) | 64/64 (Chromium, synthetic model, recovery and accessibility audit) |
+| `node scripts/mvp-ui-smoke.mjs` (Chromium) | 64/64 (Chromium, synthetic model, recovery and accessibility audit; rerun with the Home, Kanban and Help panels present) |
 | `node scripts/m6-ui-smoke.mjs` (real component CLIs) | 23/23 (real Missions, Atlas and Beacon CLIs, Chromium) |
-| `node scripts/m3-smoke.mjs --mode fixture` (strict) | refused on an uncommitted tree as designed; rerun on the final committed revision is recorded there |
+| `node scripts/m3-smoke.mjs --mode fixture` (strict) | 69/69 on committed revision `55e50ba` (an earlier run on `bb074bd` failed only its Luuna-checkout integrity check because a concurrent worktree was committing into the same `.git`; rerun on a quiet tree) |
 | Genuine provider steps, real GitHub, native Windows/Mac, installer build | not run: no provider credential, no GitHub token or repository for the publisher, no Windows or Mac host |
 
 Blocking the v1 label after this update: items 1–6 of the October 21 list
