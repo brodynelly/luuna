@@ -66,6 +66,31 @@ pub struct WorkbenchState {
     pub initialized: bool,
 }
 pub fn snapshot(app: &AppState, key: &str) -> Value {
+    if let Some(request) = app.snapshot_requests.get(key) {
+        let args = request.fields.get("args").and_then(Value::as_array);
+        let arg = |i: usize| {
+            args.and_then(|a| a.get(i))
+                .and_then(Value::as_str)
+                .unwrap_or("")
+        };
+        let context = |name: &str| app.context.get(name).map(String::as_str).unwrap_or("");
+        let matches = match key {
+            "project" | "memory" | "prompts" => arg(0) == context("project"),
+            "show-ticket" => arg(0) == context("ticket"),
+            "show-plan" => arg(0) == context("plan"),
+            "run" | "candidate" | "diff" | "tasks" | "worktrees" | "attempts" | "events"
+            | "publication" => arg(0) == context("run"),
+            "render-prompt" => {
+                arg(0) == context("project")
+                    && arg(1) == text(&app.workbench.selected, "name")
+                    && arg(2) == text(&app.workbench.selected, "version")
+            }
+            _ => true,
+        };
+        if !matches {
+            return Value::Null;
+        }
+    }
     app.snapshots.get(key).cloned().unwrap_or(Value::Null)
 }
 fn array(value: Value) -> Vec<Value> {
@@ -82,7 +107,10 @@ pub fn rows(app: &AppState) -> Vec<Value> {
         Screen::Missions => {
             array(snapshot(app, "board")["columns"][app.workbench.column]["cards"].clone())
         }
-        Screen::Memory => array(snapshot(app, "memory")),
+        Screen::Memory => array(snapshot(app, "memory"))
+            .into_iter()
+            .filter(|record| app.workbench.include_user || text(record, "scope") != "user")
+            .collect(),
         Screen::Prompts => array(snapshot(app, "prompts"))
             .into_iter()
             .filter(|r| {
@@ -96,7 +124,7 @@ pub fn rows(app: &AppState) -> Vec<Value> {
     }
 }
 pub fn selected(app: &AppState) -> Value {
-    match app.workbench.screen {
+    let record = match app.workbench.screen {
         Screen::Project => snapshot(app, "project"),
         Screen::Ticket => snapshot(app, "show-ticket"),
         Screen::MemoryDetail => app.workbench.selected.clone(),
@@ -107,6 +135,28 @@ pub fn selected(app: &AppState) -> Value {
             .get(app.workbench.cursor)
             .cloned()
             .unwrap_or(Value::Null),
+    };
+    let current = |name: &str| app.context.get(name).map(String::as_str).unwrap_or("");
+    let valid = match app.workbench.screen {
+        Screen::Ticket => text(&record, "id") == current("ticket") && !current("ticket").is_empty(),
+        Screen::Plan => text(&record, "id") == current("plan") && !current("plan").is_empty(),
+        Screen::RunDetail if app.workbench.evidence == 0 => {
+            text(&record, "id") == current("run") && !current("run").is_empty()
+        }
+        Screen::Project => {
+            text(record.get("project").unwrap_or(&record), "id") == current("project")
+                && !current("project").is_empty()
+        }
+        Screen::PromptDetail => {
+            text(&record, "name") == text(&app.workbench.selected, "name")
+                && text(&record, "version") == text(&app.workbench.selected, "version")
+        }
+        _ => true,
+    };
+    if valid {
+        record
+    } else {
+        Value::Null
     }
 }
 pub fn text(v: &Value, key: &str) -> String {
@@ -157,6 +207,7 @@ pub fn choose_project(app: &mut AppState, id: &str) {
         app.context.clear();
         app.context.insert("project".into(), id.into());
         app.snapshots.clear();
+        app.snapshot_requests.clear();
         app.workbench.memory_ids.clear();
         app.workbench.prompt_selection = None;
         app.workbench.include_user = false;
@@ -371,6 +422,7 @@ fn inspect(app: &mut AppState) {
                     .insert("repository".into(), text(&v, "repository_id"));
                 open(app, Screen::Project);
             } else {
+                app.context.remove("plan");
                 app.context.insert("ticket".into(), ticket);
                 let run = text(&v, "run_id");
                 if !run.is_empty() {
@@ -390,6 +442,7 @@ fn inspect(app: &mut AppState) {
             open(app, Screen::PromptDetail);
         }
         Screen::Runs => {
+            app.context.remove("ticket");
             app.context.insert("run".into(), text(&v, "id"));
             let plan = text(&v["metadata"], "plan_id");
             if !plan.is_empty() {
@@ -507,6 +560,28 @@ pub fn key(app: &mut AppState, key: KeyEvent) -> bool {
         return true;
     }
     let screen = app.workbench.screen;
+    if app.active_request.is_some() && key.code == KeyCode::Char('u') && screen == Screen::Memory {
+        app.status =
+            "Wait for the current memory read, or Esc to stop it before changing scope.".into();
+        return true;
+    }
+    if matches!(
+        screen,
+        Screen::Ticket
+            | Screen::MemoryDetail
+            | Screen::PromptDetail
+            | Screen::Plan
+            | Screen::RunDetail
+            | Screen::Project
+    ) && matches!(
+        key.code,
+        KeyCode::Char('e' | 'd' | 'p' | 's' | 'a' | 'i' | 'c' | 'f' | 'b' | 'x' | 'y' | 'o' | 'g')
+    ) && selected(app).is_null()
+    {
+        app.status =
+            "Current record is not loaded. Refresh successfully before using its actions.".into();
+        return true;
+    }
     let count = rows(app).len();
     match key.code {
         KeyCode::Tab | KeyCode::BackTab => app.workbench.nav = true,
@@ -568,7 +643,7 @@ pub fn key(app: &mut AppState, key: KeyEvent) -> bool {
         KeyCode::Char('u') if screen == Screen::Memory => {
             app.workbench.include_user = !app.workbench.include_user;
             if !app.workbench.include_user {
-                let ids: Vec<String> = rows(app)
+                let ids: Vec<String> = array(snapshot(app, "memory"))
                     .iter()
                     .filter(|v| text(v, "scope") == "user")
                     .map(identity)
@@ -752,10 +827,21 @@ pub fn received(app: &mut AppState, event: &BridgeEvent, command: Option<&str>, 
     if app.mode == Mode::Workbench {
         app.workbench.cursor = app.workbench.cursor.min(rows(app).len().saturating_sub(1));
     }
+    let v = event.fields.get("value").cloned().unwrap_or(Value::Null);
+    // A successful authoritative run read is the only link used by its Plan action.
+    if command == "run" && text(&v, "id") == app.context.get("run").cloned().unwrap_or_default() {
+        app.context.remove("plan");
+        app.context.remove("ticket");
+        for (name, key) in [("plan", "plan_id"), ("ticket", "ticket_id")] {
+            let id = text(&v["metadata"], key);
+            if !id.is_empty() {
+                app.context.insert(name.into(), id);
+            }
+        }
+    }
     if was_read {
         return;
     }
-    let v = event.fields.get("value").cloned().unwrap_or(Value::Null);
     match command {
         "register" | "import" => open(app, Screen::Projects),
         "confirm" | "enable-components" | "rebind" => open(app, Screen::Project),
