@@ -5,6 +5,7 @@ import { renderToStaticMarkup } from "react-dom/server";
 import { StatusBadge } from "./StatusBadge";
 import { TONES, baselineTone, candidateTone, checkTone, confidenceTone, connectionTone, leaseTone, manifestTone, runTone, severityTone, verdictTone } from "./tone";
 import type { Tone } from "./tone";
+import { declarations, motionProblems, rules, splitAtRules } from "./lint";
 
 // Stylesheets are read with node:fs: Vitest replaces `*.css?raw` imports with "", which would
 // let every check below pass without reading anything. Each file read must be non-empty.
@@ -14,21 +15,23 @@ const read = (file: string) => raw(file).replace(/\/\*[\s\S]*?\*\//g, "");
 const files = readdirSync(root, { recursive: true }).map((file) => file.replaceAll("\\", "/")).sort();
 const sheets = files.filter((file) => file.endsWith(".css"));
 const TOKENS = "design/tokens.css";
+const TOKEN_SHEETS = [TOKENS, "design/tokens-depth.css", "design/tokens-motion.css"];
 const MANIFEST = "styles.css";
 // Tailwind CSS v4 utilities (ADR 0030): last layer, its theme a reference to the tokens.
 const TAILWIND = "design/tailwind.css";
-const EXPECTED_SHEETS = [MANIFEST, TOKENS, "design/base.css", "design/components.css", "design/overlays.css", "screens/app.css", "screens/home.css", "screens/board.css", "screens/projects.css", "screens/workflows.css", "screens/candidate-review.css", "screens/project-components.css", "screens/help.css", "screens/settings.css", "design/tailwind.css"];
-const MEDIA = ["(max-width: 920px)", "(max-width: 680px)", "(prefers-reduced-motion: reduce)", "(prefers-color-scheme: light)", "(prefers-contrast: more)", "(forced-colors: active)"];
+// Every sheet is registered once (ADR 0032); later items replace a sheet's content, never this list.
+const EXPECTED_SHEETS = [MANIFEST, ...TOKEN_SHEETS, "design/fonts.css", "design/base.css", "design/components.css", "design/overlays.css", "design/controls.css", "design/motion.css", "screens/app.css", "screens/shell.css", "screens/home.css", "screens/board.css", "screens/projects.css", "screens/workflows.css", "screens/candidate-review.css", "screens/project-components.css", "screens/help.css", "screens/settings.css", "screens/sessions.css", "design/tailwind.css"];
+function layerOf(sheet: string): string {
+  if (TOKEN_SHEETS.includes(sheet) || sheet === "design/fonts.css") return "tokens";
+  if (sheet === "design/base.css") return "base";
+  if (sheet === TAILWIND) return "utilities";
+  if (sheet.startsWith("screens/")) return "screens";
+  return "components"; // components, overlays, controls, motion
+}
+const MEDIA = ["(max-width: 920px)", "(max-width: 680px)", "(prefers-reduced-motion: reduce)", "(prefers-color-scheme: light)", "(prefers-contrast: more)", "(forced-colors: active)", "(hover: hover)", "(pointer: fine)"];
 
 const STATES = [...new Set([runTone, candidateTone, checkTone, baselineTone, verdictTone, severityTone, leaseTone, connectionTone].flatMap((map) => Object.keys(map)))];
 const STATE_SELECTOR = new RegExp(`[.="'](?:${STATES.join("|")})(?![\\w-])`);
-
-function declarations(css: string): Array<[string, string]> {
-  return [...css.matchAll(/([-\w]+)\s*:\s*([^;{}]+)(?=[;}])/g)].map((match) => [match[1], match[2].trim()]);
-}
-function rules(css: string): Array<{ selector: string; body: string }> {
-  return [...css.matchAll(/([^{}]+)\{([^{}]*)\}/g)].map((match) => ({ selector: match[1].trim(), body: match[2] }));
-}
 
 describe("stylesheets", () => {
   test("the manifest imports every design-system sheet in layer order and each has rules", () => {
@@ -38,10 +41,10 @@ describe("stylesheets", () => {
     for (const sheet of sheets.filter((name) => name !== MANIFEST)) expect(rules(read(sheet)).length, `${sheet} has no rules`).toBeGreaterThan(0);
     const manifest = read(MANIFEST).trim().split(/;\s*/).filter(Boolean);
     expect(manifest[0]).toBe("@layer tokens, base, components, screens, utilities");
-    expect(manifest.slice(1)).toEqual(EXPECTED_SHEETS.slice(1).map((sheet) => `@import "./${sheet}" layer(${sheet === TOKENS ? "tokens" : sheet === TAILWIND ? "utilities" : sheet.startsWith("screens/") ? "screens" : sheet === "design/overlays.css" ? "components" : sheet.replace(/^design\/|\.css$/g, "")})`));
+    expect(manifest.slice(1)).toEqual(EXPECTED_SHEETS.slice(1).map((sheet) => `@import "./${sheet}" layer(${layerOf(sheet)})`));
   });
 
-  for (const file of EXPECTED_SHEETS.filter((name) => name !== TOKENS && name !== MANIFEST)) {
+  for (const file of EXPECTED_SHEETS.filter((name) => !TOKEN_SHEETS.includes(name) && name !== MANIFEST)) {
     test(`${file} uses tokens only`, () => {
       const css = read(file);
       const problems: string[] = [];
@@ -52,7 +55,6 @@ describe("stylesheets", () => {
         if (/(?:^|[\s,(])(?:white|black|red|green|blue|gray|grey)(?=$|[\s,)])/i.test(value)) problems.push(`named colour in ${where}`);
         if (/(?<![\w-])-?\d*\.?\d+(?:px|rem|em|pt|vw|vh|vmin|vmax|ch|ex|ms|s)\b/.test(value)) problems.push(`raw length or duration in ${where}`);
         if (property === "font-size" && !/^(?:var\(--text-[\w-]+\)|inherit)$/.test(value)) problems.push(`font-size must be var(--text-*): ${where}`);
-        if (property === "opacity") problems.push(`opacity hides contrast from the audit; use a disabled colour token: ${where}`);
         if (value.includes("!important")) problems.push(`!important in ${where}`);
         if (/--tone-(?:success|active|danger|attention|neutral|interrupted)-/.test(value) && file !== "design/components.css") problems.push(`raw tone token outside the tone indirection: ${where}`);
       }
@@ -69,6 +71,7 @@ describe("stylesheets", () => {
         for (const part of selector.replace(/\[data-tone(?:="[^"]*")?\]/g, "").split(",")) if (STATE_SELECTOR.test(part)) problems.push(`selector names a runtime state: ${part.trim()}`);
         if (file.startsWith("screens/") && selector.split(",").some((part) => (part.match(/>/g) ?? []).length > 3)) problems.push(`scope by a unique class with at most three child steps: ${selector}`);
       }
+      problems.push(...motionProblems(css));
       for (const prelude of css.matchAll(/@media\s+([^{]+)\{/g)) {
         for (const part of prelude[1].split(/\band\b|,/).map((item) => item.trim()).filter(Boolean)) if (!MEDIA.includes(part)) problems.push(`unapproved media query ${part}`);
       }
@@ -95,6 +98,40 @@ describe("stylesheets", () => {
   });
 });
 
+describe("token sheets", () => {
+  const MOTION = "design/tokens-motion.css";
+  const RM = "(prefers-reduced-motion: reduce)";
+  const media = (css: string) => splitAtRules(css, "media");
+  for (const file of TOKEN_SHEETS) {
+    test(`${file} holds only :root custom properties under approved media`, () => {
+      const css = read(file);
+      const { inside, preludes, outside } = media(css);
+      expect(rules(outside).filter(({ selector }) => selector !== ":root").map(({ selector }) => selector)).toEqual([]);
+      for (const [name] of [...declarations(outside), ...inside.flatMap(declarations)]) expect(name.startsWith("--") || (file === TOKENS && name === "color-scheme"), `${file}: ${name}`).toBe(true);
+      for (const prelude of preludes) for (const part of prelude.split(/\band\b|,/).map((item) => item.trim()).filter(Boolean)) expect(MEDIA, `${file}: ${part}`).toContain(part);
+    });
+  }
+  test("the depth sheet's light names are a subset of its dark names", () => {
+    const { inside, outside } = media(read("design/tokens-depth.css"));
+    const darkNames = new Set(declarations(outside).map(([name]) => name));
+    expect(darkNames.size).toBeGreaterThan(30);
+    expect(inside.flatMap(declarations).map(([name]) => name).filter((name) => !darkNames.has(name))).toEqual([]);
+  });
+  test("every duration token is zeroed under reduced motion, derived from the token sheets", () => {
+    const durations = new Set<string>();
+    const reduced = new Map<string, string>();
+    for (const file of TOKEN_SHEETS) {
+      const { inside, preludes, outside } = media(read(file));
+      for (const [name] of declarations(outside)) if (name.startsWith("--duration-")) durations.add(name);
+      preludes.forEach((prelude, index) => { if (prelude === RM) for (const [name, value] of declarations(inside[index])) reduced.set(name, value); });
+    }
+    expect(durations.size).toBeGreaterThanOrEqual(12);
+    expect([...durations].filter((name) => !/^0m?s$/.test(reduced.get(name) ?? ""))).toEqual([]);
+    for (const name of ["--lift-y", "--reveal-offset", "--toast-offset"]) expect(reduced.get(name), name).toBe("0px");
+    for (const name of ["--press-scale", "--enter-scale", "--pulse-scale"]) expect(reduced.get(name), name).toBe("1");
+  });
+});
+
 // ---- WCAG 2.x contrast of every semantic pair, in both colour schemes ----
 const tokens = read(TOKENS);
 function block(start: number): string {
@@ -114,8 +151,8 @@ function contrast(one: string, two: string): number {
   const [high, low] = [luminance(one), luminance(two)].sort((x, y) => y - x);
   return (high + 0.05) / (low + 0.05);
 }
-const SURFACES = ["color-bg", "color-sidebar", "color-surface", "color-surface-raised", "color-surface-sunken", "color-field", "color-control", "color-selected"];
-const TEXT = ["color-text", "color-text-muted", "color-text-subtle", "color-accent"];
+const SURFACES = ["color-bg", "color-sidebar", "color-surface", "color-surface-raised", "color-surface-sunken", "color-field", "color-control", "color-selected", "color-accent-tint", "color-control-hover"];
+const TEXT = ["color-text", "color-text-heading", "color-text-muted", "color-text-subtle", "color-accent"];
 const PAIRS: Array<[string, string, number]> = [
   ...TEXT.flatMap((fg) => SURFACES.map((bg): [string, string, number] => [fg, bg, 4.5])),
   ...TONES.flatMap((tone): Array<[string, string, number]> => [
@@ -129,9 +166,15 @@ const PAIRS: Array<[string, string, number]> = [
     [`tone-${tone}-mark`, "color-surface", 3],
     [`tone-${tone}-mark`, "color-surface-raised", 3],
   ]),
-  ["tone-active-mark", "color-surface-sunken", 3],
+  ...TONES.map((tone): [string, string, number] => [`tone-${tone}-mark`, "color-surface-sunken", 3]),
   ["color-on-accent", "color-accent", 4.5],
   ["color-on-accent", "color-accent-hover", 4.5],
+  ["color-on-accent", "color-accent-active", 4.5],
+  // ::selection paints --color-text-heading; body text may sit inside a selection too. Muted, subtle and accent text do not need to meet it.
+  ["color-text", "color-selection", 4.5],
+  ["color-text-heading", "color-selection", 4.5],
+  ...["color-selected", "color-accent-tint", "color-sidebar"].map((bg): [string, string, number] => ["color-focus", bg, 3]),
+  ...["color-sidebar", "color-control-hover"].map((bg): [string, string, number] => ["color-border-control", bg, 3]),
   ["color-text", "color-control-hover", 4.5],
   ["color-accent", "color-selected", 3],
   ...["color-bg", "color-surface", "color-surface-raised", "color-surface-sunken"].map((bg): [string, string, number] => ["color-focus", bg, 3]),
