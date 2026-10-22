@@ -3,14 +3,50 @@
 // follow the state. Nothing here decides what is allowed: it prints the runtime's decisions.
 import { baselineStep, nextStep } from "@luuna/api-client";
 
+/**
+ * The six outcome tones of the design system (ADR 0013, docs/DESIGN-SYSTEM.md), mapped from the
+ * runtime's states exactly as apps/desktop/src/design/tone.ts maps them, so a state reads the same
+ * in both clients. A tone is presentation only: the runtime's text is printed unchanged, in colour
+ * when the output is a terminal and NO_COLOR is unset, as plain text otherwise.
+ */
+export const TONES = ["success", "active", "danger", "attention", "neutral", "interrupted"];
+/** SGR parameters per tone: green is earned, cyan is the runtime working, rose is failed or blocked evidence, amber waits on the developer, dim is recorded without being evidence, plum is an interruption. */
+const SGR_BY_TONE = { success: "32", active: "36", danger: "31", attention: "33", neutral: "2", interrupted: "35" };
+export const runTone = { queued: "neutral", running: "active", completed: "neutral", failed: "danger", cancelled: "neutral", interrupted: "interrupted", discovered: "neutral", exploring: "active", testing_blocked: "danger", plan_ready: "attention", approved: "attention", implementing: "active", validating: "active", reviewing: "active", reviewed: "success", paused: "attention" };
+export const candidateTone = { pending: "neutral", validating: "active", reviewing: "active", reviewed: "success", failed: "danger", testing_blocked: "danger", paused: "attention", cancelled: "neutral", interrupted: "interrupted" };
+export const checkTone = { passed: "success", failed: "danger", blocked: "danger", cancelled: "neutral", interrupted: "interrupted" };
+export const baselineTone = { ...checkTone, running: "active" };
+export const verdictTone = { passed: "success", changes_required: "danger", blocked: "danger" };
+export const severityTone = { info: "neutral", warning: "attention", blocking: "danger" };
+export const leaseTone = { active: "active", released: "neutral", abandoned: "interrupted" };
+export const connectionTone = { connected: "success", reconnecting: "interrupted", offline: "neutral" };
+
+/** Whether colour may be used: only on a terminal, never with NO_COLOR set (https://no-color.org) or TERM=dumb. */
+export function colourEnabled({ env = {}, stdout } = {}) {
+  if (!stdout || !stdout.isTTY) return false;
+  if (env.NO_COLOR !== undefined && env.NO_COLOR !== "") return false;
+  if (env.TERM === "dumb") return false;
+  return true;
+}
+
+/** The text in its tone's colour when `colour` is on; the unchanged text otherwise (an unknown tone is plain). */
+export function paint(text, tone, colour) {
+  const code = tone && SGR_BY_TONE[tone];
+  if (!colour || !code) return String(text);
+  return `\u001b[${code}m${text}\u001b[0m`;
+}
+
+const painter = (options) => (text, tone) => paint(text, tone, Boolean(options?.colour));
+
 const short = (hash) => (typeof hash === "string" && hash.length > 20 ? `${hash.slice(0, 19)}…` : String(hash ?? ""));
 const when = (value) => (typeof value === "string" ? value.replace("T", " ").replace(/\.\d+Z$/, "Z") : "");
 const dollars = (micros) => `$${(Number(micros ?? 0) / 1_000_000).toFixed(4)}`;
 
-function runLine(run) {
+function runLine(run, options) {
+  const p = painter(options);
   const kind = run.metadata?.kind;
   const what = kind === "baseline" ? `baseline · ${run.metadata.repository_id ?? ""} · manifest r${run.metadata.manifest_revision ?? "?"}` : kind === "workflow" ? `workflow · plan ${run.metadata.plan_id ?? ""} r${run.metadata.plan_revision ?? "?"}` : typeof run.metadata?.prompt === "string" ? `session · ${run.metadata.prompt.slice(0, 60)}` : "session";
-  return `${run.id}  ${run.state}  ${what}  ${when(run.created_at)}`;
+  return `${run.id}  ${p(run.state, runTone[run.state])}  ${what}  ${when(run.created_at)}`;
 }
 
 function eventLine(event) {
@@ -19,8 +55,8 @@ function eventLine(event) {
   return `${String(event.sequence).padStart(5)}  ${when(event.timestamp)}  ${event.type}${state}${reason}`;
 }
 
-function checkLine(result) {
-  return `  ${result.recipe_id}: ${result.status}${result.exit_code === null || result.exit_code === undefined ? "" : ` (exit ${result.exit_code})`}${result.tests_detected !== undefined ? ` · ${result.tests_detected} test(s) detected` : ""}${result.reason ? ` · ${result.reason}` : ""}${result.artifact_refs?.length ? ` · logs: ${result.artifact_refs.join(", ")}` : ""}`;
+function checkLine(result, options) {
+  return `  ${result.recipe_id}: ${painter(options)(result.status, checkTone[result.status])}${result.exit_code === null || result.exit_code === undefined ? "" : ` (exit ${result.exit_code})`}${result.tests_detected !== undefined ? ` · ${result.tests_detected} test(s) detected` : ""}${result.reason ? ` · ${result.reason}` : ""}${result.artifact_refs?.length ? ` · logs: ${result.artifact_refs.join(", ")}` : ""}`;
 }
 
 /** What the runtime admits for this candidate now, from its own decisions. */
@@ -35,19 +71,20 @@ function decisions(view) {
   return out;
 }
 
-export function formatCandidate(view) {
+export function formatCandidate(view, options) {
+  const p = painter(options);
   if (!view.evidence) return ["No candidate is recorded for this run.", ...(view.active ? ["The runtime is running the scoped writer."] : [])].join("\n");
   const evidence = view.evidence;
   const actions = { validate: view.validate_allowed, revalidate: view.revalidate_allowed, repair: view.repair_allowed, reasons: view.decision_reasons ?? {} };
   const lines = [
-    `Candidate r${evidence.candidate.revision}  ${evidence.status}`,
+    `Candidate r${evidence.candidate.revision}  ${p(evidence.status, candidateTone[evidence.status])}`,
     `candidate hash: ${evidence.candidate.hash}`,
     `approved plan hash: ${evidence.candidate.plan_hash}`,
     ...Object.entries(evidence.candidate.repository_commits).map(([id, commit]) => `${id} commit: ${commit}`),
     `checks (${evidence.results.length} result(s)):`,
-    ...evidence.results.map(checkLine),
+    ...evidence.results.map((result) => checkLine(result, options)),
   ];
-  if (evidence.review) lines.push(`independent review: ${evidence.review.verdict} (${evidence.review.findings.length} finding(s); session ${evidence.review.reviewer_session})`, ...evidence.review.findings.map((finding) => `  ${finding.severity} ${finding.path}:${finding.line} ${finding.explanation}`));
+  if (evidence.review) lines.push(`independent review: ${p(evidence.review.verdict, verdictTone[evidence.review.verdict])} (${evidence.review.findings.length} finding(s); session ${evidence.review.reviewer_session})`, ...evidence.review.findings.map((finding) => `  ${p(finding.severity, severityTone[finding.severity])} ${finding.path}:${finding.line} ${finding.explanation}`));
   else lines.push("independent review: none recorded");
   if (evidence.reason) {
     lines.push(`reason: ${evidence.reason}`);
@@ -97,9 +134,9 @@ export function taskLines(task) {
   return lines;
 }
 
-function formatBaseline(baseline) {
+function formatBaseline(baseline, options) {
   const step = baseline.reason ? baselineStep(baseline.status, baseline.reason) : "";
-  return [`${baseline.run_id}  ${baseline.status}  manifest r${baseline.manifest_revision} · commit ${short(baseline.identity?.commit)} · ${baseline.results?.length ?? 0}/${baseline.required_checks?.length ?? 0} required results`, ...(baseline.reason ? [`  reason: ${baseline.reason}${step && !baseline.prerequisite ? `  next: ${step}` : ""}`] : []), ...(baseline.prerequisite ? offerLines(baseline.prerequisite) : []), ...(baseline.results ?? []).map(checkLine)].join("\n");
+  return [`${baseline.run_id}  ${painter(options)(baseline.status, baselineTone[baseline.status])}  manifest r${baseline.manifest_revision} · commit ${short(baseline.identity?.commit)} · ${baseline.results?.length ?? 0}/${baseline.required_checks?.length ?? 0} required results`, ...(baseline.reason ? [`  reason: ${baseline.reason}${step && !baseline.prerequisite ? `  next: ${step}` : ""}`] : []), ...(baseline.prerequisite ? offerLines(baseline.prerequisite) : []), ...(baseline.results ?? []).map((result) => checkLine(result, options))].join("\n");
 }
 
 function formatProject(view) {
@@ -116,14 +153,15 @@ function formatProject(view) {
 }
 
 /** The Home summary: projects, validation health per repository, blockers and the create-ticket shortcut. */
-export function formatHome(summary) {
+export function formatHome(summary, options) {
+  const p = painter(options);
   const lines = [];
   if (!summary.projects.length) return "No projects registered. Register a repository (register <name> <repository-id> <path>) to start.";
   for (const project of summary.projects) {
     lines.push(`${project.name} (${project.id})  ${project.revision > 0 ? `manifest r${project.revision}` : "unconfirmed"} · ${project.tickets} ticket(s) · ${project.active_workflows} active workflow(s)`);
     for (const repository of project.repositories) {
       const baseline = repository.baseline;
-      lines.push(`  ${repository.repository_id}: ${baseline ? `baseline ${baseline.status} · manifest r${baseline.manifest_revision} · commit ${short(baseline.commit)}${baseline.reason ? ` · ${baseline.reason}` : ""}` : "no baseline"}${repository.prerequisite ? " · testing setup needed" : ""}`);
+      lines.push(`  ${repository.repository_id}: ${baseline ? `baseline ${p(baseline.status, baselineTone[baseline.status])} · manifest r${baseline.manifest_revision} · commit ${short(baseline.commit)}${baseline.reason ? ` · ${baseline.reason}` : ""}` : "no baseline"}${repository.prerequisite ? " · testing setup needed" : ""}`);
     }
   }
   lines.push(summary.blockers.length ? `blockers (${summary.blockers.length}):` : "blockers: none");
@@ -133,11 +171,12 @@ export function formatHome(summary) {
 }
 
 /** The Kanban projection: every column with its read-only cards, then the note that nothing is dragged. */
-export function formatBoard(board) {
+export function formatBoard(board, options) {
+  const p = painter(options);
   const lines = [];
   for (const { column, cards } of board.columns) {
     lines.push(`${column.title} (${cards.length})  ${column.description}`);
-    for (const card of cards) lines.push(`  ${card.kind === "prerequisite" ? `[prerequisite] ${card.title} · ${card.project_id} · ${card.reason ?? ""}` : `[ticket] ${card.title} · ${card.project_id} · ${card.ticket_id} r${card.ticket_revision}${card.purpose ? ` · ${card.purpose.replace(/_/g, " ")}` : ""}${card.run_id ? ` · run ${card.run_id} ${card.state} (plan r${card.plan_revision})` : " · no plan yet"}`}`);
+    for (const card of cards) lines.push(`  ${card.kind === "prerequisite" ? `[prerequisite] ${card.title} · ${card.project_id} · ${card.reason ?? ""}` : `[ticket] ${card.title} · ${card.project_id} · ${card.ticket_id} r${card.ticket_revision}${card.purpose ? ` · ${card.purpose.replace(/_/g, " ")}` : ""}${card.run_id ? ` · run ${card.run_id} ${p(card.state, runTone[card.state])} (plan r${card.plan_revision})` : " · no plan yet"}`}`);
   }
   lines.push(board.note);
   return lines.join("\n");
@@ -174,19 +213,20 @@ export function formatDoctor(report) {
   return lines.join("\n");
 }
 
-/** Renders one command result for a terminal; `id` is the catalog id. */
-export function format(id, value) {
+/** Renders one command result for a terminal; `id` is the catalog id; `options.colour` paints the tones. */
+export function format(id, value, options = {}) {
   if (value === undefined || value === null) return "";
+  const p = painter(options);
   switch (id) {
     case "doctor": return formatDoctor(value);
-    case "health": return `runtime ${value.status} · Pi ${value.pi_version} · native execution ${value.native_execution ? "yes" : "no"} · build ${value.build_identity ?? "unknown"}`;
+    case "health": return `runtime ${p(value.status, value.status === "ok" ? "success" : "danger")} · Pi ${value.pi_version} · native execution ${value.native_execution ? "yes" : "no"} · build ${value.build_identity ?? "unknown"}`;
     case "projects.list": return value.length ? value.map((project) => `${project.id}  ${project.revision > 0 ? `manifest r${project.revision}` : "unconfirmed"}  ${project.name}`).join("\n") : "No projects registered.";
     case "projects.show": case "projects.register": case "projects.manifest.confirm": case "projects.repositories.rebind": return formatProject(value);
     case "projects.discover": return formatDiscovery(value);
     case "projects.events": case "runs.events": return value.length ? value.map(eventLine).join("\n") : "No events.";
-    case "baselines.start": case "runs.start": case "runs.show": case "runs.cancel": case "runs.implement": case "runs.validate": case "runs.repair": return runLine(value);
-    case "baselines.list": return value.length ? value.map(formatBaseline).join("\n") : "No baselines recorded.";
-    case "runs.list": return value.length ? value.map(runLine).join("\n") : "No runs.";
+    case "baselines.start": case "runs.start": case "runs.show": case "runs.cancel": case "runs.implement": case "runs.validate": case "runs.repair": return runLine(value, options);
+    case "baselines.list": return value.length ? value.map((baseline) => formatBaseline(baseline, options)).join("\n") : "No baselines recorded.";
+    case "runs.list": return value.length ? value.map((run) => runLine(run, options)).join("\n") : "No runs.";
     case "components.status": case "components.enable": return `components ${value.enabled ? "enabled" : "not enabled"}${value.workspace_path ? ` · ${value.workspace_path}` : ""}${value.reason ? ` · ${value.reason}` : ""}`;
     case "memory.list": return value.length ? value.map((record) => `${record.id}  ${record.scope}  ${record.hash}\n  ${record.content}\n  provenance: ${record.provenance}`).join("\n") : "No memory records in this view.";
     case "memory.create": return `${value.id}  ${value.scope}  ${value.hash}`;
@@ -200,18 +240,18 @@ export function format(id, value) {
     case "memory.retention.apply": return value.deleted.length ? `Deleted ${value.deleted.length} expired record(s) at ${value.applied_at}: ${value.deleted.map((record) => `${record.id} (${record.scope}, created ${record.created_at})`).join(", ")}` : `No memory record exceeded the retention policy at ${value.applied_at}.`;
     case "tickets.list": return value.length ? value.map(formatTicket).join("\n") : "No tickets.";
     case "tickets.source": return `source ${value.source ?? "unknown"} · id ${value.source_id ?? "none"} · revision ${value.source_revision ?? "none"} · reconciliation ${value.reconciliation_required ? "REQUIRED" : "not required"}${value.workspace ? ` · ${value.workspace}` : ""}`;
-    case "plans.create": return `${formatPlanRecord(value.plan)}\nworkflow run: ${runLine(value.run)}`;
+    case "plans.create": return `${formatPlanRecord(value.plan)}\nworkflow run: ${runLine(value.run, options)}`;
     case "plans.list": return value.length ? value.map((plan) => `${plan.id}  r${plan.revision}  ${plan.hash}`).join("\n") : "No plan revisions.";
     case "plans.show": return formatPlanRecord(value);
-    case "plans.approve": return `Approved plan ${value.approval.plan_id} r${value.approval.plan_revision} by ${value.approval.approved_by} (hash ${value.approval.plan_hash})\nworkflow run: ${runLine(value.run)}`;
+    case "plans.approve": return `Approved plan ${value.approval.plan_id} r${value.approval.plan_revision} by ${value.approval.approved_by} (hash ${value.approval.plan_hash})\nworkflow run: ${runLine(value.run, options)}`;
     case "runs.stream": return `Followed ${value.run_id}: ${value.events_followed} event(s), last sequence ${value.last_sequence}, run ${value.state}.`;
-    case "runs.candidate": return formatCandidate(value);
+    case "runs.candidate": return formatCandidate(value, options);
     case "runs.diff": return [`Diff for ${value.candidate_hash}  ${value.repository_id} · base ${value.base_commit} · candidate commit ${value.commit}`, value.diff || (value.truncated ? "Diff omitted because it exceeds the display limit." : "No changes."), ...(value.truncated ? ["This diff is truncated. It does not show all candidate changes."] : []), ...(value.worktree_drift ? [value.worktree_drift] : []), ...(value.files ? value.files.map((file) => `  ${file.path} · ${file.status} · ${file.shown}`) : [])].join("\n");
-    case "runs.worktrees": return value.length ? value.map((lease) => `${lease.id}  ${lease.state}  ${lease.repository_id}  ${lease.path}${lease.candidate_commit ? ` · candidate ${lease.candidate_commit}` : ""}${lease.reason ? ` · ${lease.reason}` : ""}`).join("\n") : "No worktree leases.";
+    case "runs.worktrees": return value.length ? value.map((lease) => `${lease.id}  ${p(lease.state, leaseTone[lease.state])}  ${lease.repository_id}  ${lease.path}${lease.candidate_commit ? ` · candidate ${lease.candidate_commit}` : ""}${lease.reason ? ` · ${lease.reason}` : ""}`).join("\n") : "No worktree leases.";
     case "runs.attempts": return value.length ? value.map((attempt) => `attempt ${attempt.number}  ${attempt.state}  task ${attempt.task_id}  ${when(attempt.started_at)}${attempt.finished_at ? ` → ${when(attempt.finished_at)}` : ""}`).join("\n") : "No writer attempts recorded.";
     case "runs.tasks": return value.length ? value.flatMap(taskLines).join("\n") : "No task records: a single-task implementer plan runs the M2c writer path and records no task graph.";
-    case "projection.home": return formatHome(value);
-    case "projection.board": return formatBoard(value);
+    case "projection.home": return formatHome(value, options);
+    case "projection.board": return formatBoard(value, options);
     case "artifacts.read": return value || "Empty log.";
     case "shutdown": return `Runtime ${value.status}. Runs, candidates and worktrees stay durable; start it again with the same data directory and token.`;
     default: return typeof value === "string" ? value : JSON.stringify(value, null, 2);
