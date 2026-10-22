@@ -30,3 +30,12 @@ test("the board projects every ticket into the column of its latest plan revisio
   expect(html).not.toMatch(/draggable/);
   expect(html).toContain("Nothing here.");
 });
+
+test("Board cards stay unchanged buttons inside a reveal list that keeps its heading name", async () => {
+  const { client } = fixtureClient();
+  const projection = await readBoard(client, new AbortController().signal);
+  const html = renderToStaticMarkup(<BoardView projection={projection} busy={false} onOpen={() => {}} />);
+  expect(html).toMatch(/<ul class="reveal board-cards" aria-labelledby="board-[a-z_]+">/);
+  expect(html).toContain('class="run-card');
+  expect(html).not.toMatch(/draggable/);
+});

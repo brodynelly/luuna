@@ -51,3 +51,10 @@
 .workflows .ticket-list { display: grid; grid-template-columns: repeat(auto-fill, minmax(min(100%, var(--field-min)), 1fr)); gap: var(--space-1-5); margin: 0; padding: 0; list-style: none; }
 .workflows .ticket-list > .ticket-row { display: grid; min-width: 0; }
 .workflows .ticket-list button.run-card:not([aria-pressed="true"]) { border-color: var(--color-border); background: var(--color-surface); }
+
+/* Depth: ticket rows and cards. The plan review is a distinct, static block (no motion). */
+.workflows .ticket-list button.run-card { min-height: var(--row-height); border-radius: var(--radius-button); box-shadow: var(--shadow-button); }
+.workflows .ticket-list button.run-card:hover:not(:disabled), .workflows .ticket-list button.run-card:focus-visible { box-shadow: var(--shadow-button-hover); }
+.ticket-card { border-radius: var(--radius-card); box-shadow: var(--shadow-card); }
+.plan-review { padding: var(--space-4); border: var(--border-width) solid var(--color-border-strong); border-radius: var(--radius-card); background: var(--color-surface-raised); box-shadow: var(--shadow-card); }
+.plan-review > .plan-meta { overflow-wrap: anywhere; }

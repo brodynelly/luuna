@@ -6,7 +6,7 @@ import { boundedMap } from "./Workflows";
 import { describeFailure } from "./failures";
 import { runTone } from "./design/tone";
 import { viewInfo } from "./content/views";
-import { Button, ContextMenuArea, copyText, EmptyState, ErrorBanner, HeadingRow, Hint, Id, Item, List, Loading, Meta, OpenCard, Page, StatusBadge, useNotify, VisuallyHidden } from "./ui";
+import { Button, ContextMenuArea, copyText, EmptyState, ErrorBanner, HeadingRow, Hint, Id, Item, List, Loading, Meta, OpenCard, Page, RevealList, StatusBadge, useNotify, VisuallyHidden } from "./ui";
 
 /** One read of what the board projects: every project view (with its offers), its tickets, and the run listing. */
 export async function readBoard(client: Pick<LuunaClient, "listProjects" | "project" | "listTickets" | "listRuns">, signal: AbortSignal): Promise<BoardProjection> {
@@ -48,9 +48,9 @@ export function BoardView({ projection, busy, onOpen }: { projection: BoardProje
     <List className="board-columns" label="Kanban columns">{projection.columns.map(({ column, cards }) => <Item key={column.id} className="board-column">
       <HeadingRow level={3} id={`board-${column.id}`} title={<>{column.title} <span className="board-count" aria-label={`${cards.length} card(s)`}>{cards.length}</span></>} />
       <Hint className="board-column-scope">{column.description}</Hint>
-      {cards.length > 0 ? <List className="board-cards" labelledBy={`board-${column.id}`}>{cards.map((card) => <Item key={card.kind === "prerequisite" ? `offer-${card.project_id}-${card.repository_id}` : `ticket-${card.ticket_id}`}>
+      {cards.length > 0 ? <RevealList className="board-cards" labelledBy={`board-${column.id}`}>{cards.map((card) => <Item key={card.kind === "prerequisite" ? `offer-${card.project_id}-${card.repository_id}` : `ticket-${card.ticket_id}`}>
         <BoardCardView card={card} busy={busy} onOpen={onOpen} />
-      </Item>)}</List> : <EmptyState>Nothing here.</EmptyState>}
+      </Item>)}</RevealList> : <EmptyState>Nothing here.</EmptyState>}
     </Item>)}</List>
     <Meta block className="board-note">{projection.note}</Meta>
   </>;
@@ -89,6 +89,6 @@ export function Board({ client, connectionEpoch = 0, refreshEpoch = 0, onOpen }:
     {error && <ErrorBanner message={error} onDismiss={() => setError("")} />}
     {client ? projection ? <BoardView projection={projection} busy={busy} onOpen={onOpen} />
       : !error && <Loading label="Reading the runtime's tickets and workflows…" rows={4} />
-      : <EmptyState boxed>Connect to the runtime to see the board.</EmptyState>}
+      : <EmptyState boxed wash>Connect to the runtime to see the board.</EmptyState>}
   </Page>;
 }

@@ -57,3 +57,9 @@
 .candidate-review > .setup-handoff > .handoff-checks { display: grid; gap: var(--space-0-5); margin: 0; padding-left: var(--space-4); overflow-wrap: anywhere; }
 .candidate-review > .editor-handoff { display: grid; grid-template-columns: minmax(0, 1fr); gap: var(--space-1-5); min-width: 0; }
 .candidate-review > .editor-handoff > .worktree-paths { display: grid; gap: var(--space-1); margin: 0; padding: 0; list-style: none; font-size: var(--text-xs); overflow-wrap: anywhere; }
+
+/* Depth, static: evidence rows are table-like with hairlines and tabular numbers. Nothing here moves. */
+.candidate-review .check-results > .check-record, .candidate-review .review-findings > .finding-record { min-height: var(--row-height); font-variant-numeric: tabular-nums; }
+.candidate-review > .candidate-verdict { border-radius: var(--radius-card); background: var(--color-surface-raised); box-shadow: var(--shadow-card); padding-right: var(--space-3); }
+.candidate-review > .candidate-verdict > .verdict-line { display: flex; align-items: center; gap: var(--space-2); }
+.candidate-review > .editor-handoff, .candidate-review > .setup-handoff { padding: var(--space-3); border: var(--border-width) solid var(--color-border); border-radius: var(--radius-card); background: var(--color-surface-raised); box-shadow: var(--shadow-card); }

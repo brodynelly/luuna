@@ -1,6 +1,6 @@
 import type React from "react";
-import { viewInfo } from "./content/views";
-import { Box, ExternalLink, Id, Item, List, Page, Section, StatusBadge, Text } from "./ui";
+import { Box, ExternalLink, Id, Item, Kbd, List, Page, Section, StatusBadge, Text } from "./ui";
+import { VIEWS, viewInfo, viewShortcut } from "./content/views";
 import { TONES, candidateTone, runTone } from "./design/tone";
 import type { Tone } from "./design/tone";
 
@@ -60,6 +60,13 @@ export const DOCUMENTS: readonly { path: string; title: string }[] = [
   { path: "packages/tui/README.md", title: "The terminal client: the same actions and projections" },
 ];
 
+/** The keyboard shortcuts: one per view (derived from the view list, Settings is Ctrl+,) and the global ones. */
+export const SHORTCUTS: readonly { keys: string; action: string }[] = [
+  ...VIEWS.map((view) => ({ keys: viewShortcut(view.id), action: view.label })),
+  { keys: "Ctrl+K", action: "Go to a view, project or ticket" },
+  { keys: "Ctrl+\\", action: "Collapse sidebar" },
+];
+
 /** One Help topic: a titled section of the page. */
 function Topic({ id, title, children }: { id: string; title: string; children: React.ReactNode }) {
   return <Section id={id} title={title} variant="plain" className="help-section">{children}</Section>;
@@ -81,6 +88,9 @@ export function Help() {
       </Topic>
       <Topic id="help-evidence" title="Where evidence lives">
         <List>{EVIDENCE_LOCATIONS.map((location) => <Item key={location.where}><strong>{location.where}.</strong> {location.what}</Item>)}</List>
+      </Topic>
+      <Topic id="help-shortcuts" title="Keyboard shortcuts">
+        <List className="help-plain help-shortcuts">{SHORTCUTS.map((shortcut) => <Item key={shortcut.keys}><Kbd>{shortcut.keys}</Kbd> <span>{shortcut.action}</span></Item>)}</List>
       </Topic>
       <Topic id="help-documents" title="Documents">
         <List className="help-plain">{DOCUMENTS.map((document) => <Item key={document.path}><ExternalLink href={`${REPOSITORY_URL}/${document.path}`}>{document.title}</ExternalLink> <Id>{document.path}</Id></Item>)}</List>
