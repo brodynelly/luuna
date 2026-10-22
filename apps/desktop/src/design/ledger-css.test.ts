@@ -64,7 +64,7 @@ describe("Ledger component sheets", () => {
     for (const sheet of SHEETS) for (const { selector, body } of rulesOf(sheet).filter(({ selector }) => selector.includes(":disabled"))) expect(body, `${sheet}: ${selector}`).not.toMatch(/opacity/);
   });
 
-  test("no Stripe-era decoration remains", () => {
+  test("no earlier decorative styling remains", () => {
     expect(everything).not.toMatch(/gradient|aurora|glow|\.reveal|count-up|\.tab-indicator|--ease-spring/i);
   });
 });
