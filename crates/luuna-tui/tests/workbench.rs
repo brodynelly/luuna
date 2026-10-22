@@ -47,6 +47,7 @@ fn app() -> AppState {
     app.snapshots.insert("run".into(), run);
     app.snapshots.insert("candidate".into(),json!({"active":false,"evidence":{"candidate":{"hash":hash(),"revision":1,"repository_commits":{"api":"abc"}},"status":"reviewed","results":[{"recipe_id":"tests","status":"passed","exit_code":0}],"review":{"verdict":"passed","findings":[]}},"validate_allowed":false,"decision_reasons":{"validate":"already reviewed"}}));
     app.snapshots.insert("show-plan".into(),json!({"id":"plan-1","ticket_id":"ticket-1","revision":1,"hash":hash(),"tasks":[{"id":"api","repository_id":"api","role":"implementer","paths":["src"],"operations":["read","write"],"depends_on":[]}],"budgets":{"max_attempts":2,"timeout_seconds":90},"component_context":{"memory":[],"prompt":null}}));
+    app.workbench.selected = app.snapshots["render-prompt"].clone();
     app
 }
 fn draw(app: &mut AppState, w: u16, h: u16, color: bool) -> String {
@@ -99,7 +100,11 @@ fn every_view_has_content_at_every_supported_size_in_color_and_plain() {
             for color in [true, false] {
                 let mut a = app();
                 a.workbench.screen = screen;
-                a.workbench.selected = a.snapshots["memory"][0].clone();
+                a.workbench.selected = if screen == Screen::PromptDetail {
+                    a.snapshots["render-prompt"].clone()
+                } else {
+                    a.snapshots["memory"][0].clone()
+                };
                 let painted = draw(&mut a, w, h, color);
                 assert_eq!(painted.lines().count(), usize::from(h));
                 assert!(painted.contains("LUUNA"), "{screen:?} {w}x{h}");
@@ -408,4 +413,169 @@ fn reconnect_refreshes_the_visual_view_without_discarding_unsent_forms() {
             .value,
         "unsent draft"
     );
+}
+
+fn fail_read(a: &mut AppState, aborted: bool) {
+    if aborted {
+        key(a, KeyCode::Esc);
+    }
+    let id = a.active_request.clone().unwrap();
+    a.apply(serde_json::from_value(json!({"v":1,"id":id,"event":"error","message":"Record read failed","outcome":if aborted{"aborted"}else{"refused"}})).unwrap());
+}
+
+#[test]
+fn failed_or_aborted_ticket_switch_cannot_prefill_previous_ticket_into_new_id() {
+    for aborted in [false, true] {
+        let mut a = app();
+        a.workbench.screen = Screen::Missions;
+        a.snapshots.get_mut("board").unwrap()["columns"][0]["cards"][0]["ticket_id"] =
+            json!("ticket-B");
+        a.snapshots.get_mut("board").unwrap()["columns"][0]["cards"][0]["run_id"] = json!("run-B");
+        key(&mut a, KeyCode::Enter);
+        assert_eq!(a.context["ticket"], "ticket-B");
+        assert!(!a.context.contains_key("plan"));
+        fail_read(&mut a, aborted);
+        assert!(views::selected(&a).is_null());
+        let queued = a.queue.len();
+        key(&mut a, KeyCode::Char('e'));
+        assert!(a.form.is_none());
+        assert_eq!(a.queue.len(), queued);
+        assert!(a.status.contains("not loaded"));
+    }
+}
+
+#[test]
+fn generic_record_switches_clear_cached_bodies_and_dependent_identity() {
+    for (screen, command, argument, new_id, action) in [
+        (Screen::RunDetail, "run", "run", "run-B", 'p'),
+        (Screen::Plan, "show-plan", "plan", "plan-B", 'a'),
+        (
+            Screen::PromptDetail,
+            "render-prompt",
+            "name",
+            "prompt-B",
+            'e',
+        ),
+    ] {
+        let mut a = app();
+        a.workbench.screen = screen;
+        a.begin(command);
+        a.form
+            .as_mut()
+            .unwrap()
+            .fields
+            .iter_mut()
+            .find(|f| f.name == argument)
+            .unwrap()
+            .value = new_id.into();
+        if command == "render-prompt" {
+            a.form
+                .as_mut()
+                .unwrap()
+                .fields
+                .iter_mut()
+                .find(|f| f.name == "version")
+                .unwrap()
+                .value = "2".into();
+        }
+        a.submit();
+        assert!(a.active_request.is_some(), "{command}");
+        fail_read(&mut a, true);
+        a.mode = Mode::Workbench;
+        a.form = None;
+        assert!(
+            views::selected(&a).is_null(),
+            "{command} retained a foreign record"
+        );
+        key(&mut a, KeyCode::Char(action));
+        assert!(a.form.is_none());
+        if command == "run" {
+            assert!(!a.context.contains_key("plan"));
+        }
+        if command == "show-plan" {
+            assert!(!a.context.contains_key("run"));
+        }
+    }
+}
+
+#[test]
+fn successful_prompt_for_other_query_cannot_be_edited_under_previous_selection() {
+    let mut a = app();
+    a.workbench.screen = Screen::PromptDetail;
+    a.invoke(
+        "render-prompt",
+        vec!["demo".into(), "other".into(), "2".into()],
+        Default::default(),
+        true,
+    );
+    event(
+        &mut a,
+        json!({"name":"other","version":2,"hash":hash(),"body":"Foreign body"}),
+    );
+    a.mode = Mode::Workbench;
+    assert!(views::selected(&a).is_null());
+    key(&mut a, KeyCode::Char('e'));
+    assert!(a.form.is_none());
+}
+
+#[test]
+fn fresh_board_ticket_run_plan_navigation_uses_each_runs_authoritative_plan() {
+    let mut a = app();
+    for suffix in ["B", "C"] {
+        a.active_request = None;
+        a.workbench.screen = Screen::Missions;
+        a.snapshots.get_mut("board").unwrap()["columns"][0]["cards"][0]["ticket_id"] =
+            json!(format!("ticket-{suffix}"));
+        a.snapshots.get_mut("board").unwrap()["columns"][0]["cards"][0]["run_id"] =
+            json!(format!("run-{suffix}"));
+        key(&mut a, KeyCode::Enter);
+        assert!(!a.context.contains_key("plan"));
+        event(
+            &mut a,
+            json!({"id":format!("ticket-{suffix}"),"revision":3,"title":"Current ticket"}),
+        );
+        key(&mut a, KeyCode::Char('g'));
+        assert_eq!(
+            a.queue.back().unwrap().fields["args"],
+            json!([format!("run-{suffix}")])
+        );
+        event(
+            &mut a,
+            json!({"id":format!("run-{suffix}"),"metadata":{"plan_id":format!("plan-{suffix}"),"ticket_id":format!("ticket-{suffix}")}}),
+        );
+        key(&mut a, KeyCode::Char('p'));
+        assert_eq!(
+            a.queue.back().unwrap().fields["args"],
+            json!([format!("plan-{suffix}")])
+        );
+        event(&mut a, json!({"id":format!("plan-{suffix}"),"hash":hash()}));
+    }
+}
+
+#[test]
+fn delayed_user_memory_response_cannot_appear_under_excluded_scope() {
+    let mut a = app();
+    a.workbench.screen = Screen::Memory;
+    key(&mut a, KeyCode::Char('u'));
+    let first = a.active_request.clone();
+    assert!(a.workbench.include_user);
+    key(&mut a, KeyCode::Char('u'));
+    assert!(a.workbench.include_user);
+    assert_eq!(a.active_request, first);
+    event(
+        &mut a,
+        json!([{"id":"private","scope":"user","content":"Explicit only","hash":hash()}]),
+    );
+    assert_eq!(views::rows(&a).len(), 1);
+    a.workbench.memory_ids.insert("private".into());
+    key(&mut a, KeyCode::Char('u'));
+    assert!(!a.workbench.include_user);
+    assert!(views::rows(&a).is_empty());
+    assert!(a.workbench.memory_ids.is_empty());
+    // Defense in depth: even an unexpected included row in an excluded response is never selectable.
+    event(
+        &mut a,
+        json!([{"id":"private","scope":"user","content":"Unexpected","hash":hash()}]),
+    );
+    assert!(views::rows(&a).is_empty());
 }

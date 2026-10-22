@@ -134,6 +134,7 @@ pub struct AppState {
     pub prompt: Option<PendingPrompt>,
     pub context: BTreeMap<String, String>,
     pub snapshots: BTreeMap<String, Value>,
+    pub snapshot_requests: BTreeMap<String, ClientCommand>,
     pub pending: BTreeMap<String, ClientCommand>,
     pub output: String,
     pub output_omitted: bool,
@@ -162,6 +163,7 @@ impl Default for AppState {
             prompt: None,
             context: BTreeMap::new(),
             snapshots: BTreeMap::new(),
+            snapshot_requests: BTreeMap::new(),
             pending: BTreeMap::new(),
             output: String::new(),
             output_omitted: false,
@@ -251,6 +253,9 @@ impl AppState {
             return;
         }
         self.active_request = Some(id.clone());
+        // A failed/replaced read must never leave another record's body actionable.
+        self.snapshots.remove(name);
+        self.snapshot_requests.remove(name);
         self.pending.insert(id, request.clone());
         if read_only {
             self.last_read = Some(request.clone());
@@ -288,6 +293,23 @@ impl AppState {
                     if name == "project" {
                         crate::views::choose_project(self, &value);
                     } else {
+                        if self.context.get(&name) != Some(&value) {
+                            match name.as_str() {
+                                "ticket" => {
+                                    self.context.remove("run");
+                                    self.context.remove("plan");
+                                }
+                                "run" => {
+                                    self.context.remove("ticket");
+                                    self.context.remove("plan");
+                                }
+                                "plan" => {
+                                    self.context.remove("ticket");
+                                    self.context.remove("run");
+                                }
+                                _ => {}
+                            }
+                        }
                         self.context.insert(name, value);
                     }
                 }
@@ -442,8 +464,11 @@ impl AppState {
                         .unwrap_or("result")
                         .to_string();
                     if self.snapshots.len() >= 16 && !self.snapshots.contains_key(&key) {
-                        self.snapshots.pop_first();
+                        if let Some((removed, _)) = self.snapshots.pop_first() {
+                            self.snapshot_requests.remove(&removed);
+                        }
                     }
+                    self.snapshot_requests.insert(key.clone(), request.clone());
                     self.snapshots.insert(
                         key,
                         event.fields.get("value").cloned().unwrap_or(Value::Null),
