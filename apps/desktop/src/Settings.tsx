@@ -87,7 +87,7 @@ export function Settings({ client, connectionEpoch = 0, refreshEpoch = 0, childr
     <Section id="environment-heading" title="Environment" className="settings-environment" accessory={refresh}>
       {error && <ErrorBanner message={error} onDismiss={() => setError("")} />}
       {client ? report ? <DoctorReportView report={report} tick={tick} /> : !error && <Loading label="Reading the runtime's doctor report…" rows={6} />
-        : <EmptyState boxed wash>Connect to the runtime to see its environment and which credentials are configured.</EmptyState>}
+        : <EmptyState boxed>Connect to the runtime to see its environment and which credentials are configured.</EmptyState>}
     </Section>
   </Page>;
 }

@@ -1,11 +1,8 @@
-import { useId, useLayoutEffect, useRef, type KeyboardEvent, type ReactNode } from "react";
-import { indicatorGeometry } from "./motion-math";
+import { useId, useRef, type KeyboardEvent, type ReactNode } from "react";
 
 /**
  * Tabs (WAI-ARIA tabs pattern, automatic activation): the selection is the caller's state, the
- * component shows it. One indicator slides under the selected tab with a transform only; before
- * the first measurement (server rendering, or no layout yet) the selected tab draws its own
- * underline instead, so nothing slides in from zero.
+ * component shows it. The selected tab draws its own static underline (Ledger Tabs); nothing slides.
  */
 export interface TabItem {
   id: string;
@@ -32,30 +29,6 @@ export function Tabs({ label, tabs, selected, onSelect, idPrefix }: TabsProps) {
   const prefix = idPrefix ?? generated;
   const list = useRef<HTMLDivElement>(null);
 
-  useLayoutEffect(() => {
-    const element = list.current;
-    if (!element) return;
-    const indicator = element.querySelector<HTMLElement>(".tab-indicator");
-    const place = () => {
-      const tab = [...element.querySelectorAll<HTMLElement>("[role=tab]")].find((item) => item.getAttribute("aria-selected") === "true");
-      if (!tab || !indicator) return;
-      const geometry = indicatorGeometry(element.getBoundingClientRect(), tab.getBoundingClientRect());
-      indicator.style.setProperty("--tab-x", `${geometry.x}px`);
-      indicator.style.setProperty("--tab-y", `${geometry.y}px`);
-      indicator.style.setProperty("--tab-scale", String(geometry.scale));
-      // The first position is flushed while transitions are still off, then measured is set: the indicator never slides in from zero.
-      if (!element.hasAttribute("data-measured")) {
-        void indicator.getBoundingClientRect();
-        element.setAttribute("data-measured", "");
-      }
-    };
-    place();
-    if (typeof ResizeObserver === "undefined") return;
-    const observer = new ResizeObserver(place);
-    observer.observe(element);
-    return () => observer.disconnect();
-  }, [selected, tabs]);
-
   function key(event: KeyboardEvent<HTMLDivElement>) {
     const enabled = tabs.filter((tab) => !tab.disabled);
     if (!enabled.length) return;
@@ -76,7 +49,6 @@ export function Tabs({ label, tabs, selected, onSelect, idPrefix }: TabsProps) {
       const on = tab.id === selected;
       return <button key={tab.id} type="button" role="tab" id={tabId(prefix, tab.id)} aria-selected={on} aria-controls={panelId(prefix, tab.id)} tabIndex={on ? 0 : -1} disabled={tab.disabled} data-capability={tab["data-capability"]} onClick={() => onSelect(tab.id)}>{tab.label}</button>;
     })}
-    <span className="tab-indicator" aria-hidden="true" />
   </div>;
 }
 

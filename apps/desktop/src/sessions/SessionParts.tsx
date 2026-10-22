@@ -24,7 +24,7 @@ export function History({ runs, selected, connected, newer, onSelect, onRefresh,
             meta={<><StatusBadge tone={runTone[run.state]}>{run.state}</StatusBadge><time dateTime={run.created_at}>{localTime(run.created_at)}</time></>} />
         </ContextMenuArea>
       </Item>)}</List>
-      : connected ? <EmptyState wash title="No sessions yet">Start one to create a durable run record.</EmptyState> : <EmptyState>Connect to see sessions saved by your runtime.</EmptyState>}
+      : connected ? <EmptyState title="No sessions yet">Start one to create a durable run record.</EmptyState> : <EmptyState>Connect to see sessions saved by your runtime.</EmptyState>}
     {connected && runs.length > 0 && <Toolbar>
       <Button disabled={!newer} onClick={onNewer}>Newer sessions</Button>
       <Button disabled={runs.length < 200} onClick={onOlder}>Older sessions</Button>

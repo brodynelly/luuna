@@ -14,14 +14,16 @@ const BUTTON_CLASS: Record<ButtonVariant, string | undefined> = { secondary: und
 
 export interface ButtonProps extends Omit<ButtonHTMLAttributes<HTMLButtonElement>, "type"> {
   variant?: ButtonVariant;
+  /** Ledger sizes: the default is the 28 px compact button; `md` is 32 px and `lg` is 40 px (page-header actions). */
+  size?: "md" | "lg";
   /** Submit buttons belong to a form; everything else is an explicit `type="button"`. */
   submit?: boolean;
   "data-capability"?: string;
 }
 
 /** A push button. One `primary` per action group; `danger` and `text` are small. */
-export function Button({ variant = "secondary", submit = false, className, children, ...rest }: ButtonProps) {
-  const classes = [BUTTON_CLASS[variant], className].filter(Boolean).join(" ") || undefined;
+export function Button({ variant = "secondary", size, submit = false, className, children, ...rest }: ButtonProps) {
+  const classes = [BUTTON_CLASS[variant], size ? `button-${size}` : undefined, className].filter(Boolean).join(" ") || undefined;
   return <button type={submit ? undefined : "button"} className={classes} {...rest}>{children}</button>;
 }
 

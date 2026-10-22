@@ -69,7 +69,7 @@ test("Home shows four untoned stat tiles derived from the summary, with the fina
   const html = renderToStaticMarkup(<HomeSummaryView summary={summary} busy={false} onOpen={() => {}} />);
   const sum = (pick: (project: (typeof summary.projects)[number]) => number) => summary.projects.reduce((total, project) => total + pick(project), 0);
   expect(html).toContain('<dl class="stat-grid" aria-label="Home summary counts">');
-  const values = [...html.matchAll(/<div class="stat-tile"><dt>([^<]+)<\/dt><dd><span class="count-up">(\d+)<\/span>/g)].map((match) => [match[1], Number(match[2])]);
+  const values = [...html.matchAll(/<div class="stat-tile"><dt>([^<]+)<\/dt><dd class="stat-value">(\d+)<\/dd>/g)].map((match) => [match[1], Number(match[2])]);
   expect(values).toEqual([["Projects", summary.projects.length], ["Waiting on you", summary.blockers.length], ["Tickets", sum((project) => project.tickets)], ["Active workflows", sum((project) => project.active_workflows)]]);
   expect(sum((project) => project.tickets)).toBe(3);
   expect(html.match(/class="stat-tile"[^>]*data-tone/)).toBeNull();
