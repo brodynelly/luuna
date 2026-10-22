@@ -20,9 +20,13 @@ struct Harness {
 }
 impl Harness {
     fn new() -> Self {
+        Self::with(|_| {})
+    }
+    fn with(adjust: impl FnOnce(&mut RuntimeConfig)) -> Self {
         let root =
             std::env::temp_dir().join(format!("luuna-runtime-test-{}", uuid::Uuid::new_v4()));
-        let config = configuration(root.clone());
+        let mut config = configuration(root.clone());
+        adjust(&mut config);
         let state = AppState::open(config).unwrap();
         Self {
             app: router(state.clone()),
@@ -649,4 +653,220 @@ async fn explicit_shutdown_interrupts_a_demo_run_and_reaps_its_child() {
         .as_str()
         .unwrap()
         .starts_with("interrupted by runtime shutdown"));
+}
+
+impl Harness {
+    async fn raw(&self, request: Request<Body>) -> (StatusCode, Option<String>, Value) {
+        let response = self.app.clone().oneshot(request).await.unwrap();
+        let status = response.status();
+        let content_type = response
+            .headers()
+            .get("content-type")
+            .and_then(|value| value.to_str().ok())
+            .map(ToOwned::to_owned);
+        let bytes = to_bytes(response.into_body(), 2 * 1024 * 1024)
+            .await
+            .unwrap();
+        (
+            status,
+            content_type,
+            serde_json::from_slice(&bytes).unwrap_or(Value::Null),
+        )
+    }
+}
+
+#[tokio::test]
+async fn every_rejection_carries_a_displayable_json_reason() {
+    let harness = Harness::new();
+    let post = |content_type: Option<&str>, body: Vec<u8>| {
+        let mut request = Request::builder()
+            .method("POST")
+            .uri("/api/v1/runs")
+            .header("Authorization", format!("Bearer {TOKEN}"));
+        if let Some(content_type) = content_type {
+            request = request.header("Content-Type", content_type);
+        }
+        request.body(Body::from(body)).unwrap()
+    };
+    let get = |method: &str, uri: &str| {
+        Request::builder()
+            .method(method)
+            .uri(uri)
+            .header("Authorization", format!("Bearer {TOKEN}"))
+            .body(Body::empty())
+            .unwrap()
+    };
+    let cases = [
+        (
+            post(Some("application/json"), b"{\"prompt\":".to_vec()),
+            StatusCode::BAD_REQUEST,
+            "",
+        ),
+        (
+            post(
+                Some("application/json"),
+                br#"{"prompt":"success","provider":"test","model":"synthetic","temperature":1}"#
+                    .to_vec(),
+            ),
+            StatusCode::UNPROCESSABLE_ENTITY,
+            "unknown field `temperature`",
+        ),
+        (
+            post(Some("application/json"), br#"{"prompt":7}"#.to_vec()),
+            StatusCode::UNPROCESSABLE_ENTITY,
+            "invalid type",
+        ),
+        (
+            post(None, br#"{"prompt":"success"}"#.to_vec()),
+            StatusCode::UNSUPPORTED_MEDIA_TYPE,
+            "",
+        ),
+        (
+            post(
+                Some("application/json"),
+                format!("{{\"prompt\":\"{}\"}}", "x".repeat(300 * 1024)).into_bytes(),
+            ),
+            StatusCode::PAYLOAD_TOO_LARGE,
+            "",
+        ),
+        (
+            get("GET", "/api/v1/runs/x/events?after=abc"),
+            StatusCode::BAD_REQUEST,
+            "",
+        ),
+        (get("GET", "/api/v1/missing"), StatusCode::NOT_FOUND, ""),
+        (
+            get("DELETE", "/api/v1/runs"),
+            StatusCode::METHOD_NOT_ALLOWED,
+            "",
+        ),
+    ];
+    for (request, expected, detail) in cases {
+        let label = format!("{} {}", request.method(), request.uri());
+        let (status, content_type, body) = harness.raw(request).await;
+        assert_eq!(status, expected, "{label}: {body}");
+        assert_eq!(content_type.as_deref(), Some("application/json"), "{label}");
+        let reason = body["error"].as_str().unwrap_or_default();
+        // The desktop shows a reason of 1..=300 characters without controls.
+        assert!(
+            !reason.trim().is_empty()
+                && reason.encode_utf16().count() <= 300
+                && !reason.chars().any(char::is_control),
+            "{label}: {reason:?}"
+        );
+        assert!(reason.contains(detail), "{label}: {reason:?}");
+    }
+}
+
+#[tokio::test]
+async fn health_reports_native_execution_and_the_bearer_scheme_is_case_insensitive() {
+    let harness = Harness::new();
+    let (status, health) = harness.request("GET", "/health", None, false).await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(health["native_execution"], true);
+    assert!(health.get("demo_only").is_none(), "{health}");
+    for (header, expected) in [
+        (format!("bearer {TOKEN}"), StatusCode::OK),
+        (format!("BEARER {TOKEN}"), StatusCode::OK),
+        (format!("Basic {TOKEN}"), StatusCode::UNAUTHORIZED),
+        (format!("Bearer {TOKEN}x"), StatusCode::UNAUTHORIZED),
+        (TOKEN.to_owned(), StatusCode::UNAUTHORIZED),
+    ] {
+        let request = Request::builder()
+            .uri("/api/v1/runs")
+            .header("Authorization", header.as_str())
+            .body(Body::empty())
+            .unwrap();
+        assert_eq!(harness.raw(request).await.0, expected, "{header}");
+    }
+}
+
+#[tokio::test]
+async fn the_shared_slots_refuse_a_fifth_run_and_listing_can_be_limited() {
+    let harness = Harness::new();
+    let mut runs = Vec::new();
+    for _ in 0..4 {
+        runs.push(harness.start("slow").await);
+    }
+    let (status, body) = harness
+        .request(
+            "POST",
+            "/api/v1/runs",
+            Some(json!({"prompt":"slow","provider":"test","model":"synthetic"})),
+            true,
+        )
+        .await;
+    assert_eq!(status, StatusCode::TOO_MANY_REQUESTS);
+    assert_eq!(body["error"], "four runs are already active");
+    let (status, listed) = harness
+        .request("GET", "/api/v1/runs?limit=2", None, true)
+        .await;
+    assert_eq!(status, StatusCode::OK);
+    let listed = listed.as_array().unwrap();
+    assert_eq!(listed.len(), 2);
+    let (_, everything) = harness.request("GET", "/api/v1/runs", None, true).await;
+    assert_eq!(listed[..], everything.as_array().unwrap()[..2]);
+    for run in &runs {
+        harness
+            .request(
+                "POST",
+                &format!("/api/v1/runs/{}/cancel", run.id),
+                None,
+                true,
+            )
+            .await;
+    }
+    for run in &runs {
+        assert_eq!(harness.terminal(&run.id).await.state, RunState::Cancelled);
+    }
+}
+
+#[tokio::test]
+async fn an_out_of_range_last_event_id_is_a_client_error() {
+    let harness = Harness::new();
+    let run = harness.start("success").await;
+    harness.terminal(&run.id).await;
+    let request = Request::builder()
+        .uri(format!("/api/v1/runs/{}/stream", run.id))
+        .header("Authorization", format!("Bearer {TOKEN}"))
+        .header("Last-Event-ID", "18446744073709551615")
+        .body(Body::empty())
+        .unwrap();
+    let (status, _, body) = harness.raw(request).await;
+    assert_eq!(status, StatusCode::BAD_REQUEST, "{body}");
+    assert!(body["error"].as_str().unwrap().contains("cursor"));
+}
+
+#[tokio::test]
+async fn a_demo_run_past_its_deadline_fails_after_its_child_is_reaped() {
+    let harness = Harness::with(|config| config.max_run_seconds = 1);
+    let run = harness.start("slow").await;
+    let terminal = harness.terminal(&run.id).await;
+    assert_eq!(terminal.state, RunState::Failed);
+    let (_, events) = harness
+        .request(
+            "GET",
+            &format!("/api/v1/runs/{}/events", run.id),
+            None,
+            true,
+        )
+        .await;
+    let events = events.as_array().unwrap();
+    assert!(events
+        .iter()
+        .any(|e| e["type"] == "run.failed" && e["payload"]["reason"] == "run deadline exceeded"));
+    #[cfg(unix)]
+    {
+        let pid = events
+            .iter()
+            .find(|e| e["type"] == "pi.spawned")
+            .and_then(|e| e["payload"]["pid"].as_u64())
+            .unwrap();
+        let alive = std::process::Command::new("kill")
+            .args(["-0", &pid.to_string()])
+            .status()
+            .map(|s| s.success())
+            .unwrap_or(false);
+        assert!(!alive, "the child is reaped before run.failed persists");
+    }
 }

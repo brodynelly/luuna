@@ -23,6 +23,8 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 import process from "node:process";
 import { pathsDigest } from "./m3-checkout-digest.mjs";
+import { settled, waitForExit } from "./smoke-process.mjs";
+import { failedNoChangeRepair } from "./m3-evidence.mjs";
 import { setTimeout as sleep } from "node:timers/promises";
 
 // Linux: the harness runs under a child subreaper, so every process of the run that outlives its
@@ -895,11 +897,13 @@ async function blockingFindingsAreBoundedByAutomaticRepair(name) {
   // second revision means the attempt budget was spent, a first revision means the
   // repair writer produced no fresh candidate.
   const reason = ev.reason ?? "";
-  const gateClosed = final.repair_allowed === false && ev.status === "paused";
+  const attempts = (await api("GET", `/runs/${runId}/attempts`)).body;
+  summary.outcome.attempts = Array.isArray(attempts) ? attempts.map(({ number, state }) => ({ number, state })) : null;
+  const gateClosed = final.repair_allowed === false && ev.status === "paused" && summary.outcome.run_state === "paused";
   const consistent = allRequiredPassed(ev.results) && gateClosed && (
     (ev.review?.verdict === "changes_required" && repairs.length === 1 && (
       (ev.candidate.revision === 2 && /attempt 3 exceeds max_attempts 2/.test(reason))
-      || (ev.candidate.revision === 1 && /no fresh candidate/.test(reason))))
+      || (ev.candidate.revision === 1 && (/no fresh candidate/.test(reason) || failedNoChangeRepair(reason, attempts)))))
     || (blocking && ev.review?.verdict === "blocked" && ev.candidate.revision === 1 && repairs.length === 0)
   );
   record(`${name}: the real reviewer did not pass the unmet requirement and bounded automatic repair stopped within max_attempts=2`, consistent, `status=${ev.status} revision=${ev.candidate.revision} verdict=${ev.review?.verdict} blocking=${blocking} repair_allowed=${final.repair_allowed} repairs=${repairs.length} reviews=${reviews.length} reason=${truncate(ev.reason ?? "", 160)}`);
@@ -968,19 +972,26 @@ async function hardKillDuringReviewReservesSpend(name) {
   record(`${name}: validation is accepted`, accepted.status === 202, `status ${accepted.status}`);
   const reviewStarted = await waitForEvent(runId, (event) => event.type === "review.started", (runTimeoutSeconds + 60) * 1000);
   const pid = reviewStarted?.payload?.pid;
+  // Provider spend is unknown only once the reviewer prompt is sent; the runtime records that durably first.
+  await waitForEvent(runId, (event) => event.type === "review.prompt_sent" && event.payload?.reviewer_session === reviewStarted?.payload?.reviewer_session, (runTimeoutSeconds + 60) * 1000);
   const before = await api("GET", `/runs/${runId}/candidate`);
   const costBefore = before.body?.evidence?.cost_usd_micros ?? 0;
   runtime.kill("SIGKILL");
-  const killed = await waitForExit(runtime, 10_000);
+  const killed = await waitForExit(runtime, 10_000, { drain: false });
   // A runtime whose exit is not observed may still own the port and the output tree: the scenario
   // fails here and `runtime` keeps the old handle, so the final cleanup stops it again.
-  record(`${name}: the hard-killed runtime exited before the restart`, killed.exited, killed.exited ? "exit observed" : "exit NOT observed within 10s");
+  record(`${name}: the hard-killed runtime exited before the restart`, killed.exited, JSON.stringify({ exit_observed: killed.exited, exit_code: runtime.exitCode, signal: runtime.signalCode, stdio_closed: runtime.stdioClosed }));
   if (!killed.exited) throw new Error("the hard-killed runtime did not exit; restart not attempted");
   // The synthetic reviewer holds for 60s without reading stdin, so only a real Pi child can notice the closed pipe promptly.
   const childExit = await waitUntil(() => typeof pid !== "number" || !processAlive(pid), mode === "fixture" ? 75_000 : 20_000);
   // A PID alone cannot prove ownership once the runtime is gone, so an orphan is
   // reported (and fails the check below) rather than killed by a possibly recycled PID.
   const orphaned = typeof pid === "number" && processAlive(pid);
+  // On Windows the reviewer can inherit the runtime's stderr handle. Its pipe
+  // must drain after reviewer reconciliation, not before that reconciliation.
+  const drained = await waitForExit(runtime, 10_000);
+  record(`${name}: the old runtime log drained after reviewer reconciliation`, drained.exited);
+  if (!drained.exited) throw new Error("Old runtime log remains open; restart not attempted");
   runtime = await startRuntime("restarted");
   const after = await candidateSettled(runId);
   const events = await eventsOf(runId);
@@ -1219,23 +1230,6 @@ async function reapStrays() {
 
 function processAlive(pid) {
   try { process.kill(pid, 0); return true; } catch (error) { return error.code === "EPERM"; }
-}
-
-/**
- * A runtime is settled only once it has exited and its stdio has closed: Node may still deliver
- * queued stderr after 'exit', and only 'close' guarantees the log writer has seen the last chunk.
- */
-function settled(child) {
-  return (child.exitCode !== null || child.signalCode !== null) && child.stdioClosed !== false;
-}
-
-async function waitForExit(child, timeoutMs) {
-  const startedAt = Date.now();
-  while (Date.now() - startedAt < timeoutMs) {
-    if (settled(child)) return { exited: true, elapsed: Date.now() - startedAt };
-    await sleep(50);
-  }
-  return { exited: false, elapsed: Date.now() - startedAt };
 }
 
 async function waitUntil(predicate, timeoutMs) {

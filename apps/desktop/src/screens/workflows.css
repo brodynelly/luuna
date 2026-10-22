@@ -6,6 +6,9 @@
  * row, meta line and reason/next-step rules come from components.css.
  */
 
+/* Ticket form: each field's UTF-8 byte count sits under it, closer than the next field. */
+.ticket-form .byte-count { margin-top: calc(var(--space-1) - var(--space-3)); }
+
 /* Run settings: writer paths, writes and approver share a wrapping field row in the tray. */
 .plan-controls > label:first-child { flex-grow: 2; }
 .plan-controls > .checkbox { flex: none; min-height: var(--control-height); }
@@ -19,6 +22,8 @@
 .ticket-head > .state { flex: none; }
 .ticket-intent { max-width: var(--measure); color: var(--color-text-muted); line-height: var(--leading); overflow-wrap: anywhere; }
 .ticket-card > .ticket-actions > .state { margin-left: auto; }
+/* The first writer's cancel sits at the end of the actions, beside the run badge. */
+.ticket-card > .ticket-actions > button.danger + .state { margin-left: 0; }
 
 /* Plan review: the full hash, the complete plan in a bounded region, then the acknowledgment. */
 .plan-review { display: grid; grid-template-columns: minmax(0, 1fr); gap: var(--space-2); min-width: 0; padding-top: var(--space-3); border-top: var(--border-width) solid var(--color-border); }

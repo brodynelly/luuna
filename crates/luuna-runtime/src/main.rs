@@ -1,83 +1,148 @@
-use luuna_runtime::{router, AppState, RuntimeConfig};
+use luuna_runtime::{serve, AppState, ServiceSettings, StartupError, Stopped};
 use std::{
     net::{Ipv4Addr, SocketAddrV4},
-    path::PathBuf,
+    time::Duration,
 };
+
+mod admin;
+
+/// How long open connections may drain once owned work has settled. The
+/// admission drain and the settle wait before it are bounded separately, so
+/// an orderly stop always ends.
+const DRAIN_DEADLINE: Duration = Duration::from_secs(10);
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
-    let data_dir =
-        PathBuf::from(std::env::var("LUUNA_DATA_DIR").unwrap_or_else(|_| ".luuna".into()));
-    let data_dir = if data_dir.is_absolute() {
-        data_dir
-    } else {
-        std::env::current_dir()?.join(data_dir)
-    };
-    let token = std::env::var("LUUNA_API_TOKEN")
-        .map_err(|_| "set LUUNA_API_TOKEN to a random token of at least 32 bytes")?;
-    let launcher_args = match std::env::var("LUUNA_PI_ARGS_JSON") {
-        Ok(raw) => serde_json::from_str::<Vec<String>>(&raw)?,
-        Err(_) => Vec::new(),
-    };
-    let port: u16 = std::env::var("LUUNA_PORT")
-        .unwrap_or_else(|_| "4242".into())
-        .parse()?;
-    let config = RuntimeConfig {
-        data_dir,
-        pi_program: PathBuf::from(
-            std::env::var("LUUNA_PI_COMMAND").unwrap_or_else(|_| "pi".into()),
-        ),
-        pi_launcher_args: launcher_args,
-        git_program: PathBuf::from(
-            std::env::var("LUUNA_GIT_COMMAND").unwrap_or_else(|_| "git".into()),
-        ),
-        provider: std::env::var("LUUNA_PI_PROVIDER").ok(),
-        model: std::env::var("LUUNA_PI_MODEL").ok(),
-        token,
-        max_run_seconds: std::env::var("LUUNA_RUN_TIMEOUT_SECONDS")
-            .unwrap_or_else(|_| "600".into())
-            .parse()?,
-    };
-    let state = AppState::open(config)?;
-    let listener =
-        tokio::net::TcpListener::bind(SocketAddrV4::new(Ipv4Addr::LOCALHOST, port)).await?;
+    // `backup`, `restore` and `check` maintain the data directory and exit.
+    if let Some(outcome) = admin::dispatch(std::env::args_os().skip(1)) {
+        return outcome;
+    }
+    let settings = ServiceSettings::from_env(|name| std::env::var_os(name))?;
+    let state =
+        AppState::open(settings.runtime).map_err(|error| StartupError(error.to_string()))?;
+    let address = SocketAddrV4::new(Ipv4Addr::LOCALHOST, settings.port);
+    let listener = tokio::net::TcpListener::bind(address)
+        .await
+        .map_err(|error| {
+            StartupError(format!(
+                "cannot listen on {address}: {error}; set LUUNA_PORT to a free port"
+            ))
+        })?;
     eprintln!(
-        "Luuna tool-free Pi demo listening on http://{}",
+        "Luuna runtime listening on http://{}",
         listener.local_addr()?
     );
-    let shutdown_state = state.clone();
-    axum::serve(listener, router(state))
-        .with_graceful_shutdown(async move {
-            tokio::select! {
-                _ = termination_requested() => {},
-                _ = shutdown_state.wait_for_shutdown_request() => {},
-            }
-            shutdown_state.shutdown().await;
-        })
-        .await?;
-    Ok(())
-}
-
-/// Ctrl+C and, on Unix, SIGTERM from a supervisor both request the explicit
-/// shutdown path: owned workers are stopped and interruption is persisted.
-async fn termination_requested() {
-    #[cfg(unix)]
-    {
-        let mut terminate =
-            match tokio::signal::unix::signal(tokio::signal::unix::SignalKind::terminate()) {
-                Ok(signal) => signal,
-                Err(_) => {
-                    let _ = tokio::signal::ctrl_c().await;
-                    return;
-                }
-            };
-        tokio::select! {
-            _ = tokio::signal::ctrl_c() => {},
-            _ = terminate.recv() => {},
+    watch_termination_signals(state.clone());
+    match serve(listener, state, DRAIN_DEADLINE).await? {
+        Stopped::Drained => {
+            eprintln!("luuna-runtime: stopped");
+            Ok(())
+        }
+        Stopped::DeadlineExceeded => {
+            eprintln!(
+                "luuna-runtime: connections still open {}s after owned work settled; exiting",
+                DRAIN_DEADLINE.as_secs()
+            );
+            std::process::exit(1);
         }
     }
-    #[cfg(not(unix))]
-    {
+}
+
+/// The first termination request (Ctrl+C; SIGTERM on Unix; Ctrl+Break,
+/// console close or system shutdown on Windows) takes the orderly shutdown
+/// path: owned workers stop and interruption is persisted. A second one exits
+/// at once, as the default action would have.
+fn watch_termination_signals(state: AppState) {
+    tokio::spawn(async move {
+        let mut signals = match TerminationSignals::install() {
+            Ok(signals) => signals,
+            Err(error) => {
+                eprintln!(
+                    "luuna-runtime: cannot listen for termination signals ({error}); stop the service with POST /api/v1/shutdown"
+                );
+                return;
+            }
+        };
+        signals.recv().await;
+        eprintln!(
+            "luuna-runtime: termination requested; stopping owned work (repeat to exit at once)"
+        );
+        state.request_shutdown();
+        drop(state);
+        signals.recv().await;
+        eprintln!("luuna-runtime: second termination request; exiting without waiting");
+        std::process::exit(130);
+    });
+}
+
+#[cfg(unix)]
+struct TerminationSignals {
+    interrupt: tokio::signal::unix::Signal,
+    terminate: tokio::signal::unix::Signal,
+}
+
+#[cfg(unix)]
+impl TerminationSignals {
+    fn install() -> std::io::Result<Self> {
+        use tokio::signal::unix::{signal, SignalKind};
+        Ok(Self {
+            interrupt: signal(SignalKind::interrupt())?,
+            terminate: signal(SignalKind::terminate())?,
+        })
+    }
+
+    async fn recv(&mut self) {
+        tokio::select! {
+            _ = self.interrupt.recv() => {},
+            _ = self.terminate.recv() => {},
+        }
+    }
+}
+
+/// Console close and system shutdown give the process only a few seconds
+/// before Windows ends it, so the orderly path is best effort there; a
+/// supervisor should use `POST /api/v1/shutdown` (ADR 0010). Logoff is not
+/// handled: a service would receive it for any user's session.
+#[cfg(windows)]
+struct TerminationSignals {
+    ctrl_c: tokio::signal::windows::CtrlC,
+    ctrl_break: tokio::signal::windows::CtrlBreak,
+    ctrl_close: tokio::signal::windows::CtrlClose,
+    ctrl_shutdown: tokio::signal::windows::CtrlShutdown,
+}
+
+#[cfg(windows)]
+impl TerminationSignals {
+    fn install() -> std::io::Result<Self> {
+        use tokio::signal::windows::{ctrl_break, ctrl_c, ctrl_close, ctrl_shutdown};
+        Ok(Self {
+            ctrl_c: ctrl_c()?,
+            ctrl_break: ctrl_break()?,
+            ctrl_close: ctrl_close()?,
+            ctrl_shutdown: ctrl_shutdown()?,
+        })
+    }
+
+    async fn recv(&mut self) {
+        tokio::select! {
+            _ = self.ctrl_c.recv() => {},
+            _ = self.ctrl_break.recv() => {},
+            _ = self.ctrl_close.recv() => {},
+            _ = self.ctrl_shutdown.recv() => {},
+        }
+    }
+}
+
+#[cfg(not(any(unix, windows)))]
+struct TerminationSignals;
+
+#[cfg(not(any(unix, windows)))]
+impl TerminationSignals {
+    fn install() -> std::io::Result<Self> {
+        Ok(Self)
+    }
+
+    async fn recv(&mut self) {
         let _ = tokio::signal::ctrl_c().await;
     }
 }

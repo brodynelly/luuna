@@ -1,5 +1,5 @@
 import type { CandidateDiff, CandidateView, RunRecord } from "@luuna/api-client";
-import { canCancel, canRevalidate, canValidate } from "./workflow-state";
+import { allowedActions, canCancel, canRepair, canRevalidate, canValidate, usageSummary, validationRefusal } from "./workflow-state";
 import { nextStep } from "./failures";
 import { StatusBadge } from "./design/StatusBadge";
 import { candidateTone, checkTone, severityTone, verdictTone } from "./design/tone";
@@ -25,6 +25,10 @@ export function CandidateReview({ run, view, diff, log, busy, onValidate, onRepa
   const boundDiff = diff?.candidate_hash === candidate.hash ? diff : undefined;
   const boundLog = log?.candidateHash === candidate.hash && evidence.results.some((result) => result.artifact_refs.includes(log.artifactId)) ? log : undefined;
   const review = evidence.review?.candidate_hash === candidate.hash ? evidence.review : undefined;
+  // The next step never recommends an action the runtime refuses; it names the refusal instead.
+  const step = evidence.reason ? nextStep(evidence.reason, allowedActions(run, view)) : "";
+  // A pending candidate has no reason of its own, so a refused validation says why here.
+  const refusal = step.startsWith("Validation is not available") ? "" : validationRefusal(run, view);
   return <section className="candidate-review subpanel" aria-label={`Candidate revision ${candidate.revision}`}>
     <div className="candidate-heading"><strong>Candidate r{candidate.revision}</strong><StatusBadge tone={candidateTone[evidence.status]}>{evidence.status.replace(/_/g, " ")}</StatusBadge></div>
     <dl className="facts">
@@ -36,14 +40,15 @@ export function CandidateReview({ run, view, diff, log, busy, onValidate, onRepa
     <div className="ticket-actions actions">
       <button type="button" disabled={busy} onClick={onDiff}>Inspect candidate diff</button>
       {canValidate(run, view) && <button type="button" className="primary" disabled={busy} onClick={onValidate}>{canRevalidate(run, view) ? "Re-validate and review" : "Validate and review"}</button>}
-      {view.repair_allowed && !view.active && <button type="button" disabled={busy} onClick={onRepair}>Repair candidate</button>}
+      {canRepair(view) && <button type="button" disabled={busy} onClick={onRepair}>Repair candidate</button>}
       {canCancel(run.state, view.active) && <button type="button" className="danger" disabled={busy} onClick={onCancel}>Cancel workflow</button>}
     </div>
     {view.active && <p className="callout" data-tone="active" role="status">The runtime is {run.state === "implementing" ? "running the scoped writer repair" : evidence.status === "reviewing" ? "running the independent reviewer" : "executing the approved checks"}. Closing this view does not cancel the workflow.</p>}
     {evidence.reason && <p className="failure-note" data-tone={candidateTone[evidence.status]}>{evidence.reason}</p>}
-    {evidence.reason && !canRevalidate(run, view) && !view.active && nextStep(evidence.reason) && <p className="recovery-note">{nextStep(evidence.reason)}</p>}
+    {evidence.reason && !canRevalidate(run, view) && !view.active && step && <p className="recovery-note">{step}</p>}
+    {refusal && <p className="recovery-note">{refusal}</p>}
     {canRevalidate(run, view) && <p className="recovery-note">Required checks passed in validation generation {evidence.validation_generation} but no review verdict was recorded. Re-validation starts a fresh generation for this same candidate revision under the existing approval and budgets: the checks run again and a fresh reviewer session is started. No writer attempt is spent.</p>}
-    {boundDiff && <details open className="candidate-diff section"><summary>Diff for <code>{boundDiff.candidate_hash}</code></summary><p className="diff-meta meta">{boundDiff.repository_id} · base <code>{boundDiff.base_commit}</code> · candidate commit <code>{boundDiff.commit}</code></p><pre aria-label="Candidate diff" tabIndex={0}>{boundDiff.diff || "No changes."}</pre></details>}
+    {boundDiff && <details open className="candidate-diff section"><summary>Diff for <code>{boundDiff.candidate_hash}</code></summary><p className="diff-meta meta">{boundDiff.repository_id} · base <code>{boundDiff.base_commit}</code> · candidate commit <code>{boundDiff.commit}</code></p><pre aria-label="Candidate diff" tabIndex={0}>{boundDiff.diff || (boundDiff.truncated ? "Diff omitted because it exceeds the display limit. Inspect the changed files listed below." : "No changes.")}</pre>{boundDiff.truncated && <p role="status">This diff is truncated. It does not show all candidate changes.</p>}{boundDiff.worktree_drift && <p role="status">{boundDiff.worktree_drift}</p>}{boundDiff.files && <ul aria-label="Changed candidate files">{boundDiff.files.map((file) => <li key={file.path}><code>{file.path}</code> � {file.status} � {file.shown}</li>)}</ul>}</details>}
     <details className="candidate-checks section" open={evidence.results.length > 0}>
       <summary>Check evidence · {evidence.results.length} recorded result(s)</summary>
       {evidence.results.length === 0 && <p className="empty">No check results recorded for this candidate.</p>}
@@ -77,6 +82,6 @@ export function CandidateReview({ run, view, diff, log, busy, onValidate, onRepa
         <details className="raw-evidence"><summary>Complete structured review</summary><pre>{JSON.stringify(review, null, 2)}</pre></details>
       </> : <p className="empty">No independent review recorded for this candidate.</p>}
     </div>
-    <small className="candidate-usage meta">Runtime usage recorded for this candidate: {evidence.elapsed_seconds}s · ${(evidence.cost_usd_micros / 1_000_000).toFixed(4)}. Repairs keep the existing plan approval and produce a new candidate; earlier evidence remains bound to its original hash.</small>
+    <small className="candidate-usage meta">{view.usage ? usageSummary(view.usage) : <>Runtime usage recorded for this candidate: {evidence.elapsed_seconds}s · ${(evidence.cost_usd_micros / 1_000_000).toFixed(4)}.</>} Repairs keep the existing plan approval and produce a new candidate; earlier evidence remains bound to its original hash.</small>
   </section>;
 }

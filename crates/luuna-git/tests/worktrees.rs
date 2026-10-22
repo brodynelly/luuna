@@ -392,3 +392,283 @@ async fn candidate_diff_never_executes_external_drivers_or_textconv_and_refuses_
     }
     assert!(!marker.exists());
 }
+
+/// The developer repository's HEAD, branch ref and index bytes.
+fn developer_state(dir: &Path) -> (String, String, Vec<u8>) {
+    (
+        git(dir, &["rev-parse", "HEAD"]),
+        git(dir, &["rev-parse", "refs/heads/main"]),
+        fs::read(dir.join(".git/index")).unwrap(),
+    )
+}
+
+#[tokio::test]
+async fn a_redirected_or_forged_gitfile_stops_every_managed_operation() {
+    let developer = tempfile::tempdir().unwrap();
+    let other = tempfile::tempdir().unwrap();
+    let private = tempfile::tempdir().unwrap();
+    let base = repository(developer.path());
+    repository(other.path());
+    let inspector = GitInspector::default();
+    let worktree = private.path().join("candidate");
+    let sibling = private.path().join("sibling");
+    for path in [&worktree, &sibling] {
+        inspector
+            .add_detached_worktree(developer.path(), path, &base)
+            .await
+            .unwrap();
+    }
+    let binding = inspector
+        .verify_worktree_binding(developer.path(), &worktree)
+        .await
+        .unwrap();
+    assert!(binding.git_dir.starts_with(&binding.common_dir));
+    assert!(inspector
+        .verify_worktree_binding(other.path(), &worktree)
+        .await
+        .is_err());
+    let gitfile = worktree.join(".git");
+    let original = fs::read(&gitfile).unwrap();
+    fs::write(worktree.join("src/main.py"), "print('candidate')\n").unwrap();
+    let before = developer_state(developer.path());
+    let tree = git(developer.path(), &["rev-parse", "HEAD^{tree}"]);
+
+    // A writer that can write `.git` can name any repository's metadata.
+    let forged = worktree.join("src/fake/worktrees/x");
+    fs::create_dir_all(&forged).unwrap();
+    fs::write(forged.join("gitdir"), format!("{}\n", gitfile.display())).unwrap();
+    fs::write(forged.join("commondir"), "../..\n").unwrap();
+    fs::write(forged.join("HEAD"), format!("{base}\n")).unwrap();
+    let developer_gitdir = developer.path().join(".git");
+    let sibling_gitdir = developer_gitdir.join("worktrees/sibling");
+    for redirect in [
+        format!("gitdir: {}\n", developer_gitdir.display()),
+        format!("gitdir: {}\n", sibling_gitdir.display()),
+        format!("gitdir: {}\n", forged.display()),
+        format!("gitdir: {}\n", other.path().join(".git").display()),
+        "gitdir: ../relative\n".to_owned(),
+    ] {
+        fs::write(&gitfile, &redirect).unwrap();
+        assert!(
+            inspector.head_commit(&worktree).await.is_err(),
+            "{redirect}"
+        );
+        assert!(
+            inspector.changed_paths(&worktree).await.is_err(),
+            "{redirect}"
+        );
+        assert!(
+            inspector.unseen_state(&worktree).await.is_err(),
+            "{redirect}"
+        );
+        assert!(
+            inspector.commit_all(&worktree, "redirected").await.is_err(),
+            "{redirect}"
+        );
+        assert!(inspector
+            .verify_candidate(&worktree, &base, &tree)
+            .await
+            .is_err());
+        assert!(inspector
+            .candidate_diff(&worktree, &base, &base)
+            .await
+            .is_err());
+        assert_eq!(developer_state(developer.path()), before, "{redirect}");
+    }
+    // Not a regular file any more: a directory, or a link to the real gitfile.
+    fs::remove_file(&gitfile).unwrap();
+    fs::create_dir(&gitfile).unwrap();
+    assert!(inspector.changed_paths(&worktree).await.is_err());
+    fs::remove_dir(&gitfile).unwrap();
+    #[cfg(unix)]
+    {
+        let elsewhere = private.path().join("gitfile");
+        fs::write(&elsewhere, &original).unwrap();
+        std::os::unix::fs::symlink(&elsewhere, &gitfile).unwrap();
+        assert!(inspector.changed_paths(&worktree).await.is_err());
+        fs::remove_file(&gitfile).unwrap();
+    }
+
+    // The bytes `worktree add` wrote restore every operation, on the worktree only.
+    fs::write(&gitfile, &original).unwrap();
+    fs::remove_dir_all(worktree.join("src/fake")).unwrap();
+    let candidate = inspector.commit_all(&worktree, "candidate").await.unwrap();
+    assert_eq!(inspector.head_commit(&worktree).await.unwrap(), candidate);
+    assert_eq!(developer_state(developer.path()), before);
+}
+
+#[tokio::test]
+async fn candidate_commits_ignore_developer_identity_signing_and_hook_settings() {
+    let developer = tempfile::tempdir().unwrap();
+    let private = tempfile::tempdir().unwrap();
+    let base = repository(developer.path());
+    let marker = private.path().join("ran");
+    let hooks = private.path().join("hooks");
+    fs::create_dir_all(&hooks).unwrap();
+    let script = format!("#!/bin/sh\ntouch '{}'\n", marker.display());
+    for name in [
+        "pre-commit",
+        "commit-msg",
+        "post-commit",
+        "reference-transaction",
+    ] {
+        for dir in [hooks.clone(), developer.path().join(".git/hooks")] {
+            fs::write(dir.join(name), &script).unwrap();
+            #[cfg(unix)]
+            {
+                use std::os::unix::fs::PermissionsExt;
+                fs::set_permissions(dir.join(name), fs::Permissions::from_mode(0o755)).unwrap();
+            }
+        }
+    }
+    let program = private.path().join("gpg");
+    fs::write(&program, &script).unwrap();
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        fs::set_permissions(&program, fs::Permissions::from_mode(0o755)).unwrap();
+    }
+    for (key, value) in [
+        ("user.name", "Developer"),
+        ("user.email", "developer@corp.example"),
+        ("author.name", "Dev Author"),
+        ("author.email", "author@corp.example"),
+        ("committer.name", "Dev Committer"),
+        ("committer.email", "committer@corp.example"),
+        ("commit.gpgsign", "true"),
+        ("gpg.program", &program.to_string_lossy()),
+        ("core.hooksPath", &hooks.to_string_lossy()),
+        ("log.showSignature", "true"),
+    ] {
+        git(developer.path(), &["config", key, value]);
+    }
+    let inspector = GitInspector::default();
+    let worktree = private.path().join("candidate");
+    inspector
+        .add_detached_worktree(developer.path(), &worktree, &base)
+        .await
+        .unwrap();
+    fs::write(worktree.join("src/main.py"), "print('candidate')\n").unwrap();
+    let candidate = inspector.commit_all(&worktree, "candidate").await.unwrap();
+    let object = git(&worktree, &["cat-file", "commit", &candidate]);
+    assert!(
+        object.contains("\nauthor Luuna Writer <writer@luuna.invalid> ")
+            && object.contains("\ncommitter Luuna Writer <writer@luuna.invalid> ")
+            && object.contains(&format!("\nparent {base}\n"))
+            && !object.contains("gpgsig"),
+        "{object}"
+    );
+    assert!(!marker.exists(), "a hook or signing program ran");
+}
+
+#[tokio::test]
+async fn ignored_writer_output_is_listed_as_a_change() {
+    let developer = tempfile::tempdir().unwrap();
+    let private = tempfile::tempdir().unwrap();
+    repository(developer.path());
+    fs::write(developer.path().join(".gitignore"), "*.local\nbuild/\n").unwrap();
+    git(developer.path(), &["add", "."]);
+    git(developer.path(), &["commit", "-qm", "ignore rules"]);
+    let base = git(developer.path(), &["rev-parse", "HEAD"]);
+    let inspector = GitInspector::default();
+    let worktree = private.path().join("candidate");
+    inspector
+        .add_detached_worktree(developer.path(), &worktree, &base)
+        .await
+        .unwrap();
+    assert!(inspector.changed_paths(&worktree).await.unwrap().is_empty());
+    fs::write(worktree.join("src/settings.local"), "TOKEN = 1\n").unwrap();
+    fs::create_dir_all(worktree.join("build/out")).unwrap();
+    fs::write(worktree.join("build/out/generated.py"), "x = 1\n").unwrap();
+    let mut changed: Vec<(String, String)> = inspector
+        .changed_paths(&worktree)
+        .await
+        .unwrap()
+        .into_iter()
+        .map(|c| (c.status, c.path))
+        .collect();
+    changed.sort();
+    assert_eq!(
+        changed,
+        vec![
+            ("!".to_owned(), "build".to_owned()),
+            ("!".to_owned(), "src/settings.local".to_owned()),
+        ]
+    );
+}
+
+#[cfg(unix)]
+#[tokio::test]
+async fn writes_git_cannot_see_through_links_and_into_gitlinks_change_the_unseen_state() {
+    let developer = tempfile::tempdir().unwrap();
+    let private = tempfile::tempdir().unwrap();
+    let outside = tempfile::tempdir().unwrap();
+    let initial = repository(developer.path());
+    let created = outside.path().join("created-by-writer.txt");
+    let existing = outside.path().join("existing.txt");
+    fs::write(&existing, "outside\n").unwrap();
+    std::os::unix::fs::symlink(&created, developer.path().join("src/dangling")).unwrap();
+    std::os::unix::fs::symlink(&existing, developer.path().join("src/outward")).unwrap();
+    std::os::unix::fs::symlink("main.py", developer.path().join("src/inward")).unwrap();
+    git(developer.path(), &["add", "src"]);
+    git(
+        developer.path(),
+        &[
+            "update-index",
+            "--add",
+            "--cacheinfo",
+            &format!("160000,{initial},vendor/lib"),
+        ],
+    );
+    git(developer.path(), &["commit", "-qm", "links"]);
+    let base = git(developer.path(), &["rev-parse", "HEAD"]);
+    let inspector = GitInspector::default();
+    let worktree = private.path().join("candidate");
+    inspector
+        .add_detached_worktree(developer.path(), &worktree, &base)
+        .await
+        .unwrap();
+    let before = inspector.unseen_state(&worktree).await.unwrap();
+    assert!(inspector
+        .unseen_state(&worktree)
+        .await
+        .unwrap()
+        .changed_since(&before)
+        .is_empty());
+    // A write through an inward link is an ordinary change Git reports.
+    fs::write(worktree.join("src/inward"), "print('through a link')\n").unwrap();
+    assert!(inspector
+        .unseen_state(&worktree)
+        .await
+        .unwrap()
+        .changed_since(&before)
+        .is_empty());
+    fs::write(worktree.join("src/dangling"), "escaped\n").unwrap();
+    fs::write(worktree.join("vendor/lib/injected.py"), "x = 1\n").unwrap();
+    assert!(created.exists());
+    assert_eq!(
+        inspector
+            .unseen_state(&worktree)
+            .await
+            .unwrap()
+            .changed_since(&before),
+        vec!["src/dangling".to_owned(), "vendor/lib".to_owned()]
+    );
+    // Neither write is visible to Git, which is why the state is recorded.
+    let changed: Vec<String> = inspector
+        .changed_paths(&worktree)
+        .await
+        .unwrap()
+        .into_iter()
+        .map(|c| c.path)
+        .collect();
+    assert_eq!(changed, vec!["src/main.py".to_owned()]);
+    std::thread::sleep(std::time::Duration::from_millis(20));
+    fs::write(worktree.join("src/outward"), "changed outside\n").unwrap();
+    assert!(inspector
+        .unseen_state(&worktree)
+        .await
+        .unwrap()
+        .changed_since(&before)
+        .contains(&"src/outward".to_owned()));
+}

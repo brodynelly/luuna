@@ -1,5 +1,18 @@
 # Luuna implementation handoff
 
+## Latest PR 11 review follow-up (October 21, 2026)
+
+The audit branch includes fixes for all 14 confirmed review issues and Windows
+acceptance-harness corrections. Existing main history, component pins, installed
+executables, credentials and live database contents were preserved. This branch
+has not been merged or installed. Native/browser and fixture checks passed;
+strict genuine-provider M3 remains open (final run 59/61 because the blocking
+probe's writer produced no candidate). One existing Windows-disabled stress test
+was not run. Read [the exact revisions, coverage and failures](docs/PR-11-WINDOWS-VERIFICATION.md)
+before claiming full Windows acceptance. The older successful M3 results below
+apply to their recorded revisions, not automatically to PR 11.
+
+
 You are continuing an executable foundation, not starting an empty repository. Read [AGENTS.md](AGENTS.md), [CURRENT-ARCHITECTURE.md](docs/CURRENT-ARCHITECTURE.md), [FOUNDATION-STATUS.md](docs/FOUNDATION-STATUS.md), and [IMPLEMENTATION-ROADMAP.md](docs/IMPLEMENTATION-ROADMAP.md) before changing code. Inspect the current working tree, manifests and relevant implementation/tests; prior test counts are audit evidence, not a substitute for checks after your changes.
 
 ## Settled decisions

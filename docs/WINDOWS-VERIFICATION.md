@@ -1,5 +1,17 @@
 # Windows development setup and verification
 
+## PR 11 follow-up: current acceptance status
+
+See [PR 11 Windows verification](PR-11-WINDOWS-VERIFICATION.md) for the review
+fixes, 349 passing Rust checks including explicit integration/benchmark runs,
+passing native/browser and fixture suites, and preservation evidence. Strict
+genuine-provider M3 is still open: the final clean-revision run passed 59/61,
+with no candidate produced for its blocking-review probe. One existing Windows
+large-index stress fixture remains skipped. The installed build was preserved;
+PR 11 was not merged or deployed. The successful earlier results below remain
+historical evidence for their stated revisions.
+
+
 Date: October 21, 2026. This is Windows evidence, separate from the historical
 Linux reports and the original documentation validation report.
 

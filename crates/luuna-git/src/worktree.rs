@@ -4,16 +4,306 @@
 //! commit. The developer checkout's files are never touched; `git worktree add`
 //! records its bookkeeping under the repository's `.git/worktrees`. Hooks stay
 //! neutralised and every inherited `GIT_*` variable is removed, as for inspection.
+//!
+//! The worktree's `.git` file lies inside the writer's reach, so no managed
+//! operation trusts it: each one first verifies the binding from both ends (the
+//! gitfile names an administrative directory whose own `gitdir` names this
+//! worktree back) and then runs Git with explicit `--git-dir`/`--work-tree`.
 
-use crate::{GitError, GitInspector};
+use crate::{strip_verbatim_prefix, GitError, GitInspector, Output};
 use luuna_domain::ChangedPath;
-use std::path::Path;
+use std::{
+    collections::BTreeMap,
+    path::{Path, PathBuf},
+    time::SystemTime,
+};
 
 /// Identity recorded on candidate commits; never the developer's identity.
 pub const WRITER_AUTHOR_NAME: &str = "Luuna Writer";
 pub const WRITER_AUTHOR_EMAIL: &str = "writer@luuna.invalid";
 
+/// The Git administrative directory of one Luuna-owned linked worktree.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct WorktreeBinding {
+    /// `<common>/worktrees/<name>`, as `git worktree add` wrote it.
+    pub git_dir: PathBuf,
+    /// The repository's common directory that owns `git_dir`.
+    pub common_dir: PathBuf,
+}
+
+fn binding_error(detail: &str) -> GitError {
+    GitError::Command {
+        command: "worktree binding".into(),
+        detail: detail.into(),
+    }
+}
+
+/// Read a worktree's binding without asking Git, which would follow whatever the
+/// gitfile names. The gitfile must be the regular file `git worktree add` wrote,
+/// naming an absolute `<common>/worktrees/<name>` whose `gitdir` points back at
+/// this worktree and whose common directory lies outside it. A writer confined
+/// to the worktree cannot forge an administrative directory that satisfies this.
+pub fn worktree_binding(worktree: &Path) -> Result<WorktreeBinding, GitError> {
+    let gitfile = worktree.join(".git");
+    let metadata = std::fs::symlink_metadata(&gitfile)
+        .map_err(|_| binding_error("the worktree has no .git file"))?;
+    if !metadata.file_type().is_file() || metadata.len() > 4096 {
+        return Err(binding_error(
+            "the worktree's .git is no longer the gitfile Git wrote",
+        ));
+    }
+    let text = std::fs::read_to_string(&gitfile)
+        .map_err(|_| binding_error("the worktree's .git file cannot be read"))?;
+    let git_dir = text
+        .strip_prefix("gitdir: ")
+        .and_then(|rest| rest.strip_suffix('\n'))
+        .map(|rest| rest.strip_suffix('\r').unwrap_or(rest))
+        .filter(|rest| !rest.is_empty() && !rest.contains(['\n', '\r']))
+        .map(PathBuf::from)
+        .filter(|path| path.is_absolute())
+        .ok_or_else(|| binding_error("the worktree's .git file is not an absolute gitdir line"))?;
+    let common_dir = git_dir
+        .parent()
+        .filter(|parent| parent.file_name().is_some_and(|name| name == "worktrees"))
+        .and_then(Path::parent)
+        .map(Path::to_path_buf)
+        .ok_or_else(|| {
+            binding_error("the gitfile does not name a worktree administrative directory")
+        })?;
+    let canonical = |path: &Path| {
+        std::fs::canonicalize(path)
+            .map_err(|_| binding_error("the worktree's administrative directory is missing"))
+    };
+    let read_line = |name: &str| {
+        std::fs::read_to_string(git_dir.join(name))
+            .map(|text| text.trim_end_matches(['\n', '\r']).to_owned())
+            .map_err(|_| binding_error("the worktree's administrative directory is incomplete"))
+    };
+    if canonical(Path::new(&read_line("gitdir")?))? != canonical(&gitfile)? {
+        return Err(binding_error(
+            "the gitfile names an administrative directory of a different worktree",
+        ));
+    }
+    if canonical(&git_dir.join(read_line("commondir")?))? != canonical(&common_dir)? {
+        return Err(binding_error(
+            "the administrative directory belongs to a different repository",
+        ));
+    }
+    if canonical(&common_dir)?.starts_with(canonical(worktree)?) {
+        return Err(binding_error(
+            "the gitfile names repository metadata inside the worktree",
+        ));
+    }
+    Ok(WorktreeBinding {
+        git_dir,
+        common_dir,
+    })
+}
+
+fn path_argument(flag: &str, path: &Path) -> Result<String, GitError> {
+    let path = strip_verbatim_prefix(path);
+    path.to_str()
+        .map(|text| format!("{flag}={text}"))
+        .ok_or_else(|| binding_error("worktree paths must be valid UTF-8"))
+}
+
+/// One tracked path whose effect Git cannot see from inside the worktree.
+#[derive(Debug, Clone, PartialEq, Eq)]
+enum Unseen {
+    /// A symbolic link: where a write through it would land outside the
+    /// worktree (`None` when it cannot resolve) and that location's metadata.
+    Link(Option<PathBuf>, Option<Stamp>),
+    /// An unpopulated gitlink (submodule) directory: Git never lists its contents.
+    Gitlink(Option<Stamp>, usize),
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct Stamp {
+    directory: bool,
+    len: u64,
+    modified: Option<SystemTime>,
+}
+
+fn stamp(path: &Path) -> Option<Stamp> {
+    std::fs::metadata(path).ok().map(|metadata| Stamp {
+        directory: metadata.is_dir(),
+        len: metadata.len(),
+        modified: metadata.modified().ok(),
+    })
+}
+
+/// Where a write to `path` would land: symbolic links in the existing prefix
+/// are followed by the filesystem, and a dangling link is followed to its
+/// target, which a write would create. `None` beyond 40 links.
+fn landing(path: &Path, depth: u8) -> Option<PathBuf> {
+    if depth > 40 {
+        return None;
+    }
+    let mut existing = path.to_path_buf();
+    let mut missing = Vec::new();
+    loop {
+        match std::fs::symlink_metadata(&existing) {
+            Ok(metadata) if metadata.file_type().is_symlink() && !existing.exists() => {
+                let mut next = existing.parent()?.join(std::fs::read_link(&existing).ok()?);
+                next.extend(missing.iter().rev());
+                return landing(&next, depth + 1);
+            }
+            Ok(_) => break,
+            Err(_) => {
+                missing.push(existing.file_name()?.to_owned());
+                existing = existing.parent()?.to_path_buf();
+            }
+        }
+    }
+    let mut real = std::fs::canonicalize(&existing).ok()?;
+    real.extend(missing.iter().rev());
+    Some(real)
+}
+
+/// What a writer session could change without Git reporting it: the outside
+/// targets of tracked symbolic links (dangling ones included) and the contents
+/// of unpopulated gitlink directories. Record it before the session and compare
+/// afterwards; an unchanged record means no such write happened.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct UnseenState(BTreeMap<String, Unseen>);
+
+impl UnseenState {
+    /// Tracked paths whose unseen state differs from `earlier`, sorted.
+    pub fn changed_since(&self, earlier: &UnseenState) -> Vec<String> {
+        self.0
+            .iter()
+            .filter(|(path, now)| earlier.0.get(*path) != Some(now))
+            .map(|(path, _)| path.clone())
+            .chain(
+                earlier
+                    .0
+                    .keys()
+                    .filter(|path| !self.0.contains_key(*path))
+                    .cloned(),
+            )
+            .collect::<std::collections::BTreeSet<_>>()
+            .into_iter()
+            .collect()
+    }
+}
+
 impl GitInspector {
+    /// Run Git on a Luuna-owned worktree through its verified binding, so no
+    /// repository is discovered from the writer-reachable gitfile.
+    async fn bound(
+        &self,
+        worktree: &Path,
+        args: &[&str],
+        overrides: &[String],
+    ) -> Result<Output, GitError> {
+        let binding = worktree_binding(worktree)?;
+        let git_dir = path_argument("--git-dir", &binding.git_dir)?;
+        let work_tree = path_argument("--work-tree", worktree)?;
+        let mut full = vec![git_dir.as_str(), work_tree.as_str()];
+        full.extend_from_slice(args);
+        // Errors name the subcommand, never the private paths placed before it.
+        let subcommand = args.first().copied().unwrap_or("git").to_owned();
+        let output = match self.git(Some(worktree), &full, overrides).await {
+            Err(GitError::Timeout(_)) => return Err(GitError::Timeout(subcommand)),
+            other => other?,
+        };
+        Ok(output)
+    }
+
+    async fn bound_expect(
+        &self,
+        worktree: &Path,
+        args: &[&str],
+        overrides: &[String],
+    ) -> Result<String, GitError> {
+        let output = self.bound(worktree, args, overrides).await?;
+        if output.status != Some(0) {
+            return Err(GitError::Command {
+                command: args.join(" "),
+                detail: output.stderr,
+            });
+        }
+        Ok(String::from_utf8_lossy(&output.stdout).into_owned())
+    }
+
+    /// Verify that `worktree` is still bound to the repository registered at
+    /// `root`: the structural binding plus the same common directory.
+    pub async fn verify_worktree_binding(
+        &self,
+        root: &Path,
+        worktree: &Path,
+    ) -> Result<WorktreeBinding, GitError> {
+        let binding = worktree_binding(worktree)?;
+        let common = self
+            .optional(root, &["rev-parse", "--git-common-dir"], &[])
+            .await?
+            .filter(|common| !common.is_empty())
+            .map(|common| root.join(common))
+            .ok_or_else(|| binding_error("the registered repository has no common directory"))?;
+        let canonical = |path: &Path| std::fs::canonicalize(path).ok();
+        if canonical(&common).is_none() || canonical(&common) != canonical(&binding.common_dir) {
+            return Err(binding_error(
+                "the worktree is bound to a different repository than the registered one",
+            ));
+        }
+        Ok(binding)
+    }
+
+    /// Record what Git cannot see in a Luuna-owned worktree; see [`UnseenState`].
+    pub async fn unseen_state(&self, worktree: &Path) -> Result<UnseenState, GitError> {
+        let listed = self
+            .bound(worktree, &["ls-files", "--stage", "-z"], &[])
+            .await?;
+        if listed.status != Some(0) {
+            return Err(GitError::Command {
+                command: "ls-files".into(),
+                detail: listed.stderr,
+            });
+        }
+        let inside = std::fs::canonicalize(worktree)?;
+        let mut state = BTreeMap::new();
+        for entry in listed.stdout.split(|byte| *byte == 0) {
+            let Some(tab) = entry.iter().position(|byte| *byte == b'\t') else {
+                continue;
+            };
+            let (meta, raw) = (&entry[..tab], &entry[tab + 1..]);
+            let path = String::from_utf8_lossy(raw).into_owned();
+            #[cfg(unix)]
+            let local =
+                worktree.join(<std::ffi::OsStr as std::os::unix::ffi::OsStrExt>::from_bytes(raw));
+            #[cfg(not(unix))]
+            let local = worktree.join(&path);
+            match meta.split(|byte| *byte == b' ').next() {
+                Some(b"120000") => {
+                    if !std::fs::symlink_metadata(&local)
+                        .is_ok_and(|metadata| metadata.file_type().is_symlink())
+                    {
+                        // Checked out as a plain file (no symlink support): Git sees it.
+                        continue;
+                    }
+                    let target = landing(&local, 0);
+                    if target
+                        .as_ref()
+                        .is_some_and(|target| target.starts_with(&inside))
+                    {
+                        // A write through it lands in the worktree, where Git reports it.
+                        continue;
+                    }
+                    let stamp = target.as_deref().and_then(stamp);
+                    state.insert(path, Unseen::Link(target, stamp));
+                }
+                Some(b"160000") => {
+                    let entries = std::fs::read_dir(&local)
+                        .map(|entries| entries.take(64).count())
+                        .unwrap_or(0);
+                    state.insert(path, Unseen::Gitlink(stamp(&local), entries));
+                }
+                _ => {}
+            }
+        }
+        Ok(UnseenState(state))
+    }
+
     /// Verify the exact frozen candidate before and after validation/review.
     /// Check-created untracked artifacts do not alter the commit/tree; tracked
     /// edits, staged changes, conflicts and a moved HEAD always invalidate it.
@@ -26,7 +316,7 @@ impl GitInspector {
         require_object_id(expected_commit)?;
         require_object_id(expected_tree)?;
         let head = self.head_commit(worktree).await?;
-        let tree = self.commit_tree(worktree, &head).await?;
+        let tree = self.candidate_tree(worktree, &head).await?;
         if head != expected_commit || tree != expected_tree {
             return Err(GitError::Command {
                 command: "verify candidate".into(),
@@ -45,7 +335,7 @@ impl GitInspector {
         // Checks can run Git under native permissions; those flags cannot hide
         // a tracked edit and turn it into evidence for an immutable candidate.
         let index = self
-            .git(Some(worktree), &["ls-files", "-v", "-z"], &overrides)
+            .bound(worktree, &["ls-files", "-v", "-z"], &overrides)
             .await?;
         if index.status != Some(0) {
             return Err(GitError::Command {
@@ -64,7 +354,7 @@ impl GitInspector {
             });
         }
         let status = self
-            .expect(
+            .bound_expect(
                 worktree,
                 &[
                     "status",
@@ -98,8 +388,9 @@ impl GitInspector {
     ) -> Result<String, GitError> {
         require_object_id(base_commit)?;
         require_object_id(candidate_commit)?;
+        worktree_binding(worktree)?;
         let overrides = self.filter_overrides(worktree).await?;
-        self.expect(
+        self.bound_expect(
             worktree,
             &[
                 "diff",
@@ -121,8 +412,10 @@ impl GitInspector {
     }
 
     /// Create a detached worktree for `commit` at `path`, which must not exist yet,
-    /// and verify its HEAD is exactly that commit. Repository-selected content
-    /// filters are disabled: executing them is outside the writer approval.
+    /// and verify its binding to `root` and that its HEAD is exactly that commit.
+    /// Repository-selected content filters are disabled: executing them is outside
+    /// the writer approval. The gitfile is written with an absolute path and
+    /// submodules are never populated, whatever the developer's configuration.
     pub async fn add_detached_worktree(
         &self,
         root: &Path,
@@ -135,7 +428,11 @@ impl GitInspector {
                 detail: format!("{} already exists", path.display()),
             });
         }
-        let overrides = self.filter_overrides(root).await?;
+        let mut overrides = self.filter_overrides(root).await?;
+        overrides.extend([
+            "worktree.useRelativePaths=false".to_owned(),
+            "submodule.recurse=false".to_owned(),
+        ]);
         let target = path.to_string_lossy().into_owned();
         self.expect(
             root,
@@ -143,6 +440,7 @@ impl GitInspector {
             &overrides,
         )
         .await?;
+        self.verify_worktree_binding(root, path).await?;
         let head = self.head_commit(path).await?;
         if head != commit {
             return Err(GitError::Command {
@@ -153,31 +451,52 @@ impl GitInspector {
         Ok(())
     }
 
-    /// Exact HEAD of a worktree or repository.
+    /// Exact HEAD of a Luuna-owned worktree, read through its verified binding.
     pub async fn head_commit(&self, worktree: &Path) -> Result<String, GitError> {
-        self.optional(worktree, &["rev-parse", "--verify", "--quiet", "HEAD"], &[])
-            .await?
-            .filter(|c| c.len() == 40 || c.len() == 64)
+        let output = self
+            .bound(worktree, &["rev-parse", "--verify", "--quiet", "HEAD"], &[])
+            .await?;
+        Some(String::from_utf8_lossy(&output.stdout).trim().to_owned())
+            .filter(|c| output.status == Some(0) && (c.len() == 40 || c.len() == 64))
             .ok_or_else(|| GitError::Command {
                 command: "rev-parse".into(),
                 detail: "worktree has no HEAD commit".into(),
             })
     }
 
-    /// Every path whose content differs from HEAD, including untracked files and
-    /// files inside untracked directories. Output beyond the configured cap is an
-    /// error: a change set too large to list is never judged in scope.
+    /// Exact tree of a commit, read through a Luuna-owned worktree's binding.
+    pub async fn candidate_tree(&self, worktree: &Path, commit: &str) -> Result<String, GitError> {
+        require_object_id(commit)?;
+        let spec = format!("{commit}^{{tree}}");
+        let output = self
+            .bound(worktree, &["rev-parse", "--verify", "--quiet", &spec], &[])
+            .await?;
+        Some(String::from_utf8_lossy(&output.stdout).trim().to_owned())
+            .filter(|t| output.status == Some(0) && (t.len() == 40 || t.len() == 64))
+            .ok_or_else(|| GitError::Command {
+                command: "rev-parse".into(),
+                detail: format!("commit {commit} has no tree"),
+            })
+    }
+
+    /// Every path whose content differs from HEAD, including untracked files,
+    /// files inside untracked directories and ignored files (status `!`), which
+    /// `add --all` would leave out of a candidate. Output beyond the configured
+    /// cap is an error: a change set too large to list is never judged in scope.
     pub async fn changed_paths(&self, worktree: &Path) -> Result<Vec<ChangedPath>, GitError> {
+        worktree_binding(worktree)?;
         let overrides = self.filter_overrides(worktree).await?;
         let output = self
-            .git(
-                Some(worktree),
+            .bound(
+                worktree,
                 &[
                     "status",
                     "--porcelain=v2",
                     "-z",
                     "--no-renames",
                     "--untracked-files=all",
+                    "--ignored=matching",
+                    "--ignore-submodules=none",
                 ],
                 &overrides,
             )
@@ -192,21 +511,38 @@ impl GitInspector {
     }
 
     /// Stage everything in the worktree and commit it as the Luuna writer.
-    /// Returns the new HEAD. Hooks do not run; validation is a separate gate.
+    /// Returns the new HEAD. Hooks, signing and automatic maintenance do not
+    /// run; validation is a separate gate. The commit is read back: its only
+    /// parent must be the previous HEAD and both identities the Luuna writer.
     pub async fn commit_all(&self, worktree: &Path, message: &str) -> Result<String, GitError> {
         let before = self.head_commit(worktree).await?;
         let overrides = self.filter_overrides(worktree).await?;
-        self.expect(worktree, &["add", "--all"], &overrides).await?;
+        self.bound_expect(worktree, &["add", "--all"], &overrides)
+            .await?;
+        // `author.*` and `committer.*` outrank `user.*`, so all of them are set.
         let mut identity = vec![
             format!("user.name={WRITER_AUTHOR_NAME}"),
             format!("user.email={WRITER_AUTHOR_EMAIL}"),
+            format!("author.name={WRITER_AUTHOR_NAME}"),
+            format!("author.email={WRITER_AUTHOR_EMAIL}"),
+            format!("committer.name={WRITER_AUTHOR_NAME}"),
+            format!("committer.email={WRITER_AUTHOR_EMAIL}"),
             "commit.gpgsign=false".to_owned(),
             "core.editor=false".to_owned(),
+            "gc.auto=0".to_owned(),
+            "maintenance.auto=false".to_owned(),
         ];
         identity.extend(overrides);
-        self.expect(
+        self.bound_expect(
             worktree,
-            &["commit", "--quiet", "--no-verify", "--message", message],
+            &[
+                "commit",
+                "--quiet",
+                "--no-verify",
+                "--no-gpg-sign",
+                "--message",
+                message,
+            ],
             &identity,
         )
         .await?;
@@ -215,6 +551,33 @@ impl GitInspector {
             return Err(GitError::Command {
                 command: "commit".into(),
                 detail: "no commit was created".into(),
+            });
+        }
+        // The raw object, so no pretty-format or signature-display setting runs.
+        let object = self
+            .bound_expect(worktree, &["cat-file", "commit", &after], &[])
+            .await?;
+        let headers: Vec<&str> = object.split("\n\n").next().unwrap_or("").lines().collect();
+        let parents: Vec<&str> = headers
+            .iter()
+            .filter_map(|line| line.strip_prefix("parent "))
+            .collect();
+        let writer = format!("{WRITER_AUTHOR_NAME} <{WRITER_AUTHOR_EMAIL}> ");
+        let by_writer = |role: &str| {
+            let values: Vec<&str> = headers
+                .iter()
+                .filter_map(|line| line.strip_prefix(role))
+                .collect();
+            values.len() == 1 && values[0].starts_with(&writer)
+        };
+        if parents != [before.as_str()]
+            || !by_writer("author ")
+            || !by_writer("committer ")
+            || headers.iter().any(|line| line.starts_with("gpgsig"))
+        {
+            return Err(GitError::Command {
+                command: "commit".into(),
+                detail: "the candidate commit does not have the previous HEAD as its only parent and the Luuna writer as author and committer".into(),
             });
         }
         Ok(after)
@@ -240,7 +603,9 @@ fn require_object_id(value: &str) -> Result<(), GitError> {
     })
 }
 
-/// `git status --porcelain=v2 -z --no-renames --untracked-files=all` entries.
+/// `git status --porcelain=v2 -z --no-renames --untracked-files=all
+/// --ignored=matching` entries. An ignored directory is reported once with a
+/// trailing `/`, which is dropped so the directory can be judged against scope.
 pub fn parse_changed_paths(bytes: &[u8]) -> Vec<ChangedPath> {
     let mut changes = Vec::new();
     for entry in bytes.split(|b| *b == 0).filter(|e| !e.is_empty()) {
@@ -259,6 +624,7 @@ pub fn parse_changed_paths(bytes: &[u8]) -> Vec<ChangedPath> {
             }
             "u" => ("U".to_owned(), rest.splitn(10, ' ').last().unwrap_or("")),
             "?" => ("?".to_owned(), rest),
+            "!" => ("!".to_owned(), rest.strip_suffix('/').unwrap_or(rest)),
             _ => continue,
         };
         if path.is_empty() {
@@ -273,6 +639,295 @@ pub fn parse_changed_paths(bytes: &[u8]) -> Vec<ChangedPath> {
     changes
 }
 
+// Candidate validation and review (ADR 0009): every validation generation runs
+// on exactly the frozen candidate tree, and review diffs show each textual
+// change whatever the repository's attributes say about it.
+
+/// How one changed path appears in a [`ReviewDiff`].
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum DiffShown {
+    /// Its unified diff is part of the text.
+    Text,
+    /// Binary or non-UTF-8 content: a one-line summary naming both blobs.
+    Summary,
+    /// Left out so the text stays within the requested bound.
+    Omitted,
+}
+
+/// One path that differs between the base and the candidate commit.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct DiffFile {
+    pub path: String,
+    /// Git's raw status letter (`A`, `D`, `M`, `T`).
+    pub status: String,
+    pub old_blob: String,
+    pub new_blob: String,
+    pub shown: DiffShown,
+}
+
+/// A patch between exact commits for independent review and display. `text`
+/// holds complete per-file sections only; `files` names every changed path,
+/// including those whose section did not fit (`truncated`).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ReviewDiff {
+    pub text: String,
+    pub files: Vec<DiffFile>,
+    pub truncated: bool,
+}
+
+impl GitInspector {
+    /// Git in a Luuna-owned worktree with the work tree named explicitly, so
+    /// repository configuration cannot point an operation at another tree.
+    async fn owned_worktree(
+        &self,
+        worktree: &Path,
+        args: &[&str],
+        overrides: &[String],
+    ) -> Result<crate::Output, GitError> {
+        let work_tree = crate::strip_verbatim_prefix(worktree)
+            .to_str()
+            .map(|path| format!("--work-tree={path}"))
+            .ok_or_else(|| GitError::Command {
+                command: "worktree".into(),
+                detail: "worktree paths must be valid UTF-8".into(),
+            })?;
+        let mut full = vec![work_tree.as_str()];
+        full.extend_from_slice(args);
+        // Errors name the subcommand, never the private path placed before it.
+        let subcommand = args.first().copied().unwrap_or("git").to_owned();
+        let output = match self.git(Some(worktree), &full, overrides).await {
+            Err(GitError::Timeout(_)) => return Err(GitError::Timeout(subcommand)),
+            other => other?,
+        };
+        if output.status != Some(0) {
+            return Err(GitError::Command {
+                command: subcommand,
+                detail: output.stderr,
+            });
+        }
+        Ok(output)
+    }
+
+    /// Tracked paths whose index or file content differs from HEAD in a
+    /// Luuna-owned worktree, so a drift reason can name them.
+    pub async fn tracked_changes(&self, worktree: &Path) -> Result<Vec<String>, GitError> {
+        let overrides = self.filter_overrides(worktree).await?;
+        let output = self
+            .owned_worktree(
+                worktree,
+                &[
+                    "status",
+                    "--porcelain=v2",
+                    "-z",
+                    "--no-renames",
+                    "--untracked-files=no",
+                    "--ignore-submodules=none",
+                ],
+                &overrides,
+            )
+            .await?;
+        Ok(parse_changed_paths(&output.stdout)
+            .into_iter()
+            .map(|change| change.path)
+            .collect())
+    }
+
+    /// Remove every untracked and ignored path from a Luuna-owned candidate
+    /// worktree (`git clean -ffdx`): what a writer, a person or an earlier
+    /// generation's checks left there is not part of the frozen candidate and
+    /// must not feed its checks or review. Callers verify HEAD, tree and
+    /// tracked content first. Returns the removed paths as Git names them, and
+    /// fails when anything untracked remains afterwards.
+    pub async fn clean_candidate_worktree(&self, worktree: &Path) -> Result<Vec<String>, GitError> {
+        let mut overrides = self.filter_overrides(worktree).await?;
+        overrides.push("core.quotePath=false".to_owned());
+        let planned = self
+            .owned_worktree(worktree, &["clean", "-ffdx", "--dry-run"], &overrides)
+            .await?;
+        let removed: Vec<String> = String::from_utf8_lossy(&planned.stdout)
+            .lines()
+            .filter_map(|line| line.strip_prefix("Would remove "))
+            .map(ToOwned::to_owned)
+            .collect();
+        if !removed.is_empty() {
+            self.owned_worktree(worktree, &["clean", "-ffdx", "--quiet"], &overrides)
+                .await?;
+        }
+        let left = self
+            .owned_worktree(
+                worktree,
+                &["ls-files", "--others", "--directory", "-z"],
+                &overrides,
+            )
+            .await?;
+        if left.stdout.iter().any(|byte| *byte != 0) {
+            let paths: Vec<String> = left
+                .stdout
+                .split(|byte| *byte == 0)
+                .filter(|path| !path.is_empty())
+                .take(8)
+                .map(|path| String::from_utf8_lossy(path).into_owned())
+                .collect();
+            return Err(GitError::Command {
+                command: "clean".into(),
+                detail: format!(
+                    "untracked paths remain after cleaning: {}",
+                    paths.join(", ")
+                ),
+            });
+        }
+        Ok(removed)
+    }
+
+    /// The patch between exact commits as independent review and the
+    /// developer see it. `--text` overrides `-diff`/`binary` attributes from
+    /// the tree, `info/attributes` or `core.attributesFile`, external drivers
+    /// and text conversion stay disabled and filters are overridden, so no
+    /// attribute can turn a source change into an opaque binary patch.
+    /// Content that really is binary (a NUL byte) or not valid UTF-8 becomes a
+    /// one-line summary naming both blobs instead of lossily decoded text.
+    /// Whole file sections are kept in order while they fit in `max_bytes`;
+    /// the rest are listed as omitted. A patch beyond Git's output cap yields
+    /// the file list alone, never a refusal.
+    pub async fn review_diff(
+        &self,
+        worktree: &Path,
+        base_commit: &str,
+        candidate_commit: &str,
+        max_bytes: usize,
+    ) -> Result<ReviewDiff, GitError> {
+        require_object_id(base_commit)?;
+        require_object_id(candidate_commit)?;
+        let overrides = self.filter_overrides(worktree).await?;
+        let common = [
+            "--no-ext-diff",
+            "--no-textconv",
+            "--no-renames",
+            "--no-color",
+            "--no-relative",
+            "--ignore-submodules=none",
+            base_commit,
+            candidate_commit,
+            "--",
+        ];
+        let mut raw_args = vec!["diff", "--raw", "-z", "--no-abbrev"];
+        raw_args.extend_from_slice(&common);
+        let raw = self.owned_worktree(worktree, &raw_args, &overrides).await?;
+        let mut files = parse_raw_diff(&raw.stdout).ok_or_else(|| GitError::Command {
+            command: "diff".into(),
+            detail: "unexpected raw diff output".into(),
+        })?;
+        let mut patch_args = vec![
+            "diff",
+            "--text",
+            "--full-index",
+            "--unified=3",
+            "--src-prefix=a/",
+            "--dst-prefix=b/",
+        ];
+        patch_args.extend_from_slice(&common);
+        let patch = match self.owned_worktree(worktree, &patch_args, &overrides).await {
+            Ok(output) => output.stdout,
+            Err(GitError::Oversized | GitError::Timeout(_)) => {
+                for file in &mut files {
+                    file.shown = DiffShown::Omitted;
+                }
+                return Ok(ReviewDiff {
+                    text: String::new(),
+                    truncated: !files.is_empty(),
+                    files,
+                });
+            }
+            Err(error) => return Err(error),
+        };
+        // Git shows a type change (a file replaced by a symlink or a gitlink)
+        // as a deletion followed by an addition of the same path: two sections
+        // for one raw entry.
+        let parts = |file: &DiffFile| if file.status == "T" { 2 } else { 1 };
+        let starts = patch_section_starts(&patch);
+        if starts.len() != files.iter().map(parts).sum::<usize>()
+            || starts.first().is_some_and(|start| *start != 0)
+            || (starts.is_empty() && !patch.is_empty())
+        {
+            return Err(GitError::Command {
+                command: "diff".into(),
+                detail: "patch sections do not match the changed paths".into(),
+            });
+        }
+        let mut text = String::new();
+        let mut truncated = false;
+        let mut next = 0;
+        for file in &mut files {
+            let from = starts[next];
+            next += parts(file);
+            let section = &patch[from..starts.get(next).copied().unwrap_or(patch.len())];
+            let rendered = match std::str::from_utf8(section) {
+                Ok(section) if !section.contains('\0') => {
+                    file.shown = DiffShown::Text;
+                    section.to_owned()
+                }
+                _ => {
+                    file.shown = DiffShown::Summary;
+                    // Escaped, so a path cannot add lines of its own.
+                    format!(
+                        "diff --git a/{path} b/{path}\nLuuna: {status} {path}: binary or non-UTF-8 content is not shown as text (old blob {old}, new blob {new}); inspect the file itself.\n",
+                        path = file.path.escape_debug(),
+                        status = file.status,
+                        old = file.old_blob,
+                        new = file.new_blob,
+                    )
+                }
+            };
+            if text.len() + rendered.len() <= max_bytes {
+                text.push_str(&rendered);
+            } else {
+                file.shown = DiffShown::Omitted;
+                truncated = true;
+            }
+        }
+        Ok(ReviewDiff {
+            text,
+            files,
+            truncated,
+        })
+    }
+}
+
+/// `git diff --raw -z --no-renames --no-abbrev` entries; `None` when the
+/// output does not have that shape.
+fn parse_raw_diff(bytes: &[u8]) -> Option<Vec<DiffFile>> {
+    let mut fields = bytes.split(|byte| *byte == 0);
+    let mut files = Vec::new();
+    while let Some(meta) = fields.next() {
+        if meta.is_empty() {
+            continue;
+        }
+        let meta = std::str::from_utf8(meta).ok()?.strip_prefix(':')?;
+        let parts: Vec<&str> = meta.split(' ').collect();
+        let [_, _, old, new, status] = parts.as_slice() else {
+            return None;
+        };
+        let path = fields.next().filter(|path| !path.is_empty())?;
+        files.push(DiffFile {
+            path: String::from_utf8_lossy(path).into_owned(),
+            status: (*status).to_owned(),
+            old_blob: (*old).to_owned(),
+            new_blob: (*new).to_owned(),
+            shown: DiffShown::Omitted,
+        });
+    }
+    Some(files)
+}
+
+/// Offsets of each `diff --git ` header line in a patch. Content lines always
+/// carry a ` `, `+`, `-` or `\` prefix, so no file content can start a section.
+fn patch_section_starts(patch: &[u8]) -> Vec<usize> {
+    const HEADER: &[u8] = b"diff --git ";
+    (0..patch.len())
+        .filter(|&at| (at == 0 || patch[at - 1] == b'\n') && patch[at..].starts_with(HEADER))
+        .collect()
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -281,7 +936,7 @@ mod tests {
     fn porcelain_entries_become_changed_paths() {
         let raw = b"1 .M N... 100644 100644 100644 abc def src/main.rs\0\
 1 A. N... 000000 100644 100644 000 def docs/new file.md\0\
-? untracked/dir/file.txt\0! ignored.log\0";
+? untracked/dir/file.txt\0! ignored.log\0! build/\0";
         let changes = parse_changed_paths(raw);
         assert_eq!(
             changes
@@ -292,6 +947,8 @@ mod tests {
                 ("M", "src/main.rs"),
                 ("A", "docs/new file.md"),
                 ("?", "untracked/dir/file.txt"),
+                ("!", "ignored.log"),
+                ("!", "build"),
             ]
         );
         assert!(parse_changed_paths(b"").is_empty());

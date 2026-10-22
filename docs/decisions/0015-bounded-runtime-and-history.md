@@ -50,3 +50,15 @@ assistant replay remain proportional to history size; future projections or
 workflow pagination must preserve discovery of every ticket and approval.
 Measured performance and platform/provider coverage belong in the performance
 review, separately from historical documentation validation.
+
+Amendment (2026-10-22, merge with the audit-hardening branch and
+[ADR 0016](0016-storage-backup-and-schema-compatibility.md)): the run-history
+indexes are versioned storage migration 9 rather than an unversioned startup
+statement. Supervised workers (panic settlement and active-map release) run
+through the bounded `dispatch::worker` pool. `limit` keeps its 1 to 10,000
+validation, but run pages answer at most 200 records (and about 1 MiB of
+events), so `readEventPages` and the desktop continue until an empty page
+rather than stopping at the first short one. `before` is accepted only with
+`limit`. The Windows suspended-spawn job ownership is the executor's single
+process-tree owner, and display progress reserves channel slots for the
+final reaping record.

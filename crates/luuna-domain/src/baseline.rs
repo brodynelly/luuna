@@ -16,8 +16,11 @@ use std::collections::BTreeMap;
 pub enum CheckStatus {
     Passed,
     Failed,
-    /// Could not run meaningfully: missing executable, incapable host, dirty
-    /// checkout, container profile, or an empty suite. Never counts as success.
+    /// Could not run meaningfully: missing executable or dependency, incapable
+    /// host, dirty checkout, container profile, an empty or skip-only suite, or
+    /// a workflow time budget that ended the check before its own deadline.
+    /// Infrastructure, not an assertion: never counts as success, and never
+    /// asks a repair writer to fix it.
     Blocked,
     Cancelled,
     Interrupted,
@@ -280,7 +283,7 @@ mod tests {
             command: vec!["cargo".into(), "test".into()],
             status,
             exit_code,
-            artifact_refs: vec!["artifact:baseline-run:unit:stdout".into()],
+            artifact_refs: vec!["unit.stdout".into()],
             cwd: ".".into(),
             started_at: None,
             finished_at: None,

@@ -12,10 +12,13 @@ use axum::{
 use chrono::{SecondsFormat, Utc};
 use luuna_domain::{
     valid_project_id, BaselineEvidence, BaselineIdentity, BaselineStatus, CheckResult, CheckStatus,
-    ExecutionProfile, ManifestCheck, RunState, SCHEMA_VERSION,
+    DirtyState, ExecutionProfile, ManifestCheck, RunState, SCHEMA_VERSION,
 };
-use luuna_executor::{artifact_hashes, artifact_ref, CommandSpec, Executor, Probe, Progress};
-use luuna_storage::{ManifestRecord, RepositoryRegistration, RunRecord};
+use luuna_executor::{
+    artifact_hashes, artifact_id, reconcile_process_group, CommandSpec, Executor,
+    GroupReconciliation, Probe, ProcessGroup, Progress,
+};
+use luuna_storage::{ManifestRecord, RepositoryRegistration, RunRecord, Store};
 use serde::Deserialize;
 use serde_json::json;
 use std::{path::PathBuf, time::Duration};
@@ -24,6 +27,8 @@ use tokio::sync::{mpsc, watch};
 /// Output events per check kept in the durable stream; artifacts hold everything.
 const MAX_OUTPUT_EVENTS: usize = 200;
 const MAX_ARTIFACT_RESPONSE: usize = 16 * 1024 * 1024;
+/// Dirty paths named in a blocked baseline's reason; the event keeps the full recorded list.
+const NAMED_DIRTY_PATHS: usize = 5;
 
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -120,6 +125,30 @@ pub async fn start_baseline(
     let run_id = uuid::Uuid::new_v4().to_string();
     let (tx, rx) = watch::channel(false);
     let mut active = state.active.lock().map_err(internal)?;
+    // One baseline per repository at a time: two would run the same recipes in
+    // the same developer checkout and contend for its files, caches and ports.
+    // Decided under the active-run lock, before this run exists.
+    {
+        let store = state.store.lock().map_err(internal)?;
+        for active_id in active.keys() {
+            let Some(other) = store.get_run(active_id).map_err(internal)? else {
+                continue;
+            };
+            if !other.state.is_terminal()
+                && other.metadata["kind"] == "baseline"
+                && other.metadata["project_id"] == id.as_str()
+                && other.metadata["repository_id"] == request.repository_id.as_str()
+            {
+                return Err(ApiError(
+                    StatusCode::CONFLICT,
+                    format!(
+                        "baseline run {} is already running for repository {}; wait for it to settle or cancel it",
+                        other.id, request.repository_id
+                    ),
+                ));
+            }
+        }
+    }
     if active.len() >= 4 {
         return Err(ApiError(
             StatusCode::TOO_MANY_REQUESTS,
@@ -144,7 +173,6 @@ pub async fn start_baseline(
         .map_err(internal)?;
     active.insert(run_id.clone(), tx);
     drop(active);
-    let worker_state = state.clone();
     let job = BaselineJob {
         run_id: run_id.clone(),
         project_id: id,
@@ -154,15 +182,7 @@ pub async fn start_baseline(
         recipes,
         required,
     };
-    crate::dispatch::worker(async move {
-        baseline_worker(worker_state.clone(), job, rx).await;
-        // Release the data-directory owner before declaring this worker gone.
-        let active_runs = worker_state.active.clone();
-        drop(worker_state);
-        if let Ok(mut active) = active_runs.lock() {
-            active.remove(&run_id);
-        };
-    });
+    state.spawn_supervised(run_id, baseline_worker(state.clone(), job, rx));
     Ok((StatusCode::ACCEPTED, Json(run)))
 }
 
@@ -196,8 +216,160 @@ pub(crate) fn recipe_spec(
         repository_root: PathBuf::from(local_path),
         cwd: recipe.cwd.clone(),
         timeout: Duration::from_secs(recipe.timeout_seconds),
+        budget: None,
         capabilities: recipe.capabilities.clone(),
         artifact_dir: artifact_dir.to_path_buf(),
+    }
+}
+
+/// Relay one check's executor progress into the run's durable events: the
+/// started process group (restart recovery reaps its survivors after a hard
+/// kill), any descendants reaped once it settled and, when `output` is set,
+/// the first `MAX_OUTPUT_EVENTS` output chunks. The relay ends when the
+/// executor drops its sender.
+pub(crate) fn relay_progress(
+    state: &AppState,
+    run_id: &str,
+    recipe_id: &str,
+    output: bool,
+) -> (mpsc::Sender<Progress>, tokio::task::JoinHandle<()>) {
+    // Display progress is bounded and never backpressures the child's pipes.
+    let (progress, mut updates) = mpsc::channel::<Progress>(luuna_executor::PROGRESS_CAPACITY);
+    let relay_state = state.clone();
+    let relay_run = run_id.to_owned();
+    let relay_recipe = recipe_id.to_owned();
+    let relay = crate::dispatch::worker(async move {
+        let mut emitted = 0usize;
+        while let Some(update) = updates.recv().await {
+            match update {
+                Progress::Started {
+                    pid,
+                    command,
+                    group,
+                } => {
+                    let _ = relay_state.event(
+                        &relay_run,
+                        "check.spawned",
+                        json!({"recipe_id": relay_recipe, "pid": pid, "command": command, "process_group": group}),
+                    );
+                }
+                Progress::Output { stream, chunk } => {
+                    if output && emitted < MAX_OUTPUT_EVENTS {
+                        emitted += 1;
+                        let _ = relay_state.event(
+                            &relay_run,
+                            "check.output",
+                            json!({"recipe_id": relay_recipe, "stream": stream, "chunk": chunk, "truncated_stream": emitted == MAX_OUTPUT_EVENTS, "display_only": true}),
+                        );
+                    }
+                }
+                Progress::Reaped { descendants } => {
+                    let _ = relay_state.event(
+                        &relay_run,
+                        "check.reaped",
+                        json!({"recipe_id": relay_recipe, "descendants": descendants}),
+                    );
+                }
+            }
+        }
+    });
+    (progress, relay)
+}
+
+/// Startup recovery, before any work is accepted. A runtime that died while
+/// a check ran could not stop the check's descendants: Linux kills only the
+/// direct child with it, macOS not even that, and Windows only when the
+/// check's job object held the tree. Every process group recorded for a run
+/// this restart is about to interrupt is reconciled: verified survivors are
+/// terminated and named in `check.orphans_reaped`, and processes that may
+/// belong to the group but cannot be verified are left alone and named in
+/// `check.orphans_unverified`, so a resumed validation never runs beside them
+/// unknowingly.
+pub(crate) fn reap_orphaned_checks(store: &mut Store) -> luuna_storage::Result<()> {
+    for (run_id, event) in store.recovery_check_events()? {
+        let recipe_id = event.payload["recipe_id"].clone();
+        let Ok(group) =
+            serde_json::from_value::<ProcessGroup>(event.payload["process_group"].clone())
+        else {
+            eprintln!("luuna-runtime: skipped malformed process ownership for run {run_id}");
+            continue;
+        };
+        match reconcile_process_group(&group) {
+            GroupReconciliation::Gone => {}
+            GroupReconciliation::Reaped(processes) => {
+                store.append_event(
+                    &run_id,
+                    "check.orphans_reaped",
+                    json!({"recipe_id": recipe_id, "pgid": group.pgid, "processes": processes}),
+                )?;
+            }
+            GroupReconciliation::Unverified { processes, reason } => {
+                store.append_event(
+                        &run_id,
+                        "check.orphans_unverified",
+                        json!({"recipe_id": recipe_id, "pgid": group.pgid, "processes": processes, "reason": reason}),
+                    )?;
+            }
+        }
+    }
+    Ok(())
+}
+
+/// Why a checkout that is not an exact commit blocks a baseline, naming the
+/// paths. Untracked files alone are often output an earlier check wrote;
+/// Git-ignored files never count, so ignoring them resolves the block.
+fn dirty_checkout_reason(dirty: &DirtyState) -> String {
+    let mut named = dirty
+        .paths
+        .iter()
+        .take(NAMED_DIRTY_PATHS)
+        .cloned()
+        .collect::<Vec<_>>()
+        .join(", ");
+    let more = dirty.paths.len().saturating_sub(NAMED_DIRTY_PATHS);
+    if more > 0 || dirty.truncated {
+        named.push_str(", and more");
+    }
+    if dirty.staged + dirty.unstaged + dirty.conflicted == 0 {
+        return format!(
+            "checkout is not at an exact commit: {} untracked path(s) ({named}); untracked files block a baseline even when an earlier check wrote them (build output, caches, reports): add them to .gitignore, since Git-ignored files never block a baseline, or remove them",
+            dirty.untracked
+        );
+    }
+    format!(
+        "checkout is not at an exact commit: {} staged, {} unstaged, {} untracked and {} conflicted paths ({named}); commit or stash developer changes before running a baseline",
+        dirty.staged, dirty.unstaged, dirty.untracked, dirty.conflicted
+    )
+}
+
+/// Settle a baseline the worker is finishing or can no longer complete. A
+/// failed write is retried once, so a transient storage error does not leave
+/// the record `running`, where it would withhold implementation and the next
+/// baseline until a restart.
+async fn settle_baseline(
+    state: &AppState,
+    baseline_id: &str,
+    status: BaselineStatus,
+    reason: Option<&str>,
+) -> Result<(), String> {
+    let attempt = || {
+        state
+            .store
+            .lock()
+            .map_err(|_| "store poisoned".to_owned())
+            .and_then(|mut store| {
+                store
+                    .finish_baseline(baseline_id, status, reason)
+                    .map(|_| ())
+                    .map_err(|e| e.to_string())
+            })
+    };
+    match attempt() {
+        Ok(()) => Ok(()),
+        Err(_) => {
+            tokio::time::sleep(Duration::from_millis(100)).await;
+            attempt()
+        }
     }
 }
 
@@ -292,7 +464,12 @@ async fn baseline_worker(state: AppState, job: BaselineJob, cancel: watch::Recei
     {
         fail(
             &state,
-            format!("repository identity changed since registration: {error}"),
+            crate::projects::identity_changed(
+                &job.manifest.manifest.id,
+                &job.registration.repository_id,
+                error,
+            )
+            .1,
             None,
         );
         return;
@@ -326,11 +503,7 @@ async fn baseline_worker(state: AppState, job: BaselineJob, cancel: watch::Recei
             "container execution profile is not implemented; only native execution runs".to_owned(),
         )
     } else if !observation.dirty.is_clean() {
-        let dirty = &observation.dirty;
-        Some(format!(
-            "checkout is not at an exact commit: {} staged, {} unstaged, {} untracked and {} conflicted paths; commit or stash developer changes before running a baseline",
-            dirty.staged, dirty.unstaged, dirty.untracked, dirty.conflicted
-        ))
+        Some(dirty_checkout_reason(&observation.dirty))
     } else if job.required.is_empty() {
         Some("manifest declares no required check for this repository".to_owned())
     } else {
@@ -402,9 +575,7 @@ async fn baseline_worker(state: AppState, job: BaselineJob, cancel: watch::Recei
     );
 
     if let Some(reason) = blocked_reason {
-        let _ = state.store.lock().map(|mut store| {
-            store.finish_baseline(&baseline_id, BaselineStatus::Blocked, Some(&reason))
-        });
+        let _ = settle_baseline(&state, &baseline_id, BaselineStatus::Blocked, Some(&reason)).await;
         let _ = state.event(
             &job.run_id,
             "baseline.finished",
@@ -429,34 +600,7 @@ async fn baseline_worker(state: AppState, job: BaselineJob, cancel: watch::Recei
             "check.started",
             json!({"recipe_id": recipe.id, "command": command, "cwd": recipe.cwd, "required": recipe.required, "timeout_seconds": recipe.timeout_seconds}),
         );
-        let (progress, mut updates) = mpsc::channel::<Progress>(luuna_executor::PROGRESS_CAPACITY);
-        let relay_state = state.clone();
-        let relay_run = job.run_id.clone();
-        let relay_recipe = recipe.id.clone();
-        let relay = crate::dispatch::worker(async move {
-            let mut emitted = 0usize;
-            while let Some(update) = updates.recv().await {
-                match update {
-                    Progress::Started { pid, command } => {
-                        let _ = relay_state.event(
-                            &relay_run,
-                            "check.spawned",
-                            json!({"recipe_id": relay_recipe, "pid": pid, "command": command}),
-                        );
-                    }
-                    Progress::Output { stream, chunk } => {
-                        if emitted < MAX_OUTPUT_EVENTS {
-                            emitted += 1;
-                            let _ = relay_state.event(
-                                &relay_run,
-                                "check.output",
-                                json!({"recipe_id": relay_recipe, "stream": stream, "chunk": chunk, "truncated_stream": true, "display_only": true}),
-                            );
-                        }
-                    }
-                }
-            }
-        });
+        let (progress, relay) = relay_progress(&state, &job.run_id, &recipe.id, true);
         let execution = state
             .executor
             .execute(&spec, cancel.clone(), Some(progress))
@@ -465,18 +609,11 @@ async fn baseline_worker(state: AppState, job: BaselineJob, cancel: watch::Recei
         let execution = match execution {
             Ok(execution) => execution,
             Err(error) => {
-                fail(
-                    &state,
-                    format!("executor failure: {error}"),
-                    Some(BaselineStatus::Failed),
-                );
-                let _ = state.store.lock().map(|mut store| {
-                    store.finish_baseline(
-                        &baseline_id,
-                        BaselineStatus::Failed,
-                        Some(&error.to_string()),
-                    )
-                });
+                let reason = format!("executor failure: {error}");
+                let _ =
+                    settle_baseline(&state, &baseline_id, BaselineStatus::Failed, Some(&reason))
+                        .await;
+                fail(&state, reason, Some(BaselineStatus::Failed));
                 return;
             }
         };
@@ -492,22 +629,23 @@ async fn baseline_worker(state: AppState, job: BaselineJob, cancel: watch::Recei
             command: execution.command.clone(),
             status: execution.status,
             exit_code: execution.exit_code,
+            // `<recipe>.<stream>`, the identity the artifact route serves.
             artifact_refs: execution
                 .artifacts
                 .iter()
-                .map(|a| artifact_ref(&job.run_id, &recipe.id, &a.name))
+                .map(|a| artifact_id(&recipe.id, &a.name))
                 .collect(),
             cwd: recipe.cwd.clone(),
             started_at: Some(execution.started_at.clone()),
             finished_at: Some(execution.finished_at.clone()),
             reason: execution.reason.clone(),
-            artifact_hashes: artifact_hashes(&execution),
+            artifact_hashes: artifact_hashes(&recipe.id, &execution),
             tests_detected: execution.tests_detected,
             truncated_artifacts: execution
                 .artifacts
                 .iter()
                 .filter(|a| a.truncated)
-                .map(|a| artifact_ref(&job.run_id, &recipe.id, &a.name))
+                .map(|a| artifact_id(&recipe.id, &a.name))
                 .collect(),
         };
         let recorded = state
@@ -520,11 +658,10 @@ async fn baseline_worker(state: AppState, job: BaselineJob, cancel: watch::Recei
                     .map_err(|e| e.to_string())
             });
         if let Err(error) = recorded {
-            fail(
-                &state,
-                format!("cannot persist check result: {error}"),
-                Some(BaselineStatus::Failed),
-            );
+            let reason = format!("cannot persist check result: {error}");
+            let _ =
+                settle_baseline(&state, &baseline_id, BaselineStatus::Failed, Some(&reason)).await;
+            fail(&state, reason, Some(BaselineStatus::Failed));
             return;
         }
         let _ = state.event(
@@ -536,7 +673,8 @@ async fn baseline_worker(state: AppState, job: BaselineJob, cancel: watch::Recei
                 "tool_version": execution.tool_version,
                 "stdout_excerpt": execution.stdout_excerpt,
                 "stderr_excerpt": execution.stderr_excerpt,
-                "artifacts": execution.artifacts.iter().map(|a| json!({"name": a.name, "sha256": a.sha256, "bytes": a.bytes, "truncated": a.truncated})).collect::<Vec<_>>(),
+                "reaped_descendants": execution.reaped_descendants,
+                "artifacts": execution.artifacts.iter().map(|a| json!({"name": a.name, "sha256": a.sha256, "bytes": a.bytes, "retained_bytes": a.retained_bytes, "truncated": a.truncated})).collect::<Vec<_>>(),
             }),
         );
         let was_cancelled = result.status == CheckStatus::Cancelled;
@@ -582,9 +720,14 @@ async fn baseline_worker(state: AppState, job: BaselineJob, cancel: watch::Recei
                     .identity
                     .matches(&after.identity)
                 {
-                    drift = Some(format!(
-                        "repository identity changed while checks ran: {error}"
-                    ));
+                    drift = Some(
+                        crate::projects::identity_changed(
+                            &job.manifest.manifest.id,
+                            &job.registration.repository_id,
+                            error,
+                        )
+                        .1,
+                    );
                 } else if after.dirty.untracked > 0 {
                     // Build caches and reports are untracked by definition and do not
                     // change the recorded commit or tree; they are recorded, not judged.
@@ -633,15 +776,7 @@ async fn baseline_worker(state: AppState, job: BaselineJob, cancel: watch::Recei
                 .join("; "),
         ),
     };
-    let finished = state
-        .store
-        .lock()
-        .map_err(|_| "store poisoned".to_owned())
-        .and_then(|mut store| {
-            store
-                .finish_baseline(&baseline_id, status, reason.as_deref())
-                .map_err(|e| e.to_string())
-        });
+    let finished = settle_baseline(&state, &baseline_id, status, reason.as_deref()).await;
     let _ = state.event(
         &job.run_id,
         "baseline.finished",
@@ -708,7 +843,9 @@ pub async fn artifact(
         .get_run(&id)
         .map_err(internal)?
         .ok_or_else(not_found)?;
-    let path = artifact_dir(&state, &id).join(format!("{recipe_id}.{stream}.log"));
+    // The executor's file naming keeps IDs that differ only in case, and
+    // Windows device names, apart on every filesystem.
+    let path = luuna_executor::artifact_log_path(&artifact_dir(&state, &id), &artifact_id);
     let bytes = match tokio::fs::read(&path).await {
         Ok(bytes) => bytes,
         Err(_) => return Err(ApiError(StatusCode::NOT_FOUND, "artifact not found".into())),

@@ -6,11 +6,14 @@
 //! recipe that the developer confirms, and the M2b executor later runs under
 //! runtime policy. Imported text cannot widen scope or request secrets.
 use luuna_domain::{
-    Confidence, Discovery, DiscoveryQuestion, ExecutionProfile, ManifestCheck, ProjectManifest,
-    ProjectPolicy, ProposedCheck, RepositoryDiscovery, RepositoryManifest, RepositoryObservation,
-    SCHEMA_VERSION,
+    Confidence, DirtyState, Discovery, DiscoveryQuestion, ExecutionProfile, ManifestCheck,
+    ProjectManifest, ProjectPolicy, ProposedCheck, RepositoryDiscovery, RepositoryManifest,
+    RepositoryObservation, SCHEMA_VERSION,
 };
-use std::path::{Path, PathBuf};
+use std::{
+    collections::BTreeSet,
+    path::{Path, PathBuf},
+};
 use thiserror::Error;
 
 pub const MAX_MANIFEST_FILE_BYTES: u64 = 1024 * 1024;
@@ -107,6 +110,7 @@ pub fn discover(request: DiscoveryRequest) -> Result<Discovery, DiscoveryError> 
         }
         let mut facts = inspect_stack(&input.root, &id);
         let observation = input.observation;
+        flag_uncommitted_evidence(&id, &observation.dirty, &mut facts);
         if !observation.dirty.is_clean() {
             facts.question(
                 &id,
@@ -126,7 +130,10 @@ pub fn discover(request: DiscoveryRequest) -> Result<Discovery, DiscoveryError> 
                 facts.question(
                     &id,
                     "remote",
-                    "no portable origin remote is configured (none, or a filesystem path); confirm an explicit local: identity or add a URL remote before publication work",
+                    format!(
+                        "no portable origin remote is configured (none, or a filesystem path), so the proposal uses the explicit identity local:{id}; if you add a URL remote later, the registration no longer matches: rebind the repository with POST /api/v1/projects/{}/repositories/{id}/rebind, then confirm a manifest revision with that remote before publication work",
+                        request.project_id
+                    ),
                 );
                 format!("local:{id}")
             }
@@ -144,7 +151,7 @@ pub fn discover(request: DiscoveryRequest) -> Result<Discovery, DiscoveryError> 
             facts.question(
                 &id,
                 "checks",
-                "no required check recipe could be proposed; feature work stays blocked until a usable testing setup is confirmed (M2b prerequisite)",
+                "no required check recipe could be proposed, and a manifest needs at least one: add a test command to the repository, commit it and run discovery again, or enter a required recipe for a command the repository already supports before confirming; Luuna does not create a testing-prerequisite task, so tests are added outside Luuna for now",
             );
         }
         manifests.push(RepositoryManifest {
@@ -187,6 +194,44 @@ pub fn discover(request: DiscoveryRequest) -> Result<Discovery, DiscoveryError> 
         manifest_problems,
         questions,
     })
+}
+
+/// Recipes are read from the working tree, while baselines and Luuna worktrees
+/// use the committed HEAD. A recipe whose evidence file has uncommitted changes
+/// (or whose checkout has too many changed paths to tell) is only inferred, and
+/// the developer is asked about it explicitly.
+fn flag_uncommitted_evidence(id: &str, dirty: &DirtyState, facts: &mut Facts) {
+    let prefix = format!("{id}:");
+    let mut files = BTreeSet::new();
+    let mut checks = Vec::new();
+    for proposed in &mut facts.checks {
+        let changed: Vec<String> = proposed
+            .evidence
+            .iter()
+            .filter_map(|evidence| evidence.strip_prefix(&prefix))
+            .filter_map(|evidence| evidence.split(['#', ' ']).next())
+            .filter(|file| dirty.truncated || dirty.paths.iter().any(|path| path == file))
+            .map(ToOwned::to_owned)
+            .collect();
+        if changed.is_empty() {
+            continue;
+        }
+        files.extend(changed);
+        proposed.confidence = Confidence::Inferred;
+        checks.push(proposed.check.id.clone());
+    }
+    if checks.is_empty() {
+        return;
+    }
+    facts.question(
+        id,
+        "uncommitted-evidence",
+        format!(
+            "uncommitted changes in {} (or too many changed paths to tell): recipes {} were read from the working tree, but baselines and Luuna worktrees use the committed HEAD, so commit the change and run discovery again, or confirm these recipes only if HEAD supports them",
+            files.into_iter().collect::<Vec<_>>().join(", "),
+            checks.join(", ")
+        ),
+    );
 }
 
 const CONVENTIONAL_BRANCHES: [&str; 4] = ["main", "master", "trunk", "develop"];
@@ -484,7 +529,7 @@ fn node(root: &Path, id: &str, facts: &mut Facts) {
         facts.question(
             id,
             "node-tests",
-            "package.json declares no usable test script; a testing prerequisite task will be required before feature work",
+            "package.json declares no usable test script; add and commit one, then run discovery again, or confirm another required recipe; Luuna does not create a testing-prerequisite task",
         );
     }
 }
@@ -952,6 +997,90 @@ mod tests {
             .questions
             .iter()
             .any(|q| q.topic == "default-branch"));
+    }
+
+    #[test]
+    fn evidence_read_from_uncommitted_files_is_inferred_and_questioned() {
+        let dir = tempfile::tempdir().unwrap();
+        fs::write(
+            dir.path().join("package.json"),
+            r#"{"scripts":{"test":"vitest run"}}"#,
+        )
+        .unwrap();
+        fs::write(dir.path().join("package-lock.json"), "{}").unwrap();
+        fs::write(dir.path().join("Cargo.toml"), "[package]\nname = \"x\"\n").unwrap();
+        let mut dirty = observation(dir.path(), Some("main"), None);
+        dirty.dirty.unstaged = 1;
+        dirty.dirty.paths = vec!["package.json".into()];
+        let discovery = discover(request(dir.path(), dirty)).unwrap();
+        let checks = &discovery.repositories[0].proposed_checks;
+        let npm = checks.iter().find(|c| c.check.id == "npm-test").unwrap();
+        assert_eq!(npm.confidence, Confidence::Inferred);
+        let cargo = checks.iter().find(|c| c.check.id == "cargo-test").unwrap();
+        assert_eq!(cargo.confidence, Confidence::Observed);
+        let question = discovery
+            .questions
+            .iter()
+            .find(|q| q.topic == "uncommitted-evidence")
+            .expect("uncommitted evidence is questioned");
+        assert!(
+            question.detail.contains("package.json"),
+            "{}",
+            question.detail
+        );
+        assert!(question.detail.contains("npm-test"), "{}", question.detail);
+        assert!(
+            !question.detail.contains("cargo-test"),
+            "{}",
+            question.detail
+        );
+        let mut clean = observation(dir.path(), Some("main"), None);
+        clean.dirty.untracked = 1;
+        clean.dirty.paths = vec!["notes.txt".into()];
+        let discovery = discover(request(dir.path(), clean)).unwrap();
+        assert!(discovery.repositories[0]
+            .proposed_checks
+            .iter()
+            .filter(|c| c.check.id == "npm-test" || c.check.id == "cargo-test")
+            .all(|c| c.confidence == Confidence::Observed));
+        assert!(!discovery
+            .questions
+            .iter()
+            .any(|q| q.topic == "uncommitted-evidence"));
+    }
+
+    #[test]
+    fn questions_name_recoveries_that_exist() {
+        let dir = tempfile::tempdir().unwrap();
+        fs::write(dir.path().join("package.json"), r#"{"name":"x"}"#).unwrap();
+        let discovery = discover(request(
+            dir.path(),
+            observation(dir.path(), Some("main"), None),
+        ))
+        .unwrap();
+        let detail = |topic: &str| {
+            discovery
+                .questions
+                .iter()
+                .find(|q| q.topic == topic)
+                .map(|q| q.detail.clone())
+                .unwrap_or_else(|| panic!("{topic}: {:?}", discovery.questions))
+        };
+        let remote = detail("remote");
+        assert!(
+            remote.contains("POST /api/v1/projects/fixture/repositories/app/rebind"),
+            "{remote}"
+        );
+        assert!(!remote.contains("re-register"), "{remote}");
+        for topic in ["checks", "node-tests"] {
+            let text = detail(topic);
+            assert!(!text.contains("will be required"), "{text}");
+            assert!(
+                text.contains("does not create a testing-prerequisite task"),
+                "{text}"
+            );
+            assert!(text.contains("run discovery again"), "{text}");
+        }
     }
 
     #[test]

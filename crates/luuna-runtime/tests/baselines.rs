@@ -261,14 +261,24 @@ async fn passing_baseline_records_bound_evidence_and_artifacts() {
         .as_str()
         .unwrap()
         .starts_with("sha256:"));
-    assert!(result["artifact_hashes"]["stdout"]
-        .as_str()
-        .unwrap()
-        .starts_with("sha256:"));
+    // Recorded references use the identity the artifact route serves, and
+    // each digest is keyed by its reference.
     assert_eq!(
-        result["artifact_refs"][0],
-        format!("artifact:{id}:unit:stdout")
+        result["artifact_refs"],
+        json!(["unit.stdout", "unit.stderr"])
     );
+    for reference in ["unit.stdout", "unit.stderr"] {
+        let digest = result["artifact_hashes"][reference].as_str().unwrap();
+        let (status, body) = harness
+            .raw(
+                "GET",
+                &format!("/api/v1/runs/{id}/artifacts/{reference}"),
+                None,
+            )
+            .await;
+        assert_eq!(status, StatusCode::OK, "{reference}");
+        assert_eq!(digest, luuna_executor::sha256_hex(&body), "{reference}");
+    }
     assert!(finished["payload"]["stdout_excerpt"]
         .as_str()
         .unwrap()
@@ -309,6 +319,21 @@ async fn passing_baseline_records_bound_evidence_and_artifacts() {
         .await;
     assert_eq!(status, StatusCode::OK);
     assert!(String::from_utf8_lossy(&body).contains("test result: ok. 2 passed"));
+    let legacy_dir = harness.root.join("artifacts").join(&id);
+    fs::write(
+        legacy_dir.join("Unit.stdout.log"),
+        b"historical uppercase evidence",
+    )
+    .unwrap();
+    let (status, body) = harness
+        .raw(
+            "GET",
+            &format!("/api/v1/runs/{id}/artifacts/Unit.stdout"),
+            None,
+        )
+        .await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(&body[..], b"historical uppercase evidence");
     for bad in ["unit.stdin", "../../luuna.sqlite3.stdout", "missing.stdout"] {
         let (status, _) = harness
             .raw("GET", &format!("/api/v1/runs/{id}/artifacts/{bad}"), None)
@@ -737,4 +762,387 @@ async fn explicit_shutdown_interrupts_a_running_baseline_instead_of_cancelling_i
         .await
         .iter()
         .any(|e| e["type"] == "run.cancelled"));
+}
+
+#[tokio::test]
+async fn a_skip_only_suite_never_passes_a_baseline() {
+    // Acceptance A07: an empty or skip-only baseline does not pass the required test gate.
+    let harness = Harness::new();
+    let repo = tempfile::tempdir().unwrap();
+    clean_repository(repo.path());
+    fs::write(
+        repo.path().join("test_gated.py"),
+        "import unittest\n\n\nclass Gated(unittest.TestCase):\n    @unittest.skip('needs a device')\n    def test_a(self):\n        pass\n\n    @unittest.skip('needs a device')\n    def test_b(self):\n        pass\n",
+    )
+    .unwrap();
+    git(repo.path(), &["add", "test_gated.py"]);
+    git(repo.path(), &["commit", "-q", "-m", "gated tests"]);
+    register(&harness, repo.path()).await;
+    let mut unit = check("unit", "", true, 30);
+    unit["args"] = json!(["-B", "-m", "unittest", "-v", "test_gated"]);
+    harness.confirm("fixture", 0, vec![unit]).await;
+    let run = harness.baseline("fixture", false).await;
+    let id = run["id"].as_str().unwrap().to_owned();
+    assert_eq!(harness.terminal(&id).await["state"], "failed");
+    let (_, baselines) = harness
+        .request("GET", "/api/v1/projects/fixture/baselines", None)
+        .await;
+    assert_eq!(baselines[0]["status"], "blocked", "{baselines}");
+    let result = &baselines[0]["results"][0];
+    assert_eq!(result["status"], "blocked");
+    assert_eq!(result["exit_code"], 0);
+    assert_eq!(result["tests_detected"], 0);
+    assert!(result["reason"]
+        .as_str()
+        .unwrap()
+        .starts_with("empty suite"));
+}
+
+#[tokio::test]
+async fn a_second_baseline_for_a_repository_is_refused_while_one_runs() {
+    let harness = Harness::new();
+    let repo = tempfile::tempdir().unwrap();
+    clean_repository(repo.path());
+    register(&harness, repo.path()).await;
+    harness
+        .confirm(
+            "fixture",
+            0,
+            vec![check("slow", "import time; time.sleep(60)", true, 120)],
+        )
+        .await;
+    let run = harness.baseline("fixture", false).await;
+    let id = run["id"].as_str().unwrap().to_owned();
+    let (status, body) = harness
+        .request(
+            "POST",
+            "/api/v1/projects/fixture/baselines",
+            Some(json!({"repository_id": "app"})),
+        )
+        .await;
+    assert_eq!(status, StatusCode::CONFLICT, "{body}");
+    assert!(
+        body["error"].as_str().unwrap().contains(&id),
+        "the refusal names the running baseline: {body}"
+    );
+    let (status, _) = harness
+        .request("POST", &format!("/api/v1/runs/{id}/cancel"), None)
+        .await;
+    assert_eq!(status, StatusCode::ACCEPTED);
+    assert_eq!(harness.terminal(&id).await["state"], "cancelled");
+    // Once it settled, the repository accepts a baseline again.
+    let next = harness.baseline("fixture", false).await;
+    let next = next["id"].as_str().unwrap().to_owned();
+    let (status, _) = harness
+        .request("POST", &format!("/api/v1/runs/{next}/cancel"), None)
+        .await;
+    assert_eq!(status, StatusCode::ACCEPTED);
+    harness.terminal(&next).await;
+}
+
+#[tokio::test]
+async fn untracked_output_of_an_earlier_baseline_is_named_and_ignoring_it_resolves_the_block() {
+    let harness = Harness::new();
+    let repo = tempfile::tempdir().unwrap();
+    clean_repository(repo.path());
+    register(&harness, repo.path()).await;
+    harness
+        .confirm(
+            "fixture",
+            0,
+            vec![check(
+                "cache",
+                "import os; os.makedirs('__pycache__', exist_ok=True); open('__pycache__/x.pyc', 'w').write('cache'); print('cached')",
+                true,
+                30,
+            )],
+        )
+        .await;
+    let first = harness.baseline("fixture", false).await;
+    let first = first["id"].as_str().unwrap().to_owned();
+    assert_eq!(harness.terminal(&first).await["state"], "completed");
+    // The next baseline in a row meets the output the first one wrote.
+    let second = harness.baseline("fixture", false).await;
+    let second = second["id"].as_str().unwrap().to_owned();
+    assert_eq!(harness.terminal(&second).await["state"], "failed");
+    let (_, baselines) = harness
+        .request("GET", "/api/v1/projects/fixture/baselines", None)
+        .await;
+    let blocked = baselines
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|b| b["run_id"] == second)
+        .unwrap();
+    assert_eq!(blocked["status"], "blocked");
+    let reason = blocked["reason"].as_str().unwrap();
+    assert!(
+        reason.contains("__pycache__/") && reason.contains(".gitignore"),
+        "the reason names the paths and the remedy: {reason}"
+    );
+    assert!(!reason.contains("stash"), "{reason}");
+    // Git-ignored output never blocks a baseline.
+    fs::write(repo.path().join(".gitignore"), "__pycache__/\n").unwrap();
+    git(repo.path(), &["add", ".gitignore"]);
+    git(repo.path(), &["commit", "-q", "-m", "ignore build output"]);
+    let third = harness.baseline("fixture", false).await;
+    let third = third["id"].as_str().unwrap().to_owned();
+    assert_eq!(harness.terminal(&third).await["state"], "completed");
+}
+
+#[tokio::test]
+async fn a_check_that_moves_head_cannot_produce_passed_evidence() {
+    let harness = Harness::new();
+    let repo = tempfile::tempdir().unwrap();
+    clean_repository(repo.path());
+    register(&harness, repo.path()).await;
+    harness
+        .confirm(
+            "fixture",
+            0,
+            vec![check(
+                "commit",
+                "import subprocess; subprocess.run(['git', '-c', 'user.name=Fixture', '-c', 'user.email=fixture@example.invalid', '-c', 'commit.gpgsign=false', 'commit', '-q', '--allow-empty', '-m', 'moved by a check'], check=True); print('committed')",
+                true,
+                30,
+            )],
+        )
+        .await;
+    let before = git(repo.path(), &["rev-parse", "HEAD"]);
+    let run = harness.baseline("fixture", false).await;
+    let id = run["id"].as_str().unwrap().to_owned();
+    assert_eq!(harness.terminal(&id).await["state"], "failed");
+    let after = git(repo.path(), &["rev-parse", "HEAD"]);
+    assert_ne!(before, after);
+    let (_, baselines) = harness
+        .request("GET", "/api/v1/projects/fixture/baselines", None)
+        .await;
+    assert_eq!(baselines[0]["status"], "failed", "{baselines}");
+    assert_eq!(baselines[0]["identity"]["commit"], before);
+    let reason = baselines[0]["reason"].as_str().unwrap();
+    assert!(
+        reason.contains(&format!("HEAD moved from {before} to {after}")),
+        "{reason}"
+    );
+    assert_eq!(baselines[0]["results"][0]["status"], "passed");
+}
+
+#[tokio::test]
+async fn a_result_that_cannot_be_persisted_settles_the_baseline_instead_of_leaving_it_running() {
+    let harness = Harness::new();
+    let repo = tempfile::tempdir().unwrap();
+    clean_repository(repo.path());
+    register(&harness, repo.path()).await;
+    harness
+        .confirm("fixture", 0, vec![check("unit", "print('ok')", true, 30)])
+        .await;
+    // Every check-result write fails, as on a full disk, while the rest of
+    // the database stays writable.
+    let database = harness.root.join("luuna.sqlite3");
+    let inject = |sql: &str| {
+        let status = Command::new(python())
+            .args([
+                "-c",
+                "import sqlite3, sys; c = sqlite3.connect(sys.argv[1]); c.execute(sys.argv[2]); c.commit()",
+            ])
+            .arg(&database)
+            .arg(sql)
+            .status()
+            .unwrap();
+        assert!(status.success(), "{sql}");
+    };
+    inject("CREATE TRIGGER luuna_test_failing_results BEFORE INSERT ON check_results BEGIN SELECT RAISE(ABORT, 'injected storage failure'); END");
+    let run = harness.baseline("fixture", false).await;
+    let id = run["id"].as_str().unwrap().to_owned();
+    let terminal = harness.terminal(&id).await;
+    assert_eq!(terminal["state"], "failed", "{terminal}");
+    let (_, baselines) = harness
+        .request("GET", "/api/v1/projects/fixture/baselines", None)
+        .await;
+    assert_eq!(
+        baselines[0]["status"], "failed",
+        "the baseline is settled, not left running: {baselines}"
+    );
+    assert!(baselines[0]["reason"]
+        .as_str()
+        .unwrap()
+        .contains("cannot persist check result"));
+    inject("DROP TRIGGER luuna_test_failing_results");
+    let next = harness.baseline("fixture", false).await;
+    let next = next["id"].as_str().unwrap().to_owned();
+    assert_eq!(harness.terminal(&next).await["state"], "completed");
+}
+
+/// A runtime binary started on a free loopback port with the given data directory.
+#[cfg(target_os = "linux")]
+struct RuntimeProcess {
+    child: std::process::Child,
+    port: u16,
+}
+
+#[cfg(target_os = "linux")]
+impl RuntimeProcess {
+    fn start(data_dir: &Path) -> Self {
+        use std::io::BufRead;
+        let mut child = Command::new(env!("CARGO_BIN_EXE_luuna-runtime"))
+            .env("LUUNA_DATA_DIR", data_dir)
+            .env("LUUNA_API_TOKEN", TOKEN)
+            .env("LUUNA_PORT", "0")
+            .env("LUUNA_PI_COMMAND", python())
+            .env("LUUNA_GIT_COMMAND", "git")
+            .stdin(std::process::Stdio::null())
+            .stdout(std::process::Stdio::null())
+            .stderr(std::process::Stdio::piped())
+            .spawn()
+            .unwrap();
+        // Keep draining stderr so the runtime never writes into a closed pipe.
+        let stderr = std::io::BufReader::new(child.stderr.take().unwrap());
+        let (sender, receiver) = std::sync::mpsc::channel();
+        std::thread::spawn(move || {
+            for line in stderr.lines().map_while(Result::ok) {
+                if let Some((_, rest)) = line.split_once("127.0.0.1:") {
+                    let digits: String = rest.chars().take_while(char::is_ascii_digit).collect();
+                    let _ = sender.send(digits.parse::<u16>().ok());
+                }
+            }
+        });
+        let port = receiver
+            .recv_timeout(Duration::from_secs(60))
+            .ok()
+            .flatten()
+            .expect("the runtime reports its listening address");
+        Self { child, port }
+    }
+
+    /// One request over a fresh connection; the body is parsed as JSON.
+    fn request(&self, method: &str, path: &str, body: Option<Value>) -> (u16, Value) {
+        use std::io::{Read, Write};
+        let body = body.map(|b| b.to_string()).unwrap_or_default();
+        let mut stream = std::net::TcpStream::connect(("127.0.0.1", self.port)).unwrap();
+        write!(
+            stream,
+            "{method} {path} HTTP/1.1\r\nHost: 127.0.0.1\r\nAuthorization: Bearer {TOKEN}\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}",
+            body.len()
+        )
+        .unwrap();
+        let mut response = Vec::new();
+        stream.read_to_end(&mut response).unwrap();
+        let text = String::from_utf8_lossy(&response);
+        let status = text
+            .split_whitespace()
+            .nth(1)
+            .and_then(|code| code.parse().ok())
+            .unwrap_or(0);
+        let payload = text.split_once("\r\n\r\n").map(|(_, b)| b).unwrap_or("");
+        // Without a declared length the body may arrive chunked.
+        let json = serde_json::from_str(payload).unwrap_or_else(|_| {
+            payload
+                .find(['[', '{'])
+                .and_then(|start| {
+                    let end = payload.rfind([']', '}'])?;
+                    serde_json::from_str(&payload[start..=end]).ok()
+                })
+                .unwrap_or(Value::Null)
+        });
+        (status, json)
+    }
+}
+
+#[cfg(target_os = "linux")]
+impl Drop for RuntimeProcess {
+    fn drop(&mut self) {
+        let _ = self.child.kill();
+        let _ = self.child.wait();
+    }
+}
+
+#[cfg(target_os = "linux")]
+#[tokio::test]
+async fn restart_after_a_hard_kill_reaps_the_check_processes_the_dead_runtime_left() {
+    let alive = |pid: u64| {
+        std::fs::read_to_string(format!("/proc/{pid}/stat"))
+            .ok()
+            .and_then(|stat| stat.rsplit(')').next()?.trim_start().chars().next())
+            .is_some_and(|state| state != 'Z' && state != 'X')
+    };
+    let data = tempfile::tempdir().unwrap();
+    let repo = tempfile::tempdir().unwrap();
+    let scratch = tempfile::tempdir().unwrap();
+    let marker = scratch.path().join("orphan.pid");
+    clean_repository(repo.path());
+    let runtime = RuntimeProcess::start(data.path());
+    let (status, view) = runtime.request(
+        "POST",
+        "/api/v1/projects",
+        Some(json!({"id":"fixture","name":"Fixture","repositories":[{"id":"app","path":repo.path().to_string_lossy()}]})),
+    );
+    assert_eq!(status, 201, "{view}");
+    // A silent descendant: it holds no pipe, so nothing ends it with the runtime.
+    let script = format!(
+        "import subprocess as s, sys, time; p = s.Popen([sys.executable, '-c', 'import time; time.sleep(120)'], stdin=s.DEVNULL, stdout=s.DEVNULL, stderr=s.DEVNULL); open({marker:?}, 'w').write(str(p.pid)); time.sleep(120)",
+        marker = marker.to_string_lossy()
+    );
+    let manifest = json!({
+        "schema_version": "0.1", "id": "fixture", "name": "Fixture", "revision": 1,
+        "repositories": [{"id": "app", "remote": "https://example.invalid/fixture.git", "default_branch": "main",
+            "profiles": ["python"], "execution": "native", "checks": [check("hold", &script, true, 300)]}],
+        "relationships": [],
+        "policy": {"approval": "plan", "testing_prerequisite": true, "publish": "automatic_pr", "merge": "human",
+            "max_explorers": 1, "max_implementers": 1, "max_task_repairs": 2},
+    });
+    let (status, view) = runtime.request(
+        "PUT",
+        "/api/v1/projects/fixture/manifest",
+        Some(json!({"expected_revision": 0, "manifest": manifest})),
+    );
+    assert_eq!(status, 200, "{view}");
+    let (status, run) = runtime.request(
+        "POST",
+        "/api/v1/projects/fixture/baselines",
+        Some(json!({"repository_id": "app"})),
+    );
+    assert_eq!(status, 202, "{run}");
+    let id = run["id"].as_str().unwrap().to_owned();
+    let mut orphan = None;
+    for _ in 0..400 {
+        let (_, events) = runtime.request("GET", &format!("/api/v1/runs/{id}/events"), None);
+        let spawned = events.as_array().into_iter().flatten().any(|e| {
+            e["type"] == "check.spawned" && e["payload"]["process_group"]["marker"].is_string()
+        });
+        orphan = std::fs::read_to_string(&marker)
+            .ok()
+            .and_then(|pid| pid.trim().parse::<u64>().ok());
+        if spawned && orphan.is_some() {
+            break;
+        }
+        tokio::time::sleep(Duration::from_millis(25)).await;
+    }
+    let orphan = orphan.expect("the check started its descendant");
+    // A hard kill: no shutdown path runs.
+    drop(runtime);
+    tokio::time::sleep(Duration::from_millis(300)).await;
+    assert!(alive(orphan), "the descendant outlives the killed runtime");
+
+    let restarted = RuntimeProcess::start(data.path());
+    assert!(
+        !alive(orphan),
+        "restart recovery reaps the recorded survivor"
+    );
+    let (_, run) = restarted.request("GET", &format!("/api/v1/runs/{id}"), None);
+    assert_eq!(run["state"], "interrupted", "{run}");
+    let (_, events) = restarted.request("GET", &format!("/api/v1/runs/{id}/events"), None);
+    let reaped = events
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|e| e["type"] == "check.orphans_reaped")
+        .unwrap_or_else(|| panic!("the reap is recorded: {events}"));
+    assert_eq!(reaped["payload"]["recipe_id"], "hold");
+    assert!(reaped["payload"]["processes"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .any(|p| p.as_str().unwrap().contains(&format!("pid {orphan}"))));
+    let (_, baselines) = restarted.request("GET", "/api/v1/projects/fixture/baselines", None);
+    assert_eq!(baselines[0]["status"], "interrupted");
 }

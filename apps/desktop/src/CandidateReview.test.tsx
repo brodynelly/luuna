@@ -95,3 +95,57 @@ test("polling reconciles run and candidate reads that straddle settlement", () =
   expect(workflowNeedsRefresh({ ...run, state: "reviewed" }, { ...view, evidence: { ...evidence, status: "reviewed" } })).toBe(false);
   expect(workflowNeedsRefresh({ ...run, state: "implementing" }, view)).toBe(true);
 });
+
+test("a refused repair is explained and never recommended", () => {
+  const paused = { ...view, repair_allowed: false, evidence: { ...evidence, status: "paused" as const, reason: "independent review did not pass; repair or re-plan required" } };
+  const legacy = render(paused, { ...run, state: "paused" });
+  expect(legacy).not.toContain("Repair candidate");
+  expect(legacy).not.toContain("repair the candidate");
+  expect(legacy).toContain("Repair is not available. Read the findings, then create the next plan revision.");
+  const explained = render({ ...paused, decision_reasons: { validate: "candidate validation is already active or cannot be resumed", repair: "budget exceeded: attempt 3 exceeds max_attempts 2", revalidate: "candidate already has a recorded review verdict" } }, { ...run, state: "paused" });
+  expect(explained).toContain("Repair is not available: budget exceeded: attempt 3 exceeds max_attempts 2.");
+  expect(render({ ...paused, repair_allowed: true }, { ...run, state: "paused" })).toContain("repair the candidate or create the next plan revision");
+});
+
+test("the runtime's validate decision replaces the client's guess, with its reason", () => {
+  const interrupted = { ...view, evidence: { ...evidence, status: "interrupted" as const, reason: "interrupted by runtime shutdown" } };
+  const interruptedRun = { ...run, state: "interrupted" as const };
+  // An older runtime reports no decision: the interrupted candidate offers validation.
+  expect(render(interrupted, interruptedRun)).toContain("Validate and review");
+  const refused = { ...interrupted, validate_allowed: false, decision_reasons: { validate: "budget exceeded: the remaining approved cost budget is reserved", repair: null, revalidate: "x" } };
+  const html = render(refused, interruptedRun);
+  expect(html).not.toContain("Validate and review");
+  expect(html).toContain("Validation is not available: budget exceeded: the remaining approved cost budget is reserved.");
+  expect(html).toContain("next plan revision");
+  expect(html.match(/Validation is not available/g)).toHaveLength(1);
+  // A pending candidate records no reason of its own; the runtime's refusal explains the missing button.
+  const pendingRefused = render({ ...view, validate_allowed: false, decision_reasons: { validate: "manifest changed; re-plan", repair: null, revalidate: null } });
+  expect(pendingRefused).not.toContain("Validate and review");
+  expect(pendingRefused).toContain("Validation is not available: manifest changed; re-plan. Create the next plan revision to continue.");
+  expect(render({ ...view, validate_allowed: true })).not.toContain("is not available");
+  expect(canValidate(run, { ...view, validate_allowed: false })).toBe(false);
+  expect(canValidate({ ...run, state: "reviewed" }, { ...view, validate_allowed: true })).toBe(true);
+  expect(canValidate(run, { ...view, active: true, validate_allowed: true })).toBe(false);
+  // Re-validation needs both the validate gate and the re-validation decision.
+  const failedRun = { ...run, state: "failed" as const };
+  const failed = { ...view, revalidate_allowed: true, evidence: { ...evidence, status: "failed" as const } };
+  expect(canRevalidate(failedRun, { ...failed, validate_allowed: false })).toBe(false);
+  expect(render({ ...failed, validate_allowed: true }, failedRun)).toContain("Re-validate and review");
+});
+
+test("workflow usage is shown against the approved budgets when the runtime reports it", () => {
+  const usage = { attempts: 2, max_attempts: 2, elapsed_seconds: 312, timeout_seconds: 600, cost_usd_micros: 420_000, cost_budget_usd_micros: 1_000_000, cost_unreported: false, repairs: 1, max_repairs: 2 };
+  const html = render({ ...view, usage });
+  expect(html).toContain("Workflow usage: 2 of 2 writer attempt(s) · 312s of 600s · $0.4200 of $1.0000 · 1 of 2 repair(s).");
+  expect(html).not.toContain("Runtime usage recorded for this candidate");
+  expect(render({ ...view, usage: { ...usage, cost_unreported: true, max_repairs: null } })).toContain("1 repair(s). Some model spend was reported without a cost");
+  expect(render(view)).toContain("Runtime usage recorded for this candidate: 3s · $0.0010.");
+});
+
+test("an oversized diff lists omissions instead of claiming there are no changes", () => {
+  const html = render(view, run, { candidate_hash: hash, repository_id: "app", base_commit: commit, commit, diff: "", truncated: true, files: [{ path: "src/large.ts", status: "M", shown: "omitted" }], worktree_drift: "worktree differs from frozen candidate" });
+  expect(html).not.toContain("No changes.");
+  expect(html).toContain("This diff is truncated");
+  expect(html).toContain("src/large.ts");
+  expect(html).toContain("worktree differs from frozen candidate");
+});

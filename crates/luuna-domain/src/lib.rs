@@ -17,6 +17,12 @@ pub use writer::*;
 pub const SCHEMA_VERSION: &str = "0.1";
 pub const CANONICALIZATION: &str = "luuna-json-v1";
 
+/// Inclusive plan budget ceilings. Unbounded values could overflow a deadline or
+/// exceed what a JSON client shows exactly; zero would refuse every stage.
+pub const MAX_PLAN_ATTEMPTS: u32 = 10;
+pub const MAX_PLAN_TIMEOUT_SECONDS: u64 = 86_400;
+pub const MAX_PLAN_COST_USD_MICROS: u64 = 1_000_000_000;
+
 #[derive(Debug, Error)]
 pub enum DomainError {
     #[error("invalid contract: {0}")]
@@ -308,16 +314,50 @@ impl PlanRevision {
         if self.permissions.operations.is_empty() || !unique(&self.permissions.operations) {
             return invalid("operations must be nonempty and unique");
         }
-        for paths in self.permissions.repositories.values() {
-            if paths.is_empty() || paths.iter().any(|p| !valid_relative_path(p)) || !unique(paths) {
-                return invalid("permission paths must be unique relative paths");
+        // Task paths first: permissions default to them, so a malformed entry is
+        // reported against the field the client actually wrote.
+        for task in &self.tasks {
+            for path in &task.paths {
+                if let Some(problem) = scope_path_problem(path) {
+                    return Err(DomainError::Invalid(format!(
+                        "task {} path {path:?} {problem}",
+                        task.id
+                    )));
+                }
             }
         }
-        if self.budgets.max_workers == 0
-            || self.budgets.max_attempts == 0
-            || self.budgets.timeout_seconds == 0
-        {
-            return invalid("worker, attempt and time budgets must be positive");
+        for (repository, paths) in &self.permissions.repositories {
+            if paths.is_empty() || !unique(paths) {
+                return invalid("permission paths must be nonempty and unique");
+            }
+            for path in paths {
+                if let Some(problem) = scope_path_problem(path) {
+                    return Err(DomainError::Invalid(format!(
+                        "permission path {path:?} for repository {repository} {problem}"
+                    )));
+                }
+            }
+        }
+        let budgets = &self.budgets;
+        if budgets.max_workers != 1 {
+            return invalid("budgets.max_workers must be exactly 1");
+        }
+        if !(1..=MAX_PLAN_ATTEMPTS).contains(&budgets.max_attempts) {
+            return Err(DomainError::Invalid(format!(
+                "budgets.max_attempts must be between 1 and {MAX_PLAN_ATTEMPTS}"
+            )));
+        }
+        if !(1..=MAX_PLAN_TIMEOUT_SECONDS).contains(&budgets.timeout_seconds) {
+            return Err(DomainError::Invalid(format!(
+                "budgets.timeout_seconds must be between 1 and {MAX_PLAN_TIMEOUT_SECONDS}"
+            )));
+        }
+        // Zero cost is refused rather than defined: a new model stage needs
+        // remaining budget, so a zero-cost plan could never be validated.
+        if !(1..=MAX_PLAN_COST_USD_MICROS).contains(&budgets.cost_usd_micros) {
+            return Err(DomainError::Invalid(format!(
+                "budgets.cost_usd_micros must be between 1 and {MAX_PLAN_COST_USD_MICROS}"
+            )));
         }
         if self.tasks.is_empty() {
             return invalid("at least one task is required");
@@ -336,7 +376,7 @@ impl PlanRevision {
                 || task.acceptance_criteria.iter().any(|s| s.is_empty())
                 || task.paths.is_empty()
                 || task.paths.iter().any(|p| {
-                    !valid_relative_path(p)
+                    scope_path_problem(p).is_some()
                         || !allowed_paths.iter().any(|prefix| path_within(p, prefix))
                 })
                 || task.operations.is_empty()
@@ -535,22 +575,10 @@ impl ReviewResult {
             || self.candidate_hash != candidate.hash
             || self.reviewer_session.is_empty()
             || self.reviewer_session == implementer_session
-            || self.evidence.is_empty()
-            || self.findings.iter().any(|f| {
-                f.path.is_empty()
-                    || f.line == 0
-                    || f.explanation.is_empty()
-                    || f.evidence.is_empty()
-            })
-            || (self.verdict == ReviewVerdict::Passed
-                && self
-                    .findings
-                    .iter()
-                    .any(|f| f.severity == Severity::Blocking))
         {
             return invalid("review must independently match the exact candidate and findings");
         }
-        Ok(())
+        self.check_contract()
     }
 }
 
@@ -601,6 +629,47 @@ pub(crate) fn valid_relative_path(path: &str) -> bool {
         && !path.contains(':')
         && !path.bytes().any(|byte| byte < 32 || byte == 127)
         && path.split('/').all(|part| !part.is_empty() && part != "..")
+}
+/// Why `path` cannot be an approved scope path (a task path or permission
+/// prefix), or `None` when it is canonical. Scope is compared as plain strings
+/// with the paths Git reports, so each location has exactly one spelling: `.`
+/// alone is the whole repository, and no component may be `.`, `..`, empty or
+/// Git's repository metadata.
+pub fn scope_path_problem(path: &str) -> Option<&'static str> {
+    if path == "." {
+        return None;
+    }
+    if path.is_empty() {
+        return Some("must not be empty");
+    }
+    if path.starts_with('/') || path.contains('\\') {
+        return Some("must be relative to the repository root and use '/' separators");
+    }
+    if path.contains(':') || path.bytes().any(|byte| byte < 32 || byte == 127) {
+        return Some("must not contain ':' or control characters");
+    }
+    let parts: Vec<&str> = path.split('/').collect();
+    if parts.iter().any(|part| part.is_empty()) {
+        return Some("must not contain empty components or a trailing '/'");
+    }
+    if parts.contains(&"..") {
+        return Some("must not contain '..' components");
+    }
+    if parts.contains(&".") {
+        return Some("must not contain '.' components (write \"src\", not \"./src\" or \"src/.\")");
+    }
+    if parts.iter().any(|part| is_repository_metadata(part)) {
+        return Some("must not name repository metadata (.git)");
+    }
+    None
+}
+/// Whether one path component reaches Git's repository metadata as a
+/// filesystem may resolve it: `.git` in any ASCII case, with the trailing dots
+/// or spaces Windows ignores or an NTFS stream suffix, or its `GIT~1` short name.
+pub fn is_repository_metadata(component: &str) -> bool {
+    let name = component.split(':').next().unwrap_or(component);
+    let name = name.trim_end_matches(['.', ' ']).to_ascii_lowercase();
+    name == ".git" || name == "git~1"
 }
 pub(crate) fn path_within(path: &str, prefix: &str) -> bool {
     prefix == "."
@@ -782,6 +851,129 @@ mod tests {
             .insert("app".into(), vec!["src".into()]);
         sibling.tasks[0].paths = vec!["src-escape".into()];
         assert!(sibling.seal().is_err());
+    }
+    #[test]
+    fn scope_paths_have_one_canonical_spelling_and_never_name_repository_metadata() {
+        for good in [
+            ".",
+            "src",
+            "src/main.py",
+            "docs/a b.md",
+            ".github/workflows",
+            "a.git",
+        ] {
+            let mut plan = plan();
+            plan.permissions
+                .repositories
+                .insert("app".into(), vec![good.into()]);
+            plan.tasks[0].paths = vec![good.into()];
+            plan.seal().unwrap_or_else(|e| panic!("{good}: {e}"));
+        }
+        for bad in [
+            "./src",
+            "src/.",
+            "a/./b",
+            "src/",
+            "src//x",
+            "/src",
+            "a\\b",
+            "a:b",
+            "",
+            "..",
+            ".git",
+            "src/.git/x",
+            ".GIT",
+            ".git.",
+            ".git ",
+            "Git~1",
+            "src/.Git/config",
+        ] {
+            // Permissions default to the task paths, so the error names the task.
+            let mut plan = plan();
+            plan.permissions
+                .repositories
+                .insert("app".into(), vec![bad.into()]);
+            plan.tasks[0].paths = vec![bad.into()];
+            let error = plan.seal().unwrap_err().to_string();
+            assert!(
+                error.contains(&format!("task implement path {bad:?}")),
+                "{bad}: {error}"
+            );
+            let mut plan = self::plan();
+            plan.permissions
+                .repositories
+                .insert("app".into(), vec![bad.into()]);
+            let error = plan.seal().unwrap_err().to_string();
+            assert!(
+                error.contains(&format!("permission path {bad:?} for repository app")),
+                "{bad}: {error}"
+            );
+        }
+        for metadata in [
+            ".git",
+            ".GIT",
+            ".git.",
+            ".git ",
+            "git~1",
+            ".git::$INDEX_ALLOCATION",
+        ] {
+            assert!(is_repository_metadata(metadata), "{metadata}");
+        }
+        for ordinary in [".gitignore", ".github", "git", ".", "..", "a.git"] {
+            assert!(!is_repository_metadata(ordinary), "{ordinary}");
+        }
+    }
+    #[test]
+    fn budgets_are_bounded_and_named_when_refused() {
+        let at_limits = |edit: fn(&mut Budgets)| {
+            let mut plan = plan();
+            edit(&mut plan.budgets);
+            plan.seal()
+        };
+        at_limits(|b| {
+            b.max_attempts = MAX_PLAN_ATTEMPTS;
+            b.timeout_seconds = MAX_PLAN_TIMEOUT_SECONDS;
+            b.cost_usd_micros = MAX_PLAN_COST_USD_MICROS;
+        })
+        .unwrap();
+        at_limits(|b| {
+            b.max_attempts = 1;
+            b.timeout_seconds = 1;
+            b.cost_usd_micros = 1;
+        })
+        .unwrap();
+        for (edit, field) in [
+            (
+                (|b: &mut Budgets| b.max_workers = 0) as fn(&mut Budgets),
+                "budgets.max_workers",
+            ),
+            (|b| b.max_workers = 2, "budgets.max_workers"),
+            (
+                |b| b.max_attempts = 0,
+                "budgets.max_attempts must be between 1 and 10",
+            ),
+            (
+                |b| b.max_attempts = 11,
+                "budgets.max_attempts must be between 1 and 10",
+            ),
+            (
+                |b| b.timeout_seconds = 0,
+                "budgets.timeout_seconds must be between 1 and 86400",
+            ),
+            (|b| b.timeout_seconds = 86_401, "budgets.timeout_seconds"),
+            (|b| b.timeout_seconds = u64::MAX, "budgets.timeout_seconds"),
+            (
+                |b| b.cost_usd_micros = 0,
+                "budgets.cost_usd_micros must be between 1 and 1000000000",
+            ),
+            (
+                |b| b.cost_usd_micros = 1_000_000_001,
+                "budgets.cost_usd_micros",
+            ),
+        ] {
+            let error = at_limits(edit).unwrap_err().to_string();
+            assert!(error.contains(field), "{field}: {error}");
+        }
     }
     #[test]
     fn object_key_order_is_irrelevant_but_array_order_is_not() {

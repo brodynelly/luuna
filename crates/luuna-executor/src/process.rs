@@ -1,10 +1,15 @@
 //! Process-tree ownership is established before a Windows child can execute.
+//!
+//! Unix children lead a dedicated process group. Windows children are created
+//! suspended, assigned to a kill-on-close job object and only then resumed, so
+//! nothing the child starts can escape the job; a child that cannot be owned
+//! is killed and the spawn fails.
 use std::io;
 use tokio::process::{Child, Command};
 
 pub(super) struct Owner {
     #[cfg(windows)]
-    job: windows_sys::Win32::Foundation::HANDLE,
+    job: Option<super::job::Job>,
     #[cfg(unix)]
     pid: Option<u32>,
 }
@@ -31,38 +36,26 @@ impl Owner {
         Ok(Self { pid: child.id() })
     }
 
+    #[cfg(not(any(unix, windows)))]
+    fn new(_child: &Child) -> io::Result<Self> {
+        Ok(Self {})
+    }
+
     #[cfg(windows)]
     fn new(child: &Child) -> io::Result<Self> {
         use windows_sys::Win32::{
             Foundation::{CloseHandle, INVALID_HANDLE_VALUE},
-            System::{Diagnostics::ToolHelp::*, JobObjects::*, Threading::*},
+            System::{Diagnostics::ToolHelp::*, Threading::*},
         };
-        // SAFETY: all handles below are newly owned; configuration is initialized
-        // and Windows receives the exact structure size. The child is suspended.
+        let handle = child
+            .raw_handle()
+            .ok_or_else(|| io::Error::other("child handle unavailable"))?;
+        let job = super::job::Job::contain(handle)
+            .ok_or_else(|| io::Error::other("could not assign the child to a job object"))?;
+        let owner = Self { job: Some(job) };
+        // SAFETY: the snapshot and thread handles are newly owned and closed
+        // here; THREADENTRY32 carries its exact size. The child is suspended.
         unsafe {
-            let job = CreateJobObjectW(std::ptr::null(), std::ptr::null());
-            if job.is_null() {
-                return Err(io::Error::last_os_error());
-            }
-            let owner = Self { job };
-            let mut limits = JOBOBJECT_EXTENDED_LIMIT_INFORMATION::default();
-            limits.BasicLimitInformation.LimitFlags = JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE;
-            if SetInformationJobObject(
-                job,
-                JobObjectExtendedLimitInformation,
-                &limits as *const _ as _,
-                std::mem::size_of_val(&limits) as u32,
-            ) == 0
-                || AssignProcessToJobObject(
-                    job,
-                    child
-                        .raw_handle()
-                        .ok_or_else(|| io::Error::other("child handle unavailable"))?
-                        as _,
-                ) == 0
-            {
-                return Err(io::Error::last_os_error());
-            }
             let snapshot = CreateToolhelp32Snapshot(TH32CS_SNAPTHREAD, 0);
             if snapshot == INVALID_HANDLE_VALUE {
                 return Err(io::Error::last_os_error());
@@ -88,18 +81,21 @@ impl Owner {
             if !resumed {
                 return Err(io::Error::other("could not resume owned child"));
             }
-            Ok(owner)
         }
+        Ok(owner)
+    }
+
+    /// The kill-on-close job holding the tree, until `stop` closes it.
+    #[cfg(windows)]
+    pub(super) fn job(&self) -> Option<&super::job::Job> {
+        self.job.as_ref()
     }
 
     pub(super) fn stop(&mut self) {
         #[cfg(windows)]
-        if !self.job.is_null() {
-            // SAFETY: closing our final handle terminates only this job's tree.
-            unsafe {
-                windows_sys::Win32::Foundation::CloseHandle(self.job);
-            }
-            self.job = std::ptr::null_mut();
+        {
+            // Closing our only handle terminates exactly this job's tree.
+            self.job = None;
         }
         #[cfg(unix)]
         if let Some(pid) = self.pid.take() {
@@ -116,6 +112,3 @@ impl Drop for Owner {
         self.stop();
     }
 }
-// The owned handle can be moved between executor tasks, never shared or copied.
-#[cfg(windows)]
-unsafe impl Send for Owner {}

@@ -1,5 +1,5 @@
 //! Genuine installed Pi handshake; deliberately makes no provider request.
-use luuna_engine_pi::{PiConfig, PiProcess};
+use luuna_engine_pi::{session_tools, PiConfig, PiProcess, ReviewerProfile, SessionProfile};
 use serde_json::json;
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
@@ -32,6 +32,21 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         println!("{command}: genuine Pi RPC acknowledged");
     }
     process.stop().await?;
+    // Pi runs offline, so grep and find work only where their helper
+    // programs (rg, fd) are already installed; sessions omit them otherwise.
+    let reviewer = PiConfig {
+        profile: SessionProfile::Reviewer(ReviewerProfile {
+            system_prompt: String::new(),
+            extensions: vec![],
+            environment: vec![],
+        }),
+        ..config
+    };
+    let tools = session_tools(&reviewer);
+    println!("file tools available: {}", tools.declared.join(", "));
+    for (tool, reason) in &tools.omitted {
+        println!("file tool omitted: {tool} ({reason})");
+    }
     let _ = std::fs::remove_dir_all(root);
     println!("Pi 1.3.0 subprocess stopped and reaped; provider execution not tested");
     Ok(())

@@ -402,7 +402,21 @@ async fn an_approved_writer_changes_only_its_worktree_and_records_a_candidate() 
         .iter()
         .find(|e| e["type"] == "pi.fixture_args")
         .unwrap();
-    assert_eq!(fixture["payload"]["tools"], "read,grep,find,ls,edit,write");
+    // grep and find are declared only where Pi can run their helper programs
+    // offline; an omitted tool is recorded with its reason.
+    let declared: Vec<&str> = spawned["payload"]["tools"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|tool| tool.as_str().unwrap())
+        .collect();
+    assert_eq!(fixture["payload"]["tools"], declared.join(","));
+    assert!(declared.starts_with(&["read"]) && declared.ends_with(&["ls", "edit", "write"]));
+    let omitted = spawned["payload"]["omitted_tools"].as_array().unwrap();
+    assert_eq!(declared.len() + omitted.len(), 6, "{spawned}");
+    assert!(omitted
+        .iter()
+        .all(|tool| tool["reason"].as_str().unwrap().contains("not on PATH")));
     assert_eq!(fixture["payload"]["no_tools"], false);
     assert!(fixture["payload"]["extensions"][0]
         .as_str()
@@ -574,6 +588,97 @@ async fn component_source_edits_during_writer_and_reviewer_cannot_accept_stale_w
 }
 
 #[tokio::test]
+async fn a_maximum_size_ticket_launches_its_writer_in_a_short_worktree_path() {
+    // The largest ticket the 256 KiB request body admits. Its criteria reach
+    // the writer's system prompt, far above Linux's 128 KiB per-argument limit
+    // (and Windows' 32,767-character command line), so Pi must read that
+    // prompt from a private file rather than argv.
+    let harness = Harness::new();
+    let repo = tempfile::tempdir().unwrap();
+    ready(&harness, repo.path()).await;
+    let mut criteria = vec!["fixture:write_in_scope".to_owned()];
+    criteria.extend((0..15).map(|i| format!("{i:02} {}", "c".repeat(15_997))));
+    let (status, ticket) = harness
+        .request(
+            "POST",
+            "/api/v1/projects/fixture/tickets",
+            Some(json!({
+                "idempotency_key": format!("key-{}", uuid::Uuid::new_v4()),
+                "title": "T".repeat(200),
+                "intent": "i".repeat(16_000),
+                "acceptance_criteria": criteria,
+                "repository_ids": ["app"],
+            })),
+        )
+        .await;
+    assert_eq!(status, StatusCode::CREATED, "{ticket}");
+    let opened = harness
+        .plan(ticket["id"].as_str().unwrap(), json!({}))
+        .await;
+    harness.approve(&opened["plan"]).await;
+    let run_id = opened["run"]["id"].as_str().unwrap().to_owned();
+    assert_eq!(harness.implement(&run_id).await.0, StatusCode::ACCEPTED);
+    let settled = harness.settled(&run_id).await;
+    assert_eq!(settled["state"], "validating", "{settled}");
+    let events = harness.events(&run_id).await;
+    let fixture = &events
+        .iter()
+        .find(|e| e["type"] == "pi.fixture_args")
+        .unwrap()["payload"];
+    assert_eq!(fixture["system_prompt_from_file"], true);
+    assert!(
+        fixture["system_prompt_bytes"].as_u64().unwrap() > 240_000,
+        "{fixture}"
+    );
+    // The worktree is `worktrees/<run>/<attempt number>/<repository>`, not
+    // a second UUID: about 40 characters closer to Windows' MAX_PATH.
+    let (_, leases) = harness
+        .request("GET", &format!("/api/v1/runs/{run_id}/worktrees"), None)
+        .await;
+    assert_eq!(
+        PathBuf::from(leases[0]["path"].as_str().unwrap()),
+        harness
+            .root
+            .join("worktrees")
+            .join(&run_id)
+            .join("1")
+            .join("app")
+    );
+}
+
+#[tokio::test]
+async fn a_writer_session_whose_agent_end_exceeds_the_record_cap_records_its_candidate() {
+    // Pi's turn_end and agent_end repeat every tool result of the run, so a
+    // normal session that read 24 files emits them above 1 MiB. That is not a
+    // lost transport: the candidate is recorded, the reported cost charged
+    // and a bounded summary persisted in place of the echo.
+    let harness = Harness::new();
+    let repo = tempfile::tempdir().unwrap();
+    ready(&harness, repo.path()).await;
+    let (run_id, _) = harness
+        .approved(repo.path(), "large_session", json!({}))
+        .await;
+    assert_eq!(harness.implement(&run_id).await.0, StatusCode::ACCEPTED);
+    let settled = harness.settled(&run_id).await;
+    assert_eq!(settled["state"], "validating", "{settled}");
+    let events = harness.events(&run_id).await;
+    for kind in ["pi.turn_end", "pi.agent_end"] {
+        let event = events.iter().find(|e| e["type"] == kind).unwrap();
+        let summary = &event["payload"]["luuna_summary"];
+        assert!(
+            summary["record_bytes"].as_u64().unwrap() > 1024 * 1024,
+            "{kind}"
+        );
+        assert!(
+            event.to_string().len() < 64 * 1024,
+            "{kind} is persisted bounded"
+        );
+    }
+    let store = luuna_storage::Store::open(harness.root.join("luuna.sqlite3")).unwrap();
+    assert_eq!(store.workflow_usage(&run_id).unwrap().cost_usd_micros, 500);
+}
+
+#[tokio::test]
 async fn stale_or_missing_approval_base_recipe_baseline_and_repository_are_refused() {
     let harness = Harness::new();
     let repo = tempfile::tempdir().unwrap();
@@ -635,12 +740,20 @@ async fn stale_or_missing_approval_base_recipe_baseline_and_repository_are_refus
     assert_eq!(harness.run(&run_id).await["state"], "approved");
     harness.baseline().await;
 
-    // A newer plan revision makes the earlier approval stale.
+    // A newer plan revision makes the earlier approval stale: the waiting
+    // workflow is superseded (settled) and can no longer be implemented.
     let second = harness.plan(&ticket_id, json!({})).await;
     assert_eq!(second["plan"]["revision"], 2);
     let (status, body) = harness.implement(&run_id).await;
     assert_eq!(status, StatusCode::CONFLICT, "{body}");
-    assert!(body["error"].as_str().unwrap().contains("stale"), "{body}");
+    assert!(
+        body["error"]
+            .as_str()
+            .unwrap()
+            .contains("approval is required"),
+        "{body}"
+    );
+    assert_eq!(harness.run(&run_id).await["state"], "cancelled");
     let second_run = second["run"]["id"].as_str().unwrap().to_owned();
     harness.approve(&second["plan"]).await;
 
@@ -1107,24 +1220,25 @@ async fn stale_candidate_hash_and_manual_worktree_changes_cannot_start_validatio
         .await;
     let path = PathBuf::from(leases[0]["path"].as_str().unwrap());
     fs::write(path.join("src/main.py"), "print('manual mutation')\n").unwrap();
+    // The generation is claimed and fails on the drift with a recorded
+    // reason; no check or review runs on content that is not the candidate.
     let (status, response) = harness.candidate_action(&id, "validate", hash).await;
-    assert_eq!(status, StatusCode::CONFLICT, "{response}");
-    assert_eq!(
-        harness
-            .request("GET", &format!("/api/v1/runs/{id}/diff"), None)
-            .await
-            .0,
-        StatusCode::CONFLICT
-    );
-    let refused = harness.candidate(&id).await;
+    assert_eq!(status, StatusCode::ACCEPTED, "{response}");
+    let refused = harness.candidate_settled(&id).await;
     assert_eq!(refused["evidence"]["candidate"]["hash"], *hash);
-    assert_eq!(refused["evidence"]["validation_generation"], 0);
+    assert_eq!(refused["evidence"]["status"], "failed", "{refused}");
+    assert_eq!(refused["evidence"]["content_drift"], true);
+    assert!(refused["evidence"]["results"]
+        .as_array()
+        .unwrap()
+        .is_empty());
     assert_eq!(refused["active"], false);
+    assert_eq!(refused["revalidate_allowed"], false);
     assert!(!harness
         .events(&id)
         .await
         .iter()
-        .any(|e| e["type"] == "candidate.validation_started"));
+        .any(|e| e["type"] == "candidate.check_finished" || e["type"] == "review.started"));
 }
 
 #[tokio::test]
@@ -1624,7 +1738,9 @@ async fn restart_during_review_preserves_candidate_and_reserves_unknown_provider
         harness.candidate_action(&id, "validate", hash).await.0,
         StatusCode::ACCEPTED
     );
-    harness.wait_for_event(&id, "review.started").await;
+    // Unknown spend begins with the durable marker written just before the
+    // reviewer prompt; a crash before it reserves nothing.
+    harness.wait_for_event(&id, "review.prompt_sent").await;
     let mut store = luuna_storage::Store::open(harness.root.join("luuna.sqlite3")).unwrap();
     let usage_before = store.workflow_usage(&id).unwrap();
     assert_eq!(store.interrupt_active_runs().unwrap(), 1);
@@ -1673,9 +1789,11 @@ async fn restart_during_checks_requires_a_fresh_generation_without_resetting_wri
     let repo = tempfile::tempdir().unwrap();
     clean_repository(repo.path());
     register(&harness, repo.path()).await;
-    // The generated marker coordinates an in-flight command without altering
-    // tracked candidate content. A retry can then complete the real command.
-    harness.confirm(0, vec![check("unit", "from pathlib import Path; import time; candidate = 'implemented by' in Path('src/main.py').read_text(); marker = Path('.check-started'); hold = candidate and not marker.exists(); marker.touch() if candidate else None; time.sleep(60) if hold else None; print('running 1 tests'); print('test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured')")]).await;
+    // The marker coordinates an in-flight command from outside the worktree,
+    // which every generation resets. A retry can then complete the command.
+    let markers = tempfile::tempdir().unwrap();
+    let marker = markers.path().join("check-started");
+    harness.confirm(0, vec![check("unit", &format!("from pathlib import Path; import time; candidate = 'implemented by' in Path('src/main.py').read_text(); marker = Path(r'{}'); hold = candidate and not marker.exists(); marker.touch() if candidate else None; time.sleep(60) if hold else None; print('running 1 tests'); print('test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured')", marker.display()))]).await;
     harness.baseline().await;
     let before = snapshot(repo.path());
     let (id, _) = harness
@@ -1685,22 +1803,18 @@ async fn restart_during_checks_requires_a_fresh_generation_without_resetting_wri
     harness.settled(&id).await;
     let initial = harness.candidate(&id).await;
     let hash = &initial["evidence"]["candidate"]["hash"];
-    let (_, leases) = harness
-        .request("GET", &format!("/api/v1/runs/{id}/worktrees"), None)
-        .await;
-    let worktree = PathBuf::from(leases[0]["path"].as_str().unwrap());
     assert_eq!(
         harness.candidate_action(&id, "validate", hash).await.0,
         StatusCode::ACCEPTED
     );
     for _ in 0..200 {
-        if worktree.join(".check-started").exists() {
+        if marker.exists() {
             break;
         }
         tokio::time::sleep(Duration::from_millis(25)).await;
     }
     assert!(
-        worktree.join(".check-started").exists(),
+        marker.exists(),
         "candidate command must be running before recovery"
     );
     let mut store = luuna_storage::Store::open(harness.root.join("luuna.sqlite3")).unwrap();
@@ -2081,7 +2195,9 @@ async fn explicit_shutdown_interrupts_candidate_checks_and_a_fresh_generation_re
     let repo = tempfile::tempdir().unwrap();
     clean_repository(repo.path());
     register(&harness, repo.path()).await;
-    harness.confirm(0, vec![check("unit", "from pathlib import Path; import time; candidate = 'implemented by' in Path('src/main.py').read_text(); marker = Path('.check-started'); hold = candidate and not marker.exists(); marker.touch() if candidate else None; time.sleep(60) if hold else None; print('running 1 tests'); print('test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured')")]).await;
+    let markers = tempfile::tempdir().unwrap();
+    let marker = markers.path().join("check-started");
+    harness.confirm(0, vec![check("unit", &format!("from pathlib import Path; import time; candidate = 'implemented by' in Path('src/main.py').read_text(); marker = Path(r'{}'); hold = candidate and not marker.exists(); marker.touch() if candidate else None; time.sleep(60) if hold else None; print('running 1 tests'); print('test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured')", marker.display()))]).await;
     harness.baseline().await;
     let before = snapshot(repo.path());
     let (id, _) = harness
@@ -2091,21 +2207,17 @@ async fn explicit_shutdown_interrupts_candidate_checks_and_a_fresh_generation_re
     harness.settled(&id).await;
     let initial = harness.candidate(&id).await;
     let hash = &initial["evidence"]["candidate"]["hash"];
-    let (_, leases) = harness
-        .request("GET", &format!("/api/v1/runs/{id}/worktrees"), None)
-        .await;
-    let worktree = PathBuf::from(leases[0]["path"].as_str().unwrap());
     assert_eq!(
         harness.candidate_action(&id, "validate", hash).await.0,
         StatusCode::ACCEPTED
     );
     for _ in 0..200 {
-        if worktree.join(".check-started").exists() {
+        if marker.exists() {
             break;
         }
         tokio::time::sleep(Duration::from_millis(25)).await;
     }
-    assert!(worktree.join(".check-started").exists());
+    assert!(marker.exists());
     harness.state.shutdown().await;
     let interrupted = harness.candidate_settled(&id).await;
     assert_eq!(
