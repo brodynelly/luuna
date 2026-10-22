@@ -56,5 +56,5 @@
 .workflows .ticket-list button.run-card { min-height: var(--row-height); border-radius: var(--radius-md); box-shadow: none; }
 .workflows .ticket-list button.run-card:hover:not(:disabled):not([aria-pressed="true"]) { background: var(--fill); }
 .ticket-card { border-radius: var(--radius-card); box-shadow: var(--shadow-card); }
-.plan-review { padding: var(--space-4); border: var(--border-width) solid var(--color-border-strong); border-radius: var(--radius-card); background: var(--color-surface-raised); box-shadow: var(--shadow-card); }
+.plan-review { padding: var(--space-4); border: var(--border-width) solid var(--color-border-strong); border-radius: var(--radius-card); background: var(--surface-muted); box-shadow: var(--shadow-card); }
 .plan-review > .plan-meta { overflow-wrap: anywhere; }

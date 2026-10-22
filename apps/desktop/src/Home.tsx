@@ -88,7 +88,7 @@ export function HomeSummaryView({ summary, busy, onOpen, onAddProject }: Summary
   }
   const sum = (pick: (project: HomeSummary["projects"][number]) => number) => summary.projects.reduce((total, project) => total + pick(project), 0);
   return <>
-    <Box className="home-hero">
+    <Box className="home-metrics">
       <StatGrid label="Home summary counts">
         <StatTile term="Projects" value={summary.projects.length} />
         <StatTile term="Waiting on you" value={summary.blockers.length} />

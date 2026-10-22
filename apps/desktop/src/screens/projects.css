@@ -10,9 +10,10 @@
    920 px the rail stays in view while a long ticket scrolls the detail column. */
 .projects-layout { display: grid; grid-template-columns: var(--rail-width) minmax(0, 1fr); align-items: start; gap: var(--space-5) var(--space-6); min-width: 0; }
 .projects-rail { position: sticky; top: calc(var(--topbar-height) + var(--space-5)); display: grid; grid-template-columns: minmax(0, 1fr); align-content: start; gap: var(--space-4); min-width: 0; }
+.app[data-banner] .projects-rail { top: calc(var(--banner-height) + var(--topbar-height) + var(--space-5)); }
 
 /* Add, import and create: quiet disclosures under the project list; the open one holds its form. */
-.projects-rail > details.section > summary { color: var(--color-accent); }
+.projects-rail > details.section > summary { color: var(--accent-text); }
 
 /* Project cards: name first, then the manifest chip and the exact project id. */
 .project-list { display: grid; grid-template-columns: minmax(0, 1fr); gap: var(--space-1); min-width: 0; margin: 0; padding: 0; list-style: none; }
