@@ -4,7 +4,7 @@ Date: 2026-10-22. Status: accepted; amends ADR 0002 (compatibility aliases and
 compatible data paths), ADR 0012 (primary and legacy aliases, compatible data
 directories) and ADR 0014 and ADR 0024 (the managed store layout they
 describe). The same branch pins the component commits that implement it
-(Missions `55cff87`, Atlas `1ce87ca`, Beacon `1a3c72f`).
+(Missions `bda5f31`, Atlas `3296243`, Beacon `e103e01`).
 
 ## Context
 
