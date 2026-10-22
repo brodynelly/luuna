@@ -1797,3 +1797,77 @@ async fn an_advisory_task_that_changes_files_fails_with_a_scope_reason() {
     assert!(store.active_worktree_leases().unwrap().is_empty());
     assert_eq!(fixture.snapshot(), before);
 }
+
+/// A mixed plan: a repository lead reads one repository that no writer
+/// changes, and writers change the other two. The candidate set freezes only
+/// the written repositories (the advisory repository keeps its base commit in
+/// the plan), and default permissions merge across tasks sharing a repository
+/// whatever their order.
+#[tokio::test]
+async fn an_advisory_only_repository_is_not_part_of_the_candidate_set() {
+    let harness = Harness::new();
+    let dir = tempfile::tempdir().unwrap();
+    let fixture = Fixture::new(dir.path());
+    ready(&harness, &fixture).await;
+    let before = fixture.snapshot();
+    let mut tasks = vec![advisory(
+        "lead",
+        "repository_lead",
+        "api",
+        "advise_json",
+        &[],
+    )];
+    tasks.extend(tasks_json(&[
+        ("shared", "write_in_scope", &["lead"]),
+        ("consumer", "write_in_scope", &["shared"]),
+    ]));
+    let (run_id, plan) = harness
+        .approved_with(
+            tasks,
+            json!({"max_attempts": 4, "timeout_seconds": 600}),
+            vec![],
+        )
+        .await;
+    assert_eq!(plan["tasks"].as_array().unwrap().len(), 3);
+    assert_eq!(plan["base_commits"]["api"], fixture.head("api"));
+    let (status, run) = harness.implement(&run_id, None).await;
+    assert_eq!(status, StatusCode::ACCEPTED, "{run}");
+    let settled = harness.settled(&run_id).await;
+    assert_eq!(settled["state"], "validating", "{settled}");
+    let tasks = harness.tasks(&run_id).await;
+    assert_eq!(task(&tasks, "lead")["state"], "completed");
+    assert!(task(&tasks, "lead").get("candidate_commit").is_none());
+    let candidate = harness.candidate(&run_id).await;
+    let commits = candidate["evidence"]["candidate"]["repository_commits"]
+        .as_object()
+        .unwrap();
+    assert_eq!(
+        commits.keys().cloned().collect::<Vec<_>>(),
+        ["consumer", "shared"],
+        "{candidate}"
+    );
+    assert_eq!(fixture.snapshot(), before, "developer checkouts untouched");
+
+    // Permissions merge across tasks sharing a repository in either order.
+    let ticket = harness.ticket().await;
+    let ticket_id = ticket["id"].as_str().unwrap();
+    let mut lead_first = vec![advisory(
+        "lead",
+        "repository_lead",
+        "api",
+        "advise_json",
+        &[],
+    )];
+    lead_first.extend(tasks_json(&[("api", "write_in_scope", &["lead"])]));
+    let (status, opened) = harness
+        .plan_with(ticket_id, lead_first, json!({}), vec![])
+        .await;
+    assert_eq!(status, StatusCode::CREATED, "{opened}");
+    let paths = opened["plan"]["permissions"]["repositories"]["api"]
+        .as_array()
+        .unwrap();
+    assert!(
+        paths.iter().any(|p| p == ".") && paths.iter().any(|p| p == "src"),
+        "{opened}"
+    );
+}

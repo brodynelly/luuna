@@ -857,6 +857,21 @@ pub async fn import_project(
             "an idempotency key of 1..200 bytes is required",
         ));
     }
+    // Every per-item key derived below is bounded by hashing the parent key,
+    // so a long import key cannot fail after the project was registered.
+    let step_key = {
+        use sha2::{Digest, Sha256};
+        let digest = format!("{:x}", Sha256::digest(key.as_bytes()));
+        let parent = digest[..24].to_owned();
+        move |kind: &str, id: &str| -> String {
+            let derived = format!("import-{parent}:{kind}:{id}");
+            if derived.len() <= 200 {
+                derived
+            } else {
+                format!("import-{parent}:{kind}:{:x}", Sha256::digest(id.as_bytes()))
+            }
+        }
+    };
     let export = parse_export(&request.export)?;
     let id = export.id.clone();
     if request.repositories.is_empty() || request.repositories.len() > MAX_REPOSITORIES {
@@ -1035,7 +1050,7 @@ pub async fn import_project(
             .store
             .lock()
             .map_err(internal)?
-            .create_ticket(&ticket, &format!("{key}:ticket:{}", exported.id))
+            .create_ticket(&ticket, &step_key("ticket", &exported.id))
             .map_err(ticket_error)?;
         if exported.revision != 1 {
             ticket_mapping.push(json!({"id": exported.id, "exported_revision": exported.revision, "imported_revision": 1}));
@@ -1049,7 +1064,7 @@ pub async fn import_project(
             let created = integrations::create_memory_locked(
                 &state,
                 &id,
-                &format!("{key}:memory:{}", record.id),
+                &step_key("memory", &record.id),
                 &record.scope,
                 &record.content,
                 &record.provenance,
@@ -1061,7 +1076,7 @@ pub async fn import_project(
             let created = integrations::create_prompt_locked(
                 &state,
                 &id,
-                &format!("{key}:prompt:{}", prompt.name),
+                &step_key("prompt", &prompt.name),
                 &prompt.name,
                 body,
                 None,

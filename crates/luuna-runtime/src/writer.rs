@@ -693,8 +693,18 @@ pub async fn create_plan(
             }
         }
         if !task_repositories.insert(task.repository_id.clone()) {
-            // The repository's base, checks and permissions were collected
-            // for the task that already names it.
+            // The repository's base and checks were collected for the task
+            // that already names it; its default permissions widen to this
+            // task's paths too, so a writer and an advisory task sharing a
+            // repository validate whatever their order.
+            if !request.permissions.contains_key(&task.repository_id) {
+                let paths = permissions.entry(task.repository_id.clone()).or_default();
+                for path in &task.paths {
+                    if !paths.contains(path) {
+                        paths.push(path.clone());
+                    }
+                }
+            }
             operations.extend(task.operations.iter().cloned());
             continue;
         }

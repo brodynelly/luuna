@@ -86,9 +86,21 @@ impl Store {
             );
         }
         let plan = current_plan(&tx, run_id)?;
+        // A candidate freezes one commit per repository that a writer task
+        // changes; a repository an advisory task (ADR 0023) only reads has a
+        // base commit in the plan but no candidate commit.
+        let writer_repositories: std::collections::BTreeSet<&String> = plan
+            .tasks
+            .iter()
+            .filter(|task| !task.is_advisory())
+            .map(|task| &task.repository_id)
+            .collect();
         if candidate.plan_hash != plan.hash
-            || candidate.repository_commits.keys().collect::<Vec<_>>()
-                != plan.base_commits.keys().collect::<Vec<_>>()
+            || candidate
+                .repository_commits
+                .keys()
+                .collect::<std::collections::BTreeSet<_>>()
+                != writer_repositories
         {
             return invalid("candidate does not match the approved plan and repositories");
         }

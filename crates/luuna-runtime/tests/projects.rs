@@ -1425,3 +1425,43 @@ async fn an_import_is_refused_for_a_different_remote_a_tampered_hash_a_host_path
         .await;
     assert_eq!(status, StatusCode::NOT_FOUND);
 }
+
+/// A 200-byte import key (the longest the API accepts) still derives bounded
+/// per-item keys, so an import with tickets completes rather than failing
+/// after the project was registered.
+#[tokio::test]
+async fn an_import_with_the_longest_key_completes_and_replays() {
+    let source = Harness::synthetic();
+    let repo = tempfile::tempdir().unwrap();
+    synthetic_repository(repo.path());
+    let export = exported_fixture(&source, repo.path()).await;
+    let target = Harness::synthetic();
+    let clone = tempfile::tempdir().unwrap();
+    let clone_root = clone.path().join("fixture");
+    clone_fixture(
+        repo.path(),
+        &clone_root,
+        "https://user:other-secret@example.invalid/fixture.git",
+    );
+    let key = "k".repeat(200);
+    let (status, imported) = target
+        .request(
+            "POST",
+            "/api/v1/projects/import",
+            Some(import_body(&export, &clone_root, &key)),
+            true,
+        )
+        .await;
+    assert_eq!(status, StatusCode::CREATED, "{imported}");
+    assert_eq!(imported["counts"]["tickets"], 1);
+    let (status, replayed) = target
+        .request(
+            "POST",
+            "/api/v1/projects/import",
+            Some(import_body(&export, &clone_root, &key)),
+            true,
+        )
+        .await;
+    assert_eq!(status, StatusCode::OK, "{replayed}");
+    assert_eq!(replayed["replayed"], true);
+}

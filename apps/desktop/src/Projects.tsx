@@ -356,7 +356,11 @@ export function Projects({ client, connectionEpoch = 0 }: { client: LuunaClient 
     if (!importText.trim()) return null;
     try {
       const value = JSON.parse(importText) as ProjectExport;
-      return value && typeof value === "object" && value.kind === "luuna-project-export" ? value : null;
+      // Only a document with the export kind and a manifest naming at least
+      // one repository by id is rendered; the runtime validates the rest.
+      const repositories = value && typeof value === "object" && value.manifest && typeof value.manifest === "object" ? value.manifest.repositories : undefined;
+      const shaped = Array.isArray(repositories) && repositories.every((repository) => repository && typeof repository === "object" && typeof repository.id === "string" && repository.id.length > 0);
+      return value && typeof value === "object" && value.kind === "luuna-project-export" && shaped ? value : null;
     } catch {
       return null;
     }
