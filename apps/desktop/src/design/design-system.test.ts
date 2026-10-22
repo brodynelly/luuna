@@ -15,7 +15,7 @@ const files = readdirSync(root, { recursive: true }).map((file) => file.replaceA
 const sheets = files.filter((file) => file.endsWith(".css"));
 const TOKENS = "design/tokens.css";
 const MANIFEST = "styles.css";
-// Tailwind CSS v4 utilities (ADR 0028): last layer, its theme a reference to the tokens.
+// Tailwind CSS v4 utilities (ADR 0030): last layer, its theme a reference to the tokens.
 const TAILWIND = "design/tailwind.css";
 const EXPECTED_SHEETS = [MANIFEST, TOKENS, "design/base.css", "design/components.css", "design/overlays.css", "screens/app.css", "screens/home.css", "screens/board.css", "screens/projects.css", "screens/workflows.css", "screens/candidate-review.css", "screens/project-components.css", "screens/help.css", "screens/settings.css", "design/tailwind.css"];
 const MEDIA = ["(max-width: 920px)", "(max-width: 680px)", "(prefers-reduced-motion: reduce)", "(prefers-color-scheme: light)", "(prefers-contrast: more)", "(forced-colors: active)"];

@@ -29,7 +29,7 @@ try {
   assert(ready, "test-owned Vite server must start");
   browser = await chromium.launch({ headless: true, executablePath });
   const page = await browser.newPage();
-  // The desktop shows one view at a time (ADR 0028); the sidebar selects it.
+  // The desktop shows one view at a time (ADR 0030); the sidebar selects it.
   const show = (view) => page.getByRole("navigation", { name: "Views" }).getByRole("button", { name: new RegExp(`^${view}`) }).click();
   page.setDefaultTimeout(30_000);
   const errors = [];

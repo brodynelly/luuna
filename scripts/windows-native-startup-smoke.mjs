@@ -107,7 +107,7 @@ try {
   await connected(cold);
   check("reload reauthenticates without spawning a duplicate runtime", metadata().runtime_pid === restarted.runtime_pid);
   check("concurrent desktop windows reuse one runtime", metadata().runtime_pid === restarted.runtime_pid);
-  // The desktop shows one view at a time (ADR 0028): Disconnect lives in Settings.
+  // The desktop shows one view at a time (ADR 0030): Disconnect lives in Settings.
   await cold.page.getByRole("navigation", { name: "Views" }).getByRole("button", { name: /^Settings/ }).click();
   await cold.page.getByRole("button", { name: "Disconnect", exact: true }).click();
   check("explicit disconnect stays disconnected and leaves runtime running", await cold.page.getByLabel("Service token", { exact: true }).count() === 1 && await healthy());

@@ -1,5 +1,5 @@
 /*
- * Utilities layer: Tailwind CSS v4 (ADR 0028), compiled at build time into the one bundled
+ * Utilities layer: Tailwind CSS v4 (ADR 0030), compiled at build time into the one bundled
  * stylesheet; nothing is fetched. The theme is a reference to the design tokens, so a utility
  * resolves to a token and never to a literal: `p-4` is four steps of the 4 px rhythm, `text-sm`
  * is --text-sm, `bg-surface` is --color-surface. No preflight: base.css owns element defaults.

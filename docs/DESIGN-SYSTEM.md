@@ -1,6 +1,6 @@
 # Luuna desktop design system
 
-Date: 2026-10-21, updated 2026-10-22 for the sidebar shell and Tailwind utilities. Status: current; decisions recorded in [ADR 0013](decisions/0013-desktop-design-system.md) and [ADR 0028](decisions/0028-desktop-shell-and-tailwind.md). This is the visual and interaction contract for the desktop client (`apps/desktop`). It is presentation only: the runtime decides every state, permission, reason and next step, and the client displays them. A design change may never change which control appears, when it is enabled, or what text the runtime's state produces.
+Date: 2026-10-21, updated 2026-10-22 for the sidebar shell and Tailwind utilities. Status: current; decisions recorded in [ADR 0013](decisions/0013-desktop-design-system.md) and [ADR 0030](decisions/0030-desktop-shell-and-tailwind.md). This is the visual and interaction contract for the desktop client (`apps/desktop`). It is presentation only: the runtime decides every state, permission, reason and next step, and the client displays them. A design change may never change which control appears, when it is enabled, or what text the runtime's state produces.
 
 ## Principles
 
@@ -23,13 +23,13 @@ apps/desktop/src/
   design/base.css            element defaults: type, code/pre, focus, forms, buttons
   design/components.css      tone indirection and every reusable component
   design/tone.ts             Tone type and exhaustive maps from runtime unions to tones
-  ui/                        the component library every view composes (ADR 0028 amendment):
+  ui/                        the component library every view composes (ADR 0030 amendment):
                              controls, layout (Page, Section), content, selection, shell
   content/views.ts           the views' titles and descriptions, the sidebar order and shortcuts
   design/components.test.ts  enforcement: 300-line files, no raw elements in views, Page on every view
   design/StatusBadge.tsx     the one status chip
   design/Icon.tsx            the sidebar's line icons (decorative, aria-hidden)
-  design/tailwind.css        Tailwind CSS v4 utilities; the theme only references the tokens (ADR 0028)
+  design/tailwind.css        Tailwind CSS v4 utilities; the theme only references the tokens (ADR 0030)
   design/design-system.test.ts   enforcement (run by npm test)
   screens/app.css            shell: sidebar, views, connect page, Settings › Runtime, Sessions workspace, history, events
   screens/home.css           Home summary: projects, validation health, blockers

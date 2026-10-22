@@ -1,5 +1,5 @@
 /**
- * The desktop's component library (ADR 0028). Views compose these; they never render a raw
+ * The desktop's component library (ADR 0030). Views compose these; they never render a raw
  * control, heading, form or container element themselves (enforced by design-system.test.ts).
  */
 export * from "./controls";

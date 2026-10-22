@@ -1,7 +1,7 @@
 import { readdirSync, readFileSync } from "node:fs";
 import { describe, expect, test } from "vitest";
 
-// The structure the template, the smokes and the accessibility audit depend on (ADR 0028):
+// The structure the template, the smokes and the accessibility audit depend on (ADR 0030):
 // every view renders through the component library in src/ui, every file stays small enough to
 // read in one sitting, and no view hand-builds a control, a heading, a form or a container.
 const root = new URL("../", import.meta.url);

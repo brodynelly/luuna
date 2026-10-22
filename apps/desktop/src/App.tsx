@@ -52,7 +52,7 @@ function useWindowNavigation() {
   return { view, setView, collapsed, toggle: () => setCollapsed((value) => !value), palette, setPalette };
 }
 
-/** The window: a sidebar of views beside the content (ADR 0028). The token stays in memory only. */
+/** The window: a sidebar of views beside the content (ADR 0030). The token stays in memory only. */
 export function App() {
   const runtime = useRuntime();
   const { client, connectionEpoch, refresh, error, setError, outage } = runtime;

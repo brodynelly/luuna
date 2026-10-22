@@ -1,4 +1,4 @@
-//! The native menu bar (ADR 0028): every view and the sidebar toggle are reachable from a menu,
+//! The native menu bar (ADR 0030): every view and the sidebar toggle are reachable from a menu,
 //! with the same shortcuts the page answers, and the platform's standard Edit commands make copy
 //! and paste work in the web view. A menu command reaches the page as a `luuna:command` DOM event
 //! through `eval`, so the frontend needs no additional Tauri permission.

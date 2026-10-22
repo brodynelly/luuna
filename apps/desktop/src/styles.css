@@ -1,7 +1,7 @@
 /*
  * Luuna desktop styles: an ordered manifest of the design system (docs/DESIGN-SYSTEM.md).
  * Vite inlines every import into one bundled stylesheet served from 'self'. Later layers win
- * regardless of specificity; nothing is unlayered. Tailwind utilities come last (ADR 0028).
+ * regardless of specificity; nothing is unlayered. Tailwind utilities come last (ADR 0030).
  */
 @layer tokens, base, components, screens, utilities;
 @import "./design/tokens.css" layer(tokens);

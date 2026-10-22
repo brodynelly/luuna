@@ -1,5 +1,5 @@
 /*
- * Overlays: the context menu and the command palette (ADR 0028). Both float above the content on
+ * Overlays: the context menu and the command palette (ADR 0030). Both float above the content on
  * the panel surface with the card elevation; neither blurs or tints what is behind it.
  */
 

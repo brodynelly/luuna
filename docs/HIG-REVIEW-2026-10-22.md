@@ -1,6 +1,6 @@
 # Desktop client: Apple HIG review, page by page
 
-Date: 2026-10-22. Scope: `apps/desktop` (Tauri 2, React 19) after [ADR 0028](decisions/0028-desktop-shell-and-tailwind.md).
+Date: 2026-10-22. Scope: `apps/desktop` (Tauri 2, React 19) after [ADR 0030](decisions/0030-desktop-shell-and-tailwind.md).
 Method: the apple-design review skill. The references are the Human Interface Guidelines pages pulled from developer.apple.com: `accessibility`, `layout`, `typography`, `color`, `designing-for-macos`, `sidebars`, `split-views`, `toolbars`, `buttons`, `lists-and-tables`, `loading`, `feedback`, `writing`, `settings` and `the-menu-bar`. The cross-platform guide translates them for Tauri. The Tauri client runs on Windows and macOS, so Apple's macOS conventions apply as design principles. Windows conventions win where they differ: sentence-case labels and Ctrl shortcuts.
 
 The client's thesis: one place to see what waits on the developer and to act on it, with evidence shown whole. What it is remembered by: green is earned. The six-tone status system is the one bold element, and everything around it stays quiet.
@@ -40,7 +40,7 @@ After this pass: **Good.** Nothing is Critical or High. The remaining Medium ite
 | Finding | Severity | Guideline | Change |
 | --- | --- | --- | --- |
 | A blank screen without a next step | Medium | `writing.md`: "Provide clear next steps on any blank screens." | With no projects, Home says "No projects yet" and offers **Add a project…**, which opens Projects. The ellipsis follows `buttons.md`: "Append a trailing ellipsis to the title when a push button opens another window, view, or app." |
-| What waits on the developer came after the projects | Medium | `layout.md`: "Order content by relative importance." | Kept from ADR 0028: "Waiting on you" comes first. |
+| What waits on the developer came after the projects | Medium | `layout.md`: "Order content by relative importance." | Kept from ADR 0030: "Waiting on you" comes first. |
 
 ## Board
 
@@ -48,7 +48,7 @@ Kept: eight read-only columns with a count each; selecting a card opens its tick
 
 ## Projects
 
-Kept from ADR 0028: the project list first, with "Add a project", "Import from another machine" and "Create from a stack profile" as progressive disclosure (`layout.md`: "Use progressive disclosure to make layouts cleaner"). The selected project is a card headed by its name.
+Kept from ADR 0030: the project list first, with "Add a project", "Import from another machine" and "Create from a stack profile" as progressive disclosure (`layout.md`: "Use progressive disclosure to make layouts cleaner"). The selected project is a card headed by its name.
 
 The page is now 15 focused files under `src/projects/`, each under 300 lines. Completed actions are confirmed by the notice.
 

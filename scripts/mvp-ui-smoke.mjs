@@ -211,7 +211,7 @@ async function waitCandidateAfter(title, previous, timeoutMs) {
   if (!moved) return null;
   return waitCandidateState(title, SETTLED, timeoutMs);
 }
-// The desktop shows one view at a time (ADR 0028); the sidebar selects it.
+// The desktop shows one view at a time (ADR 0030); the sidebar selects it.
 async function show(view, on = page) { await on.getByRole("navigation", { name: "Views" }).getByRole("button", { name: new RegExp(`^${view}`) }).click(); }
 async function connected() { return (await page.locator(".connection").innerText()).trim(); }
 async function waitConnection(text, timeoutMs) { return waitFor(async () => ((await connected()).includes(text) ? text : null), timeoutMs, 300); }
@@ -306,7 +306,7 @@ async function runBaseline() {
   }, 120_000, 500);
 }
 
-// The Tickets section lists every ticket and shows one ticket's detail (ADR 0028): select it first.
+// The Tickets section lists every ticket and shows one ticket's detail (ADR 0030): select it first.
 async function showTicket(title) {
   const row = page.locator('ul[aria-label="Ticket list"] button').filter({ hasText: title }).first();
   await row.waitFor({ timeout: 20_000 });

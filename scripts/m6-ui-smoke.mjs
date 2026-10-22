@@ -97,7 +97,7 @@ async function successful(method, route, body) {
 }
 function ticketItem(title) { return page.locator('ul[aria-label="Tickets"] > li').filter({ has: page.locator(".ticket-head strong", { hasText: title }) }); }
 function memoryItem(content) { return page.locator('ul[aria-label="Atlas memory records"] > li').filter({ hasText: content }); }
-// The desktop shows one view at a time (ADR 0028); the sidebar selects it.
+// The desktop shows one view at a time (ADR 0030); the sidebar selects it.
 async function show(view, on = page) { await on.getByRole("navigation", { name: "Views" }).getByRole("button", { name: new RegExp(`^${view}`) }).click(); }
 async function connectFixtureView() {
   fixtureView = false;
@@ -138,7 +138,7 @@ async function confirmManifest() {
   await page.getByRole("button", { name: "Confirm manifest", exact: true }).click();
   await waitFor("confirmed manifest", async () => (await page.locator(".facts").innerText()).includes("revision 1"));
 }
-// The Tickets section lists every ticket and shows one ticket's detail (ADR 0028): select it first.
+// The Tickets section lists every ticket and shows one ticket's detail (ADR 0030): select it first.
 async function showTicket(title) {
   const row = page.locator('ul[aria-label="Ticket list"] button').filter({ hasText: title }).first();
   await row.waitFor({ timeout: 20_000 });

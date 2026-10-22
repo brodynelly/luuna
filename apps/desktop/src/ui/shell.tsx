@@ -4,7 +4,7 @@ import { Icon } from "../design/Icon";
 import type { IconName } from "../design/Icon";
 
 /**
- * The window: a sidebar of views on the leading edge and one content column (ADR 0028). The
+ * The window: a sidebar of views on the leading edge and one content column (ADR 0030). The
  * wordmark is the page's h1. The sidebar can be collapsed to an icon rail (HIG › Sidebars:
  * "Consider letting people hide the sidebar"); names stay as accessible names and tooltips.
  */

@@ -11,7 +11,7 @@ const sources = readdirSync(root, { recursive: true })
   .map((file) => file.replaceAll("\\", "/"))
   .filter((file) => /\.tsx?$/.test(file) && !file.includes(".test.") && !file.endsWith(".d.ts"))
   .map((file) => [file, readFileSync(new URL(file, root), "latin1")] as const);
-// A panel's code lives in its folder (ADR 0028); its legacy file name is a barrel.
+// A panel's code lives in its folder (ADR 0030); its legacy file name is a barrel.
 const AREAS: Record<string, string> = { "Projects.tsx": "projects/", "Workflows.tsx": "workflows/", "ProjectComponents.tsx": "project-components/", "CandidateReview.tsx": "candidate/" };
 function area(name: string): string {
   return sources.filter(([file]) => file === name || file.startsWith(AREAS[name] ?? `${name}/`)).map(([, text]) => text).join("\n");

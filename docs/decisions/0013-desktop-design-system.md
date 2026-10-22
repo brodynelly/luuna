@@ -1,6 +1,6 @@
 # ADR 0013: one token-based design system for the desktop client
 
-Date: 2026-10-21. Status: accepted; amended by [ADR 0028](0028-desktop-shell-and-tailwind.md) (a sidebar shell of separate views, and Tailwind CSS utilities bound to these tokens).
+Date: 2026-10-21. Status: accepted; amended by [ADR 0030](0030-desktop-shell-and-tailwind.md) (a sidebar shell of separate views, and Tailwind CSS utilities bound to these tokens).
 
 ## Context
 
