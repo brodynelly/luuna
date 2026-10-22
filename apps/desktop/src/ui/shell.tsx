@@ -1,70 +1,83 @@
-import { useLayoutEffect, useRef } from "react";
-import type { ReactNode, RefObject } from "react";
+import type { ReactNode } from "react";
 import type { Tone } from "../design/tone";
 import { Icon } from "../design/Icon";
 import type { IconName } from "../design/Icon";
 import type { ViewMotion } from "../shell/viewTransition";
+import { Kbd } from "./docs";
 
 /**
- * The window: a sidebar of views on the leading edge and one content column (ADR 0030). The
- * wordmark is the page's h1. The sidebar can be collapsed to an icon rail (HIG › Sidebars:
- * "Consider letting people hide the sidebar"); names stay as accessible names and tooltips.
+ * The window (ADR 0030, ADR 0033): an optional banner across the top, a sidebar of views, and one
+ * column holding the sticky top bar and `main`. The wordmark is the page's h1. The sidebar can be
+ * collapsed to an icon rail above 768 px; at 768 px and below it is an off-canvas panel (`navOpen`)
+ * and the rest of the window is inert while it is open.
  */
-export function AppShell({ collapsed, sidebar, children, motion }: { collapsed: boolean; sidebar: ReactNode; children: ReactNode; motion?: ViewMotion }) {
-  return <div className="app" data-sidebar={collapsed ? "collapsed" : undefined} data-view-motion={motion}>
+export function AppShell({ collapsed, sidebar, banner, topbar, rail, navOpen, onDismissNav, children, motion }: {
+  collapsed: boolean; sidebar: ReactNode; banner?: ReactNode; topbar?: ReactNode; rail?: ReactNode; navOpen?: boolean; onDismissNav?: () => void; children: ReactNode; motion?: ViewMotion;
+}) {
+  return <div className="app" data-sidebar={collapsed ? "collapsed" : undefined} data-nav={navOpen ? "open" : undefined} data-banner={banner ? "" : undefined} data-rail={rail ? "" : undefined} data-view-motion={motion}>
     <a className="skip-link" href="#main">Skip to main content</a>
+    {banner && <div className="shell-banner" inert={navOpen}>{banner}</div>}
     {sidebar}
-    <main id="main" tabIndex={-1} className="flex flex-col gap-5">{children}</main>
+    {navOpen && <button type="button" className="sidebar-scrim" aria-label="Close navigation" tabIndex={-1} onClick={onDismissNav} />}
+    <div className="shell-main" inert={navOpen}>
+      {topbar}
+      <main id="main" tabIndex={-1} className="content">{children}</main>
+    </div>
+    {rail && <aside className="shell-rail" aria-label="Details" inert={navOpen}>{rail}</aside>}
   </div>;
 }
 
-/** The brand mark: a lavender disc whose leading half is cut from the surface behind it. */
+/** The brand mark: an accent disc whose leading half is cut from the surface behind it. */
 export function Mark({ className }: { className: string }) {
   return <svg className={className} viewBox="0 0 292 292" aria-hidden="true" focusable="false"><circle cx="146" cy="146" r="146" /><path d="M146 0a146 146 0 0 0 0 292z" /></svg>;
 }
 
-export interface PillGeometry { y: number; height: number }
-
-/** The pill's offset and height inside the nav, or null while the current item is missing or not laid out. */
-export function pillGeometry(nav: { top: number }, item: { top: number; height: number } | null): PillGeometry | null {
-  if (!item || item.height <= 0) return null;
-  return { y: Math.round(item.top - nav.top), height: Math.round(item.height) };
+/** The app-wide state strip (Ledger Banner): only for state that changes what every action means, one at a time. */
+export function Banner({ label, children, action, className }: { label: string; children: ReactNode; action?: ReactNode; className?: string }) {
+  return <div className={["banner", className].filter(Boolean).join(" ")} role="status">
+    <strong className="banner-label">{label}</strong><span className="banner-message">{children}</span>{action}
+  </div>;
 }
 
-/** Writes the pill's two custom properties; no React state. Null leaves the static active fill showing. */
-export function applyPill(nav: Pick<HTMLElement, "style" | "setAttribute" | "removeAttribute">, geometry: PillGeometry | null) {
-  if (!geometry) { nav.removeAttribute("data-pill"); return; }
-  nav.style.setProperty("--pill-y", `${geometry.y}px`);
-  nav.style.setProperty("--pill-h", `${geometry.height}px`);
-  nav.setAttribute("data-pill", "ready");
+/** The sticky top bar: the menu button (under 768 px), the palette trigger shaped as a Ledger search field, then `actions`. */
+export function TopBar({ onMenu, menuOpen, onSearch, actions }: { onMenu: () => void; menuOpen: boolean; onSearch: () => void; actions?: ReactNode }) {
+  return <header className="topbar">
+    <button type="button" id="nav-menu" className="topbar-menu" aria-label={menuOpen ? "Close navigation" : "Open navigation"} aria-expanded={menuOpen} aria-controls="app-sidebar" onClick={onMenu}><Icon name="sidebar" /></button>
+    <button type="button" className="topbar-search" aria-label="Go to a view, project or ticket" aria-haspopup="dialog" aria-keyshortcuts="Control+K" title="Go to a view, project or ticket (Ctrl+K)" onClick={onSearch}>
+      <Icon name="search" /><span className="topbar-search-label">Go to…</span><Kbd>Ctrl K</Kbd>
+    </button>
+    <span className="topbar-spacer" />
+    {actions}
+  </header>;
 }
 
-/** Measures the current item once per change of view or collapse, and again when the nav resizes. */
-function useNavPill(ref: RefObject<HTMLElement | null>, current: string, collapsed: boolean) {
-  useLayoutEffect(() => {
-    const nav = ref.current;
-    if (!nav) return;
-    const place = () => applyPill(nav, pillGeometry(nav.getBoundingClientRect(), nav.querySelector("[aria-current=\"page\"]")?.getBoundingClientRect() ?? null));
-    place();
-    if (typeof ResizeObserver === "undefined") return;
-    const observer = new ResizeObserver(place);
-    observer.observe(nav);
-    return () => observer.disconnect();
-  }, [ref, current, collapsed]);
+export interface Crumb { label: string; onSelect?: () => void; ellipsis?: boolean }
+
+/** At most four crumbs: longer trails keep the first and the last two, with "…" for the middle. */
+export function crumbTrail(items: ReadonlyArray<Crumb>): Crumb[] {
+  if (items.length <= 4) return [...items];
+  return [items[0], { label: "…", ellipsis: true }, ...items.slice(-2)];
 }
 
-export function Sidebar({ status, current, onToggle, onSearch, collapsed, children }: { status: ReactNode; current: string; onToggle: () => void; onSearch: () => void; collapsed: boolean; children: ReactNode }) {
-  const navRef = useRef<HTMLElement>(null);
-  useNavPill(navRef, current, collapsed);
-  return <aside className="sidebar flex flex-col gap-5">
+/** Where a nested page sits; the last crumb is the page itself. Not wired into the top-level views. */
+export function Breadcrumbs({ items }: { items: ReadonlyArray<Crumb> }) {
+  const trail = crumbTrail(items);
+  return <nav aria-label="Breadcrumb" className="breadcrumbs">
+    <ol>{trail.map((crumb, index) => <li key={`${index}-${crumb.label}`}>
+      {index === trail.length - 1 ? <span aria-current="page">{crumb.label}</span>
+        : crumb.ellipsis || !crumb.onSelect ? <span aria-hidden={crumb.ellipsis ? true : undefined}>{crumb.label}</span>
+          : <button type="button" onClick={crumb.onSelect}>{crumb.label}</button>}
+    </li>)}</ol>
+  </nav>;
+}
+
+export function Sidebar({ status, onToggle, collapsed, children }: { status: ReactNode; onToggle: () => void; collapsed: boolean; children: ReactNode }) {
+  return <aside id="app-sidebar" className="sidebar flex flex-col gap-5">
     <div className="sidebar-top flex items-center gap-2">
       <h1 className="wordmark flex items-center gap-2"><Mark className="wordmark-mark" /><span className="sidebar-label">luuna</span></h1>
       <button type="button" className="sidebar-toggle" aria-label={collapsed ? "Show sidebar labels" : "Collapse sidebar"} aria-expanded={!collapsed} aria-keyshortcuts="Control+\" title={`${collapsed ? "Expand" : "Collapse"} sidebar (Ctrl+\\)`} onClick={onToggle}><Icon name="sidebar" /></button>
     </div>
-    <button type="button" className="sidebar-search" aria-label="Go to a view, project or ticket" aria-haspopup="dialog" aria-keyshortcuts="Control+K" title="Go to a view, project or ticket (Ctrl+K)" onClick={onSearch}>
-      <Icon name="search" /><span className="sidebar-label">Go to…</span><kbd className="sidebar-label">Ctrl K</kbd>
-    </button>
-    <nav className="sidebar-nav" aria-label="Views" ref={navRef}><span className="nav-pill" aria-hidden="true" />{children}</nav>
+    <nav className="sidebar-nav" aria-label="Views">{children}</nav>
     <div className="sidebar-footer">{status}</div>
   </aside>;
 }
@@ -77,9 +90,9 @@ export function NavSection({ id, label, children }: { id: string; label: string;
   </div>;
 }
 
-/** The connection status chip in the sidebar footer, led by the shared tone mark; it pulses while live. */
-export function ConnectionStatus({ tone, label, title, live }: { tone: Tone; label: string; title?: string; live?: boolean }) {
-  return <span className="connection" data-tone={tone} data-live={live ? "" : undefined} role="status" aria-live="polite" title={title}><i className="tone-mark" aria-hidden="true" data-tone={tone} /><span className="sidebar-label">{label}</span></span>;
+/** The connection status in the sidebar footer (Ledger StatusIndicator look): the shared tone mark, then the label. */
+export function ConnectionStatus({ tone, label, title }: { tone: Tone; label: string; title?: string }) {
+  return <span className="connection" data-tone={tone} role="status" aria-live="polite" title={title}><i className="tone-mark" aria-hidden="true" data-tone={tone} /><span className="sidebar-label">{label}</span></span>;
 }
 
 export interface NavItemProps {

@@ -1,5 +1,5 @@
 import { describe, expect, test } from "vitest";
-import { NAV_SECTIONS, VIEWS, viewForShortcut, viewShortcut } from "./views";
+import { CONNECTION_LABEL, NAV_SECTIONS, OUTAGE_LABEL, OUTAGE_NOTE, VIEWS, viewForShortcut, viewShortcut } from "./views";
 
 describe("navigation sections", () => {
   test("cover every view exactly once", () => {
@@ -14,5 +14,15 @@ describe("navigation sections", () => {
       const key = viewShortcut(id).replace("Ctrl+", "");
       expect(viewForShortcut({ key, ctrlKey: true, metaKey: false, altKey: false, shiftKey: false }), id).toBe(id);
     }
+  });
+});
+
+describe("status words", () => {
+  test("the connection labels are the words the smokes read", () => {
+    expect(CONNECTION_LABEL).toEqual({ connected: "Local runtime connected", reconnecting: "Reconnecting to runtime", offline: "Local runtime offline" });
+  });
+  test("the outage banner names its label and the durable-work sentence", () => {
+    expect(OUTAGE_LABEL).toBe("Reconnecting");
+    expect(OUTAGE_NOTE).toBe("Runs, candidates and worktrees are durable in the runtime; nothing is lost while Luuna waits.");
   });
 });

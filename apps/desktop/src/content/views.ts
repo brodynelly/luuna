@@ -46,3 +46,7 @@ export function viewForShortcut(event: Pick<KeyboardEvent, "key" | "ctrlKey" | "
 
 /** The connection status line, in the words the sidebar and the smokes use. */
 export const CONNECTION_LABEL = { connected: "Local runtime connected", reconnecting: "Reconnecting to runtime", offline: "Local runtime offline" } as const;
+
+/** The banner shown while the runtime is unreachable: its label, and the sentence that follows the outage text. */
+export const OUTAGE_LABEL = "Reconnecting";
+export const OUTAGE_NOTE = "Runs, candidates and worktrees are durable in the runtime; nothing is lost while Luuna waits.";
