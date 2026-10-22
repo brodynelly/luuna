@@ -216,7 +216,7 @@ async fn actual_cli_workflows_and_large_private_arguments() {
     use std::io::Write;
     std::fs::OpenOptions::new()
         .append(true)
-        .open(workspace.join(".mulch/mulch.config.yaml"))
+        .open(workspace.join(".luuna/atlas/config.yaml"))
         .unwrap()
         .write_all(b"\nhooks:\n  pre-record: [echo synthetic-hook]\n")
         .unwrap();

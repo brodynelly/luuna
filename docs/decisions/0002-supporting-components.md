@@ -18,7 +18,7 @@ Keep the application and these independently identified CLI packages together in
 | Luuna Atlas | Mulch | `components/atlas/` | `@luuna/atlas-cli` | `luuna-atlas`, `la` |
 | Luuna Beacon | Canopy | `components/beacon/` | `@luuna/beacon-cli` | `luuna-beacon`, `lb` |
 
-Preserve compatible underlying APIs and data formats. Legacy commands may remain compatibility aliases. Preserve upstream copyright, MIT licenses, source provenance, and notices. The product and new Luuna contributions use MIT. Names are distribution identities, not permission to rewrite the tools in Rust.
+Preserve compatible underlying APIs and data formats. Legacy commands may remain compatibility aliases (amended by ADR 0028: removed, with data under `.luuna/`). Preserve upstream copyright, MIT licenses, source provenance, and notices. The product and new Luuna contributions use MIT. Names are distribution identities, not permission to rewrite the tools in Rust.
 
 Keep each tool behind a versioned adapter boundary. Do not automatically consume its task databases, personal histories, prompts, or package-local instructions as Luuna policy. Nested installation lifecycle scripts must not change the root repository's Git hooks configuration.
 
