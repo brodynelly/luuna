@@ -76,7 +76,7 @@ test("Windows ConPTY runs real Node terminal input, resize, screen rendering and
     const resized = await wait((state) => state.lines.join("\n").includes("SIZE 40x12"));
     assert.equal(resized.columns, 40); assert.equal(resized.rows, 12);
     await terminal.send("q"); const closed = await wait((state) => state.exit !== null);
-    assert.equal(closed.exit, 7); assert.equal(closed.alternate, false); assert.equal(closed.cursorVisible, true);
+    assert.equal(closed.exit, 7, `${readFileSync(result, "utf8")} ${terminal.raw.toString().slice(-1000)}`); assert.equal(closed.alternate, false); assert.equal(closed.cursorVisible, true);
     assert.equal(closed.lines[0].trim(), "main"); assert.deepEqual(closed.unknown, []);
     const consoleResult = JSON.parse(readFileSync(result, "utf8"));
     assert.equal(consoleResult.exit, 7);
