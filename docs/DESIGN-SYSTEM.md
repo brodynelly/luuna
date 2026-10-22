@@ -24,6 +24,9 @@ apps/desktop/src/
   design/tokens-scale.css    token sheet: system fonts, Ledger type styles, spacing, control and layout sizes
   design/tokens-motion.css   token sheet: easings, durations, motion distances, component sizes, reduced motion
   design/tokens-legacy.css   token sheet: old names aliased to Ledger roles until the restyle items migrate them
+  design/fonts.css           last tokens-layer import, not a token sheet: ten Söhne @font-face rules and the non-Apple Söhne-first override (ADR 0033 font amendment)
+  design/platform.ts         sets data-platform (apple or other) before the first render
+  assets/fonts/soehne/       the ten hinted Söhne TTFs, bundled at the sole user's direction (THIRD-PARTY-NOTICES.md)
   design/base.css            element defaults: type, code/pre, focus, forms, buttons
   design/components.css      tone indirection and every reusable component
   design/overlays.css        palette, menus, dialogs
@@ -54,7 +57,7 @@ apps/desktop/src/
   screens/sessions.css       Sessions refinements (item D)
 ```
 
-Vite inlines the imports into one bundled stylesheet served from `'self'`, which the Tauri CSP allows. Later layers win regardless of specificity, so a screen rule refines a component without `!important`. No font is bundled (system stack, ADR 0033); no font, script or stylesheet is fetched remotely, and the CSP keeps `font-src 'self'`.
+Vite inlines the imports into one bundled stylesheet served from `'self'`, which the Tauri CSP allows. Later layers win regardless of specificity, so a screen rule refines a component without `!important`. The only bundled fonts are the ten hinted Söhne TTFs for non-Apple platforms (ADR 0033 font amendment, served from `'self'` and never inlined as `data:` URIs); no font, script or stylesheet is fetched remotely, and the CSP keeps `font-src 'self'`.
 
 Tailwind CSS v4 (`@tailwindcss/vite`) compiles `design/tailwind.css` into the last layer, `utilities`. No preflight is imported and Tailwind's palette is never loaded: the theme is `@theme inline reference` over the tokens, so `gap-2` is `calc(var(--space-1) * 2)`, `text-sm` is `var(--text-sm)` and `bg-surface` is `var(--color-surface)` (a legacy alias until L2 moves the keys to Ledger names). Use utilities for layout in markup (flex, grid, gap); keep tones, components and anything a smoke reads in the layered stylesheets.
 
@@ -191,7 +194,7 @@ ADR 0032 decisions 4 to 7 in short. Hover lifts 1 px and press scales to 0.98; e
 
 ### Fonts
 
-System fonts only (ADR 0033). `--font-sans` is the Ledger stack (`-apple-system`, `BlinkMacSystemFont`, `SF Pro Text`, `Segoe UI`, `Helvetica Neue`, Arial) and `--font-mono` is `ui-monospace`, `SF Mono`, Menlo, Consolas. Nothing is bundled or fetched; the CSP keeps `font-src 'self'`. Söhne, `fonts.css` and the platform attributes were removed; the files remain in Git history.
+Söhne first on non-Apple platforms, Ledger's system stack everywhere else (ADR 0033 and its 2026-10-22 font amendment). `--font-sans` in `tokens-scale.css` is the Ledger stack (`-apple-system`, `BlinkMacSystemFont`, `SF Pro Text`, `Segoe UI`, `Helvetica Neue`, Arial) and `--font-mono` is `ui-monospace`, `SF Mono`, Menlo, Consolas. Those token values are Ledger's exactly. `design/fonts.css` declares one family, "Söhne", with ten faces from the user's hinted TrueType files (weights 300 to 700, upright and italic, `font-display: swap`), and `:root[data-platform="other"]` puts "Söhne" first in `--font-sans` and `--font-display` ahead of the Ledger stack, which is the fallback. `--font-mono` is untouched. `design/platform.ts` sets `data-platform` before the first render; Apple platforms keep the Ledger stack and SF Pro is never bundled. The files are TTF, not woff2, because the earlier unhinted woff2 subsets rendered soft on Windows at 125% scaling; a test requires the `fpgm`, `prep` and `cvt ` tables in every file. Vite never inlines them, nothing is fetched remotely, and the CSP keeps `font-src 'self'`. Söhne is commercial and not covered by the MIT license: see `THIRD-PARTY-NOTICES.md`.
 
 ## Accessibility
 

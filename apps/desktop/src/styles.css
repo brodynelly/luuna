@@ -15,6 +15,7 @@
 @import "./design/tokens-scale.css" layer(tokens);
 @import "./design/tokens-motion.css" layer(tokens);
 @import "./design/tokens-legacy.css" layer(tokens);
+@import "./design/fonts.css" layer(tokens);
 @import "./design/base.css" layer(base);
 @import "./design/components.css" layer(components);
 @import "./design/overlays.css" layer(components);
