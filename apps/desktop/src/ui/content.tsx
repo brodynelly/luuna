@@ -1,7 +1,5 @@
 import type { AnchorHTMLAttributes, HTMLAttributes, ReactNode } from "react";
 import type { Tone } from "../design/tone";
-import { Aurora } from "./surfaces";
-import { useReveal } from "./motion";
 import { useStickyScroll } from "./useStickyScroll";
 
 /**
@@ -33,16 +31,15 @@ export function ExternalLink({ href, children, ...props }: AnchorHTMLAttributes<
 
 /**
  * A list of records (baselines, recipes, tickets, checks, findings). `rows` draws hairline-divided
- * rows instead of bordered cards; `reveal` staggers the first entrance of the items, once.
+ * rows instead of bordered cards.
  */
-export function RecordList({ label, className, variant = "cards", reveal = false, children, ...marker }: { label?: string; className?: string; variant?: "cards" | "rows"; reveal?: boolean; "data-capability"?: string; children: ReactNode }) {
-  const ref = useReveal<HTMLUListElement>();
-  const classes = [className, "record-list", variant === "rows" ? "record-rows" : undefined, reveal ? "reveal" : undefined].filter(Boolean).join(" ");
-  return <ul ref={reveal ? ref : undefined} className={classes} aria-label={label} {...marker}>{children}</ul>;
+export function RecordList({ label, className, variant = "cards", children, ...marker }: { label?: string; className?: string; variant?: "cards" | "rows"; "data-capability"?: string; children: ReactNode }) {
+  const classes = [className, "record-list", variant === "rows" ? "record-rows" : undefined].filter(Boolean).join(" ");
+  return <ul className={classes} aria-label={label} {...marker}>{children}</ul>;
 }
 
 export interface RecordProps {
-  /** A leaf record (a baseline, a check, a finding) carries a toned rule on its leading edge. */
+  /** The tone of a leaf record (a baseline, a check, a finding): a data attribute only. The record's own StatusBadge shows it as a word plus a shape. */
   tone?: Tone;
   /** Title and badge on the first line; every later child on its own full-width line. */
   headed?: boolean;
@@ -127,7 +124,7 @@ export function ReasonNote({ tone, reason, next, block = false, className }: { t
   return block ? <p className={classes} data-tone={tone}>{body}</p> : <small className={classes} data-tone={tone}>{body}</small>;
 }
 
-/** The next allowed step on its own, ruled in the accent. */
+/** The next allowed step on its own, led by an accent chevron. */
 export function NextStep({ block = false, status = false, children }: { block?: boolean; status?: boolean; children: ReactNode }) {
   const role = status ? "status" : undefined;
   return block ? <p className="recovery-note" role={role}>{children}</p> : <span className="recovery-note" role={role}>{children}</span>;
@@ -143,11 +140,10 @@ export function ErrorBanner({ message, onDismiss }: { message: ReactNode; onDism
   return <div className="error" role="alert">{message}<button className="text-button" type="button" onClick={onDismiss}>Dismiss</button></div>;
 }
 
-/** An empty screen invites the next action: what is missing, then the control that adds it. `wash` lays a soft aurora behind it. */
-export function EmptyState({ boxed = false, wash = false, title, action, children }: { boxed?: boolean; wash?: boolean; title?: ReactNode; action?: ReactNode; children?: ReactNode }) {
+/** An empty screen invites the next action: what is missing, then the control that adds it. */
+export function EmptyState({ boxed = false, title, action, children }: { boxed?: boolean; title?: ReactNode; action?: ReactNode; children?: ReactNode }) {
   if (!title && !action) return <p className={boxed ? "empty empty-box" : "empty"}>{children}</p>;
-  return <div className={["empty-state", boxed ? "empty-box" : undefined, wash ? "aurora-host" : undefined].filter(Boolean).join(" ")}>
-    {wash && <Aurora />}
+  return <div className={["empty-state", boxed ? "empty-box" : undefined].filter(Boolean).join(" ")}>
     {title && <p className="empty-title">{title}</p>}
     {children && <p className="empty">{children}</p>}
     {action}

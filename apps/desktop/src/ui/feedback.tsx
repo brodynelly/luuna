@@ -1,8 +1,9 @@
 import type { ReactNode } from "react";
 
 /**
- * Feedback states: loading rows, the empty-pane placeholder, an indeterminate progress bar and
- * streaming dots. All motion is CSS (design/motion.css) with a static reduced-motion fallback.
+ * Feedback states: loading rows, the empty-pane placeholder, an indeterminate progress bar,
+ * streaming dots and the static success check. All motion is CSS (design/motion.css) and is
+ * functional only, with a static reduced-motion fallback (ADR 0033).
  */
 
 /** Shown while a view reads the runtime: placeholder rows in the shape of the content, announced once. */
@@ -26,4 +27,15 @@ export function ProgressBar({ label }: { label: string }) {
 /** Three dots that pulse while output streams. Decorative unless `label` is given. */
 export function StreamingDots({ label }: { label?: string }) {
   return <span className="streaming-dots" aria-hidden={label ? undefined : "true"} role={label ? "img" : undefined} aria-label={label}><span /><span /><span /></span>;
+}
+
+export type CheckSize = "sm" | "md" | "lg";
+
+/** A static check beside a recorded success (a passed verdict, a healthy environment). It never animates. Decorative unless `label` is given. */
+export function CheckDraw({ label, size }: { label?: string; size?: CheckSize }) {
+  const named = label ? { role: "img", "aria-label": label } : { "aria-hidden": true as const, focusable: "false" as const };
+  return <svg className="check-draw" data-size={size} viewBox="0 0 24 24" {...named}>
+    <circle cx="12" cy="12" r="9" pathLength={1} />
+    <path d="M8 12.5l2.7 2.7L16 9.5" pathLength={1} />
+  </svg>;
 }

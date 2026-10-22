@@ -1,4 +1,4 @@
-import { Aurora, Box, Button, Disclosure, ErrorBanner, Hint, Id, Section, StatusLine } from "../ui";
+import { Box, Button, Disclosure, ErrorBanner, Hint, Id, Section, StatusLine } from "../ui";
 import { AtlasMemory } from "./AtlasMemory";
 import { BeaconPrompts } from "./Prompts";
 import { useComponents } from "./useComponents";
@@ -18,8 +18,7 @@ export function ProjectComponents(props: ComponentsProps) {
     accessory={<Button variant="text" disabled={!client || busy || loading} data-capability="components.status" onClick={() => state.setRefreshTick((value) => value + 1)}>Refresh components</Button>}>
     {state.error && <ErrorBanner message={state.error} onDismiss={() => state.setError("")} />}
     {status?.enabled ? <StatusLine className="component-status">{loading ? "Refreshing component state…" : "Project components enabled"}</StatusLine>
-      : <Box className="component-disabled aurora-host">
-        <Aurora />
+      : <Box className="component-disabled">
         <StatusLine className="component-status">{loading ? "Refreshing component state…" : status?.reason ?? "Project components are not enabled."}</StatusLine>
         <Button variant="primary" disabled={!client || busy || loading || status === null} data-capability="components.enable" onClick={enable}>Enable project components</Button>
       </Box>}

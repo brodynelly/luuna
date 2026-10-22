@@ -24,7 +24,6 @@
   --duration-draw: 400ms;
   --duration-shimmer: 1400ms;
   --duration-pulse: 1800ms;
-  --duration-ambient: 24000ms;
   --duration-stagger: 35ms;
 
   /* Distances: an integer lift so text does not blur. --stagger-cap is 10 (item B's JS constant mirrors it). */
@@ -40,12 +39,12 @@
   --row-height: 40px;
   --row-height-lg: 44px;
   --tab-indicator-height: 2px;
-  --progress-height: 2px;
+  --progress-height: 6px;
   --dot-size: 6px;
-  --switch-width: 32px;
-  --switch-height: 18px;
-  --switch-thumb: 14px;
-  --switch-travel: 14px;
+  --switch-width: 36px;
+  --switch-height: 20px;
+  --switch-thumb: 16px;
+  --switch-travel: 16px;
 
   /* Resting values for variables that scripts write at runtime (like --menu-x). */
   --tab-x: 0px;
@@ -73,7 +72,6 @@
     --duration-draw: 0ms;
     --duration-shimmer: 0ms;
     --duration-pulse: 0ms;
-    --duration-ambient: 0ms;
     --duration-stagger: 0ms;
     --lift-y: 0px;
     --press-scale: 1;
@@ -89,5 +87,12 @@
   --check-size-sm: 16px;
   --check-size-md: 24px;
   --check-size-lg: 48px;
+}
+/* item L2: component dimensions (scheme-independent). The switch is 36x20 with a 16 px knob; the progress track is 6 px. */
+:root {
+  --badge-height: 20px;
+  --kbd-size: 20px;
+  --toast-max: 480px;
+  --empty-desc-max: 360px;
 }
 @media (prefers-reduced-motion: reduce) { :root {} }

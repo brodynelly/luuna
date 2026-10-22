@@ -1,18 +1,8 @@
 import { expect, test } from "vitest";
 import { renderToStaticMarkup } from "react-dom/server";
-import { Aurora, Button, CheckDraw, CountUp, EmptyState, GlowSurface, Loading, Placeholder, ProgressBar, RecordList, Reveal, StreamingDots, SelectField, Switch, TabPanel, Table, Tabs, TextArea, TextField, Checkbox } from "./index";
+import { Button, CheckDraw, EmptyState, Loading, Placeholder, ProgressBar, RecordList, StreamingDots, SelectField, Switch, TabPanel, Table, Tabs, TextArea, TextField, Checkbox } from "./index";
 
 const html = (node: React.ReactElement) => renderToStaticMarkup(node);
-
-test("CountUp renders the final value in static markup and respects a custom format", () => {
-  expect(html(<CountUp value={1234} />)).toBe('<span class="count-up">1234</span>');
-  expect(html(<CountUp value={5} format={(n) => `${n} runs`} className="big" />)).toBe('<span class="count-up big">5 runs</span>');
-});
-
-test("Reveal renders its class with no inline style, and a group only when labelled", () => {
-  expect(html(<Reveal><span>a</span></Reveal>)).toBe('<div class="reveal"><span>a</span></div>');
-  expect(html(<Reveal label="Cards"><span>a</span></Reveal>)).toBe('<div class="reveal" role="group" aria-label="Cards"><span>a</span></div>');
-});
 
 test("CheckDraw is decorative without a label and an image with one", () => {
   const plain = html(<CheckDraw />);
@@ -27,17 +17,7 @@ test("CheckDraw is decorative without a label and an image with one", () => {
   expect(named).not.toContain("aria-hidden");
 });
 
-test("Aurora is aria-hidden and subtle by default", () => {
-  expect(html(<Aurora />)).toBe('<div class="aurora" data-intensity="subtle" aria-hidden="true"></div>');
-  expect(html(<Aurora intensity="vivid" />)).toContain('data-intensity="vivid"');
-});
-
-test("GlowSurface is a card with the glow class and keeps role group when labelled", () => {
-  expect(html(<GlowSurface>x</GlowSurface>)).toBe('<div class="card glow-surface">x</div>');
-  expect(html(<GlowSurface label="Hero" className="hero">x</GlowSurface>)).toBe('<div class="card glow-surface hero" role="group" aria-label="Hero">x</div>');
-});
-
-test("Tabs have tablist semantics, one selected tab, a roving tabindex, paired ids and one hidden indicator", () => {
+test("Tabs have tablist semantics, one selected tab, a roving tabindex and paired ids, and no sliding indicator", () => {
   const markup = html(<Tabs label="Sections" idPrefix="s" selected="b" onSelect={() => undefined} tabs={[{ id: "a", label: "A" }, { id: "b", label: "B", "data-capability": "x.y" }, { id: "c", label: "C", disabled: true }]} />);
   expect(markup).toContain('role="tablist" aria-label="Sections"');
   expect(markup.match(/aria-selected="true"/g)).toHaveLength(1);
@@ -46,7 +26,7 @@ test("Tabs have tablist semantics, one selected tab, a roving tabindex, paired i
   expect(markup).toContain('id="s-tab-a" aria-selected="false" aria-controls="s-panel-a" tabindex="-1"');
   expect(markup).toContain('data-capability="x.y"');
   expect(markup).toContain("disabled");
-  expect(markup.match(/class="tab-indicator" aria-hidden="true"/g)).toHaveLength(1);
+  expect(markup).not.toContain("tab-indicator");
   expect(markup).not.toContain("data-measured");
   const panel = html(<TabPanel id="b" idPrefix="s" selected={false}>body</TabPanel>);
   expect(panel).toBe('<div role="tabpanel" id="s-panel-b" aria-labelledby="s-tab-b" hidden="">body</div>');
@@ -94,10 +74,11 @@ test("RecordList, EmptyState and Button render the same markup as before when th
   expect(html(<Button>Go</Button>)).toBe('<button type="button">Go</button>');
 });
 
-test("the new optional props add only their documented markup", () => {
-  expect(html(<RecordList variant="rows" reveal><li>x</li></RecordList>)).toBe('<ul class="record-list record-rows reveal"><li>x</li></ul>');
-  expect(html(<EmptyState title="T" wash>Body</EmptyState>)).toBe('<div class="empty-state aurora-host"><div class="aurora" data-intensity="subtle" aria-hidden="true"></div><p class="empty-title">T</p><p class="empty">Body</p></div>');
+test("the optional props add only their documented markup", () => {
+  expect(html(<RecordList variant="rows"><li>x</li></RecordList>)).toBe('<ul class="record-list record-rows"><li>x</li></ul>');
   expect(html(<Button variant="quiet">Q</Button>)).toBe('<button type="button" class="quiet">Q</button>');
+  expect(html(<Button size="md">M</Button>)).toBe('<button type="button" class="button-md">M</button>');
+  expect(html(<Button variant="primary" size="lg" className="x">L</Button>)).toBe('<button type="button" class="primary button-lg x">L</button>');
 });
 
 test("Loading and Placeholder keep their markup after the move to feedback", () => {

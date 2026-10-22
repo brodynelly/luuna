@@ -34,7 +34,7 @@ export function ProjectDetail({ client, connectionEpoch, state, actions }: { cli
   const registration = view?.repositories[0];
   if (!view || !registration?.observation) {
     return <Card className="project-detail">
-      <EmptyState boxed wash title={client ? state.projects.length ? "No project selected" : "No projects yet" : "Not connected"}>{client ? state.projects.length ? "Select a project to see its checks, tickets and history." : "Add your first project to get started." : "Connect to the runtime to import a repository."}</EmptyState>
+      <EmptyState boxed title={client ? state.projects.length ? "No project selected" : "No projects yet" : "Not connected"}>{client ? state.projects.length ? "Select a project to see its checks, tickets and history." : "Add your first project to get started." : "Connect to the runtime to import a repository."}</EmptyState>
     </Card>;
   }
   const repositoryIds = view.repositories.map((repository) => repository.repository_id);

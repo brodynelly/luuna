@@ -6,7 +6,7 @@ import { describeFailure } from "./failures";
 import { baselineTone, manifestTone, runTone } from "./design/tone";
 import { viewInfo } from "./content/views";
 import type { View } from "./content/views";
-import { Actions, Aurora, Box, Button, ContextMenuArea, copyText, EmptyState, ErrorBanner, GlowSurface, Id, Item, List, Loading, Meta, Page, ReasonNote, RecordItem, RecordList, Section, StatGrid, StatTile, StatusBadge, useNotify, VisuallyHidden } from "./ui";
+import { Actions, Box, Button, Card, ContextMenuArea, copyText, EmptyState, ErrorBanner, Id, Item, List, Loading, Meta, Page, ReasonNote, RecordItem, RecordList, Section, StatGrid, StatTile, StatusBadge, useNotify, VisuallyHidden } from "./ui";
 
 /** Where a Home control sends the developer: the project's panel, its ticket form, or one ticket. */
 export interface OpenRequest { projectId: string; ticketId?: string; ticketForm?: boolean }
@@ -35,7 +35,7 @@ type Summary = { summary: HomeSummary; busy: boolean; onOpen: (request: OpenRequ
 function Blockers({ summary, busy, onOpen }: Summary) {
   const count = summary.blockers.length;
   return <Section id="home-waiting" variant="plain" className="home-section" title={<>Waiting on you{count > 0 && <span className="home-count"> {count}</span>}</>}>
-    {count > 0 ? <RecordList className="home-blockers" label="Blockers waiting on you" reveal>{summary.blockers.map((blocker, index) => {
+    {count > 0 ? <RecordList className="home-blockers" label="Blockers waiting on you">{summary.blockers.map((blocker, index) => {
       const tone = blockerTone(blocker);
       return <RecordItem key={`${blocker.project_id}-${blocker.run_id ?? blocker.repository_id ?? index}`} headed className="home-blocker" tone={tone}>
         <StatusBadge tone={tone}>{blocker.state ? blocker.state.replace(/_/g, " ") : "testing setup"}</StatusBadge>
@@ -52,13 +52,13 @@ function Blockers({ summary, busy, onOpen }: Summary) {
 function ProjectHealth({ summary, busy, onOpen }: Summary) {
   const notify = useNotify();
   return <Section id="home-projects-heading" variant="plain" className="home-section" title="Projects">
-    <RecordList className="home-projects" label="Projects and validation health" reveal>{summary.projects.map((project) => <RecordItem key={project.id} className="home-project">
+    <RecordList className="home-projects" label="Projects and validation health">{summary.projects.map((project) => <RecordItem key={project.id} className="home-project">
       <ContextMenuArea label={`Actions for ${project.name}`} commands={() => [
         { label: "Open project", onSelect: () => onOpen({ projectId: project.id }), disabled: busy },
         { label: "New ticket", onSelect: () => onOpen({ projectId: project.id, ticketForm: true }), disabled: busy || project.revision === 0 },
         { label: "Copy project ID", group: true, onSelect: () => void copyText(project.id).then(() => notify("Project ID copied")) },
       ]}>
-      <GlowSurface className="home-project-card">
+      <Card className="home-project-card">
       <Box className="home-project-head">
         <strong>{project.name}</strong>
         <StatusBadge tone={manifestTone(project.revision)}>{project.revision > 0 ? `manifest r${project.revision}` : "unconfirmed"}</StatusBadge>
@@ -75,7 +75,7 @@ function ProjectHealth({ summary, busy, onOpen }: Summary) {
         <Button disabled={busy} onClick={() => onOpen({ projectId: project.id })}>Open {project.name}</Button>
         <Button variant="text" disabled={busy || project.revision === 0} aria-label={`New ticket in ${project.name}`} onClick={() => onOpen({ projectId: project.id, ticketForm: true })}>New ticket</Button>
       </Actions>
-      </GlowSurface>
+      </Card>
       </ContextMenuArea>
     </RecordItem>)}</RecordList>
   </Section>;
@@ -84,12 +84,11 @@ function ProjectHealth({ summary, busy, onOpen }: Summary) {
 /** The summary as rendered; pure, so a fixture summary renders without a runtime. */
 export function HomeSummaryView({ summary, busy, onOpen, onAddProject }: Summary & { onAddProject?: () => void }) {
   if (summary.projects.length === 0) {
-    return <EmptyState boxed wash title="No projects yet" action={onAddProject && <Button variant="primary" onClick={onAddProject}>Add a project…</Button>}>Add a repository in Projects to get started.</EmptyState>;
+    return <EmptyState boxed title="No projects yet" action={onAddProject && <Button variant="primary" onClick={onAddProject}>Add a project…</Button>}>Add a repository in Projects to get started.</EmptyState>;
   }
   const sum = (pick: (project: HomeSummary["projects"][number]) => number) => summary.projects.reduce((total, project) => total + pick(project), 0);
   return <>
-    <Box className="home-hero aurora-host">
-      <Aurora />
+    <Box className="home-hero">
       <StatGrid label="Home summary counts">
         <StatTile term="Projects" value={summary.projects.length} />
         <StatTile term="Waiting on you" value={summary.blockers.length} />
@@ -136,6 +135,6 @@ export function Home({ client, connectionEpoch = 0, refreshEpoch = 0, onOpen, on
     {error && <ErrorBanner message={error} onDismiss={() => setError("")} />}
     {client ? summary ? <HomeSummaryView summary={summary} busy={busy} onOpen={onOpen} onAddProject={onNavigate && (() => onNavigate("projects"))} />
       : !error && <Loading label="Reading the runtime's projects, baselines and workflows…" />
-      : <EmptyState boxed wash>Connect to the runtime to see your projects, their validation health and blockers.</EmptyState>}
+      : <EmptyState boxed>Connect to the runtime to see your projects, their validation health and blockers.</EmptyState>}
   </Page>;
 }

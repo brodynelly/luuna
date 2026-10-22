@@ -120,7 +120,7 @@ export function Workflows({ client, projectId, repositoryId, repositoryIds = [re
     <PrerequisiteOffers offers={offers} disabled={!client || work.busy || !manifestConfirmed} prefillSetupTicket={prefillSetupTicket} />
     {data.tickets.list.length > 0
       ? <TicketList rows={data.tickets.list.map((ticket) => { const latest = data.tickets.plans[ticket.id]?.at(-1); return { ticket, run: latest && runFor(latest), planRevision: latest?.revision }; })} selected={selected} onSelect={setChosen} />
-      : <EmptyState wash title="No tickets yet">Create the first one below.</EmptyState>}
+      : <EmptyState title="No tickets yet">Create the first one below.</EmptyState>}
     {detail && <RecordList className="tickets" label="Tickets" data-capability="tickets.list">
       <TicketCard key={detail.id} ticket={detail} source={data.tickets.sources[detail.id]} revisions={(data.tickets.plans[detail.id] ?? []).map((plan) => ({ plan, run: runFor(plan) }))}
         snapshots={data.snapshots} diffs={work.inspections.diffs} attempts={work.inspections.attempts} publications={work.inspections.publications}

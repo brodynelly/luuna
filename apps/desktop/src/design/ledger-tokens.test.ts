@@ -203,18 +203,8 @@ describe("colour tokens", () => {
 });
 
 // ---- Banned decoration (ADR 0033) ----
-// Selectors that still draw a coloured left rule. Item L2 empties this list; a stale entry fails.
+// Selectors that still draw a coloured left rule. Item L2 emptied the component-sheet entries; L3/L4 own the screen ones, and a stale entry fails.
 const LEFT_RULE_PENDING: string[] = [
-  "design/components.css: .callout",
-  "design/components.css: .callout[data-tone]",
-  "design/components.css: .error",
-  "design/components.css: .failure-note[data-tone]",
-  "design/components.css: .notice",
-  "design/components.css: .record-list.record-rows > .record[data-tone]",
-  "design/components.css: .recovery-note",
-  "design/components.css: .record[data-tone]",
-  'design/components.css: button.run-card.selected, button.run-card[aria-pressed="true"]',
-  'design/overlays.css: .palette-option[aria-selected="true"]',
   "screens/candidate-review.css: .candidate-review > .candidate-verdict",
   "screens/candidate-review.css: .candidate-review > .candidate-verdict[data-tone]",
   "screens/workflows.css: .task-graph > .task-record > .advisory-result",

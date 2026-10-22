@@ -9,7 +9,7 @@ const root = new URL("../", import.meta.url);
 const read = (file: string) => readFileSync(new URL(file, root), "utf8").replace(/\/\*[\s\S]*?\*\//g, "");
 const SHEETS = ["design/motion.css", "design/components.css", "design/overlays.css", "design/controls.css"];
 const ANIMATED_SHEETS = ["design/motion.css", "design/components.css", "design/overlays.css"];
-const ALLOWED = ["transform", "opacity", "background-position", "stroke-dashoffset"];
+const ALLOWED = ["transform", "opacity"];
 const LAYOUT = /^(?:width|height|min-width|min-height|max-width|max-height|inline-size|block-size|top|left|right|bottom|inset|inset-inline|inset-block|inset-inline-start|inset-block-end|margin|padding|all)\b/;
 
 function topLevel(text: string): string[] {
@@ -25,9 +25,9 @@ function topLevel(text: string): string[] {
 }
 
 describe("motion stylesheets", () => {
-  test("every @keyframes body animates only transform, opacity, background-position or stroke-dashoffset", () => {
+  test("every @keyframes body animates only transform or opacity", () => {
     const bodies = SHEETS.flatMap((sheet) => splitAtRules(read(sheet), "keyframes").inside);
-    expect(bodies.length).toBeGreaterThan(8);
+    expect(bodies.length).toBeGreaterThanOrEqual(6);
     const problems = bodies.flatMap((body) => declarations(body)).filter(([property]) => !ALLOWED.includes(property)).map(([property, value]) => `${property}: ${value}`);
     expect(problems).toEqual([]);
   });
@@ -58,23 +58,22 @@ describe("motion stylesheets", () => {
     });
   }
 
-  test("the glow is not drawn under reduced motion, and only a fine hovering pointer lights it", () => {
-    const { inside, preludes } = splitAtRules(read("design/motion.css"), "media");
-    const reduced = inside.filter((_, index) => preludes[index]!.includes("prefers-reduced-motion")).flatMap(rules);
-    expect(reduced.some(({ selector, body }) => selector === ".glow-surface::before" && /display:\s*none/.test(body))).toBe(true);
-    const hover = inside.filter((_, index) => preludes[index] === "(hover: hover) and (pointer: fine)").flatMap(rules);
-    expect(hover.map(({ selector }) => selector)).toContain(".glow-surface:hover::before");
+  test("no stylesheet holds a gradient, aurora, glow or reveal", () => {
+    for (const sheet of SHEETS) expect(read(sheet), sheet).not.toMatch(/gradient|aurora|glow|reveal|count-up|--shadow-focus|pulse-ring/);
   });
 
-  test("the active chip pulses in CSS and live output never does", () => {
+  test("badges never animate and live output never does", () => {
     const components = read("design/components.css");
-    expect(components).toMatch(/\.state\[data-tone="active"\]::after \{[^}]*animation: pulse-ring/);
+    const badges = rules(components).filter(({ selector }) => /\.(?:state|tag|tone-mark|check-draw)(?![\w-])/.test(selector));
+    expect(badges.length).toBeGreaterThan(0);
+    for (const { selector, body } of badges) expect(body, selector).not.toMatch(/animation|transition/);
     const caret = rules(components).filter(({ selector }) => selector.includes("pre[data-live]"));
     expect(caret.length).toBeGreaterThan(0);
     for (const { body } of caret) expect(body).not.toMatch(/animation/);
+    for (const { selector, body } of rules(read("design/motion.css")).filter(({ selector }) => selector.includes("check-draw"))) expect(body, selector).not.toMatch(/animation/);
   });
 
-  test("overlays and the reveal fill backwards, so no transform remains at rest", () => {
-    for (const sheet of ANIMATED_SHEETS) for (const [property, value] of declarations(splitAtRules(read(sheet), "keyframes").outside)) if (property === "animation" && /(?:menu|dialog|scrim|toast|reveal)-in/.test(value)) expect(value, `${sheet}: ${value}`).toMatch(/\bbackwards\b/);
+  test("overlays and the toast fill backwards, so no transform remains at rest", () => {
+    for (const sheet of ANIMATED_SHEETS) for (const [property, value] of declarations(splitAtRules(read(sheet), "keyframes").outside)) if (property === "animation" && /(?:menu|dialog|scrim|toast)-in/.test(value)) expect(value, `${sheet}: ${value}`).toMatch(/\bbackwards\b/);
   });
 });

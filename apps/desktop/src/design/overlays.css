@@ -1,8 +1,9 @@
 /*
- * Overlays: the context menu and the command palette (ADR 0030, ADR 0032). Both float above the
- * content on the panel surface with the popover or dialog elevation; neither blurs or tints what
- * is behind it. They scale in from 0.96 with a fade (keyframes in motion.css); a fill of
- * backwards leaves no transform behind once the entrance ends.
+ * Overlays: the context menu and the command palette (ADR 0030, ADR 0033; Ledger Menu, Dialog, SearchField
+ * and Kbd). Both float above the content on the overlay surface with the popover elevation (a hairline in
+ * dark); neither blurs or tints what is behind it. They scale in from 0.96 with a fade (keyframes in
+ * motion.css); a fill of backwards leaves no transform behind once the entrance ends. Items inside these
+ * clipped containers draw their keyboard focus ring inset, so it is never cut off.
  */
 
 /* An item with a context menu lays out exactly as it would without one. */
@@ -12,13 +13,13 @@
   position: fixed;
   top: var(--menu-y);
   left: var(--menu-x);
-  z-index: 50;
+  z-index: var(--z-menu);
   display: grid;
   min-width: var(--menu-min-width);
   padding: var(--space-1);
-  border: var(--border-width) solid var(--color-border);
-  border-radius: var(--radius-menu);
-  background: var(--color-surface);
+  border: var(--border-width) solid transparent;
+  border-radius: var(--radius-lg);
+  background: var(--surface-overlay);
   box-shadow: var(--shadow-popover);
   transform-origin: top left;
   animation: menu-in var(--duration-micro) var(--ease-out) backwards;
@@ -26,51 +27,62 @@
 .context-menu button[role="menuitem"] {
   justify-content: flex-start;
   width: 100%;
-  min-height: var(--control-height-sm);
-  padding: 0 var(--space-3);
+  min-height: var(--control-md);
+  padding: 0 var(--space-2);
   border-color: transparent;
+  border-radius: var(--radius-md);
   background: transparent;
-  color: var(--color-text);
+  color: var(--ink-body);
+  box-shadow: none;
+  font-size: var(--text-body);
   font-weight: var(--weight-regular);
 }
-.context-menu button[role="menuitem"]:is(:hover, :focus-visible):not(:disabled) { background: var(--color-selected); outline-offset: var(--focus-inset); }
-.context-menu button[role="menuitem"] { border-radius: var(--radius-chip); box-shadow: none; }
-.context-menu button[role="menuitem"]:disabled { color: var(--color-text-disabled); }
-.context-separator { margin: var(--space-1) 0; border: 0; border-top: var(--border-width) solid var(--color-border); }
+.context-menu button[role="menuitem"]:is(:hover, :focus-visible):not(:disabled) { background: var(--fill); }
+.context-menu button[role="menuitem"]:focus-visible { outline-offset: var(--focus-inset); }
+.context-menu button[role="menuitem"]:disabled { background: transparent; color: var(--ink-disabled); }
+.context-separator { margin: var(--space-1) 0; border: 0; border-top: var(--border-width) solid var(--separator); }
 
-/* The palette: a modal dialog near the top of the window, one field and the matching commands. */
+/* The palette: a modal dialog near the top of the window, one search field and the matching commands. */
 dialog.palette {
   width: min(var(--palette-width), calc(100% - 2 * var(--gutter)));
   margin: var(--palette-top) auto 0;
   padding: 0;
-  border: var(--border-width) solid var(--color-border);
-  border-radius: var(--radius-dialog);
-  background: var(--color-surface);
-  color: var(--color-text);
-  box-shadow: var(--shadow-dialog);
+  border: var(--border-width) solid transparent;
+  border-radius: var(--radius-xl);
+  background: var(--surface-overlay);
+  color: var(--ink);
+  box-shadow: var(--shadow-popover);
 }
 dialog.palette[open] { transform-origin: top center; animation: dialog-in var(--duration-standard) var(--ease-out) backwards; }
-dialog.palette::backdrop { background: var(--color-scrim); }
+dialog.palette::backdrop { background: var(--scrim); }
 dialog.palette[open]::backdrop { animation: scrim-in var(--duration-standard) var(--ease-out) backwards; }
-.palette-field { display: block; padding: var(--space-3); border-bottom: var(--border-width) solid var(--color-border); }
+.palette-field { display: block; padding: var(--space-3); border-bottom: var(--border-width) solid var(--separator); }
 /* The search is prose, not an identifier: it keeps the sans face the spellCheck-off rule would swap for mono. */
-.palette-field > input { margin: 0; font-family: var(--font-sans); font-size: var(--text-md); }
+.palette-field > input { margin: 0; border-color: transparent; border-radius: var(--radius-md); background: var(--fill); box-shadow: none; font-family: var(--font-sans); font-size: var(--text-body); }
+.palette-field > input:hover:not(:disabled) { border-color: transparent; }
+.palette-field > input::placeholder { color: var(--ink-muted); }
 ul.palette-list[role="listbox"] { max-height: var(--palette-list-max); margin: 0; padding: var(--space-1); overflow: auto; list-style: none; }
-.palette-option { display: flex; align-items: baseline; gap: var(--space-3); padding: var(--space-2) var(--space-3); border-radius: var(--radius-menu); cursor: pointer; }
-.palette-option[aria-selected="true"] { background: var(--color-accent-tint); box-shadow: inset var(--rule-width) 0 0 var(--color-accent); }
+.palette-option { display: flex; align-items: center; gap: var(--space-3); min-height: var(--control-md); padding: 0 var(--space-2); border-radius: var(--radius-md); color: var(--ink-body); cursor: pointer; }
+.palette-option[aria-selected="true"] { background: var(--fill); color: var(--ink); }
 .palette-option > .palette-label { flex: 1 1 auto; min-width: 0; overflow-wrap: anywhere; }
-.palette-option > .palette-group { color: var(--color-text-muted); font-size: var(--text-xs); }
-.palette-empty { padding: var(--space-4); color: var(--color-text-muted); font-size: var(--text-sm); }
-.palette-hint { margin: 0; padding: var(--space-2) var(--space-3); border-top: var(--border-width) solid var(--color-border); color: var(--color-text-muted); font-size: var(--text-xs); }
+.palette-option > .palette-group { color: var(--ink-muted); font-size: var(--text-caption); }
+.palette-empty { padding: var(--space-4); color: var(--ink-muted); font-size: var(--text-label); }
+.palette-hint { margin: 0; padding: var(--space-2) var(--space-3); border-top: var(--border-width) solid var(--separator); color: var(--ink-muted); font-size: var(--text-caption); }
 kbd {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-width: var(--kbd-size);
+  min-height: var(--kbd-size);
   padding: 0 var(--space-1);
-  border: var(--border-width) solid var(--color-border);
+  border: var(--border-width) solid var(--border);
+  border-bottom-width: calc(var(--border-width) * 2);
   border-radius: var(--radius-sm);
-  background: var(--color-surface-raised);
-  box-shadow: var(--shadow-kbd);
-  color: var(--color-text-muted);
+  background: var(--surface-raised);
+  color: var(--ink-body);
   font-family: var(--font-sans);
-  font-size: var(--text-2xs);
+  font-size: var(--text-caption);
+  font-weight: var(--weight-medium);
 }
 
 @media (prefers-reduced-motion: reduce) {
