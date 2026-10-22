@@ -133,14 +133,16 @@ hold or pass to Git without exposing it in arguments, logs or events.
   CI observation on a real workflow and a human merge on GitHub are the M7
   exit evidence and have not been produced.
 - **Multi-repository candidate sets** are handled by the publisher (one
-  branch per repository, linked bodies), but M4 has not produced such a set
-  through the runtime, so the linking path has no end-to-end evidence.
+  branch per repository, linked bodies); the linking path gained synthetic
+  end-to-end evidence with the second 2026-10-22 amendment below, real
+  GitHub evidence remains outstanding.
 - **Signed installers and a host update policy** (M7's portable installation
   half) are untouched by this decision; `doctor` is the diagnostic they will
   ship with.
 - **Repair after CI failure** (A24's bounded repair that invalidates affected
-  evidence) is reported by `ci.state: failure` but not yet driven into the
-  repair workflow; the developer chooses to repair or re-plan.
+  evidence) was reported by `ci.state: failure` but not driven into the
+  repair workflow until the second 2026-10-22 amendment below; the developer
+  still chooses to repair or re-plan.
 
 ## Amendment (2026-10-22): publication revalidates every authoritative input
 
@@ -217,3 +219,111 @@ and a `.env` file (`write_secret` synthetic writer scenario) passes its check
 and review and is refused by the policy with findings that never contain the
 values. The ticket-revision case of `verify_plan_sources` is exercised through
 the ticket editing route (ADR 0026) rather than here.
+
+## Amendment (2026-10-22, second): CI-driven bounded repair and linked-set evidence
+
+The October 22 specification audit (finding 5) held two further gaps against
+this decision: A24's "PR-created CI fails → distinct CI failure shown;
+bounded repair invalidates affected evidence" was reported by `ci.state:
+failure` but never driven into the repair workflow ("What remains"), and
+the linked multi-repository publication path (A22/A25, the M7 exit) had no
+end-to-end evidence. The decision is amended:
+
+1. **`POST /api/v1/runs/{id}/publication/repair`** with `{candidate_hash,
+   provider, model}` (the shape of `POST …/repair`) is the bounded repair
+   after CI failed on a published candidate. Its gate, in this order and
+   before anything changes: no work may be active for the run; the run's
+   latest publication must exist, be complete and `pr_open` (a `failed`
+   record is reconciled first, an `integrated` one has nothing to repair, a
+   superseded one is refused naming the repaired candidate); the hash must
+   be that publication's; the CI observation is refreshed through the same
+   bounded `observe` as `GET …/publication`, so a stale view never triggers
+   a repair, and must be `failure` on at least one repository (an `unknown`,
+   `pending` or `success` observation is refused naming each repository's
+   state, its reason and the next step); and
+   `Store::can_repair_after_ci_failure` applies the authorization, binding
+   and budget half of the ordinary repair gate (`repair_budget_gate`, shared
+   with `POST …/repair`: the current approved plan, ticket and manifest, the
+   ADR 0017 multi-repository limitation with its re-planning reason,
+   `max_task_repairs`, and attempt, time and cost headroom) while the
+   candidate is still `reviewed`, so a repair the budgets would refuse never
+   costs the candidate its review. A CI repair counts as a task repair.
+2. **Effect.** The reviewed candidate is invalidated with
+   `invalidate_reviewed_candidate(…, content_drift: false)` and a reason that
+   names, per failing repository, the pull request and the failing checks by
+   name and conclusion (`ci-unit failure`), never GitHub log content; the
+   run moves `reviewed -> failed` and `candidate.invalidated` is recorded as
+   in the first amendment. The publication record gains
+   `superseded_by_repair: true`, `superseded_reason` and `superseded_at`;
+   its `publication_state` stays as observed (the enum is unchanged) and the
+   pull request stays open: Luuna never closes or merges it. Then
+   `publication.repair_requested` is recorded with the candidate hash, the
+   candidate's new status and a `ci_failure` summary (repository, pull
+   request, commit, every observed check, the failed checks), and the
+   existing repair path (`writer::repair_after_ci_failure`, the same
+   `schedule_writer` as `POST …/repair`) creates the next candidate revision
+   in a fresh worktree; the attempt's provenance is `trigger: ci_repair`.
+   The repair writer's evidence envelope carries a `ci_failure` section
+   beside the previous checks, output and review: it is data inside the
+   marker-delimited block, redacted and bounded with the rest. If the writer
+   path refuses after the invalidation (a moved HEAD, a lost baseline), the
+   refusal says so and names `POST /repair` as the next step; the
+   invalidation stands, since CI did fail on the reviewed candidate.
+3. **The next publication supersedes the first.** The repaired candidate is
+   validated and reviewed afresh and published under its own record (one
+   record per run and hash, as before) on its own branch; its pull request
+   body carries a `## Supersedes` section naming the earlier pull request by
+   number and URL, the earlier candidate hash and branch, and the recorded
+   reason. `Store::publications(run_id)` lists a run's publications for this;
+   `GET …/publication` keeps returning the newest record.
+4. **Linked-set bodies state dependencies and merge order.** With several
+   repositories every pull request body names the others by URL (as before)
+   and adds `## Dependencies and merge order`: the set's repositories in
+   producer-before-consumer order derived from the candidate set's
+   `<consumer>:<producer>` bindings (`publication::merge_order`), each
+   consumer with the exact producer commit it was bound to, the current pull
+   request marked, and the statement that the pull requests are not merged
+   atomically and that a partial merge leaving the rest obsolete calls for
+   re-planning (docs/08-validation.md "Publication rules").
+5. **Clients.** `runs.publication.repair` in the capability catalog, the
+   `repairPublication` client method (returning the superseded record plus
+   the run now implementing), the TUI command `publication-repair` and a
+   desktop control shown only when the publication for the displayed
+   candidate is open and reports a CI failure; the desktop marks a
+   superseded publication.
+
+Tests. `crates/luuna-runtime/tests/publication.rs` (twelve scenarios) adds
+the CI repair against the shared fake GitHub
+(`tests/support/mod.rs`, pull requests numbered per repository, failures,
+check runs and merges switchable per repository): the repair is refused while
+CI is unknown, pending or passing and for a stale hash with nothing
+invalidated; a failing `ci-unit` check admits it, the candidate is `failed`
+with `content_drift: false` and a reason naming the check, the run is
+`failed`, `candidate.invalidated`, `publication.repair_requested` and
+`candidate.repair_started` follow in that order, the attempt is `ci_repair`,
+the synthetic `ci_repair` writer (fixtures/pi-rpc/mock_pi.py) repairs only
+when its prompt carries the `ci_failure` evidence and the check's name, the
+new revision validates and reviews, the first record reads superseded and is
+refused a second repair, publishing the new hash opens pull request 2 on a
+new branch whose body names pull request 1 as superseded while branch and
+pull request 1 are left alone, `max_task_repairs` refuses a further CI repair
+before anything is invalidated, and no merge-, close- or delete-like request
+is ever sent. `crates/luuna-runtime/tests/publication_multirepo.rs` (five
+scenarios) drives the three-repository fixture of `multirepo.rs` under
+GitHub-shaped identities with per-repository bare remotes: a reviewed set
+publishes three branches at the exact commits and three pull requests (one
+`POST` each) whose bodies, after linking, name the other two and the
+`api`, `shared`, `consumer` order with the bindings; a creation failure on
+the second repository in publication order leaves the first open, the third
+attempted and opened and linking withheld, and `reconcile` completes the set
+with exactly one more creation, no second push and linked bodies; one
+repository merged keeps `pr_open` with that repository's `merge.merged` and
+no `publication.integrated`, all merged is `integrated` once; a newer plan
+revision refuses reconciliation of the partial set with the pushed branches
+left alone; a manual edit in one repository's worktree refuses the set
+naming that repository, invalidates the candidate and pushes to no remote.
+The developer checkouts are byte identical throughout.
+
+What remains unchanged from "What remains": real GitHub evidence (a genuine
+push, pull request, CI run and human merge) has still not been produced;
+repair of a multi-repository set, CI-failed or not, is still re-planning.

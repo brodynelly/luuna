@@ -7,228 +7,35 @@
 //! identity check are the real ones; the developer checkout carries a
 //! `url.<bare path>.pushInsteadOf` rewrite, as a developer's own transport
 //! rewrite would, so Git's effective push URL is the local bare repository.
+mod support;
+
 use axum::{
     body::{to_bytes, Body},
-    extract::{Path as AxumPath, Query, State},
     http::{Request, StatusCode},
-    routing::get,
-    Json, Router,
+    Router,
 };
 use luuna_runtime::{router, AppState, PublicationSettings, RuntimeConfig};
 use serde_json::{json, Value};
 use std::{
-    collections::HashMap,
     fs,
     path::{Path, PathBuf},
     process::Command,
-    sync::{Arc, Mutex},
+    sync::atomic::{AtomicU32, Ordering},
     time::Duration,
 };
+use support::{assert_no_merge_requests, start_fake_github, Fake};
 use tower::ServiceExt;
 
 const TOKEN: &str = "synthetic-test-token-with-at-least-32-bytes";
 const REMOTE: &str = "https://github.com/luuna-test/fixture.git";
-
-/// The fake GitHub REST API: pull requests by number, every request it saw,
-/// and the behaviours a scenario switches on.
-#[derive(Default)]
-struct FakeGitHub {
-    requests: Vec<(String, String)>,
-    pull_requests: Vec<Value>,
-    delay_create: Option<Duration>,
-    fail_create_once: bool,
-    check_runs: Vec<Value>,
-    merged: bool,
-}
-
-type Fake = Arc<Mutex<FakeGitHub>>;
-
-fn pull_request(number: u64, owner: &str, repo: &str, body: &Value) -> Value {
-    json!({
-        "number": number,
-        "html_url": format!("https://github.com/{owner}/{repo}/pull/{number}"),
-        "url": format!("https://api.github.com/repos/{owner}/{repo}/pulls/{number}"),
-        "state": "open",
-        "title": body["title"],
-        "body": body["body"],
-        "head": {"ref": body["head"], "sha": body["head_sha"]},
-        "base": {"ref": body["base"]},
-        "merged": false,
-        "merged_at": null,
-        "merged_by": null,
-    })
-}
-
-async fn list_pulls(
-    State(fake): State<Fake>,
-    AxumPath((owner, repo)): AxumPath<(String, String)>,
-    Query(query): Query<HashMap<String, String>>,
-) -> Json<Value> {
-    let mut fake = fake.lock().unwrap();
-    fake.requests.push((
-        "GET".into(),
-        format!("/repos/{owner}/{repo}/pulls?{query:?}"),
-    ));
-    let head = query.get("head").cloned().unwrap_or_default();
-    let branch = head.split_once(':').map(|(_, b)| b.to_owned());
-    let listed: Vec<Value> = fake
-        .pull_requests
-        .iter()
-        .filter(|pr| branch.as_deref().is_none_or(|b| pr["head"]["ref"] == b))
-        .cloned()
-        .collect();
-    Json(Value::Array(listed))
-}
-
-async fn create_pull(
-    State(fake): State<Fake>,
-    AxumPath((owner, repo)): AxumPath<(String, String)>,
-    Json(body): Json<Value>,
-) -> (StatusCode, Json<Value>) {
-    let (delay, response) = {
-        let mut fake = fake.lock().unwrap();
-        fake.requests
-            .push(("POST".into(), format!("/repos/{owner}/{repo}/pulls")));
-        if fake.fail_create_once {
-            fake.fail_create_once = false;
-            (
-                None,
-                (
-                    StatusCode::INTERNAL_SERVER_ERROR,
-                    Json(json!({"message": "synthetic outage"})),
-                ),
-            )
-        } else {
-            let number = fake.pull_requests.len() as u64 + 1;
-            let pr = pull_request(number, &owner, &repo, &body);
-            fake.pull_requests.push(pr.clone());
-            (fake.delay_create, (StatusCode::CREATED, Json(pr)))
-        }
-    };
-    if let Some(delay) = delay {
-        tokio::time::sleep(delay).await;
-    }
-    response
-}
-
-async fn get_pull(
-    State(fake): State<Fake>,
-    AxumPath((owner, repo, number)): AxumPath<(String, String, u64)>,
-) -> (StatusCode, Json<Value>) {
-    let mut fake = fake.lock().unwrap();
-    fake.requests.push((
-        "GET".into(),
-        format!("/repos/{owner}/{repo}/pulls/{number}"),
-    ));
-    let merged = fake.merged;
-    match fake
-        .pull_requests
-        .iter()
-        .find(|pr| pr["number"] == number)
-        .cloned()
-    {
-        Some(mut pr) => {
-            if merged {
-                pr["merged"] = json!(true);
-                pr["merged_at"] = json!("2026-10-21T12:00:00Z");
-                pr["merged_by"] = json!({"login": "a-human"});
-                pr["state"] = json!("closed");
-            }
-            (StatusCode::OK, Json(pr))
-        }
-        None => (StatusCode::NOT_FOUND, Json(json!({"message": "Not Found"}))),
-    }
-}
-
-async fn patch_pull(
-    State(fake): State<Fake>,
-    AxumPath((owner, repo, number)): AxumPath<(String, String, u64)>,
-    Json(body): Json<Value>,
-) -> (StatusCode, Json<Value>) {
-    let mut fake = fake.lock().unwrap();
-    fake.requests.push((
-        "PATCH".into(),
-        format!("/repos/{owner}/{repo}/pulls/{number}"),
-    ));
-    match fake
-        .pull_requests
-        .iter_mut()
-        .find(|pr| pr["number"] == number)
-    {
-        Some(pr) => {
-            pr["body"] = body["body"].clone();
-            (StatusCode::OK, Json(pr.clone()))
-        }
-        None => (StatusCode::NOT_FOUND, Json(json!({"message": "Not Found"}))),
-    }
-}
-
-async fn check_runs(
-    State(fake): State<Fake>,
-    AxumPath((owner, repo, sha)): AxumPath<(String, String, String)>,
-) -> Json<Value> {
-    let mut fake = fake.lock().unwrap();
-    fake.requests.push((
-        "GET".into(),
-        format!("/repos/{owner}/{repo}/commits/{sha}/check-runs"),
-    ));
-    Json(json!({"total_count": fake.check_runs.len(), "check_runs": fake.check_runs}))
-}
-
-async fn combined_status(
-    State(fake): State<Fake>,
-    AxumPath((owner, repo, sha)): AxumPath<(String, String, String)>,
-) -> Json<Value> {
-    let mut fake = fake.lock().unwrap();
-    fake.requests.push((
-        "GET".into(),
-        format!("/repos/{owner}/{repo}/commits/{sha}/status"),
-    ));
-    Json(json!({"state": "pending", "statuses": []}))
-}
-
-async fn fallback(State(fake): State<Fake>, request: Request<Body>) -> (StatusCode, Json<Value>) {
-    fake.lock().unwrap().requests.push((
-        request.method().to_string(),
-        request.uri().path().to_owned(),
-    ));
-    (StatusCode::NOT_FOUND, Json(json!({"message": "Not Found"})))
-}
-
-async fn start_fake_github() -> (Fake, String) {
-    let fake: Fake = Arc::default();
-    let app = Router::new()
-        .route(
-            "/repos/{owner}/{repo}/pulls",
-            get(list_pulls).post(create_pull),
-        )
-        .route(
-            "/repos/{owner}/{repo}/pulls/{number}",
-            get(get_pull).patch(patch_pull),
-        )
-        .route(
-            "/repos/{owner}/{repo}/commits/{sha}/check-runs",
-            get(check_runs),
-        )
-        .route(
-            "/repos/{owner}/{repo}/commits/{sha}/status",
-            get(combined_status),
-        )
-        .fallback(fallback)
-        .with_state(fake.clone());
-    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
-    let address = listener.local_addr().unwrap();
-    tokio::spawn(async move {
-        axum::serve(listener, app).await.unwrap();
-    });
-    (fake, format!("http://{address}"))
-}
 
 struct Harness {
     app: Router,
     state: AppState,
     root: PathBuf,
     fake: Fake,
+    /// The manifest's `max_task_repairs`, set before the project is confirmed.
+    max_task_repairs: AtomicU32,
 }
 
 impl Harness {
@@ -263,6 +70,7 @@ impl Harness {
             state,
             root,
             fake,
+            max_task_repairs: AtomicU32::new(2),
         }
     }
     async fn request(&self, method: &str, path: &str, body: Option<Value>) -> (StatusCode, Value) {
@@ -325,7 +133,7 @@ impl Harness {
                 "profiles": ["python"], "execution": "native", "checks": checks}],
             "relationships": [],
             "policy": {"approval": "plan", "testing_prerequisite": true, "publish": "automatic_pr", "merge": "human",
-                "max_explorers": 1, "max_implementers": 1, "max_task_repairs": 2},
+                "max_explorers": 1, "max_implementers": 1, "max_task_repairs": self.max_task_repairs.load(Ordering::Relaxed)},
         });
         let (status, view) = self
             .request(
@@ -515,13 +323,23 @@ impl Harness {
         .await
     }
     fn requests(&self, method: &str, path_part: &str) -> usize {
-        self.fake
-            .lock()
-            .unwrap()
-            .requests
-            .iter()
-            .filter(|(m, p)| m == method && p.contains(path_part))
-            .count()
+        self.fake.lock().unwrap().count(method, path_part)
+    }
+    async fn repair_publication(&self, run_id: &str, hash: &Value) -> (StatusCode, Value) {
+        self.request(
+            "POST",
+            &format!("/api/v1/runs/{run_id}/publication/repair"),
+            Some(json!({"candidate_hash": hash, "provider": "test", "model": "synthetic"})),
+        )
+        .await
+    }
+    async fn validate(&self, run_id: &str, hash: &Value) -> (StatusCode, Value) {
+        self.request(
+            "POST",
+            &format!("/api/v1/runs/{run_id}/validate"),
+            Some(json!({"candidate_hash": hash, "provider": "test", "model": "synthetic"})),
+        )
+        .await
     }
 }
 
@@ -854,7 +672,12 @@ async fn a_failed_pull_request_creation_is_retried_by_reconcile_without_a_second
     let (run_id, _ticket, candidate) = harness.reviewed(repo.path()).await;
     let hash = candidate["hash"].clone();
     let commit = candidate["repository_commits"]["app"].as_str().unwrap();
-    harness.fake.lock().unwrap().fail_create_once = true;
+    harness
+        .fake
+        .lock()
+        .unwrap()
+        .fail_create_once
+        .insert("fixture".into());
     let (status, accepted) = harness.publish(&run_id, &hash, "publish-fail").await;
     assert_eq!(status, StatusCode::ACCEPTED, "{accepted}");
     let failed = harness.publication_settled(&run_id).await;
@@ -921,10 +744,13 @@ async fn ci_failure_is_distinct_from_integration_and_luuna_never_merges() {
         .unwrap()
         .contains("no checks"));
 
-    harness.fake.lock().unwrap().check_runs = vec![
-        json!({"name": "unit", "status": "completed", "conclusion": "failure"}),
-        json!({"name": "lint", "status": "completed", "conclusion": "success"}),
-    ];
+    harness.fake.lock().unwrap().check_runs.insert(
+        "fixture".into(),
+        vec![
+            json!({"name": "unit", "status": "completed", "conclusion": "failure"}),
+            json!({"name": "lint", "status": "completed", "conclusion": "success"}),
+        ],
+    );
     let (status, observed) = harness.publication(&run_id).await;
     assert_eq!(status, StatusCode::OK, "{observed}");
     let ci = &observed["repositories"]["app"]["ci"];
@@ -941,13 +767,15 @@ async fn ci_failure_is_distinct_from_integration_and_luuna_never_merges() {
     assert_eq!(candidate_after["evidence"]["candidate"], candidate);
     assert_eq!(harness.run(&run_id).await["state"], "reviewed");
 
-    harness.fake.lock().unwrap().check_runs =
-        vec![json!({"name": "unit", "status": "in_progress", "conclusion": null})];
+    harness.fake.lock().unwrap().check_runs.insert(
+        "fixture".into(),
+        vec![json!({"name": "unit", "status": "in_progress", "conclusion": null})],
+    );
     let (_, pending) = harness.publication(&run_id).await;
     assert_eq!(pending["repositories"]["app"]["ci"]["state"], "pending");
 
     // A person merges on GitHub; Luuna observes it and never calls merge.
-    harness.fake.lock().unwrap().merged = true;
+    harness.fake.lock().unwrap().merged.insert("fixture".into());
     let (status, integrated) = harness.publication(&run_id).await;
     assert_eq!(status, StatusCode::OK, "{integrated}");
     assert_eq!(
@@ -978,17 +806,9 @@ async fn ci_failure_is_distinct_from_integration_and_luuna_never_merges() {
         1,
         "integration is recorded once"
     );
+    assert_no_merge_requests(&harness.fake);
     let requests = harness.fake.lock().unwrap().requests.clone();
-    assert!(
-        requests
-            .iter()
-            .all(|(method, path)| !path.contains("merge") && method != "PUT" && method != "DELETE"),
-        "Luuna sent a merge-like request: {requests:?}"
-    );
     assert!(requests.iter().any(|(m, _)| m == "POST"), "{requests:?}");
-    assert!(requests
-        .iter()
-        .all(|(m, p)| m != "POST" || p.ends_with("/pulls")));
 }
 
 #[tokio::test]
@@ -1018,7 +838,14 @@ async fn there_is_no_merge_route_or_operation() {
     );
     assert!(!router.contains("merge\""));
     let publication = include_str!("../src/publication.rs").to_ascii_lowercase();
-    for forbidden in ["/merge\"", "pulls/{}/merge", ".put(", "method::put"] {
+    for forbidden in [
+        "/merge\"",
+        "pulls/{}/merge",
+        ".put(",
+        "method::put",
+        "method::delete",
+        "\"state\": \"closed\"",
+    ] {
         assert!(
             !publication.contains(forbidden),
             "publication must not perform a merge ({forbidden})"
@@ -1094,7 +921,12 @@ async fn reconciliation_is_refused_once_a_newer_plan_revision_exists() {
     let (run_id, ticket, candidate) = harness.reviewed(repo.path()).await;
     let hash = candidate["hash"].clone();
     let commit = candidate["repository_commits"]["app"].as_str().unwrap();
-    harness.fake.lock().unwrap().fail_create_once = true;
+    harness
+        .fake
+        .lock()
+        .unwrap()
+        .fail_create_once
+        .insert("fixture".into());
     let (status, _) = harness.publish(&run_id, &hash, "publish-then-replan").await;
     assert_eq!(status, StatusCode::ACCEPTED);
     let failed = harness.publication_settled(&run_id).await;
@@ -1200,7 +1032,12 @@ async fn reconciliation_revalidates_the_worktree_before_retrying_a_step() {
     let repo = Repo::new();
     let (run_id, _ticket, candidate) = harness.reviewed(repo.path()).await;
     let hash = candidate["hash"].clone();
-    harness.fake.lock().unwrap().fail_create_once = true;
+    harness
+        .fake
+        .lock()
+        .unwrap()
+        .fail_create_once
+        .insert("fixture".into());
     let (status, _) = harness.publish(&run_id, &hash, "publish-then-drift").await;
     assert_eq!(status, StatusCode::ACCEPTED);
     let failed = harness.publication_settled(&run_id).await;
@@ -1280,4 +1117,294 @@ async fn the_pre_push_policy_refuses_credentials_without_naming_their_values() {
     let view = harness.candidate(&run_id).await;
     assert_eq!(view["evidence"]["status"], "reviewed", "{view}");
     assert_eq!(harness.run(&run_id).await["state"], "reviewed");
+}
+
+/// The check runs the fake reports for the fixture repository's pull request head.
+fn set_check_runs(harness: &Harness, runs: Vec<Value>) {
+    harness
+        .fake
+        .lock()
+        .unwrap()
+        .check_runs
+        .insert("fixture".into(), runs);
+}
+
+#[tokio::test]
+async fn a_ci_failure_drives_a_bounded_repair_that_invalidates_the_published_candidate() {
+    let harness = Harness::new().await;
+    harness.max_task_repairs.store(1, Ordering::Relaxed);
+    let repo = Repo::new();
+    let (run_id, ticket, candidate) = harness.reviewed_with(repo.path(), "ci_repair").await;
+    let hash = candidate["hash"].clone();
+    let first_commit = candidate["repository_commits"]["app"]
+        .as_str()
+        .unwrap()
+        .to_owned();
+    // Before any publication there is nothing to repair.
+    let (status, refused) = harness.repair_publication(&run_id, &hash).await;
+    assert_eq!(status, StatusCode::NOT_FOUND, "{refused}");
+    assert!(refused["error"].as_str().unwrap().contains("POST /publish"));
+    let (status, _) = harness.publish(&run_id, &hash, "publish-ci-repair").await;
+    assert_eq!(status, StatusCode::ACCEPTED);
+    let open = harness.publication_settled(&run_id).await;
+    assert_eq!(open["publication_state"], "pr_open", "{open}");
+    assert!(open.get("superseded_by_repair").is_none(), "{open}");
+
+    // Unknown (no checks), pending and passing CI each refuse the repair,
+    // naming the state and the next step; the evidence is untouched.
+    let (status, refused) = harness.repair_publication(&run_id, &hash).await;
+    assert_eq!(status, StatusCode::CONFLICT, "{refused}");
+    let reason = refused["error"].as_str().unwrap();
+    assert!(reason.contains("ci unknown"), "{reason}");
+    assert!(reason.contains("GET /publication"), "{reason}");
+    set_check_runs(
+        &harness,
+        vec![json!({"name": "ci-unit", "status": "in_progress", "conclusion": null})],
+    );
+    let (status, refused) = harness.repair_publication(&run_id, &hash).await;
+    assert_eq!(status, StatusCode::CONFLICT, "{refused}");
+    let reason = refused["error"].as_str().unwrap();
+    assert!(reason.contains("ci pending"), "{reason}");
+    assert!(reason.contains("still running"), "{reason}");
+    set_check_runs(
+        &harness,
+        vec![json!({"name": "ci-unit", "status": "completed", "conclusion": "success"})],
+    );
+    let (status, refused) = harness.repair_publication(&run_id, &hash).await;
+    assert_eq!(status, StatusCode::CONFLICT, "{refused}");
+    let reason = refused["error"].as_str().unwrap();
+    assert!(reason.contains("ci success"), "{reason}");
+    assert!(reason.contains("nothing to repair"), "{reason}");
+    let stale = json!(format!("sha256:{}", "0".repeat(64)));
+    let (status, refused) = harness.repair_publication(&run_id, &stale).await;
+    assert_eq!(status, StatusCode::CONFLICT, "{refused}");
+    assert!(refused["error"]
+        .as_str()
+        .unwrap()
+        .contains("candidate hash changed"));
+    assert_eq!(
+        harness.candidate(&run_id).await["evidence"]["status"],
+        "reviewed"
+    );
+    assert_eq!(harness.run(&run_id).await["state"], "reviewed");
+    let events = event_types(&harness.events(&run_id).await);
+    assert!(
+        !events
+            .iter()
+            .any(|e| e == "publication.repair_requested" || e == "candidate.invalidated"),
+        "{events:?}"
+    );
+
+    // CI fails on the pull request: the repair is admitted. The observation
+    // is refreshed by the route itself (the stale `success` view above does
+    // not stand), the reviewed candidate is invalidated naming the check, the
+    // publication is superseded and the repair writer runs with the CI
+    // failure in its evidence.
+    set_check_runs(
+        &harness,
+        vec![
+            json!({"name": "ci-unit", "status": "completed", "conclusion": "failure"}),
+            json!({"name": "lint", "status": "completed", "conclusion": "success"}),
+        ],
+    );
+    let (status, accepted) = harness.repair_publication(&run_id, &hash).await;
+    assert_eq!(status, StatusCode::ACCEPTED, "{accepted}");
+    assert_eq!(accepted["superseded_by_repair"], true, "{accepted}");
+    assert_eq!(accepted["publication_state"], "pr_open");
+    assert_eq!(accepted["run"]["state"], "implementing", "{accepted}");
+    let superseded_reason = accepted["superseded_reason"].as_str().unwrap();
+    assert!(
+        superseded_reason.contains("ci-unit failure"),
+        "{superseded_reason}"
+    );
+    assert!(
+        superseded_reason.contains("pull request #1"),
+        "{superseded_reason}"
+    );
+    assert!(!superseded_reason.contains("lint"), "{superseded_reason}");
+    let settled = harness.settled(&run_id).await;
+    assert_eq!(settled["state"], "validating", "{settled}");
+    let events = harness.events(&run_id).await;
+    let invalidated = events
+        .iter()
+        .find(|e| e["type"] == "candidate.invalidated")
+        .unwrap_or_else(|| panic!("{:?}", event_types(&events)));
+    assert_eq!(invalidated["payload"]["candidate_hash"], hash);
+    assert_eq!(invalidated["payload"]["content_drift"], false);
+    let reason = invalidated["payload"]["reason"].as_str().unwrap();
+    assert!(
+        reason.starts_with("CI failed on the published pull request"),
+        "{reason}"
+    );
+    assert!(
+        reason.contains("repository app, pull request #1"),
+        "{reason}"
+    );
+    assert!(reason.contains("ci-unit failure"), "{reason}");
+    let requested = events
+        .iter()
+        .find(|e| e["type"] == "publication.repair_requested")
+        .unwrap();
+    assert_eq!(requested["payload"]["candidate_hash"], hash);
+    assert_eq!(requested["payload"]["candidate_status"], "failed");
+    let ci = &requested["payload"]["ci_failure"][0];
+    assert_eq!(ci["repository_id"], "app");
+    assert_eq!(ci["pull_request"]["number"], 1);
+    assert_eq!(ci["failed_checks"][0]["name"], "ci-unit");
+    assert_eq!(ci["failed_checks"][0]["conclusion"], "failure");
+    assert_eq!(ci["checks"].as_array().unwrap().len(), 2);
+    let types = event_types(&events);
+    let invalidated_at = types
+        .iter()
+        .position(|e| e == "candidate.invalidated")
+        .unwrap();
+    let requested_at = types
+        .iter()
+        .position(|e| e == "publication.repair_requested")
+        .unwrap();
+    let repair_at = types
+        .iter()
+        .position(|e| e == "candidate.repair_started")
+        .unwrap();
+    assert!(
+        invalidated_at < requested_at && requested_at < repair_at,
+        "{types:?}"
+    );
+    // One repair attempt, provenance `ci_repair`, started from the first candidate.
+    let (_, attempts) = harness
+        .request("GET", &format!("/api/v1/runs/{run_id}/attempts"), None)
+        .await;
+    let attempts = attempts.as_array().unwrap();
+    assert_eq!(attempts.len(), 2, "{attempts:?}");
+    assert_eq!(
+        attempts[1]["payload"]["trigger"], "ci_repair",
+        "{attempts:?}"
+    );
+    assert_eq!(attempts[1]["payload"]["repair_of"], hash);
+
+    // The repaired candidate is a new revision in a fresh worktree whose
+    // writer saw the CI failure (the synthetic writer only repairs when the
+    // evidence names the failing check); it validates and reviews afresh.
+    let pending = harness.candidate(&run_id).await;
+    assert_eq!(pending["evidence"]["status"], "pending", "{pending}");
+    assert_eq!(pending["evidence"]["candidate"]["revision"], 2);
+    let second_hash = pending["evidence"]["candidate"]["hash"].clone();
+    assert_ne!(second_hash, hash);
+    let second_commit = pending["evidence"]["candidate"]["repository_commits"]["app"]
+        .as_str()
+        .unwrap()
+        .to_owned();
+    assert_ne!(second_commit, first_commit);
+    let worktree = harness.worktree(&run_id).await;
+    assert_eq!(
+        fs::read_to_string(worktree.join("src/main.py")).unwrap(),
+        "print('repaired after the ci failure')\n"
+    );
+    let (status, body) = harness.validate(&run_id, &second_hash).await;
+    assert_eq!(status, StatusCode::ACCEPTED, "{body}");
+    let reviewed = harness.candidate_settled(&run_id).await;
+    assert_eq!(reviewed["evidence"]["status"], "reviewed", "{reviewed}");
+    assert_eq!(reviewed["evidence"]["review"]["verdict"], "passed");
+    assert_eq!(reviewed["evidence"]["candidate"]["hash"], second_hash);
+
+    // The first publication reads as superseded; its pull request is still
+    // the developer's (never closed or merged by Luuna).
+    let (status, earlier) = harness.publication(&run_id).await;
+    assert_eq!(status, StatusCode::OK, "{earlier}");
+    assert_eq!(earlier["candidate_hash"], hash);
+    assert_eq!(earlier["superseded_by_repair"], true);
+    assert_eq!(earlier["publication_state"], "pr_open");
+    assert!(earlier["superseded_at"].is_string());
+    assert_eq!(earlier["repositories"]["app"]["ci"]["state"], "failure");
+    // A second request against the superseded record is refused.
+    let (status, refused) = harness.repair_publication(&run_id, &hash).await;
+    assert_eq!(status, StatusCode::CONFLICT, "{refused}");
+    assert!(refused["error"]
+        .as_str()
+        .unwrap()
+        .contains("already superseded"));
+
+    // Publishing the repaired candidate opens pull request 2 on its own
+    // branch at the exact new commit; its body names pull request 1 as
+    // superseded. The first branch and pull request are left alone.
+    let (status, accepted) = harness
+        .publish(&run_id, &second_hash, "publish-ci-repair-2")
+        .await;
+    assert_eq!(status, StatusCode::ACCEPTED, "{accepted}");
+    let second = harness.publication_settled(&run_id).await;
+    assert_eq!(second["publication_state"], "pr_open", "{second}");
+    assert_eq!(second["candidate_hash"], second_hash);
+    assert!(second.get("superseded_by_repair").is_none(), "{second}");
+    assert_eq!(second["repositories"]["app"]["pull_request"]["number"], 2);
+    let second_branch = second["repositories"]["app"]["branch"].as_str().unwrap();
+    let first_branch = earlier["repositories"]["app"]["branch"].as_str().unwrap();
+    assert_ne!(second_branch, first_branch);
+    assert_eq!(
+        second_branch,
+        format!(
+            "luuna/{}/{}",
+            ticket["id"].as_str().unwrap(),
+            &second_hash.as_str().unwrap()[7..19]
+        )
+    );
+    assert_eq!(
+        remote_branch(repo.path(), second_branch).as_deref(),
+        Some(second_commit.as_str())
+    );
+    assert_eq!(
+        remote_branch(repo.path(), first_branch).as_deref(),
+        Some(first_commit.as_str())
+    );
+    assert_eq!(harness.requests("POST", "/pulls"), 2);
+    {
+        let fake = harness.fake.lock().unwrap();
+        assert_eq!(fake.pull_requests.len(), 2);
+        let body = fake.pull_requests[1]["body"].as_str().unwrap();
+        assert!(body.contains("## Supersedes"), "{body}");
+        assert!(
+            body.contains("Pull request #1 (https://github.com/luuna-test/fixture/pull/1)"),
+            "{body}"
+        );
+        assert!(body.contains(hash.as_str().unwrap()), "{body}");
+        assert!(body.contains(second_hash.as_str().unwrap()), "{body}");
+        assert!(body.contains("ci-unit failure"), "{body}");
+        assert_eq!(fake.pull_requests[0]["state"], "open");
+    }
+    let events = harness.events(&run_id).await;
+    assert_eq!(
+        events
+            .iter()
+            .filter(|e| e["type"] == "publication.requested")
+            .count(),
+        2
+    );
+
+    // The repair budget bounds a further CI repair: with `max_task_repairs`
+    // 1 spent, a new failure is refused before anything is invalidated.
+    let (status, refused) = harness.repair_publication(&run_id, &second_hash).await;
+    assert_eq!(status, StatusCode::UNPROCESSABLE_ENTITY, "{refused}");
+    let reason = refused["error"].as_str().unwrap();
+    assert!(reason.contains("max_task_repairs exhausted"), "{reason}");
+    assert!(reason.contains("re-plan"), "{reason}");
+    let view = harness.candidate(&run_id).await;
+    assert_eq!(view["evidence"]["status"], "reviewed", "{view}");
+    assert_eq!(view["evidence"]["candidate"]["hash"], second_hash);
+    assert_eq!(harness.run(&run_id).await["state"], "reviewed");
+    let (_, record) = harness.publication(&run_id).await;
+    assert_eq!(record["candidate_hash"], second_hash);
+    assert!(record.get("superseded_by_repair").is_none(), "{record}");
+    assert_eq!(
+        event_types(&harness.events(&run_id).await)
+            .iter()
+            .filter(|e| *e == "publication.repair_requested" || *e == "candidate.invalidated")
+            .count(),
+        2
+    );
+    // Nothing was ever merged, closed or deleted on GitHub.
+    assert_no_merge_requests(&harness.fake);
+    assert_eq!(harness.requests("PATCH", "/pulls"), 0);
+    assert_eq!(
+        fs::read_to_string(repo.path().join("src/main.py")).unwrap(),
+        "print('fixture')\n"
+    );
 }

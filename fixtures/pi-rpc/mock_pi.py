@@ -275,6 +275,16 @@ def run_writer(request_id, kind, scenario, prompt):
         # must quote the failing check output, not just an exit code.
         repaired = repairing and "test result: FAILED" in prompt
         write_file("src/main.py", "print('repaired by the synthetic writer')\n" if repaired else "print('seeded regression')\n")
+    elif scenario == "ci_repair":
+        # A24: the first candidate passes its local checks and review; its
+        # pull request then fails CI on GitHub. The synthetic repair writer
+        # only fixes what the runtime quoted: the `ci_failure` evidence and
+        # the failing check's name (never log content) must be in the prompt.
+        repairing = "Repair feedback:" in prompt or "Repair feedback:" in (flag("--system-prompt") or "")
+        repaired = repairing and "ci_failure" in prompt and "ci-unit" in prompt
+        write_file("src/main.py", "print('repaired after the ci failure')\n" if repaired
+                   else "print('repaired without ci evidence')\n" if repairing
+                   else "print('implemented by the synthetic writer')\n")
     elif scenario == "extension_error":
         send({"type": "extension_error", "extensionPath": "luuna-scope-guard.js",
               "event": "tool_call", "error": "synthetic scope guard failure"})

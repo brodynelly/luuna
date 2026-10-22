@@ -664,6 +664,10 @@ pub fn router(state: AppState) -> Router {
             "/api/v1/runs/{id}/publication/reconcile",
             post(publication::reconcile),
         )
+        .route(
+            "/api/v1/runs/{id}/publication/repair",
+            post(publication::repair),
+        )
         .route("/api/v1/runs/{id}/worktrees", get(writer::list_worktrees))
         .route("/api/v1/runs/{id}/attempts", get(writer::list_attempts))
         .route("/api/v1/runs/{id}/tasks", get(graph::list_tasks))

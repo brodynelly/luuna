@@ -22,6 +22,7 @@ use luuna_git::{redact_remote, GitHubRepository, PushCredential, RemoteOperation
 use luuna_storage::{
     intent_key, CiCheck, CiObservation, CiState, IntentState, MergeObservation, PublicationIntent,
     PublicationRecord, PullRequestRef, RepositoryPublication, StepState, StorageError,
+    MULTI_REPOSITORY_REPAIR,
 };
 use serde::Deserialize;
 use serde_json::{json, Value};
@@ -566,6 +567,9 @@ pub async fn publish(
             created_at: now.clone(),
             updated_at: now,
             observed_at: None,
+            superseded_by_repair: false,
+            superseded_reason: None,
+            superseded_at: None,
         };
         let mut store = state.store.lock().map_err(internal)?;
         match store.create_publication(&record) {
@@ -600,6 +604,7 @@ pub async fn publish(
         credential,
         reconcile: false,
         stop: rx,
+        superseded: Vec::new(),
     };
     state.spawn_supervised(id, job.run());
     Ok((StatusCode::ACCEPTED, Json(view(&state, &record)?)))
@@ -661,6 +666,7 @@ pub async fn reconcile(
         credential,
         reconcile: true,
         stop: rx,
+        superseded: Vec::new(),
     };
     state.spawn_supervised(id, job.run());
     Ok((StatusCode::ACCEPTED, Json(view(&state, &record)?)))
@@ -700,6 +706,247 @@ pub async fn get(
         observe(&state, &mut record).await?;
     }
     Ok(Json(view(&state, &record)?))
+}
+
+/// `POST /api/v1/runs/{id}/publication/repair` with the exact candidate hash
+/// (and the provider and model, as for `POST …/repair`): the bounded repair
+/// after a published candidate's pull request failed CI (A24). The run's
+/// latest publication must be complete with its pull requests open, its CI
+/// observation is refreshed first through the same bounded `observe` (a stale
+/// view never triggers a repair) and must be `failure` on at least one
+/// repository, the hash must match, no work may be active, and the ordinary
+/// repair gates and budgets must hold before anything changes. Then the
+/// reviewed candidate is invalidated with a reason naming the failing checks
+/// per repository (names and conclusions, never log content), the record is
+/// marked superseded, `publication.repair_requested` is recorded and the
+/// existing repair path creates the next candidate revision in a fresh
+/// worktree with the CI failure in its evidence. Nothing is merged, closed or
+/// pushed here.
+pub async fn repair(
+    State(state): State<AppState>,
+    Path(id): Path<String>,
+    Json(request): Json<crate::candidates::CandidateRequest>,
+) -> Result<(StatusCode, Json<Value>), ApiError> {
+    if state.active.lock().map_err(internal)?.contains_key(&id) {
+        return Err(conflict(
+            "workflow has active work; wait for it to settle, then request the repair",
+        ));
+    }
+    let record = {
+        let store = state.store.lock().map_err(internal)?;
+        if store.get_run(&id).map_err(internal)?.is_none() {
+            return Err(not_found());
+        }
+        store.latest_publication(&id).map_err(internal)?
+    };
+    let Some(mut record) = record else {
+        return Err(ApiError(
+            StatusCode::NOT_FOUND,
+            "no publication exists for this run; a CI repair follows a published candidate (POST /publish)"
+                .into(),
+        ));
+    };
+    if record.candidate_hash != request.candidate_hash {
+        return Err(conflict(format!(
+            "candidate hash changed; the latest publication is of candidate {}: reload the publication (GET /publication) and request the repair for that hash",
+            record.candidate_hash
+        )));
+    }
+    if record.superseded_by_repair {
+        return Err(conflict(
+            "this publication was already superseded by a repair; validate, review and publish the repaired candidate (GET /candidate)",
+        ));
+    }
+    let not_open = match record.publication_state {
+        PublicationState::PrOpen if record.complete() => None,
+        PublicationState::PrOpen | PublicationState::Pending | PublicationState::Pushing => {
+            Some("the publication is still in progress or incomplete; wait for it to settle or reconcile it (POST /publication/reconcile)")
+        }
+        PublicationState::Failed => Some(
+            "the publication did not complete; reconcile it (POST /publication/reconcile) before a CI repair",
+        ),
+        PublicationState::Integrated => Some(
+            "every pull request was already merged; there is nothing to repair, and a further change is the next plan revision",
+        ),
+    };
+    if let Some(next) = not_open {
+        return Err(conflict(format!(
+            "a CI repair needs open pull requests (publication is {}): {next}",
+            state_text(&record.publication_state)
+        )));
+    }
+    // Refresh the observation under the bounded timeouts before deciding.
+    observe(&state, &mut record).await?;
+    if record.publication_state == PublicationState::Integrated {
+        return Err(conflict(
+            "a CI repair needs open pull requests (publication is integrated): every pull request was observed merged; there is nothing to repair",
+        ));
+    }
+    let failing: Vec<(String, RepositoryPublication)> = record
+        .repositories
+        .iter()
+        .filter(|(_, r)| r.ci.state == CiState::Failure)
+        .map(|(id, r)| (id.clone(), r.clone()))
+        .collect();
+    if failing.is_empty() {
+        let states: Vec<String> = record
+            .repositories
+            .iter()
+            .map(|(repository_id, r)| {
+                let next = match r.ci.state {
+                    CiState::Unknown => "CI could not be observed or no checks are reported; read the publication again (GET /publication) once CI reports",
+                    CiState::Pending => "CI is still running; wait for it to finish, then read the publication again (GET /publication)",
+                    CiState::Success => "CI passed; there is nothing to repair and merging is the developer's decision on GitHub",
+                    CiState::Failure => "",
+                };
+                format!(
+                    "repository {repository_id}: ci {}{}; {next}",
+                    ci_state_text(&r.ci.state),
+                    r.ci
+                        .reason
+                        .as_deref()
+                        .map(|reason| format!(" ({reason})"))
+                        .unwrap_or_default()
+                )
+            })
+            .collect();
+        return Err(conflict(format!(
+            "a CI repair needs an observed CI failure on at least one pull request; none is observed: {}",
+            states.join("; ")
+        )));
+    }
+    // The ordinary repair gates and budgets (ADR 0009, ADR 0017), evaluated
+    // before the reviewed evidence is touched: a repair the budgets refuse
+    // never costs the candidate its review.
+    state
+        .store
+        .lock()
+        .map_err(internal)?
+        .can_repair_after_ci_failure(&id, &record.candidate_hash)
+        .map_err(|error| match error {
+            StorageError::Invalid(detail) if detail == MULTI_REPOSITORY_REPAIR => {
+                conflict(format!("CI repair refused: {detail}"))
+            }
+            StorageError::Invalid(detail) => conflict(format!("CI repair refused: {detail}")),
+            StorageError::Domain(DomainError::BudgetExceeded(detail)) => {
+                unprocessable(format!("CI repair refused: {detail}"))
+            }
+            StorageError::Domain(error) => conflict(format!("CI repair refused: {error}")),
+            other => storage_error(other),
+        })?;
+    let mut summary = Vec::new();
+    let mut sentences = Vec::new();
+    for (repository_id, repository) in &failing {
+        let failed: Vec<&CiCheck> = repository
+            .ci
+            .checks
+            .iter()
+            .filter(|c| {
+                matches!(
+                    c.conclusion.as_deref(),
+                    Some(
+                        "failure"
+                            | "cancelled"
+                            | "timed_out"
+                            | "action_required"
+                            | "startup_failure"
+                    )
+                )
+            })
+            .collect();
+        let pr = repository.pull_request.clone();
+        sentences.push(format!(
+            "repository {repository_id}, pull request {}: {}",
+            pr.as_ref()
+                .map(|pr| format!("#{} ({})", pr.number, pr.url))
+                .unwrap_or_else(|| "unknown".into()),
+            failed
+                .iter()
+                .map(|c| format!(
+                    "{} {}",
+                    c.name,
+                    c.conclusion.as_deref().unwrap_or("unknown")
+                ))
+                .collect::<Vec<_>>()
+                .join(", ")
+        ));
+        summary.push(json!({
+            "repository_id": repository_id,
+            "pull_request": pr,
+            "commit": repository.commit,
+            "ci_state": repository.ci.state,
+            "observed_at": repository.ci.observed_at,
+            "checks": repository.ci.checks,
+            "failed_checks": failed.iter().map(|c| json!({"name": c.name, "status": c.status, "conclusion": c.conclusion})).collect::<Vec<_>>(),
+        }));
+    }
+    let reason = format!(
+        "CI failed on the published pull request ({}); the developer sent the candidate to a bounded repair: the reviewed evidence is invalidated, the pull request stays open for the developer, and the next candidate revision is implemented in a fresh worktree with the CI failure in its evidence",
+        sentences.join("; ")
+    );
+    let hash = record.candidate_hash.clone();
+    let invalidated = state
+        .store
+        .lock()
+        .map_err(internal)?
+        .invalidate_reviewed_candidate(&id, &hash, &reason, false)
+        .map_err(storage_error)?;
+    let now = luuna_git_now();
+    record.superseded_by_repair = true;
+    record.superseded_reason = Some(reason.clone());
+    record.superseded_at = Some(now.clone());
+    state
+        .store
+        .lock()
+        .map_err(internal)?
+        .update_publication(
+            &mut record,
+            Some((
+                "publication.repair_requested",
+                json!({
+                    "candidate_hash": hash,
+                    "candidate_status": invalidated.status,
+                    "observed_at": now,
+                    "ci_failure": summary,
+                    "reason": reason,
+                }),
+            )),
+        )
+        .map_err(storage_error)?;
+    let ci_failure = json!({
+        "observed_at": record.observed_at,
+        "repositories": summary,
+        "note": "observed on GitHub after the independent review; check names, statuses and conclusions only, no log content",
+    });
+    let (status, Json(run)) =
+        crate::writer::repair_after_ci_failure(state.clone(), id.clone(), request, ci_failure)
+            .await
+            .map_err(|error| {
+                ApiError(
+                    error.0,
+                    format!(
+                        "{}; the reviewed candidate was invalidated after the CI failure and the publication is marked superseded: repair it (POST /repair) once the refusal is resolved, or create the next plan revision",
+                        error.1
+                    ),
+                )
+            })?;
+    let mut body = view(&state, &record)?;
+    body["run"] = serde_json::to_value(run).map_err(internal)?;
+    Ok((status, Json(body)))
+}
+
+fn state_text(state: &PublicationState) -> String {
+    serde_json::to_value(state)
+        .ok()
+        .and_then(|v| v.as_str().map(ToOwned::to_owned))
+        .unwrap_or_default()
+}
+
+fn ci_state_text(state: &CiState) -> String {
+    serde_json::to_value(state)
+        .ok()
+        .and_then(|v| v.as_str().map(ToOwned::to_owned))
+        .unwrap_or_default()
 }
 
 fn luuna_git_now() -> String {
@@ -832,6 +1079,9 @@ struct Job {
     credential: PushCredential,
     reconcile: bool,
     stop: watch::Receiver<bool>,
+    /// Earlier publications of this run that a CI repair superseded; the
+    /// pull request bodies name them.
+    superseded: Vec<PublicationRecord>,
 }
 
 struct Failure {
@@ -914,7 +1164,7 @@ impl Job {
         *self.stop.borrow()
     }
 
-    async fn run(self) {
+    async fn run(mut self) {
         let Some(mut record) = self.load() else {
             eprintln!(
                 "luuna-runtime: publication of run {} vanished before it started",
@@ -922,6 +1172,18 @@ impl Job {
             );
             return;
         };
+        self.superseded = self
+            .state
+            .store
+            .lock()
+            .ok()
+            .and_then(|store| store.publications(&self.run_id).ok())
+            .unwrap_or_default()
+            .into_iter()
+            .filter(|earlier| {
+                earlier.superseded_by_repair && earlier.candidate_hash != self.candidate_hash
+            })
+            .collect();
         let settings = self.state.publication.clone();
         let Some(token) = settings.github_token.as_deref() else {
             record.publication_state = PublicationState::Failed;
@@ -1246,6 +1508,10 @@ impl Job {
         }
         if record.repositories.len() > 1 {
             body.push_str("\n## Linked pull requests\n\n");
+            body.push_str(&format!(
+                "This pull request is part of a {}-repository candidate set; each repository's checks ran against the others' exact candidate commits.\n\n",
+                record.repositories.len()
+            ));
             for (id, repository) in &record.repositories {
                 if id == repository_id {
                     continue;
@@ -1257,6 +1523,66 @@ impl Job {
                         repository.branch
                     )),
                 }
+            }
+            body.push_str("\n## Dependencies and merge order\n\n");
+            let order = merge_order(
+                record.repositories.keys().cloned().collect(),
+                &evidence.candidate.dependency_bindings,
+            );
+            let mut producers: BTreeMap<&str, Vec<&str>> = BTreeMap::new();
+            for binding in evidence.candidate.dependency_bindings.keys() {
+                if let Some((consumer, producer)) = binding.split_once(':') {
+                    producers.entry(consumer).or_default().push(producer);
+                }
+            }
+            for (position, id) in order.iter().enumerate() {
+                let depends = producers
+                    .get(id.as_str())
+                    .map(|p| {
+                        format!(
+                            " (depends on {})",
+                            p.iter()
+                                .map(|producer| format!(
+                                    "`{producer}` at `{}`",
+                                    evidence.candidate.dependency_bindings
+                                        [&format!("{id}:{producer}")]
+                                ))
+                                .collect::<Vec<_>>()
+                                .join(", ")
+                        )
+                    })
+                    .unwrap_or_default();
+                body.push_str(&format!(
+                    "{}. `{id}`{}{depends}\n",
+                    position + 1,
+                    if id == repository_id {
+                        " (this pull request)"
+                    } else {
+                        ""
+                    }
+                ));
+            }
+            body.push_str(
+                "\nMerge producers before their consumers, in this order. The pull requests are not merged atomically: until every one is merged, a consumer's default branch may not build against its producer's; if a partial merge leaves the remaining change obsolete, re-plan instead of merging it.\n",
+            );
+        }
+        for earlier in &self.superseded {
+            let Some(previous) = earlier.repositories.get(repository_id) else {
+                continue;
+            };
+            body.push_str("\n## Supersedes\n\n");
+            match &previous.pull_request {
+                Some(pr) => body.push_str(&format!(
+                    "- Pull request #{} ({}) of candidate `{}` (branch `{}`) is superseded by this candidate revision after CI failed on it; Luuna leaves it to the developer to close.\n",
+                    pr.number, pr.url, earlier.candidate_hash, previous.branch
+                )),
+                None => body.push_str(&format!(
+                    "- Branch `{}` of candidate `{}` is superseded by this candidate revision after CI failed on it.\n",
+                    previous.branch, earlier.candidate_hash
+                )),
+            }
+            if let Some(reason) = &earlier.superseded_reason {
+                body.push_str(&format!("- Reason: {reason}\n"));
             }
         }
         body.push_str(
@@ -1411,6 +1737,40 @@ impl Job {
             }
         }
     }
+}
+
+/// The merge order of a candidate set: producers before their consumers,
+/// derived from the set's `<consumer>:<producer>` bindings; repositories with
+/// no ordering between them follow their identifiers. A binding that names a
+/// repository outside the set is ignored (the domain refuses such sets).
+pub fn merge_order(
+    repositories: Vec<String>,
+    dependency_bindings: &BTreeMap<String, String>,
+) -> Vec<String> {
+    let mut remaining: Vec<String> = repositories;
+    remaining.sort();
+    let edges: Vec<(String, String)> = dependency_bindings
+        .keys()
+        .filter_map(|binding| binding.split_once(':'))
+        .map(|(consumer, producer)| (consumer.to_owned(), producer.to_owned()))
+        .collect();
+    let mut order = Vec::new();
+    while !remaining.is_empty() {
+        let next = remaining.iter().position(|candidate| {
+            !edges
+                .iter()
+                .any(|(consumer, producer)| consumer == candidate && remaining.contains(producer))
+        });
+        match next {
+            Some(index) => order.push(remaining.remove(index)),
+            // A cycle cannot reach here (the domain refuses it); keep the
+            // rest in identifier order rather than loop.
+            None => {
+                order.append(&mut remaining);
+            }
+        }
+    }
+    order
 }
 
 fn url_encode(text: &str) -> String {
@@ -1653,6 +2013,27 @@ mod tests {
         let none = PublicationSettings::from_env(|_| None).unwrap();
         assert!(!none.github_token_configured());
         assert_eq!(none.github_api_url, DEFAULT_GITHUB_API_URL);
+    }
+
+    #[test]
+    fn merge_order_puts_producers_before_consumers() {
+        let bindings: BTreeMap<String, String> = [
+            ("consumer:shared".to_owned(), "c".repeat(40)),
+            ("shared:api".to_owned(), "a".repeat(40)),
+        ]
+        .into_iter()
+        .collect();
+        assert_eq!(
+            merge_order(
+                vec!["consumer".into(), "api".into(), "shared".into()],
+                &bindings
+            ),
+            ["api", "shared", "consumer"]
+        );
+        assert_eq!(
+            merge_order(vec!["b".into(), "a".into()], &BTreeMap::new()),
+            ["a", "b"]
+        );
     }
 
     #[test]

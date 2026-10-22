@@ -800,6 +800,22 @@ impl Store {
         repair_gate(&self.connection, run_id, hash).map(|_| ())
     }
 
+    /// Whether a reviewed candidate whose published pull request failed CI
+    /// may be sent to a bounded repair (A24): the same authorization, plan,
+    /// ticket and manifest bindings, the multi-repository limitation and the
+    /// repair and attempt budgets `POST …/repair` applies, evaluated before
+    /// the reviewed evidence is invalidated, so a repair that the budgets
+    /// would refuse never costs the candidate its review.
+    pub fn can_repair_after_ci_failure(&self, run_id: &str, hash: &str) -> Result<()> {
+        let tx = self.connection.unchecked_transaction()?;
+        let run = get_run(&tx, run_id)?.ok_or_else(|| StorageError::NotFound(run_id.into()))?;
+        let evidence = require_candidate(&tx, run_id, hash)?;
+        if run.state != RunState::Reviewed || evidence.status != CandidateStatus::Reviewed {
+            return invalid("only a reviewed candidate can be sent to repair after a CI failure");
+        }
+        repair_budget_gate(&tx, run_id).map(|_| ())
+    }
+
     /// Whether a failed candidate may start a fresh validation generation in
     /// place: its required checks passed in the current generation, no
     /// reviewer verdict was recorded (the reviewer failed, produced invalid or
@@ -1063,6 +1079,14 @@ fn repair_gate(connection: &Connection, run_id: &str, hash: &str) -> Result<Budg
     ) {
         return invalid("candidate is not repairable");
     }
+    repair_budget_gate(connection, run_id)
+}
+
+/// The authorization, binding and budget half of the repair gate, shared by
+/// the repair of a failed candidate and the CI-failure repair of a reviewed
+/// one: the current approved plan, ticket and manifest, the single-repository
+/// limitation, `max_task_repairs` and the attempt, time and cost headroom.
+fn repair_budget_gate(connection: &Connection, run_id: &str) -> Result<BudgetUsage> {
     let plan = bound_plan(connection, run_id)?;
     // Repair of a multi-repository candidate set is re-planning (ADR 0017):
     // a repair writer in one repository cannot re-establish the other

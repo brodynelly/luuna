@@ -798,6 +798,25 @@
       ]
     },
     {
+      "id": "runs.publication.repair",
+      "title": "Repair a published candidate after its pull request failed CI",
+      "method": "POST",
+      "route": "/api/v1/runs/{id}/publication/repair",
+      "client_method": "repairPublication",
+      "desktop": "runs.publication.repair",
+      "tui": "publication-repair",
+      "failure_modes": [
+        "unreachable",
+        "aborted",
+        "rejected_token",
+        "not_found",
+        "refused",
+        "shutting_down",
+        "internal",
+        "client"
+      ]
+    },
+    {
       "id": "runs.worktrees",
       "title": "List the workflow's Luuna-owned worktree leases",
       "method": "GET",
