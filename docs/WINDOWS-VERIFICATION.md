@@ -216,6 +216,16 @@ evidence were preserved. Signed installers, installed Windows service
 supervision, arbitrary descendant containment/job objects, the backup/migration
 drill and strict clean-revision M3 acceptance remain separate open work.
 
+## Packaged distribution
+
+`scripts/package-windows.ps1` now stages the pinned Missions/Atlas/Beacon
+trees with their distribution manifest, Bun 1.4.3 and the terminal client
+beside the runtime ([ADR 0024](decisions/0024-portable-component-distribution.md)).
+The layout, its verification and the clean-machine procedure are in
+[PACKAGING.md](PACKAGING.md). That procedure has not been executed: no
+installer carrying components has been built or installed on any Windows host
+yet, and no result is recorded here.
+
 ## Run locally
 
 From this checkout in PowerShell:

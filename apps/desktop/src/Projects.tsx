@@ -407,7 +407,7 @@ export function Projects({ client, connectionEpoch = 0 }: { client: LuunaClient 
           <form onSubmit={proposeScaffold} className="form-group">
             <fieldset disabled={!client || busy}>
               <label>Stack profile<select aria-label="Stack profile" value={scaffoldProfile} onChange={(event) => setScaffoldProfile(event.target.value as ScaffoldProfile)}>
-                {(["python", "node", "node-typescript", "react", "rust", "go", "flutter", "android", "ios"] as ScaffoldProfile[]).map((profile) => <option key={profile} value={profile}>{profile}</option>)}
+                {(["python", "node", "node-typescript", "react", "nextjs", "rust", "go", "flutter", "android", "ios"] as ScaffoldProfile[]).map((profile) => <option key={profile} value={profile}>{profile}</option>)}
               </select></label>
               <label>New project name<input value={scaffoldName} onChange={(event) => setScaffoldName(event.target.value)} required spellCheck={false} pattern="[a-z][a-z0-9\-]{0,63}" /></label>
               <label>Parent directory<input value={scaffoldParent} onChange={(event) => setScaffoldParent(event.target.value)} required spellCheck={false} placeholder="/absolute/existing/directory" /></label>

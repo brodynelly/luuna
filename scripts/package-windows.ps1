@@ -1,15 +1,20 @@
 # Builds a Windows development distribution of Luuna: an NSIS installer that
-# carries the Tauri desktop, the release runtime, the Windows helper scripts and
-# the pinned Pi tree (ADR 0018). Node.js, Git and Python stay host prerequisites
-# that `luuna-runtime doctor` reports. The installer is unsigned unless a
+# carries the Tauri desktop, the release runtime, the Windows helper scripts,
+# the pinned Pi tree (ADR 0018), the pinned Missions/Atlas/Beacon trees with
+# their distribution manifest and the pinned Bun 1.4.3 executable (ADR 0024),
+# and the terminal client (packages/tui with @luuna/api-client and the
+# capability catalog). Node.js, Git and Python stay host prerequisites that
+# `luuna-runtime doctor` reports. The installer is unsigned unless a
 # certificate thumbprint is supplied; an unsigned installer is a development
-# distribution, never release evidence.
+# distribution, never release evidence. See docs/PACKAGING.md for the layout
+# and the clean-machine procedure.
 #
-#   powershell -NoProfile -File scripts/package-windows.ps1 [-DebugBuild] [-SkipPi] [-CertificateThumbprint <sha1>] [-TimestampUrl <url>]
+#   powershell -NoProfile -File scripts/package-windows.ps1 [-DebugBuild] [-SkipPi] [-SkipComponents] [-CertificateThumbprint <sha1>] [-TimestampUrl <url>]
 [CmdletBinding()]
 param(
     [switch]$DebugBuild,
     [switch]$SkipPi,
+    [switch]$SkipComponents,
     [string]$CertificateThumbprint,
     [string]$TimestampUrl = 'http://timestamp.digicert.com'
 )
@@ -30,7 +35,9 @@ Step 'Prerequisites'
 Require-Command cargo 'install the pinned Rust toolchain (rust-toolchain.toml)'
 Require-Command node.exe 'install Node.js 24.19 or newer'
 Require-Command npm.cmd 'install npm with Node.js'
+Require-Command git.exe 'install Git 2.43 or newer (the component pins are verified against gitlinks)'
 if (!(Test-Path -LiteralPath (Join-Path $root 'node_modules\.bin\tauri.cmd'))) { throw 'Run npm ci --ignore-scripts at the repository root first (the Tauri CLI is a pinned devDependency).' }
+if (!$SkipComponents -and $env:PROCESSOR_ARCHITECTURE -ne 'AMD64') { throw ('The pinned Bun package staged here is bun-windows-x64; this host is ' + $env:PROCESSOR_ARCHITECTURE + '. Use -SkipComponents or add the matching package.') }
 $webview = @(
     'HKLM:\SOFTWARE\WOW6432Node\Microsoft\EdgeUpdate\Clients\{F3017226-FE2A-4295-8BDF-00C3A9A7E4C5}',
     'HKLM:\SOFTWARE\Microsoft\EdgeUpdate\Clients\{F3017226-FE2A-4295-8BDF-00C3A9A7E4C5}',
@@ -62,11 +69,28 @@ if (!$SkipPi) {
     if ($LASTEXITCODE -ne 0) { throw 'The pinned Pi CLI does not answer --version.' }
 } else { $piVersion = 'skipped' }
 
+# Bun 1.4.3 exactly as scripts/setup-cloud.sh installs it (npm install bun@1.4.3
+# into .tools/bun); the platform package carries the executable the components
+# crate and scripts/components.mjs already look for.
+$bunCandidates = @((Join-Path $root '.tools\bun\node_modules\@oven\bun-windows-x64\bin\bun.exe'), (Join-Path $root '.tools\bun\node_modules\bun\bin\bun.exe'))
+$bun = $bunCandidates | Where-Object { Test-Path -LiteralPath $_ } | Select-Object -First 1
+if (!$SkipComponents) {
+    Step 'Pinned Bun 1.4.3 (npm install bun@1.4.3 in .tools/bun)'
+    if (!$bun) {
+        & npm.cmd install --prefix (Join-Path $root '.tools\bun') --no-audit --no-fund bun@1.4.3
+        if ($LASTEXITCODE -ne 0) { throw 'Installing the pinned Bun package failed.' }
+        $bun = $bunCandidates | Where-Object { Test-Path -LiteralPath $_ } | Select-Object -First 1
+    }
+    if (!$bun) { throw ('The pinned Bun executable was not installed under ' + (Join-Path $root '.tools\bun')) }
+    $bunVersion = (& $bun --version)
+    if ($LASTEXITCODE -ne 0 -or $bunVersion.Trim() -ne '1.4.3') { throw ('Bun 1.4.3 is required; found ' + $bunVersion) }
+} else { $bunVersion = 'skipped' }
+
 Step ('Staging resources in ' + $stage)
 if (Test-Path -LiteralPath $stage) { Remove-Item -LiteralPath $stage -Recurse -Force }
 New-Item -ItemType Directory -Force -Path (Join-Path $stage 'scripts') | Out-Null
 Copy-Item -LiteralPath $runtime -Destination (Join-Path $stage 'luuna-runtime.exe')
-foreach ($script in @('windows-common.ps1', 'ensure-windows-runtime.ps1', 'start-windows.ps1', 'stop-windows.ps1', 'set-windows-provider.ps1', 'with-windows-provider.ps1')) {
+foreach ($script in @('windows-common.ps1', 'ensure-windows-runtime.ps1', 'start-windows.ps1', 'stop-windows.ps1', 'set-windows-provider.ps1', 'with-windows-provider.ps1', 'start-terminal.ps1')) {
     Copy-Item -LiteralPath (Join-Path $root ('scripts\' + $script)) -Destination (Join-Path $stage ('scripts\' + $script))
 }
 foreach ($launcher in @('Configure Luuna.cmd', 'Stop Luuna.cmd')) {
@@ -81,6 +105,40 @@ if (!$SkipPi) {
 }
 Copy-Item -LiteralPath (Join-Path $root 'LICENSE') -Destination (Join-Path $stage 'LICENSE')
 Copy-Item -LiteralPath (Join-Path $root 'THIRD-PARTY-NOTICES.md') -Destination (Join-Path $stage 'THIRD-PARTY-NOTICES.md')
+
+if (!$SkipComponents) {
+    Step 'Pinned component trees (scripts/stage-components.mjs: frozen script-free Bun install, copy, digest)'
+    & node.exe (Join-Path $root 'scripts\stage-components.mjs') stage --out $stage --root $root --bun $bun
+    if ($LASTEXITCODE -ne 0) { throw 'Staging the pinned component trees failed; the source checkout must satisfy npm run components:verify.' }
+    & node.exe (Join-Path $root 'scripts\stage-components.mjs') verify $stage
+    if ($LASTEXITCODE -ne 0) { throw 'The staged component layout did not verify against its distribution manifest.' }
+}
+
+Step 'Terminal client (packages/tui, @luuna/api-client and the capability catalog)'
+# Mirrors the checkout layout so the client resolves its dependency and the
+# catalog exactly as in development: packages/tui/src/catalog.mjs reads
+# ../../../schemas/capability-catalog.json and `@luuna/api-client` resolves
+# through node_modules. Nothing is bundled or transpiled; the host Node runs
+# the TypeScript client with its built-in type stripping.
+foreach ($directory in @('packages\tui\bin', 'packages\tui\src', 'node_modules\@luuna\api-client\src', 'schemas')) {
+    New-Item -ItemType Directory -Force -Path (Join-Path $stage $directory) | Out-Null
+}
+& robocopy (Join-Path $root 'packages\tui\bin') (Join-Path $stage 'packages\tui\bin') /E /NFL /NDL /NJH /NJS /NP | Out-Null
+if ($LASTEXITCODE -gt 7) { throw 'Copying the terminal client failed.' }
+& robocopy (Join-Path $root 'packages\tui\src') (Join-Path $stage 'packages\tui\src') /E /NFL /NDL /NJH /NJS /NP | Out-Null
+if ($LASTEXITCODE -gt 7) { throw 'Copying the terminal client failed.' }
+& robocopy (Join-Path $root 'packages\api-client\src') (Join-Path $stage 'node_modules\@luuna\api-client\src') /E /NFL /NDL /NJH /NJS /NP | Out-Null
+if ($LASTEXITCODE -gt 7) { throw 'Copying the API client failed.' }
+foreach ($file in @('packages\tui\package.json', 'packages\tui\README.md', 'schemas\capability-catalog.json')) {
+    Copy-Item -LiteralPath (Join-Path $root $file) -Destination (Join-Path $stage $file)
+}
+Copy-Item -LiteralPath (Join-Path $root 'packages\api-client\package.json') -Destination (Join-Path $stage 'node_modules\@luuna\api-client\package.json')
+$terminalLauncher = @(
+    '@echo off',
+    'rem Opens the Luuna terminal client against the local runtime. Node.js 24.19 or newer must be on PATH.',
+    'powershell -NoProfile -ExecutionPolicy Bypass -File "%~dp0scripts\start-terminal.ps1" %*'
+) -join "`r`n"
+Set-Content -LiteralPath (Join-Path $stage 'Luuna Terminal.cmd') -Value $terminalLauncher -Encoding ascii
 
 Step 'Bundle configuration overlay'
 $stageRelative = ('target/stage-' + $profile)
@@ -111,10 +169,21 @@ try {
 Step 'Verifying the packaged layout'
 $built = Join-Path $tauriDirectory ('target\' + $profile)
 $copied = Join-Path $built 'luuna'
-foreach ($required in @('luuna-runtime.exe', 'scripts\ensure-windows-runtime.ps1', 'scripts\windows-common.ps1', 'Configure Luuna.cmd')) {
+foreach ($required in @('luuna-runtime.exe', 'scripts\ensure-windows-runtime.ps1', 'scripts\windows-common.ps1', 'scripts\start-terminal.ps1', 'Configure Luuna.cmd', 'Luuna Terminal.cmd', 'packages\tui\bin\luuna-tui.mjs', 'packages\tui\src\catalog.mjs', 'node_modules\@luuna\api-client\src\index.ts', 'schemas\capability-catalog.json')) {
     if (!(Test-Path -LiteralPath (Join-Path $copied $required))) { throw ('Packaged resource missing after build: ' + $required) }
 }
 if (!$SkipPi -and !(Test-Path -LiteralPath (Join-Path $copied 'pi\node_modules\@earendil-works\pi-coding-agent\dist\cli.js'))) { throw 'Packaged Pi tree missing after build.' }
+$stagedComponents = $null
+if (!$SkipComponents) {
+    foreach ($required in @('components\manifest.json', 'components\dist-manifest.json', 'components\missions\package.json', 'components\atlas\package.json', 'components\beacon\package.json', 'bun\bun.exe')) {
+        if (!(Test-Path -LiteralPath (Join-Path $copied $required))) { throw ('Packaged component resource missing after build: ' + $required) }
+    }
+    # The bundler copied the staged trees; prove the copies still match their digests.
+    & node.exe (Join-Path $root 'scripts\stage-components.mjs') verify $copied
+    if ($LASTEXITCODE -ne 0) { throw 'The packaged component layout does not verify against its distribution manifest.' }
+    $dist = Get-Content -LiteralPath (Join-Path $copied 'components\dist-manifest.json') -Raw | ConvertFrom-Json
+    $stagedComponents = @(foreach ($component in $dist.components) { [ordered]@{ name = $component.name; commit = $component.commit; digest = $component.digest; files = $component.files } })
+}
 $installers = @(Get-ChildItem -LiteralPath (Join-Path $built 'bundle\nsis') -Filter '*.exe' -ErrorAction SilentlyContinue)
 if (!$installers.Count) { throw 'No NSIS installer was produced.' }
 $desktop = Join-Path $built 'luuna-desktop.exe'
@@ -128,10 +197,13 @@ if ($CertificateThumbprint) {
 $report = [ordered]@{
     built_at = $started.ToUniversalTime().ToString('o')
     profile = $profile
-    host = [ordered]@{ os = [Environment]::OSVersion.VersionString; architecture = $env:PROCESSOR_ARCHITECTURE; rust = $rustVersion; node = $nodeVersion; pi = $piVersion }
+    host = [ordered]@{ os = [Environment]::OSVersion.VersionString; architecture = $env:PROCESSOR_ARCHITECTURE; rust = $rustVersion; node = $nodeVersion; pi = $piVersion; bun = $bunVersion }
     signed = $signed
     webview_install_mode = 'downloadBootstrapper'
-    prerequisites_on_target = @('WebView2 Runtime (bootstrapped by the installer when absent)', 'Node.js 24.19 or newer on PATH for the pinned Pi engine', 'Git 2.43 or newer on PATH', 'Python 3 for Python check recipes', 'a provider key saved with Configure Luuna.cmd')
+    prerequisites_on_target = @('WebView2 Runtime (bootstrapped by the installer when absent)', 'Node.js 24.19 or newer on PATH for the pinned Pi engine and the terminal client', 'Git 2.43 or newer on PATH', 'Python 3 for Python check recipes', 'a provider key saved with Configure Luuna.cmd')
+    components = $stagedComponents
+    terminal_client = 'Luuna Terminal.cmd (packages/tui on the host Node)'
+    clean_machine_test = 'not executed by this script; see docs/PACKAGING.md'
     artifacts = @(
         foreach ($installer in $installers) { [ordered]@{ path = $installer.FullName; sha256 = (Sha256 $installer.FullName); size_bytes = $installer.Length } }
     )

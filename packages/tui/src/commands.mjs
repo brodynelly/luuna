@@ -86,7 +86,7 @@ export const COMMANDS = [
     example: { args: ["Walkthrough", "app", "/srv/walkthrough"], flags: { id: "walkthrough" } },
     run: (client, { args, flags }, io) => client.registerProject({ name: args[0], ...(flags.id && { id: String(flags.id) }), repositories: [{ id: args[1], path: args[2] }] }, io.signal) },
   { id: "projects.scaffold.propose", name: "propose-scaffold", action: "Scaffold proposal", context: "runtime",
-    args: [{ name: "profile", description: "node, node-typescript, react, python, go, rust, flutter, android or ios", prompt: "Stack profile" }, { name: "name", description: "project id (^[a-z][a-z0-9-]{0,63}$)", prompt: "Project name" }, { name: "parent-dir", description: "absolute existing directory the project is created under", prompt: "Parent directory" }],
+    args: [{ name: "profile", description: "node, node-typescript, react, nextjs, python, go, rust, flutter, android or ios", prompt: "Stack profile" }, { name: "name", description: "project id (^[a-z][a-z0-9-]{0,63}$)", prompt: "Project name" }, { name: "parent-dir", description: "absolute existing directory the project is created under", prompt: "Parent directory" }],
     flags: {}, example: { args: ["python", "fresh", "C:\\projects"], flags: {} },
     run: (client, { args }, io) => client.proposeScaffold({ profile: args[0], name: args[1], parent_dir: args[2] }, io.signal) },
   { id: "projects.scaffold", name: "scaffold", action: "Scaffolding", context: "runtime",

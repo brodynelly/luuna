@@ -7,9 +7,10 @@
 //! - `luuna-runtime check` reports the database's integrity and schema version;
 //! - `luuna-runtime doctor [--json]` diagnoses the host: Git, Python, Node, the
 //!   Pi launcher, the data directory and database, token and credential
-//!   presence (names only, never values), the service port and the pinned
-//!   component toolchain (ADR 0018). It exits 1 when a required item (Git,
-//!   Pi, a writable data directory) is missing.
+//!   presence (names only, never values), the service port, the pinned
+//!   component layout (source checkout or portable, ADR 0024) and the Bun
+//!   executable (ADR 0018). It exits 1 when a required item (Git, Pi, a
+//!   writable data directory) is missing.
 //!
 //! Each accepts `--data-dir <dir>`; the default is the runtime's own
 //! (`LUUNA_DATA_DIR`, else `.luuna` in the current directory). The snapshot
@@ -229,7 +230,10 @@ pub struct DoctorProbes {
     /// Provider credential variable names that are set (never values).
     pub provider_keys: Vec<String>,
     pub port: Box<dyn Fn() -> PortStatus>,
+    /// The pinned component layout: source checkout or portable (ADR 0024).
     pub components: Box<dyn Fn() -> Result<String, String>>,
+    /// The Bun executable the components run under.
+    pub bun: Box<dyn Fn() -> Result<String, String>>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -333,6 +337,7 @@ pub fn doctor_report(probes: &DoctorProbes) -> DoctorReport {
         item("provider_credentials", false, providers),
         port,
         item("components", false, (probes.components)()),
+        item("bun", false, (probes.bun)()),
     ];
     let ok = items.iter().all(|item| item.status != "missing");
     DoctorReport { ok, items }
@@ -489,6 +494,10 @@ fn host_probes(options: &Options) -> DoctorProbes {
         .and_then(|raw| raw.parse::<u16>().ok())
         .unwrap_or(4242);
     let python = if cfg!(windows) { "python" } else { "python3" };
+    // One discovery serves both component items: a portable layout verifies
+    // every staged digest at discovery, which is the expensive part.
+    let components = luuna_components::Components::discover().map_err(|error| error.to_string());
+    let components_for_bun = components.clone();
     DoctorProbes {
         git: Box::new(|| {
             let program = std::env::var("LUUNA_GIT_COMMAND").unwrap_or_else(|_| "git".into());
@@ -507,10 +516,34 @@ fn host_probes(options: &Options) -> DoctorProbes {
             .map(ToOwned::to_owned)
             .collect(),
         port: Box::new(move || probe_port(port)),
-        components: Box::new(|| {
-            luuna_components::Components::discover()
-                .map(|_| "pinned Missions/Atlas/Beacon toolchain discovered".to_owned())
-                .map_err(|error| format!("component toolchain unavailable: {error}"))
+        components: Box::new(move || {
+            components
+                .as_ref()
+                .map(|components| {
+                    format!(
+                        "pinned Missions/Atlas/Beacon toolchain discovered: {}",
+                        components.describe()
+                    )
+                })
+                .map_err(|error| {
+                    format!("component toolchain unavailable: {error}; set LUUNA_COMPONENTS_ROOT to a source checkout or a packaged layout")
+                })
+        }),
+        bun: Box::new(move || {
+            match &components_for_bun {
+            Ok(components) => Ok(format!(
+                "bun {} at {} (revalidated before every component call)",
+                components.runtime_version(),
+                components.bun().display()
+            )),
+            Err(_) => version_of("bun", "--version")
+                .map(|version| {
+                    format!("bun {version} on PATH; the component layout was not discovered")
+                })
+                .map_err(|_| {
+                    "bun not found; install Bun 1.4.3 (npm install bun@1.4.3) or use the packaged layout (LUUNA_BUN)".to_owned()
+                }),
+        }
         }),
     }
 }
@@ -598,6 +631,7 @@ mod tests {
             provider_keys: vec!["OPENROUTER_API_KEY".into()],
             port: Box::new(|| PortStatus::LuunaRunning(4242)),
             components: Box::new(|| Err("component toolchain unavailable".into())),
+            bun: Box::new(|| Err("bun not found".into())),
         }
     }
 
@@ -618,6 +652,8 @@ mod tests {
             .contains("OPENROUTER_API_KEY"));
         assert!(by_name("port").detail.contains("already answers"));
         assert_eq!(by_name("components").status, "warning");
+        assert_eq!(by_name("bun").status, "warning");
+        assert!(!by_name("bun").required);
         assert_eq!(
             by_name("database").detail,
             "not created yet; the runtime creates it at first start"
@@ -637,6 +673,24 @@ mod tests {
         );
         let unwritable = doctor_report(&probes(Ok("pi".into()), Err("read-only".into())));
         assert!(!unwritable.ok);
+    }
+
+    #[test]
+    fn doctor_reports_the_component_layout_kind_and_bun_as_advisory_items() {
+        let mut probes = probes(Ok("pi".into()), Ok("ok".into()));
+        probes.components = Box::new(|| {
+            Ok("pinned Missions/Atlas/Beacon toolchain discovered: portable layout at C:/Luuna/luuna (distribution manifest digests verified)".into())
+        });
+        probes.bun = Box::new(|| Ok("bun 1.4.3 at C:/Luuna/luuna/bun/bun.exe".into()));
+        let report = doctor_report(&probes);
+        assert!(report.ok);
+        let by_name = |name: &str| report.items.iter().find(|i| i.name == name).unwrap();
+        assert_eq!(by_name("components").status, "ok");
+        assert!(by_name("components").detail.contains("portable layout"));
+        assert_eq!(by_name("bun").status, "ok");
+        assert!(by_name("bun").detail.contains("1.4.3"));
+        let names: Vec<&str> = report.items.iter().map(|i| i.name).collect();
+        assert_eq!(&names[names.len() - 2..], ["components", "bun"]);
     }
 
     #[test]
