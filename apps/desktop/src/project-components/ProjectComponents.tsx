@@ -1,4 +1,4 @@
-import { Box, Button, Disclosure, ErrorBanner, Hint, Id, Section, StatusLine } from "../ui";
+import { Aurora, Box, Button, Disclosure, ErrorBanner, Hint, Id, Section, StatusLine } from "../ui";
 import { AtlasMemory } from "./AtlasMemory";
 import { BeaconPrompts } from "./Prompts";
 import { useComponents } from "./useComponents";
@@ -17,8 +17,12 @@ export function ProjectComponents(props: ComponentsProps) {
     description="Tickets in Missions, chosen knowledge in Atlas and versioned prompts in Beacon. What you select here is bound into the plan you approve."
     accessory={<Button variant="text" disabled={!client || busy || loading} data-capability="components.status" onClick={() => state.setRefreshTick((value) => value + 1)}>Refresh components</Button>}>
     {state.error && <ErrorBanner message={state.error} onDismiss={() => state.setError("")} />}
-    <StatusLine className="component-status">{loading ? "Refreshing component state…" : status?.enabled ? "Project components enabled" : status?.reason ?? "Project components are not enabled."}</StatusLine>
-    {!status?.enabled && <Button variant="primary" disabled={!client || busy || loading || status === null} data-capability="components.enable" onClick={enable}>Enable project components</Button>}
+    {status?.enabled ? <StatusLine className="component-status">{loading ? "Refreshing component state…" : "Project components enabled"}</StatusLine>
+      : <Box className="component-disabled aurora-host">
+        <Aurora />
+        <StatusLine className="component-status">{loading ? "Refreshing component state…" : status?.reason ?? "Project components are not enabled."}</StatusLine>
+        <Button variant="primary" disabled={!client || busy || loading || status === null} data-capability="components.enable" onClick={enable}>Enable project components</Button>
+      </Box>}
     {status?.enabled && <>
       {status.workspace_path && <Disclosure section={false} className="component-location" summary="Component data location">
         <Id>{status.workspace_path}</Id>
