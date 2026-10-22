@@ -20,6 +20,11 @@ npm run tui -- plan <ticket> --check unit=python,-m,unittest@120                
 npm run tui -- plan <ticket> --task "shared=lib;role=repository_lead" --task "api=src>shared" --override api:shared:waive:"pinned"   # roles and overrides (ADR 0023)
 ```
 
+On Windows, `bin\luuna.cmd` (and `bin/luuna` for Git Bash) run the same client through
+`scripts/start-terminal.ps1`, which supplies `LUUNA_URL` and the token in memory: with the
+checkout's `bin` folder on PATH, `luuna` opens the workbench and `luuna projects --json` runs one
+command. `-DataDirectory <dir>` is accepted only by name; every other word goes to the client.
+
 Exit codes: 0 done, 1 refused or failed (`<Action> refused: <reason> <next step>` on stderr), 2 usage.
 Transport failures and 5xx responses are plain sentences; a server body is never shown.
 

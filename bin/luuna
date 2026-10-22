@@ -1,0 +1,4 @@
+#!/bin/sh
+# `luuna <command>` from Git Bash: the same fixed launcher as luuna.cmd beside it.
+here=$(cd "$(dirname "$0")" && pwd)
+exec powershell.exe -NoProfile -ExecutionPolicy Bypass -File "$(cygpath -w "$here/../scripts/start-terminal.ps1")" "$@"
