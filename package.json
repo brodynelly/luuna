@@ -18,6 +18,7 @@
     "build": "npm run build --workspace @luuna/desktop",
     "tui": "node packages/tui/bin/luuna-tui.mjs",
     "test:tui-smoke": "node scripts/tui-smoke.mjs",
+    "test:tui-interactive-audit": "node scripts/tui-interactive-audit.mjs",
     "typecheck": "npm run typecheck --workspaces --if-present",
     "test": "npm run test:contracts && npm run test:guard && npm run test:component-pins && npm run test:smoke-harness && npm run test --workspaces --if-present",
     "test:smoke-harness": "node --test scripts/m3-checkout-digest.test.mjs scripts/windows-m3-job.test.mjs scripts/smoke-process.test.mjs scripts/m3-evidence.test.mjs scripts/stage-components.test.mjs",
