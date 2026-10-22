@@ -1,7 +1,7 @@
 import { expect, test, vi } from "vitest";
 import { renderToStaticMarkup } from "react-dom/server";
 import type { DoctorReport } from "@luuna/api-client";
-import { DOCTOR_GROUPS, DoctorReportView, Settings, doctorTone, groupDoctorItems, readDoctor } from "./Settings";
+import { DoctorReportView, Settings, doctorGroups, doctorTone, readDoctor } from "./Settings";
 
 /** A report as the runtime serves it: presence by name, never a value. */
 const report: DoctorReport = { ok: false, items: [
@@ -16,9 +16,9 @@ const report: DoctorReport = { ok: false, items: [
 test("the Settings panel renders every doctor item with the state tones, the required marker and the verdict", () => {
   const html = renderToStaticMarkup(<DoctorReportView report={report} />);
   expect(html).toContain('aria-label="Runtime environment and credential presence"');
-  expect(html).toMatch(/<span class="state" data-tone="success">ok<\/span><code>git<\/code><span class="tag">required<\/span>/);
-  expect(html).toMatch(/<span class="state" data-tone="attention">warning<\/span><code>python<\/code><span class="settings-detail">/);
-  expect(html).toMatch(/<span class="state" data-tone="danger">missing<\/span><code>pi<\/code><span class="tag">required<\/span>/);
+  expect(html).toMatch(/<code>git<\/code><span class="tag">required<\/span><\/span><span class="settings-row-desc">git version 2\.55\.0<\/span><\/div><div class="settings-row-control"><span class="state" data-tone="success">ok<\/span>/);
+  expect(html).toMatch(/<code>python<\/code><\/span><span class="settings-row-desc">python3 not found on PATH<\/span><\/div><div class="settings-row-control"><span class="state" data-tone="attention">warning<\/span>/);
+  expect(html).toMatch(/<code>pi<\/code><span class="tag">required<\/span><\/span><span class="settings-row-desc">[^<]*<\/span><\/div><div class="settings-row-control"><span class="state" data-tone="danger">missing<\/span>/);
   expect(doctorTone).toEqual({ ok: "success", warning: "attention", missing: "danger" });
   expect(html).toContain('data-tone="danger" role="status">doctor: FAILED.');
   expect(renderToStaticMarkup(<DoctorReportView report={{ ok: true, items: report.items.filter((item) => item.status !== "missing") }} />)).toContain('data-tone="success" role="status">doctor: ok.');
@@ -48,26 +48,34 @@ test("the panel says that values are never shown and that credentials are config
   const view = renderToStaticMarkup(<DoctorReportView report={report} />);
   expect(view).not.toMatch(/<(input|textarea|form)\b/);
   const text = view.replace(/<[^>]+>/g, " ").replace(/&#x27;/g, "'").replace(/\s+/g, " ").trim();
-  const known = new Set([...report.items.flatMap((item) => [item.status, item.name, item.detail, "required"]), ...DOCTOR_GROUPS.map((group) => group.label), "Other", "doctor: FAILED. A required item is missing or the database is unusable; the items above say which."]);
+  const known = new Set([...report.items.flatMap((item) => [item.status, item.name, item.detail, "required"]), "Required tools", "Runtime", "Credentials", "Optional tools", "doctor: FAILED. A required item is missing or the database is unusable; the items above say which."]);
   let rest = text;
   for (const part of [...known].sort((a, b) => b.length - a.length)) rest = rest.split(part).join(" ");
   expect(rest.trim()).toBe("");
 });
 
-test("an ok doctor report draws one check beside the verdict and a failing report draws none", () => {
+test("the verdict is a callout with no drawn check, for an ok and a failing report alike", () => {
   const ok = renderToStaticMarkup(<DoctorReportView report={{ ok: true, items: report.items.filter((item) => item.status !== "missing") }} />);
-  expect(ok.match(/class="check-draw"/g)).toHaveLength(1);
-  expect(ok).toMatch(/<div class="settings-verdict-row"><svg class="check-draw"[^>]*aria-hidden="true"/);
+  expect(ok).not.toContain("check-draw");
   expect(ok).toContain('data-tone="success" role="status">doctor: ok.');
   expect(renderToStaticMarkup(<DoctorReportView report={report} />)).not.toContain("check-draw");
 });
 
-test("doctor items sit under section labels in order, and an unknown item lands under Other", () => {
-  const items = [...report.items, { name: "future_item", required: false, status: "ok" as const, detail: "added later" }];
-  expect(groupDoctorItems(items).map((group) => [group.label, group.items.map((item) => item.name)])).toEqual([
-    ["Required tools", ["git", "pi"]], ["Optional tools", ["python"]], ["Runtime", ["port"]], ["Credentials", ["api_token", "provider_credentials"]], ["Other", ["future_item"]],
+test("doctor items sit under titled groups in order, each exactly once, and an unknown item lands under Optional tools", () => {
+  const items = [...report.items, { name: "future_item", required: false, status: "ok" as const, detail: "added later" }, { name: "database", required: true, status: "ok" as const, detail: "sqlite ok" }, { name: "github_token", required: false, status: "warning" as const, detail: "GITHUB_TOKEN is not set" }];
+  expect(doctorGroups(items).map((group) => [group.label, group.items.map((item) => item.name)])).toEqual([
+    ["Required tools", ["git", "pi"]], ["Runtime", ["port", "database"]], ["Credentials", ["api_token", "provider_credentials", "github_token"]], ["Optional tools", ["python", "future_item"]],
   ]);
+  expect(doctorGroups(items).flatMap((group) => group.items)).toHaveLength(items.length);
   const html = renderToStaticMarkup(<DoctorReportView report={{ ok: true, items }} />);
-  expect(html).toMatch(/<li class="settings-group">Required tools<\/li><li class="settings-item">/);
-  expect(html.match(/class="check-draw"/g)).toHaveLength(1);
+  for (const item of items) expect(html.match(new RegExp(`<code>${item.name}</code>`, "g")), item.name).toHaveLength(1);
+  expect([...html.matchAll(/<h4 id="settings-group-[^"]+">([^<]+)<\/h4>/g)].map((match) => match[1])).toEqual(["Required tools", "Runtime", "Credentials", "Optional tools"]);
+  expect(html).not.toMatch(/text-transform|<h[23]/);
+});
+
+test("an empty report renders no group and still shows the verdict", () => {
+  const html = renderToStaticMarkup(<DoctorReportView report={{ ok: true, items: [] }} />);
+  expect(doctorGroups([])).toEqual([]);
+  expect(html).not.toContain("settings-rows");
+  expect(html).toContain("doctor: ok.");
 });

@@ -44,7 +44,7 @@
 .plan-overrides > button { justify-self: start; }
 .task-graph > .task-record { gap: var(--space-1); }
 .task-graph > .task-record > .task-line { display: flex; flex-wrap: wrap; align-items: center; gap: var(--space-1-5) var(--space-2); min-width: 0; overflow-wrap: anywhere; }
-.task-graph > .task-record > .advisory-result { display: grid; grid-template-columns: minmax(0, 1fr); gap: var(--space-1-5); min-width: 0; padding-left: var(--space-2); border-left: var(--rule-width) solid var(--color-border-control); }
+.task-graph > .task-record > .advisory-result { display: grid; grid-template-columns: minmax(0, 1fr); gap: var(--space-1-5); min-width: 0; padding: var(--space-2) var(--space-3); border-radius: var(--radius-md); background: var(--surface-muted); }
 .task-graph > .task-record > .advisory-result > .advisory-list { display: grid; gap: var(--space-0-5); margin: 0; padding-left: var(--space-4); overflow-wrap: anywhere; }
 
 /* Ticket list: one compact selectable row per ticket; the selected ticket's detail follows it. */
@@ -53,8 +53,8 @@
 .workflows .ticket-list button.run-card:not([aria-pressed="true"]) { border-color: var(--color-border); background: var(--color-surface); }
 
 /* Depth: ticket rows and cards. The plan review is a distinct, static block (no motion). */
-.workflows .ticket-list button.run-card { min-height: var(--row-height); border-radius: var(--radius-button); box-shadow: var(--shadow-button); }
-.workflows .ticket-list button.run-card:hover:not(:disabled), .workflows .ticket-list button.run-card:focus-visible { box-shadow: var(--shadow-button-hover); }
+.workflows .ticket-list button.run-card { min-height: var(--row-height); border-radius: var(--radius-md); box-shadow: none; }
+.workflows .ticket-list button.run-card:hover:not(:disabled):not([aria-pressed="true"]) { background: var(--fill); }
 .ticket-card { border-radius: var(--radius-card); box-shadow: var(--shadow-card); }
 .plan-review { padding: var(--space-4); border: var(--border-width) solid var(--color-border-strong); border-radius: var(--radius-card); background: var(--color-surface-raised); box-shadow: var(--shadow-card); }
 .plan-review > .plan-meta { overflow-wrap: anywhere; }

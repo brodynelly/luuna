@@ -1,6 +1,6 @@
 import type { CandidateDiff, CandidateEvidence } from "@luuna/api-client";
 import { checkTone, severityTone, verdictTone } from "../design/tone";
-import { Actions, Box, Button, CheckDraw, CodeBlock, Disclosure, EmptyState, Facts, HeadingRow, Id, Item, List, Meta, Output, ReasonNote, RecordItem, RecordList, StatusBadge, Text } from "../ui";
+import { Actions, Box, Button, CodeBlock, Disclosure, EmptyState, Facts, HeadingRow, Id, Item, List, Meta, Output, ReasonNote, RecordItem, RecordList, StatusBadge, Text } from "../ui";
 import { viewableArtifact } from "./rules";
 
 type CheckResult = CandidateEvidence["results"][number];
@@ -60,7 +60,7 @@ export function ReviewVerdict({ review }: { review?: Review }) {
   return <Box className="candidate-verdict" data-tone={review ? verdictTone[review.verdict] : undefined}>
     <HeadingRow level={4} title="Independent review" />
     {review ? <>
-      <Text className="verdict-line">Verdict: <strong><StatusBadge tone={verdictTone[review.verdict]}>{review.verdict.replace(/_/g, " ")}</StatusBadge></strong>{review.verdict === "passed" && <CheckDraw key={review.candidate_hash} size="sm" />}</Text>
+      <Text className="verdict-line">Verdict: <strong><StatusBadge tone={verdictTone[review.verdict]}>{review.verdict.replace(/_/g, " ")}</StatusBadge></strong></Text>
       <Meta block>Candidate: <Id>{review.candidate_hash}</Id></Meta>
       <Meta block>Reviewer session: <Id>{review.reviewer_session}</Id></Meta>
       {review.findings.length > 0

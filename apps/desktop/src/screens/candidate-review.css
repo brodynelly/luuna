@@ -36,9 +36,8 @@
   font-size: var(--text-xs);
 }
 
-/* Independent review: a leading rule in the verdict's tone (a plain divider before any verdict). */
-.candidate-review > .candidate-verdict { display: grid; grid-template-columns: minmax(0, 1fr); gap: var(--space-2); min-width: 0; padding: var(--space-1) 0 var(--space-1) var(--space-3); border-left: var(--rule-width) solid var(--color-border); }
-.candidate-review > .candidate-verdict[data-tone] { border-left-color: var(--tone-mark); }
+/* Independent review: a bordered card; the verdict's tone is read from its badge (word and shape), never from an edge colour. */
+.candidate-review > .candidate-verdict { display: grid; grid-template-columns: minmax(0, 1fr); gap: var(--space-2); min-width: 0; padding: var(--space-3); border: var(--border-width) solid var(--separator); }
 .candidate-review > .candidate-verdict > .verdict-line { font-size: var(--text-sm); }
 
 /* Findings: severity badge and exact location, the explanation, then its evidence. */
@@ -60,6 +59,6 @@
 
 /* Depth, static: evidence rows are table-like with hairlines and tabular numbers. Nothing here moves. */
 .candidate-review .check-results > .check-record, .candidate-review .review-findings > .finding-record { min-height: var(--row-height); font-variant-numeric: tabular-nums; }
-.candidate-review > .candidate-verdict { border-radius: var(--radius-card); background: var(--color-surface-raised); box-shadow: var(--shadow-card); padding-right: var(--space-3); }
+.candidate-review > .candidate-verdict { border-radius: var(--radius-lg); background: var(--surface-raised); box-shadow: var(--shadow-card); }
 .candidate-review > .candidate-verdict > .verdict-line { display: flex; align-items: center; gap: var(--space-2); }
 .candidate-review > .editor-handoff, .candidate-review > .setup-handoff { padding: var(--space-3); border: var(--border-width) solid var(--color-border); border-radius: var(--radius-card); background: var(--color-surface-raised); box-shadow: var(--shadow-card); }

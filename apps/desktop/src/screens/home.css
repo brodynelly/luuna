@@ -1,35 +1,31 @@
 /* Screen: home. Layout and screen-specific presentation, tokens only (docs/DESIGN-SYSTEM.md). */
 /*
- * The Home summary (docs/09-experience.md, ADR 0027 point 4) is a panel above Projects: one
- * record per project with its validation health (the latest baseline per repository), then the
- * blockers waiting on the developer, then the create-ticket shortcut. Every rule is scoped by a
+ * The Home summary (docs/09-experience.md, ADR 0027 point 4) opens with a row of counts, then the
+ * blockers waiting on the developer, then one record row per project with its validation health
+ * (the latest baseline per repository) and the create-ticket shortcut. Every rule is scoped by a
  * class unique to this screen; records, badges, meta lines and callouts come from components.css.
  */
 
-/* Project records: name and chips on the first line, repositories and counts below. */
-.home-projects { gap: var(--space-3); }
+/* Counts: four metric cards on a muted tray, 4 across on a wide window and 2 x 2 below. */
+.home-hero { padding: var(--space-4); border-radius: var(--radius-lg); background: var(--surface-muted); }
+.home-hero .stat-grid { grid-template-columns: repeat(4, minmax(0, 1fr)); gap: var(--space-4); }
+@media (max-width: 920px) {
+  .home-hero .stat-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+}
+
+/* Project rows: name and chips on the first line, repositories and counts below, actions at the end. */
+.home-project-card { display: grid; gap: var(--space-2); min-width: 0; }
 .home-project-card > .home-project-head { display: flex; flex-wrap: wrap; align-items: baseline; gap: var(--space-1-5) var(--space-3); min-width: 0; }
-.home-project-card > .home-project-head > strong { min-width: 0; font-size: var(--text-sm); overflow-wrap: anywhere; }
+.home-project-card > .home-project-head > strong { min-width: 0; font-size: var(--text-label); overflow-wrap: anywhere; }
 .home-project-card > .home-repositories { display: grid; gap: var(--space-1-5); margin: 0; padding: 0; list-style: none; }
 .home-project-card > .home-repositories > li { display: flex; flex-wrap: wrap; align-items: baseline; gap: var(--space-1-5) var(--space-2); min-width: 0; }
 .home-project-card > .home-project-actions { padding-top: var(--space-1); }
+.home-projects > .home-project { padding-block: var(--space-3); }
 
-/* Blockers: a leaf record per blocker, ruled in the tone of the state it reports. */
+/* Blockers: a row per blocker; the state badge, then the title, with the reason and action below. */
 .home-blockers > .home-blocker { grid-template-columns: auto minmax(0, 1fr); align-items: baseline; gap: var(--space-1-5) var(--space-2); }
 .home-blockers > .home-blocker > :nth-child(n + 3) { grid-column: 1 / -1; }
 
 /* Sections: "Waiting on you" first, then the projects, each a titled group on the page. */
 .home-section > .panel-heading > h3 { display: flex; align-items: baseline; gap: var(--space-2); }
-.home-section .home-count { color: var(--color-text-subtle); font-size: var(--text-xs); font-variant-numeric: tabular-nums; }
-
-/* Hero: a row of count tiles (the tiles themselves are in design/components.css). */
-.home-hero { padding: var(--space-4); border: var(--border-width) solid var(--color-border); border-radius: var(--radius-card); background: var(--color-surface); }
-.home-hero .stat-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(min(100%, var(--facts-term)), 1fr)); gap: var(--space-3); margin: 0; }
-
-/* A project is a feature card: the record is only the list slot, the card carries the chrome. */
-.home-projects > .home-project { padding: 0; border: 0; background: transparent; box-shadow: none; }
-.home-project-card { transition: box-shadow var(--duration-standard) var(--ease-out); }
-@media (hover: hover) and (pointer: fine) {
-  .home-project-card:hover { box-shadow: var(--shadow-popover); }
-}
-.home-project-card:focus-within { box-shadow: var(--shadow-popover); }
+.home-section .home-count { color: var(--ink-muted); font-size: var(--text-caption); font-variant-numeric: tabular-nums; }

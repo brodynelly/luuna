@@ -90,10 +90,10 @@ export function Help() {
         <List>{EVIDENCE_LOCATIONS.map((location) => <Item key={location.where}><strong>{location.where}.</strong> {location.what}</Item>)}</List>
       </Topic>
       <Topic id="help-shortcuts" title="Keyboard shortcuts">
-        <List className="help-plain help-shortcuts">{SHORTCUTS.map((shortcut) => <Item key={shortcut.keys}><Kbd>{shortcut.keys}</Kbd> <span>{shortcut.action}</span></Item>)}</List>
+        <List className="help-plain help-shortcuts">{SHORTCUTS.map((shortcut) => <Item key={shortcut.keys}><span>{shortcut.action}</span><Kbd>{shortcut.keys}</Kbd></Item>)}</List>
       </Topic>
       <Topic id="help-documents" title="Documents">
-        <List className="help-plain">{DOCUMENTS.map((document) => <Item key={document.path}><ExternalLink href={`${REPOSITORY_URL}/${document.path}`}>{document.title}</ExternalLink> <Id>{document.path}</Id></Item>)}</List>
+        <List className="help-plain help-documents">{DOCUMENTS.map((document) => <Item key={document.path}><ExternalLink href={`${REPOSITORY_URL}/${document.path}`}>{document.title}</ExternalLink> <Id>{document.path}</Id></Item>)}</List>
       </Topic>
     </Box>
   </Page>;

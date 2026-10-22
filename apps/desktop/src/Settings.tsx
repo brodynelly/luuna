@@ -4,7 +4,7 @@ import type { DoctorItem, DoctorReport, DoctorStatus, LuunaClient } from "@luuna
 import { describeFailure } from "./failures";
 import type { Tone } from "./design/tone";
 import { viewInfo } from "./content/views";
-import { Box, Button, Callout, CheckDraw, EmptyState, ErrorBanner, Id, Item, List, Loading, Page, Section, StatusBadge, Tag } from "./ui";
+import { Box, Button, Callout, EmptyState, ErrorBanner, Id, Loading, Page, Section, SettingsRow, StatusBadge, Tag } from "./ui";
 
 /**
  * The doctor statuses on the six tones: `ok` is passed evidence of the environment, `warning`
@@ -17,38 +17,35 @@ export function readDoctor(client: Pick<LuunaClient, "doctor">, signal: AbortSig
   return client.doctor(signal);
 }
 
-/** The sections the doctor items read under, in order; an item the runtime adds later lands under "Other". */
-export const DOCTOR_GROUPS: readonly { label: string; names: readonly string[] }[] = [
-  { label: "Required tools", names: ["git", "pi", "data_dir"] },
-  { label: "Optional tools", names: ["python", "node", "bun", "components"] },
-  { label: "Runtime", names: ["database", "port"] },
-  { label: "Credentials", names: ["api_token", "github_token", "provider_credentials"] },
-];
+export interface DoctorGroup { label: string; items: DoctorItem[] }
 
-/** The items split into the labelled sections, each in the runtime's own order; empty sections are dropped. */
-export function groupDoctorItems(items: readonly DoctorItem[]): { label: string; items: DoctorItem[] }[] {
-  const known = new Set(DOCTOR_GROUPS.flatMap((group) => group.names));
-  const groups = DOCTOR_GROUPS.map((group) => ({ label: group.label, items: items.filter((item) => group.names.includes(item.name)) }));
-  groups.push({ label: "Other", items: items.filter((item) => !known.has(item.name)) });
-  return groups.filter((group) => group.items.length > 0);
+const RUNTIME_ITEMS: readonly string[] = ["data_dir", "database", "port", "components"];
+const isCredential = (name: string) => name === "provider_credentials" || name.endsWith("_token") || name.endsWith("_credentials");
+
+/**
+ * The items split into Required tools, Runtime, Credentials and Optional tools, each in the runtime's own
+ * order, empty groups dropped, every item exactly once. Presentation only: an item the runtime adds later
+ * lands under Optional tools, and the runtime stays the authority on each status.
+ */
+export function doctorGroups(items: readonly DoctorItem[]): DoctorGroup[] {
+  const credentials = items.filter((item) => isCredential(item.name));
+  const runtime = items.filter((item) => !isCredential(item.name) && RUNTIME_ITEMS.includes(item.name));
+  const rest = items.filter((item) => !isCredential(item.name) && !RUNTIME_ITEMS.includes(item.name));
+  return [
+    { label: "Required tools", items: rest.filter((item) => item.required) },
+    { label: "Runtime", items: runtime },
+    { label: "Credentials", items: credentials },
+    { label: "Optional tools", items: rest.filter((item) => !item.required) },
+  ].filter((group) => group.items.length > 0);
 }
 
-/** The report as a list: status badge, item name, the required marker and the runtime's one-line detail under section labels, then the verdict. */
-export function DoctorReportView({ report, tick = 0 }: { report: DoctorReport; tick?: number }) {
+/** The report as titled groups of settings rows (name, required marker, the runtime's detail, status badge), then the verdict. */
+export function DoctorReportView({ report }: { report: DoctorReport }) {
   return <Box className="settings-report">
-    <List className="settings-items" label="Runtime environment and credential presence">{groupDoctorItems(report.items).flatMap((group) => [
-      <Item key={`group-${group.label}`} className="settings-group">{group.label}</Item>,
-      ...group.items.map((item: DoctorItem) => <Item key={item.name} className="settings-item">
-        <StatusBadge tone={doctorTone[item.status]}>{item.status}</StatusBadge>
-        <Id>{item.name}</Id>
-        {item.required && <Tag>required</Tag>}
-        <span className="settings-detail">{item.detail}</span>
-      </Item>),
-    ])}</List>
-    <Box className="settings-verdict-row">
-      {report.ok && <CheckDraw key={tick} />}
-      <Callout className="settings-verdict" tone={report.ok ? "success" : "danger"} status>{report.ok ? "doctor: ok. Every required item is present and the database is usable." : "doctor: FAILED. A required item is missing or the database is unusable; the items above say which."}</Callout>
-    </Box>
+    <Box className="settings-groups" role="group" aria-label="Runtime environment and credential presence">{doctorGroups(report.items).map((group) => <Section key={group.label} id={`settings-group-${group.label.toLowerCase().replace(/\s+/g, "-")}`} level={4} variant="plain" className="settings-group" title={group.label}>
+      <Box className="settings-rows">{group.items.map((item: DoctorItem) => <SettingsRow key={item.name} className="settings-item" title={<><Id>{item.name}</Id>{item.required && <Tag>required</Tag>}</>} description={item.detail} control={<StatusBadge tone={doctorTone[item.status]}>{item.status}</StatusBadge>} />)}</Box>
+    </Section>)}</Box>
+    <Callout className="settings-verdict" tone={report.ok ? "success" : "danger"} status>{report.ok ? "doctor: ok. Every required item is present and the database is usable." : "doctor: FAILED. A required item is missing or the database is unusable; the items above say which."}</Callout>
   </Box>;
 }
 
@@ -86,7 +83,7 @@ export function Settings({ client, connectionEpoch = 0, refreshEpoch = 0, childr
     {children}
     <Section id="environment-heading" title="Environment" className="settings-environment" accessory={refresh}>
       {error && <ErrorBanner message={error} onDismiss={() => setError("")} />}
-      {client ? report ? <DoctorReportView report={report} tick={tick} /> : !error && <Loading label="Reading the runtime's doctor report…" rows={6} />
+      {client ? report ? <DoctorReportView report={report} /> : !error && <Loading label="Reading the runtime's doctor report…" rows={6} />
         : <EmptyState boxed>Connect to the runtime to see its environment and which credentials are configured.</EmptyState>}
     </Section>
   </Page>;

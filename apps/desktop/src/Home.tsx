@@ -6,7 +6,7 @@ import { describeFailure } from "./failures";
 import { baselineTone, manifestTone, runTone } from "./design/tone";
 import { viewInfo } from "./content/views";
 import type { View } from "./content/views";
-import { Actions, Box, Button, Card, ContextMenuArea, copyText, EmptyState, ErrorBanner, Id, Item, List, Loading, Meta, Page, ReasonNote, RecordItem, RecordList, Section, StatGrid, StatTile, StatusBadge, useNotify, VisuallyHidden } from "./ui";
+import { Actions, Box, Button, ContextMenuArea, copyText, EmptyState, ErrorBanner, Id, Item, List, Loading, Meta, Page, ReasonNote, RecordItem, RecordList, Section, StatGrid, StatTile, StatusBadge, useNotify, VisuallyHidden } from "./ui";
 
 /** Where a Home control sends the developer: the project's panel, its ticket form, or one ticket. */
 export interface OpenRequest { projectId: string; ticketId?: string; ticketForm?: boolean }
@@ -35,7 +35,7 @@ type Summary = { summary: HomeSummary; busy: boolean; onOpen: (request: OpenRequ
 function Blockers({ summary, busy, onOpen }: Summary) {
   const count = summary.blockers.length;
   return <Section id="home-waiting" variant="plain" className="home-section" title={<>Waiting on you{count > 0 && <span className="home-count"> {count}</span>}</>}>
-    {count > 0 ? <RecordList className="home-blockers" label="Blockers waiting on you">{summary.blockers.map((blocker, index) => {
+    {count > 0 ? <RecordList className="home-blockers" variant="rows" label="Blockers waiting on you">{summary.blockers.map((blocker, index) => {
       const tone = blockerTone(blocker);
       return <RecordItem key={`${blocker.project_id}-${blocker.run_id ?? blocker.repository_id ?? index}`} headed className="home-blocker" tone={tone}>
         <StatusBadge tone={tone}>{blocker.state ? blocker.state.replace(/_/g, " ") : "testing setup"}</StatusBadge>
@@ -52,13 +52,13 @@ function Blockers({ summary, busy, onOpen }: Summary) {
 function ProjectHealth({ summary, busy, onOpen }: Summary) {
   const notify = useNotify();
   return <Section id="home-projects-heading" variant="plain" className="home-section" title="Projects">
-    <RecordList className="home-projects" label="Projects and validation health">{summary.projects.map((project) => <RecordItem key={project.id} className="home-project">
+    <RecordList className="home-projects" variant="rows" label="Projects and validation health">{summary.projects.map((project) => <RecordItem key={project.id} className="home-project">
       <ContextMenuArea label={`Actions for ${project.name}`} commands={() => [
         { label: "Open project", onSelect: () => onOpen({ projectId: project.id }), disabled: busy },
         { label: "New ticket", onSelect: () => onOpen({ projectId: project.id, ticketForm: true }), disabled: busy || project.revision === 0 },
         { label: "Copy project ID", group: true, onSelect: () => void copyText(project.id).then(() => notify("Project ID copied")) },
       ]}>
-      <Card className="home-project-card">
+      <Box className="home-project-card">
       <Box className="home-project-head">
         <strong>{project.name}</strong>
         <StatusBadge tone={manifestTone(project.revision)}>{project.revision > 0 ? `manifest r${project.revision}` : "unconfirmed"}</StatusBadge>
@@ -75,7 +75,7 @@ function ProjectHealth({ summary, busy, onOpen }: Summary) {
         <Button disabled={busy} onClick={() => onOpen({ projectId: project.id })}>Open {project.name}</Button>
         <Button variant="text" disabled={busy || project.revision === 0} aria-label={`New ticket in ${project.name}`} onClick={() => onOpen({ projectId: project.id, ticketForm: true })}>New ticket</Button>
       </Actions>
-      </Card>
+      </Box>
       </ContextMenuArea>
     </RecordItem>)}</RecordList>
   </Section>;
