@@ -303,8 +303,8 @@ async function runBaseline() {
 
 async function createTicket(title, intent, criteria) {
   await page.getByLabel("Ticket title").fill(title);
-  await page.getByLabel("Intent").fill(intent);
-  await page.getByLabel("Acceptance criteria (one per line)").fill(criteria.join("\n"));
+  await page.getByLabel("Intent", { exact: true }).fill(intent);
+  await page.getByLabel("Acceptance criteria (one per line)", { exact: true }).fill(criteria.join("\n"));
   await page.getByRole("button", { name: "Create ticket" }).click();
   await waitFor(async () => ((await ticketItem(title).count()) ? true : null), 20_000);
 }
