@@ -50,7 +50,23 @@ async fn canonical_nested_worktree_runs_the_actual_test_module() {
 /// A process counts as alive only when it still runs; a killed child whose
 /// parent died is a zombie until the init process reaps it.
 fn alive(pid: u32) -> bool {
-    if cfg!(target_os = "linux") {
+    #[cfg(windows)]
+    {
+        use windows_sys::Win32::{Foundation::CloseHandle, System::Threading::*};
+        // SAFETY: query-only handle, closed before returning.
+        unsafe {
+            let handle = OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, 0, pid);
+            if handle.is_null() {
+                return false;
+            }
+            let mut code = 0;
+            let running = GetExitCodeProcess(handle, &mut code) != 0 && code == 259;
+            CloseHandle(handle);
+            running
+        }
+    }
+    #[cfg(target_os = "linux")]
+    {
         return std::fs::read_to_string(format!("/proc/{pid}/stat"))
             .ok()
             .and_then(|stat| {
@@ -59,7 +75,8 @@ fn alive(pid: u32) -> bool {
             })
             .is_some_and(|state| state != 'Z' && state != 'X');
     }
-    if cfg!(unix) {
+    #[cfg(all(unix, not(target_os = "linux")))]
+    {
         return std::process::Command::new("ps")
             .args(["-o", "stat=", "-p", &pid.to_string()])
             .output()
@@ -69,6 +86,7 @@ fn alive(pid: u32) -> bool {
             })
             .unwrap_or(false);
     }
+    #[cfg(not(any(windows, unix)))]
     false
 }
 
@@ -76,7 +94,7 @@ fn alive(pid: u32) -> bool {
 async fn passing_and_failing_commands_record_exit_codes_hashes_and_excerpts() {
     let dir = tempfile::tempdir().unwrap();
     let (_tx, cancel) = watch::channel(false);
-    let (progress, mut events) = mpsc::unbounded_channel();
+    let (progress, mut events) = mpsc::channel(luuna_executor::PROGRESS_CAPACITY);
     let passed = Executor::default()
         .execute(
             &spec(
@@ -200,7 +218,7 @@ async fn deadline_and_cancellation_terminate_the_whole_process_group() {
         .unwrap();
     assert_eq!(timed_out.status, CheckStatus::Failed);
     assert!(timed_out.reason.as_deref().unwrap().contains("deadline"));
-    assert!(!alive(timed_out.pid.unwrap()) || cfg!(not(unix)));
+    assert!(!alive(timed_out.pid.unwrap()));
 
     // The child spawns a grandchild; cancelling must reap both.
     let marker = dir.path().join("grandchild.pid");
@@ -231,8 +249,8 @@ async fn deadline_and_cancellation_terminate_the_whole_process_group() {
     let cancelled = run.await.unwrap();
     assert_eq!(cancelled.status, CheckStatus::Cancelled);
     tokio::time::sleep(Duration::from_millis(200)).await;
-    assert!(!alive(cancelled.pid.unwrap()) || cfg!(not(unix)));
-    if cfg!(unix) {
+    assert!(!alive(cancelled.pid.unwrap()));
+    {
         assert!(
             !alive(grandchild),
             "grandchild must be terminated with the process group"
@@ -264,6 +282,24 @@ async fn secrets_and_luuna_variables_never_reach_the_command() {
     assert!(!stdout.contains("secret-value"));
     assert!(stdout.contains("true"));
     let _ = PathBuf::new();
+}
+
+#[tokio::test]
+async fn a_stalled_progress_consumer_cannot_block_or_grow_command_output() {
+    let dir = tempfile::tempdir().unwrap();
+    let (_tx, cancel) = watch::channel(false);
+    let (progress, events) = mpsc::channel(luuna_executor::PROGRESS_CAPACITY);
+    let result = Executor::default().execute(&spec(dir.path(), &["-c",
+        "import sys; sys.stdout.write('x' * (20 * 1024 * 1024)); sys.stderr.write('y' * (20 * 1024 * 1024))"], 30), cancel, Some(progress)).await.unwrap();
+    assert_eq!(result.status, CheckStatus::Passed, "{result:?}");
+    assert!(events.len() <= luuna_executor::PROGRESS_CAPACITY);
+    for artifact in result.artifacts {
+        assert!(artifact.truncated);
+        assert_eq!(
+            std::fs::metadata(&artifact.path).unwrap().len(),
+            16 * 1024 * 1024
+        );
+    }
 }
 
 #[cfg(unix)]
@@ -336,7 +372,7 @@ async fn a_descendant_holding_the_pipes_cannot_keep_the_check_open() {
     assert_eq!(execution.status, CheckStatus::Failed, "{execution:?}");
     let reason = execution.reason.clone().unwrap_or_default();
     assert!(reason.contains("descendant"), "{reason}");
-    if cfg!(unix) {
+    {
         let grandchild: u32 = std::fs::read_to_string(&marker)
             .unwrap()
             .trim()

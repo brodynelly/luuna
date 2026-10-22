@@ -1,6 +1,22 @@
 import { describe, expect, it, vi } from "vitest";
-import { ApiError, LuunaClient, assistantText, awaitsValidation, checkResults, confirmedManifest, isTerminal, loopbackUrl, mergeEvents } from "../src/index";
+import { ApiError, EventReplay, EventWindow, LuunaClient, assistantText, awaitsValidation, checkResults, confirmedManifest, isTerminal, loopbackUrl, mergeEvents } from "../src/index";
 import type { EventEnvelope, ProjectManifest } from "../src/index";
+
+it("retains bounded event payloads while replaying text and rejects a gap atomically", () => {
+  const window = new EventWindow();
+  const event = (sequence: number) => ({ schema_version: "0.1", timestamp: "2026-10-21T00:00:00Z", project_id: "demo", sequence, event_id: `e${sequence}`, run_id: "run", type: "pi.message_update", payload: { assistantMessageEvent: { type: "text_delta", delta: "x" }, large: "y".repeat(4000) } }) as EventEnvelope;
+  for (let start = 1; start <= 2000; start += 200) window.append(Array.from({ length: 200 }, (_, i) => event(start + i)));
+  expect(window.cursor).toBe(2000);
+  expect(window.records.length).toBeLessThan(200);
+  expect(window.text).toBe("x".repeat(2000));
+  const previous = window.records;
+  expect(window.append([])).toBe(previous);
+  expect(() => window.append([event(2001), event(2003)])).toThrow("gap");
+  expect(window.records).toBe(previous);
+  expect(window.cursor).toBe(2000);
+  window.append([{ ...event(2001), type: "pi.message_end", payload: { message: { role: "assistant", content: [{ type: "text", text: "final" }] } } }]);
+  expect(window.text).toBe("final");
+});
 
 describe("project component authority and resources", () => {
   it("keeps component routes authenticated, project scoped and source reconciliation revision guarded", async () => {
@@ -105,6 +121,37 @@ describe("local runtime connection", () => {
 });
 
 describe("durable event replay", () => {
+  it("incrementally replays overlap without replacing unchanged history", () => {
+    const event = (sequence: number) => ({ sequence, event_id: `e${sequence}`, run_id: "run" });
+    const replay = new EventReplay<ReturnType<typeof event>>();
+    const first = replay.append([event(2), event(1)]);
+    expect(replay.append([])).toBe(first);
+    expect(replay.append([event(2)])).toBe(first);
+    const next = replay.append([event(4), event(2), event(3)]);
+    expect(next).toEqual(mergeEvents(first, [event(4), event(2), event(3)]));
+    expect(next[0]).toBe(first[0]);
+    expect(first).toHaveLength(2);
+    expect(replay.cursor).toBe(4);
+  });
+
+  it("rejects a whole bad page without poisoning cursor, identities or retained records", () => {
+    const event = (sequence: number) => ({ sequence, event_id: `e${sequence}`, run_id: "run" });
+    for (const invalid of [
+      [event(2), event(4)],
+      [event(2), { ...event(3), event_id: "e1" }],
+      [event(2), { ...event(2), event_id: "other" }],
+      [event(2), { ...event(3), run_id: "other" }],
+      [{ ...event(2), sequence: NaN }],
+      [{ ...event(2), event_id: "" }],
+    ]) {
+      const replay = new EventReplay<ReturnType<typeof event>>();
+      const first = replay.append([event(1)]);
+      expect(() => replay.append(invalid)).toThrow();
+      expect(replay.cursor).toBe(1);
+      expect(replay.append([])).toBe(first);
+      expect(replay.append([event(2), event(3)])).toHaveLength(3);
+    }
+  });
   it("deduplicates reconnect overlap and restores sequence order", () => {
     const event = (sequence: number) => ({ sequence, event_id: `e${sequence}`, run_id: "run" });
     expect(mergeEvents([event(1), event(2)], [event(3), event(2)]).map((item) => item.sequence)).toEqual([1, 2, 3]);

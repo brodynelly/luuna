@@ -20,6 +20,7 @@ const metadata = () => JSON.parse(readFileSync(path.join(home, "credentials/conn
 const providerHash = () => createHash("sha256").update(readFileSync(path.join(home, "credentials/provider.json"))).digest("hex");
 const healthy = () => fetch("http://127.0.0.1:4242/health").then(r => r.ok).catch(() => false);
 const checks = [];
+const timings = {};
 const clients = [];
 let foreign;
 function check(name, passed) {
@@ -72,8 +73,10 @@ try {
   const keyHash = providerHash();
   check("test starts against an already healthy development runtime", await healthy());
   await ps(["-Command", "$c = & ./scripts/ensure-windows-runtime.ps1; $h = @{Authorization = 'Bearer '+$c.token}; $runs = Invoke-RestMethod ($c.url+'/api/v1/runs') -Headers $h -MaximumRedirection 0 -TimeoutSec 5; if (@($runs | Where-Object { $_.state -in @('queued','running','exploring','implementing','validating','reviewing') }).Count) { exit 3 }; $c=$null; $h=$null"]);
+  const warmStarted = performance.now();
   const warm = await launch();
   await connected(warm);
+  timings.warm_launch_to_connected_ms = performance.now() - warmStarted;
   check("warm launch reuses the authenticated runtime PID", metadata().runtime_pid === saved.runtime_pid);
   const history = await warm.page.locator(".run-card").count();
   await close(warm);
@@ -89,9 +92,11 @@ try {
   check("foreign listener is refused before any HTTP request or token transmission", foreignRequests === 0);
   await new Promise(r => foreign.close(r));
   foreign = null;
+  const coldStarted = performance.now();
   await cold.page.getByRole("button", { name: "Connect automatically", exact: true }).click();
   const second = await launch();
   await Promise.all([connected(cold), connected(second)]);
+  timings.cold_retry_and_concurrent_launch_to_connected_ms = performance.now() - coldStarted;
   const restarted = metadata();
   check("retry starts a new independent runtime after cold stop", restarted.runtime_pid !== saved.runtime_pid && await healthy());
   check("cold startup preserves the existing data directory and visible history", restarted.data_directory === saved.data_directory && await cold.page.locator(".run-card").count() === history);
@@ -123,7 +128,7 @@ try {
 finally {
   if (foreign) await new Promise(r => foreign.close(r));
   for (const client of clients) await close(client).catch(() => { client.child.kill(); });
-  writeFileSync(path.join(out, "report.json"), JSON.stringify({ surface: "native Tauri WebView2", binary, sha256: createHash("sha256").update(readFileSync(binary)).digest("hex"), checks, passed: !failure && checks.every(c => c.passed) }, null, 2));
+  writeFileSync(path.join(out, "report.json"), JSON.stringify({ surface: "native Tauri WebView2", binary, sha256: createHash("sha256").update(readFileSync(binary)).digest("hex"), checks, timings, passed: !failure && checks.every(c => c.passed) }, null, 2));
   console.log(`Evidence: ${out}`);
 }
 if (failure) process.exitCode = 1;

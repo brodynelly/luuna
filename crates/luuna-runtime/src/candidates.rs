@@ -276,7 +276,7 @@ pub async fn validate(
     drop(active);
     let worker = state.clone();
     let started_copy = started.clone();
-    tokio::spawn(async move {
+    crate::dispatch::worker(async move {
         let mut current = evidence;
         let mut current_worktree = worktree;
         let mut current_diff = diff;

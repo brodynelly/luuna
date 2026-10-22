@@ -864,12 +864,16 @@ fn repair_revisions_invalidate_checks_and_reviews_without_resetting_usage() {
     store
         .finish_candidate_review(&run.id, run.revision, &candidate.hash, &rejected)
         .unwrap();
+    let before_charge = store.workflow_usage(&run.id).unwrap();
     let usage = store
         .charge_candidate_usage(&run.id, &candidate.hash, 20, 200)
         .unwrap();
-    // 10 s writer + 20 s charged + the validation and review stages, each
-    // finalized with at least its live time rounded up to a whole second.
-    assert_eq!(usage.elapsed_seconds, 32);
+    // A stage can finish within the same clock millisecond (zero rounded
+    // seconds), or take longer on a loaded host. Assert exact accumulation
+    // relative to the recorded stages rather than assuming each costs 1 s.
+    assert!(before_charge.elapsed_seconds >= 10);
+    assert_eq!(usage.elapsed_seconds, before_charge.elapsed_seconds + 20);
+    let first_revision_seconds = usage.elapsed_seconds;
     assert_eq!(usage.cost_usd_micros, 300);
     let run = store.get_run(&run.id).unwrap().unwrap();
     let run = store
@@ -918,8 +922,8 @@ fn repair_revisions_invalidate_checks_and_reviews_without_resetting_usage() {
         .is_err());
     let usage = store.workflow_usage(&run.id).unwrap();
     assert_eq!(usage.attempts, 2);
-    // 32 s from the first revision plus the 4 s repair attempt.
-    assert_eq!(usage.elapsed_seconds, 36);
+    // Every second from the first revision plus the exact 4 s repair attempt.
+    assert_eq!(usage.elapsed_seconds, first_revision_seconds + 4);
     begin_validation(&mut store, &revised);
     finish_validation(&mut store, &revised);
     assert!(matches!(

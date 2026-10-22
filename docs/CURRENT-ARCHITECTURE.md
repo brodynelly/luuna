@@ -26,6 +26,13 @@ README and AI-START-HERE are entry points, not alternative specifications. Exist
 
 ## Delivery and boundaries
 
+Runtime I/O isolation and bounded session history follow
+[ADR 0015](decisions/0015-bounded-runtime-and-history.md): synchronous transactions
+run under bounded blocking admission, SSE reads in pages, and the desktop keeps
+a bounded live event window with on-demand historical navigation. Check progress
+is lossy display data; private artifacts and durable runtime events remain the
+evidence. Windows check processes join owned Job Objects before execution.
+
 The initial client is Tauri 2 with React and TypeScript. An independent Rust service uses Tokio, an authenticated Axum API, and local SQLite persistence. Pi RPC subprocesses execute agent assignments. A client cannot directly authorize tools or decide that validation succeeded.
 
 ```text

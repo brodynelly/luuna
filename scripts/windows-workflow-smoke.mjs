@@ -41,7 +41,7 @@ writeFileSync(path.join(repo,'src','greeting.py'),"def greeting(name):\n    retu
 writeFileSync(path.join(repo,'test_greeting.py'),`import unittest\nfrom src.greeting import greeting\nclass GreetingTest(unittest.TestCase):\n    def test_greeting(self):\n        self.assertIsInstance(greeting('Ada'), str)\n`);
 git('init','-q','-b','main'); git('remote','add','origin','https://example.invalid/windows-workflow.git'); git('add','-A'); git('-c','commit.gpgsign=false','commit','-qm','fixture');
 const before = {head:git('rev-parse','HEAD'),status:git('status','--porcelain'),source:readFileSync(path.join(repo,'src','greeting.py'),'utf8')};
-const binary=path.join(root,'target','debug','luuna-runtime.exe');
+const binary=path.resolve(option('--runtime',path.join(root,'target','debug','luuna-runtime.exe')));
 const runtime=spawn(binary,[],{cwd:root,env:{...process.env,LUUNA_API_TOKEN:token,LUUNA_DATA_DIR:dataDir,LUUNA_PORT:'4252',LUUNA_PI_COMMAND:option('--pi',process.execPath),LUUNA_PI_PROVIDER:provider,LUUNA_PI_MODEL:model},stdio:['ignore','ignore','pipe'],windowsHide:true});
 runtime.stderr.on('data',chunk=>writeFileSync(path.join(out,'runtime.log'),clean(chunk),{flag:'a'}));
 runtime.on('error',error=>record('runtime spawn',false,error.message));

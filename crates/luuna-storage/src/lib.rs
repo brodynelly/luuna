@@ -9,6 +9,7 @@ use thiserror::Error;
 
 mod baselines;
 mod components;
+mod history;
 mod missions;
 mod projects;
 mod validation;
@@ -95,6 +96,7 @@ impl Store {
         connection.execute_batch(MIGRATION_4)?;
         connection.execute_batch(MIGRATION_5)?;
         connection.execute_batch(MIGRATION_6)?;
+        connection.execute_batch("CREATE INDEX IF NOT EXISTS runs_history ON runs(created_at DESC,id); CREATE INDEX IF NOT EXISTS runs_project_history ON runs(project_id,created_at DESC,id);")?;
         let store = Self { connection };
         store.initialize_component_state()?;
         Ok(store)
@@ -143,18 +145,11 @@ impl Store {
     }
 
     pub fn runs(&self) -> Result<Vec<RunRecord>> {
-        let mut query = self
-            .connection
-            .prepare("SELECT id FROM runs ORDER BY created_at DESC,id")?;
-        let ids = query
-            .query_map([], |row| row.get::<_, String>(0))?
-            .collect::<std::result::Result<Vec<_>, _>>()?;
-        ids.iter()
-            .map(|id| {
-                self.get_run(id)?
-                    .ok_or_else(|| StorageError::NotFound(id.clone()))
-            })
-            .collect()
+        let mut query = self.connection.prepare(
+            "SELECT id,project_id,state,revision,metadata,created_at,updated_at FROM runs ORDER BY created_at DESC,id",
+        )?;
+        let rows = query.query_map([], run_row)?;
+        rows.map(|row| decode_run(row?)).collect()
     }
 
     /// State and event commit together; no worker event can invoke this implicitly.
@@ -387,22 +382,36 @@ impl Store {
 
 pub(crate) fn get_run(connection: &Connection, id: &str) -> Result<Option<RunRecord>> {
     let row = connection.query_row("SELECT id,project_id,state,revision,metadata,created_at,updated_at FROM runs WHERE id=?1", [id],
-        |r| Ok((r.get::<_, String>(0)?,r.get::<_, String>(1)?,r.get::<_, String>(2)?,r.get::<_, u64>(3)?,
-            r.get::<_, String>(4)?,r.get::<_, String>(5)?,r.get::<_, String>(6)?))).optional()?;
-    row.map(
-        |(id, project_id, state, revision, metadata, created_at, updated_at)| {
-            Ok(RunRecord {
-                id,
-                project_id,
-                state: serde_json::from_str(&state)?,
-                revision,
-                metadata: serde_json::from_str(&metadata)?,
-                created_at,
-                updated_at,
-            })
-        },
-    )
-    .transpose()
+        run_row).optional()?;
+    row.map(decode_run).transpose()
+}
+
+type RunRow = (String, String, String, u64, String, String, String);
+
+fn run_row(r: &rusqlite::Row<'_>) -> rusqlite::Result<RunRow> {
+    Ok((
+        r.get(0)?,
+        r.get(1)?,
+        r.get(2)?,
+        r.get(3)?,
+        r.get(4)?,
+        r.get(5)?,
+        r.get(6)?,
+    ))
+}
+
+fn decode_run(
+    (id, project_id, state, revision, metadata, created_at, updated_at): RunRow,
+) -> Result<RunRecord> {
+    Ok(RunRecord {
+        id,
+        project_id,
+        state: serde_json::from_str(&state)?,
+        revision,
+        metadata: serde_json::from_str(&metadata)?,
+        created_at,
+        updated_at,
+    })
 }
 
 pub(crate) fn transition(

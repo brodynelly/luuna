@@ -22,6 +22,24 @@ export function workflowNeedsRefresh(run: RunRecord, view?: CandidateView): bool
 }
 
 export function workflowReason(events: EventEnvelope[]): string {
-  const event = [...events].reverse().find((event) => typeof event.payload.reason === "string");
-  return typeof event?.payload.reason === "string" ? event.payload.reason : "";
+  for (let index = events.length - 1; index >= 0; index--) {
+    const reason = events[index].payload.reason;
+    if (typeof reason === "string") return reason;
+  }
+  return "";
+}
+
+export interface WorkflowReplay { cursor: number; reason: string }
+
+/** Keep only the displayed reason and cursor, never historical model payloads. */
+export function advanceWorkflowReplay(runId: string, previous: WorkflowReplay, incoming: EventEnvelope[]): WorkflowReplay {
+  let { cursor, reason } = previous;
+  for (const event of incoming) {
+    if (event.run_id !== runId || !event.event_id || event.sequence !== cursor + 1) {
+      throw new Error("Runtime event replay has a gap or invalid identity; retrying from the last contiguous sequence.");
+    }
+    cursor = event.sequence;
+    if (typeof event.payload.reason === "string") reason = event.payload.reason;
+  }
+  return { cursor, reason };
 }

@@ -24,6 +24,10 @@ use tokio::{
     process::{Child, Command},
     sync::{mpsc, watch},
 };
+mod process;
+
+/// Display-only progress is bounded and never backpressures a child's pipes.
+pub const PROGRESS_CAPACITY: usize = 64;
 
 /// Bytes kept per output stream in the private artifact; the rest is drained and counted.
 pub const MAX_ARTIFACT_BYTES: u64 = 16 * 1024 * 1024;
@@ -327,15 +331,27 @@ impl Executor {
             .stdout(Stdio::piped())
             .stderr(Stdio::piped())
             .kill_on_drop(true);
-        let output = tokio::time::timeout(VERSION_PROBE_TIMEOUT, command.output())
-            .await
-            .ok()?
-            .ok()?;
-        let text = if output.stdout.is_empty() {
-            output.stderr
-        } else {
-            output.stdout
+        let (mut child, mut owner) = process::spawn(&mut command).await.ok()?;
+        let mut stdout = child.stdout.take()?.take(64 * 1024 + 1);
+        let mut stderr = child.stderr.take()?.take(64 * 1024 + 1);
+        let capture = async {
+            let mut out = Vec::new();
+            let mut err = Vec::new();
+            tokio::try_join!(
+                child.wait(),
+                stdout.read_to_end(&mut out),
+                stderr.read_to_end(&mut err)
+            )?;
+            Ok::<_, std::io::Error>((out, err))
         };
+        let result = tokio::time::timeout(VERSION_PROBE_TIMEOUT, capture).await;
+        owner.stop();
+        let _ = child.kill().await;
+        let (out, err) = result.ok()?.ok()?;
+        if out.len() > 64 * 1024 || err.len() > 64 * 1024 {
+            return None;
+        }
+        let text = if out.is_empty() { err } else { out };
         String::from_utf8_lossy(&text)
             .lines()
             .next()
@@ -400,7 +416,7 @@ impl Executor {
         &self,
         spec: &CommandSpec,
         mut cancel: watch::Receiver<bool>,
-        progress: Option<mpsc::UnboundedSender<Progress>>,
+        progress: Option<mpsc::Sender<Progress>>,
     ) -> Result<Execution, ExecutorError> {
         let started_at = now();
         let mut command_line = vec![spec.executable.clone()];
@@ -483,8 +499,8 @@ impl Executor {
                 Ok(())
             });
         }
-        let mut child = match command.spawn() {
-            Ok(child) => child,
+        let (mut child, mut owner) = match process::spawn(&mut command).await {
+            Ok(owned) => owned,
             Err(error) => {
                 return Ok(blocked(
                     format!("cannot start {}: {error}", resolved.display()),
@@ -495,7 +511,7 @@ impl Executor {
         };
         let pid = child.id();
         if let (Some(sender), Some(pid)) = (&progress, pid) {
-            let _ = sender.send(Progress::Started {
+            let _ = sender.try_send(Progress::Started {
                 pid,
                 command: command_line.clone(),
             });
@@ -531,6 +547,7 @@ impl Executor {
             },
         };
         if !matches!(outcome, Outcome::Exited(_)) {
+            owner.stop();
             terminate(&mut child, pid).await;
         }
         // The pipes close only when every holder exits. A descendant that
@@ -550,6 +567,7 @@ impl Executor {
         };
         let held_open = !drained;
         if held_open {
+            owner.stop();
             terminate(&mut child, pid).await;
             let _ = tokio::time::timeout(REAP_TIMEOUT, async {
                 settle(&mut stdout_task, &mut stdout_slot).await;
@@ -743,7 +761,7 @@ async fn capture(
     mut pipe: impl tokio::io::AsyncRead + Unpin,
     path: PathBuf,
     stream: &'static str,
-    progress: Option<mpsc::UnboundedSender<Progress>>,
+    progress: Option<mpsc::Sender<Progress>>,
 ) -> Result<Captured, String> {
     let mut file = create_private_file(&path)
         .await
@@ -753,6 +771,7 @@ async fn capture(
     let mut written: u64 = 0;
     let mut truncated = false;
     let mut tail: Vec<u8> = Vec::new();
+    let mut emitted = 0;
     let mut buffer = vec![0u8; 64 * 1024];
     loop {
         let read = pipe.read(&mut buffer).await.map_err(|e| e.to_string())?;
@@ -779,15 +798,23 @@ async fn capture(
             let drop = tail.len() - EXCERPT_BYTES;
             tail.drain(..drop);
         }
-        if let Some(sender) = &progress {
+        if let Some(sender) = progress
+            .as_ref()
+            .filter(|sender| emitted < 100 && sender.capacity() > 0)
+        {
             let text = String::from_utf8_lossy(chunk)
                 .chars()
                 .take(EXCERPT_BYTES)
                 .collect();
-            let _ = sender.send(Progress::Output {
-                stream,
-                chunk: text,
-            });
+            if sender
+                .try_send(Progress::Output {
+                    stream,
+                    chunk: text,
+                })
+                .is_ok()
+            {
+                emitted += 1;
+            }
         }
     }
     file.flush().await.map_err(|e| e.to_string())?;

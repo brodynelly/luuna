@@ -1,7 +1,8 @@
 import { useEffect, useRef, useState } from "react";
 import type { FormEvent } from "react";
 import type { CandidateDiff, CandidateView, ComponentContext, LuunaClient, Operation, PlanRevision, RunRecord, Ticket, TicketSourceStatus, WorktreeLease } from "@luuna/api-client";
-import { workflowNeedsRefresh, workflowReason } from "./workflow-state";
+import { advanceWorkflowReplay, workflowNeedsRefresh } from "./workflow-state";
+import type { WorkflowReplay } from "./workflow-state";
 import { CandidateReview } from "./CandidateReview";
 import { retryIdentity } from "./ProjectComponents";
 import { actionFailure, describeFailure, nextStep } from "./failures";
@@ -51,24 +52,58 @@ export function Workflows({ client, projectId, repositoryId, manifestConfirmed, 
   const [busy, setBusy] = useState(false);
   const [tick, setTick] = useState(0);
   const ticketDelivery = useRef<{ content: string; key: string } | null>(null);
+  const eventCursors = useRef(new Map<string, WorkflowReplay>());
+  const snapshots = useRef(new Map<string, { revision: number; leases: WorktreeLease[]; candidate: CandidateView }>());
+  const ticketSnapshots = useRef(new Map<string, { signature: string; plans: PlanRevision[]; source: TicketSourceStatus | null }>());
+  function invalidate() { snapshots.current.clear(); ticketSnapshots.current.clear(); }
+  async function boundedMap<T, R>(items: T[], task: (item: T) => Promise<R>): Promise<R[]> {
+    const results = new Array<R>(items.length);
+    let next = 0;
+    await Promise.all(Array.from({ length: Math.min(4, items.length) }, async () => {
+      while (next < items.length) { const index = next++; results[index] = await task(items[index]); }
+    }));
+    return results;
+  }
 
   async function load(signal: AbortSignal): Promise<boolean> {
     if (!client) return false;
     const [list, all] = await Promise.all([client.listTickets(projectId, signal), client.listRuns(signal)]);
     if (signal.aborted) return false;
     const workflowRuns = all.filter((run) => run.metadata.kind === "workflow" && run.project_id === projectId);
-    const planLists = await Promise.all(list.map((ticket) => client.listPlans(ticket.id, signal)));
-    const sources = await Promise.all(list.map((ticket) => ticket.source === "missions" ? client.ticketSource(ticket.id, signal) : Promise.resolve(null)));
+    const ticketDetails = await boundedMap(list, async (ticket) => {
+      const signature = JSON.stringify(ticket);
+      const previous = ticketSnapshots.current.get(ticket.id);
+      if (previous?.signature === signature) return previous;
+      const [plans, source] = await Promise.all([client.listPlans(ticket.id, signal), ticket.source === "missions" ? client.ticketSource(ticket.id, signal) : Promise.resolve(null)]);
+      return { signature, plans, source };
+    });
+    const details = await boundedMap(workflowRuns, async (run) => {
+      const previous = snapshots.current.get(run.id);
+      if (previous?.revision === run.revision && !workflowNeedsRefresh(run, previous.candidate)) return previous;
+      const [leases, candidate] = await Promise.all([client.worktrees(run.id, signal), client.candidate(run.id, signal)]);
+      return { revision: run.revision, leases, candidate };
+    });
+    const nextCursors = new Map(eventCursors.current);
+    await boundedMap(workflowRuns, async (run) => {
+      const previous = snapshots.current.get(run.id);
+      if (previous?.revision === run.revision && !workflowNeedsRefresh(run, previous.candidate)) return;
+      let replay = eventCursors.current.get(run.id) ?? { cursor: 0, reason: "" };
+      for (;;) {
+        const events = await client.eventPage(run.id, replay.cursor, undefined, signal);
+        replay = advanceWorkflowReplay(run.id, replay, events);
+        if (!events.length) break;
+      }
+      nextCursors.set(run.id, replay);
+    });
     if (signal.aborted) return false;
-    const [leaseLists, eventLists, candidateViews] = await Promise.all([
-      Promise.all(workflowRuns.map((run) => client.worktrees(run.id, signal))),
-      Promise.all(workflowRuns.map((run) => client.events(run.id, 0, signal))),
-      Promise.all(workflowRuns.map((run) => client.candidate(run.id, signal))),
-    ]);
-    if (signal.aborted) return false;
-    setReasons(Object.fromEntries(workflowRuns.map((run, index) => {
-      return [run.id, workflowReason(eventLists[index])];
-    })));
+    eventCursors.current = nextCursors;
+    ticketSnapshots.current = new Map(list.map((ticket, i) => [ticket.id, ticketDetails[i]]));
+    snapshots.current = new Map(workflowRuns.map((run, i) => [run.id, details[i]]));
+    const planLists = ticketDetails.map((item) => item.plans);
+    const sources = ticketDetails.map((item) => item.source);
+    const leaseLists = details.map((item) => item.leases);
+    const candidateViews = details.map((item) => item.candidate);
+    setReasons(Object.fromEntries([...nextCursors].map(([id, replay]) => [id, replay.reason])));
     setTickets(list);
     setTicketSources(Object.fromEntries(list.flatMap((ticket, index) => sources[index] ? [[ticket.id, sources[index]!]] : [])));
     setPlans(Object.fromEntries(list.map((ticket, index) => [ticket.id, planLists[index]])));
@@ -92,6 +127,8 @@ export function Workflows({ client, projectId, repositoryId, manifestConfirmed, 
     setLoadError("");
     setAutoRepair(false);
     ticketDelivery.current = null;
+    eventCursors.current.clear();
+    invalidate();
   }, [client, projectId]);
 
   useEffect(() => {
@@ -113,20 +150,22 @@ export function Workflows({ client, projectId, repositoryId, manifestConfirmed, 
   }, [client, projectId, tick]);
 
   useEffect(() => {
-    if (connectionEpoch > 0) setTick((value) => value + 1);
+    if (connectionEpoch > 0) { invalidate(); setTick((value) => value + 1); }
   }, [connectionEpoch]);
 
-  useEffect(() => { setTick((value) => value + 1); }, [componentEpoch]);
+  useEffect(() => { invalidate(); setTick((value) => value + 1); }, [componentEpoch]);
 
   async function guarded(label: string, action: () => Promise<void>) {
     setBusy(true);
     setError("");
     try {
       await action();
+      invalidate();
       setTick((value) => value + 1);
       onChanged();
     } catch (failure) {
       setError(actionFailure(label, failure));
+      invalidate();
       // A refusal usually means the authoritative state moved; show it.
       setTick((value) => value + 1);
     } finally {
@@ -220,7 +259,7 @@ export function Workflows({ client, projectId, repositoryId, manifestConfirmed, 
   }
 
   return <section className="workflows subpanel" aria-labelledby="workflows-heading">
-    <div className="panel-heading"><h3 id="workflows-heading">Tickets, plans and candidates</h3><button type="button" className="text-button" disabled={!client || busy} onClick={() => setTick((value) => value + 1)}>Refresh workflows</button></div>
+    <div className="panel-heading"><h3 id="workflows-heading">Tickets, plans and candidates</h3><button type="button" className="text-button" disabled={!client || busy} onClick={() => { invalidate(); setTick((value) => value + 1); }}>Refresh workflows</button></div>
     <p className="scope">{componentsEnabled ? "Tickets are authoritative in luuna-missions; reconcile external edits before re-planning." : "Tickets use legacy local storage until you enable project components above."} Approve the complete immutable plan, then run the scoped writer in its managed worktree. The runtime binds validation and independent review to the exact candidate hash.</p>
     {(error || loadError) && <div className="error" role="alert">{error || loadError}<button className="text-button" type="button" onClick={() => { setError(""); setLoadError(""); }}>Dismiss</button></div>}
     <form onSubmit={createTicket} className="ticket-form form-group">

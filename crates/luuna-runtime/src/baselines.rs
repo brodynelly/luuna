@@ -154,7 +154,7 @@ pub async fn start_baseline(
         recipes,
         required,
     };
-    tokio::spawn(async move {
+    crate::dispatch::worker(async move {
         baseline_worker(worker_state.clone(), job, rx).await;
         // Release the data-directory owner before declaring this worker gone.
         let active_runs = worker_state.active.clone();
@@ -429,11 +429,11 @@ async fn baseline_worker(state: AppState, job: BaselineJob, cancel: watch::Recei
             "check.started",
             json!({"recipe_id": recipe.id, "command": command, "cwd": recipe.cwd, "required": recipe.required, "timeout_seconds": recipe.timeout_seconds}),
         );
-        let (progress, mut updates) = mpsc::unbounded_channel::<Progress>();
+        let (progress, mut updates) = mpsc::channel::<Progress>(luuna_executor::PROGRESS_CAPACITY);
         let relay_state = state.clone();
         let relay_run = job.run_id.clone();
         let relay_recipe = recipe.id.clone();
-        let relay = tokio::spawn(async move {
+        let relay = crate::dispatch::worker(async move {
             let mut emitted = 0usize;
             while let Some(update) = updates.recv().await {
                 match update {
@@ -450,7 +450,7 @@ async fn baseline_worker(state: AppState, job: BaselineJob, cancel: watch::Recei
                             let _ = relay_state.event(
                                 &relay_run,
                                 "check.output",
-                                json!({"recipe_id": relay_recipe, "stream": stream, "chunk": chunk, "truncated_stream": emitted == MAX_OUTPUT_EVENTS}),
+                                json!({"recipe_id": relay_recipe, "stream": stream, "chunk": chunk, "truncated_stream": true, "display_only": true}),
                             );
                         }
                     }

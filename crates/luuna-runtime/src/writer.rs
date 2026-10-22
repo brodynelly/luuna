@@ -863,7 +863,7 @@ async fn schedule_writer(
     }
     let worker_state = state.clone();
     let run_id = run.id.clone();
-    tokio::spawn(async move {
+    crate::dispatch::worker(async move {
         let mut job = job;
         (job.repair_feedback, job.preparation_seconds) =
             repair_feedback(&worker_state, &run_id, previous_evidence, &job.plan, &rx).await;

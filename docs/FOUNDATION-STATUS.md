@@ -1,5 +1,19 @@
 # Ground-zero foundation status
 
+Subsequent local performance follow-up (October 21, 2026): [ADR 0015](decisions/0015-bounded-runtime-and-history.md)
+and [the performance review](PERFORMANCE-REVIEW.md) record bounded history,
+blocking-work admission, check output/process ownership, optimized Windows
+binaries and current-tree verification. The ordinary Windows workspace suite
+passed 191 tests; all ten real-component opt-in tests passed separately, as did
+the manual history benchmark and native Tauri unit test. Browser/native MVP
+checks passed 57/55 respectively, and native component UI passed 27. Genuine
+M1 passed 20 checks; a fresh Windows writer/repair/reviewer diagnostic passed 16.
+An earlier diagnostic's model repair was correctly rejected by independent
+review and remains recorded. Strict M3 refused the uncommitted checkout; no
+clean-revision acceptance, remote CI, commit or publication is implied. The
+installed Windows app/runtime were backed up and upgraded to release builds,
+then passed 17 native startup checks with history and credentials preserved.
+
 Current main-integration verification (October 21, 2026): all 46 initially local changed/new files were preserved and combined with PR 9's design system in [PR 10](https://github.com/brodynelly/luuna/pull/10). Final Windows checks passed 185 Rust tests (10 explicit ignores), pinned Node/npm tests, typecheck/build, 27 native and 23 browser component assertions, and 55 native/57 browser lifecycle/presentation assertions. The subsequent Node 24 Windows scope-guard fix has final Rust and pinned guard-test evidence; the UI reports retain their earlier exact runtime identity. See [local accounting, failures and verification limits](MAIN-INTEGRATION-2026-10-21.md). Hosted Actions jobs could not start because of the account billing/spending limit.
 
 The historical entries below retain their original scope and evidence. The current component runtime slice is recorded in [Runtime component workflows](#runtime-component-workflows-october-21-2026); extraction is covered separately by ADR 0012 and its evidence report.
