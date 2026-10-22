@@ -24,6 +24,7 @@ import { fileURLToPath } from "node:url";
 import process from "node:process";
 import { pathsDigest } from "./m3-checkout-digest.mjs";
 import { settled, waitForExit } from "./smoke-process.mjs";
+import { failedNoChangeRepair } from "./m3-evidence.mjs";
 import { setTimeout as sleep } from "node:timers/promises";
 
 // Linux: the harness runs under a child subreaper, so every process of the run that outlives its
@@ -896,11 +897,13 @@ async function blockingFindingsAreBoundedByAutomaticRepair(name) {
   // second revision means the attempt budget was spent, a first revision means the
   // repair writer produced no fresh candidate.
   const reason = ev.reason ?? "";
-  const gateClosed = final.repair_allowed === false && ev.status === "paused";
+  const attempts = (await api("GET", `/runs/${runId}/attempts`)).body;
+  summary.outcome.attempts = Array.isArray(attempts) ? attempts.map(({ number, state }) => ({ number, state })) : null;
+  const gateClosed = final.repair_allowed === false && ev.status === "paused" && summary.outcome.run_state === "paused";
   const consistent = allRequiredPassed(ev.results) && gateClosed && (
     (ev.review?.verdict === "changes_required" && repairs.length === 1 && (
       (ev.candidate.revision === 2 && /attempt 3 exceeds max_attempts 2/.test(reason))
-      || (ev.candidate.revision === 1 && /no fresh candidate/.test(reason))))
+      || (ev.candidate.revision === 1 && (/no fresh candidate/.test(reason) || failedNoChangeRepair(reason, attempts)))))
     || (blocking && ev.review?.verdict === "blocked" && ev.candidate.revision === 1 && repairs.length === 0)
   );
   record(`${name}: the real reviewer did not pass the unmet requirement and bounded automatic repair stopped within max_attempts=2`, consistent, `status=${ev.status} revision=${ev.candidate.revision} verdict=${ev.review?.verdict} blocking=${blocking} repair_allowed=${final.repair_allowed} repairs=${repairs.length} reviews=${reviews.length} reason=${truncate(ev.reason ?? "", 160)}`);
