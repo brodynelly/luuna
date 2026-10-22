@@ -36,7 +36,7 @@ The October 21 tables are kept unchanged as the Windows-host record.
 
 | Item | October 22 disposition | Evidence (Linux, this branch) |
 | --- | --- | --- |
-| R02 / A33 client parity | behaviour-level parity for multi-repository registration, per-repository baselines, task-graph planning with roles, derivation and dependency overrides, task resume, ticket editing, memory correction, personal export and retention, the testing-setup offer and setup plan, and the Home summary, Kanban projection, Help panel, editor handoff and the Settings panel (the runtime's doctor report, ADR 0027 point 4); 16 specification obligations and 5 required surfaces traced through the catalog | 59-action catalog against 49 routes, `check-contracts.mjs` required-action and required-surface traces, desktop/client/TUI suites below, `scripts/tui-smoke.mjs`; the interactive TUI audit remains open (ADR 0027 point 5) |
+| R02 / A33 client parity | behaviour-level parity for multi-repository registration, per-repository baselines, task-graph planning with roles, derivation and dependency overrides, task resume, ticket editing, memory correction, personal export and retention, the testing-setup offer and setup plan, and the Home summary, Kanban projection, Help panel, editor handoff and the Settings panel (the runtime's doctor report, ADR 0027 point 4); 16 specification obligations and 5 required surfaces traced through the catalog | 59-action catalog against 49 routes, `check-contracts.mjs` required-action and required-surface traces, desktop/client/TUI suites below, `scripts/tui-smoke.mjs` 51/51 and the interactive audit `scripts/tui-interactive-audit.mjs` 48/48 (ADR 0020 third amendment: menus, keys, prompts, outage, the six tones, 40 to 80 columns and 12 rows, clean quit; nine interactive-mode defects fixed) |
 | R06 delegated roles (P42) | implemented for v1: advisory roles, traces, no runtime-created children (ADR 0023); only candidate repositories' checks are required of a mixed plan | `multirepo.rs` 14 scenarios, domain tests |
 | R05 dependency overrides (P44) | implemented: confirmed-relationship check with justified `waive`/`add` overrides in the hashed plan (ADR 0023) | `multirepo.rs` |
 | R07 / R09 / E02 / E05 / E06 publication guards | superseded plan revision, worktree drift, source change and the pre-push policy refuse publication and reconciliation before any side effect; the policy scans every commit the push would publish and a repair after a refusal starts history-clean (ADR 0018 amendment) | `publication.rs` 15 scenarios (including a credential in an ancestor commit), policy unit tests, four Codex review rounds fixed |
@@ -56,12 +56,12 @@ Checks on the branch's final revision, all local (hosted CI could not start):
 | Check | Result |
 | --- | --- |
 | `cargo fmt --all -- --check`, `cargo clippy --locked --workspace --all-targets -- -D warnings` | passed |
-| `cargo test --locked --workspace -- --test-threads=2` | 460 passed, 0 failed, 16 ignored (the ignored tests are the real-CLI and genuine-provider tests run separately below) |
-| `npm test` | 29 contract checks; 59-action catalog with 16 required actions and 5 required surfaces traced; 8 scope-guard, 8 component-pin, 8 harness; 291 desktop; 48 API-client; 83 TUI |
+| `cargo test --locked --workspace -- --test-threads=2` | 465 passed, 0 failed, 16 ignored (the ignored tests are the real-CLI and genuine-provider tests run separately below) |
+| `npm test` | 29 contract checks; 59-action catalog with 16 required actions and 5 required surfaces traced; 8 scope-guard, 8 component-pin, 8 harness; 291 desktop; 48 API-client; 94 TUI |
 | `npm run typecheck`, `npm run build`, `node scripts/check-hygiene.mjs`, `git diff --check` | passed |
 | `node scripts/components-smoke.mjs` (Bun 1.4.3) | 14/14 |
 | `cargo test -p luuna-runtime --lib components_real_ -- --ignored` / `missions_real_` / `luuna-components --test real` | 9 / 4 / 1 passed |
-| `node scripts/tui-smoke.mjs --runtime <release>` | 51/51 |
+| `node scripts/tui-smoke.mjs --runtime <release>` / `node scripts/tui-interactive-audit.mjs --runtime <release>` (tmux) | 51/51 / 48/48 |
 | `node scripts/m1-smoke.mjs --mode fixture` | 19/19 |
 | `node scripts/backup-recovery-drill.mjs --skip-migration-tests` | 30/30 |
 | `node scripts/mvp-ui-smoke.mjs` (Chromium) | 64/64 (Chromium, synthetic model, recovery and accessibility audit; rerun with the Home, Kanban and Help panels present) |
@@ -72,7 +72,7 @@ Checks on the branch's final revision, all local (hosted CI could not start):
 Blocking the v1 label after this update: items 1–6 of the October 21 list
 below still hold (the publication guard defects, client parity, P22, P42/P44,
 A24 and the memory management gaps the audit added are closed), plus the
-owner's decision on ADR 0027 and the interactive terminal audit it names (its point-4 surfaces now exist).
+owner's review of the ADR 0027 estimates (every point it names, the surfaces of point 4 and the audit of point 5, now exists).
 
 ## Platform matrix
 
@@ -87,7 +87,7 @@ owner's decision on ADR 0027 and the interactive terminal audit it names (its po
 | Requirement | Evidence | Kind | Status |
 | --- | --- | --- | --- |
 | R01 Local Mac/Windows operation without a NAS | Windows native lifecycle smoke (62/62 bundled WebView2, PR 11), authenticated shutdown (ADR 0010), bootstrap (ADR 0011), `scripts/package-windows.ps1` NSIS development installer built on this host (unsigned; packaged layout verified: runtime, helper scripts, launchers, pinned Pi tree beside the executable), `luuna-runtime doctor` (ADR 0018), backup/restore drill 31/31 on Windows | native, harness | Windows: development distribution on the development host. Mac: **blocked** (no host). Clean-machine and signed installation: **not established** |
-| R02 Browser/TUI parity | capability catalog of 50 actions validated against the 43 served routes and the typed client (strict), 251 desktop, 39 client and 59 TUI tests, `scripts/tui-smoke.mjs` 53/53 (ADR 0020) | deterministic, harness | established for the cataloged actions; interactive-TUI keyboard audit open |
+| R02 Browser/TUI parity | capability catalog of 50 actions validated against the 43 served routes and the typed client (strict), 251 desktop, 39 client and 59 TUI tests, `scripts/tui-smoke.mjs` 53/53 (ADR 0020) | deterministic, harness | established for the cataloged actions; the interactive-mode audit exists since October 22 (`scripts/tui-interactive-audit.mjs` 48/48) |
 | R03 Pi with selected models | M1 20/20 genuine OpenRouter (Windows, PR 11); M3 genuine 61/61 at `fd42d59` on Linux and 59/61 at `631ed21` on Windows | genuine | established for the recorded revisions; a genuine run on the current tree is owed |
 | R04 Import and creation | M2a import evidence; approved scaffolding with real baselines for the profiles this host can run (ADR 0019) | deterministic | import established; scaffolding established per profile only where a capable runner ran it |
 | R05 Multiple repositories with explicit relationships | relationship proposals, acyclic confirmed graph, three-repository fixture with exact candidate commits (ADR 0017) | deterministic | established with the synthetic writer; no genuine multi-repository provider run |
