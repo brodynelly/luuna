@@ -1,0 +1,89 @@
+/*
+ * Design tokens, motion: easings, durations, motion distances, component sizes and the resting
+ * values of runtime-written variables (ADR 0032). Durations are written in ms because
+ * ui/glide.ts parseCssTime reads them. Every duration here is zeroed under reduced motion; a new
+ * duration must be added to the reduced-motion block too (design-system.test.ts derives the list).
+ * --duration-fast and --duration-follow stay in tokens.css (ADR 0031).
+ */
+:root {
+  /* Easings. --ease is the base easing that base.css uses. */
+  --ease-standard: cubic-bezier(0.2, 0, 0, 1);
+  --ease-out: cubic-bezier(0.16, 1, 0.3, 1);
+  --ease-in: cubic-bezier(0.4, 0, 1, 1);
+  /* Small elements only (switch thumb, chips). */
+  --ease-spring: cubic-bezier(0.34, 1.56, 0.64, 1);
+  --ease-linear: linear;
+  --ease: var(--ease-standard);
+
+  /* Durations. */
+  --duration-press: 80ms;
+  --duration-micro: 140ms;
+  --duration-standard: 220ms;
+  --duration-large: 340ms;
+  --duration-count: 800ms;
+  --duration-draw: 400ms;
+  --duration-shimmer: 1400ms;
+  --duration-pulse: 1800ms;
+  --duration-ambient: 24000ms;
+  --duration-stagger: 35ms;
+
+  /* Distances: an integer lift so text does not blur. --stagger-cap is 10 (item B's JS constant mirrors it). */
+  --lift-y: -1px;
+  --press-scale: 0.98;
+  --enter-scale: 0.96;
+  --reveal-offset: 8px;
+  --toast-offset: 12px;
+  --pulse-scale: 2.2;
+
+  /* Component sizes. */
+  --button-height: 32px;
+  --row-height: 40px;
+  --row-height-lg: 44px;
+  --tab-indicator-height: 2px;
+  --progress-height: 2px;
+  --dot-size: 6px;
+  --switch-width: 32px;
+  --switch-height: 18px;
+  --switch-thumb: 14px;
+  --switch-travel: 14px;
+
+  /* Resting values for variables that scripts write at runtime (like --menu-x). */
+  --tab-x: 0px;
+  --tab-y: 0px;
+  --tab-scale: 0;
+  --mx: 50%;
+  --my: 50%;
+  --i: 0;
+  --pill-y: 0px;
+  --pill-h: 0px;
+}
+
+/*
+ * Reduced motion: zero durations make transitions instant. Looping and entrance animations must
+ * still be switched off per selector with animation: none in their owner's reduced-motion block;
+ * a 0 ms infinite animation ends at its no-fill rest state, but owners must not rely on that.
+ */
+@media (prefers-reduced-motion: reduce) {
+  :root {
+    --duration-press: 0ms;
+    --duration-micro: 0ms;
+    --duration-standard: 0ms;
+    --duration-large: 0ms;
+    --duration-count: 0ms;
+    --duration-draw: 0ms;
+    --duration-shimmer: 0ms;
+    --duration-pulse: 0ms;
+    --duration-ambient: 0ms;
+    --duration-stagger: 0ms;
+    --lift-y: 0px;
+    --press-scale: 1;
+    --enter-scale: 1;
+    --reveal-offset: 0px;
+    --toast-offset: 0px;
+    --pulse-scale: 1;
+  }
+}
+
+/* item B: append-only. Component-dimension tokens added by item B. Each new --duration-* must also be zeroed in the reduced-motion block below. */
+:root {}
+@media (prefers-reduced-motion: reduce) { :root {} }

@@ -1,7 +1,8 @@
 /*
- * Luuna design tokens: the only stylesheet that may contain literal colours, lengths or durations.
+ * Luuna design tokens, colour, tone, type and layout. With tokens-depth.css and tokens-motion.css
+ * (and F1's fonts.css) these are the only stylesheets that may contain literal colours, lengths or durations.
  * Dark is the default look; the light block redefines every colour for prefers-color-scheme: light.
- * Reference: docs/DESIGN-SYSTEM.md. Before changing anything here:
+ * Reference: docs/DESIGN-SYSTEM.md, ADR 0032. Before changing anything here:
  *   1. A new colour role is defined in both schemes and added to the contrast pairs in
  *      design/design-system.test.ts (text 4.5:1, marks, borders and focus 3:1).
  *   2. Green (the success tone) is earned: passed evidence and a live connection only.
@@ -12,78 +13,101 @@
   color-scheme: dark;
 
   /* Surfaces: page, panel, record, inset, fields, controls, selection and dividers. */
-  --color-bg: #111114;
-  --color-surface: #18181c;
-  --color-surface-raised: #1f1f24;
-  --color-surface-sunken: #0c0c0e;
-  --color-field: #0c0c0e;
-  --color-field-disabled: #18181c;
-  --color-control: #24242a;
-  --color-control-hover: #2f2f36;
-  --color-selected: #26264a;
-  --color-selected-border: #4d4d9a;
-  --color-border: #2c2c33;
-  --color-border-control: #75757f;
+  --color-bg: #0a1628;
+  --color-surface: #101c30;
+  --color-surface-raised: #17243a;
+  --color-surface-sunken: #071121;
+  --color-field: #071121;
+  --color-field-disabled: #101c30;
+  --color-control: #17243a;
+  --color-control-hover: #1f2e47;
+  --color-selected: #1f2353;
+  --color-selected-border: #5e58d8;
+  --color-accent-tint: #1f2353;
+  --color-border: #1f2c42;
+  /* Decorative stronger divider or hover edge; never a control boundary. */
+  --color-border-strong: #2c3b55;
+  --color-border-control: #6f819b;
   /* Sidebar: the window chrome beside the content, one step off the page. */
-  --color-sidebar: #141417;
+  --color-sidebar: #0c192d;
 
   /* Text. Disabled text is exempt from contrast (WCAG 1.4.3 inactive components). */
-  --color-text: #ededf0;
-  --color-text-muted: #a3a3ad;
-  --color-text-subtle: #9696a2;
-  --color-text-disabled: #74747e;
+  --color-text: #e3e9f1;
+  --color-text-heading: #f5f8fc;
+  --color-text-muted: #a3b1c4;
+  --color-text-subtle: #97a6ba;
+  --color-text-disabled: #5f6f86;
 
-  /* Developer action and brand: the lavender of the icon. */
-  --color-accent: #a9adff;
-  --color-accent-hover: #c3c6ff;
-  --color-on-accent: #111114;
-  --color-focus: #b4b8ff;
+  /* Developer action and brand: the blurple accent. */
+  --color-accent: #9590ff;
+  --color-accent-hover: #aaa6ff;
+  --color-accent-active: #bdbaff;
+  --color-on-accent: #0a1628;
+  --color-focus: #a29dff;
+  --color-selection: #353a86;
+  --color-scrollbar: #34445c;
 
   /* Outcome tones: text (fg), tint (bg), edge (border) and shape (mark). */
-  --tone-success-fg: #9ed9b9;
-  --tone-success-bg: #1b3a2e;
-  --tone-success-border: #2f5c48;
-  --tone-success-mark: #6fcf9d;
-  --tone-active-fg: #8fd8f2;
-  --tone-active-bg: #173845;
-  --tone-active-border: #275a6e;
-  --tone-active-mark: #5cc4e8;
-  --tone-danger-fg: #f4b9c3;
-  --tone-danger-bg: #472a32;
-  --tone-danger-border: #6b3c46;
-  --tone-danger-mark: #f08a9b;
-  --tone-attention-fg: #f0d9a8;
-  --tone-attention-bg: #3a2f19;
-  --tone-attention-border: #5a4a2e;
-  --tone-attention-mark: #e8c26a;
-  --tone-neutral-fg: #c8d1df;
-  --tone-neutral-bg: #2c323c;
-  --tone-neutral-border: #414a57;
-  --tone-neutral-mark: #8f9aac;
-  --tone-interrupted-fg: #e2c0f2;
-  --tone-interrupted-bg: #3a2742;
-  --tone-interrupted-border: #57406a;
-  --tone-interrupted-mark: #c99ae6;
+  --tone-success-fg: #8fe0b4;
+  --tone-success-bg: #0f3326;
+  --tone-success-border: #1f5a42;
+  --tone-success-mark: #4ccf8d;
+  --tone-active-fg: #8bd6f4;
+  --tone-active-bg: #0c3044;
+  --tone-active-border: #1c5570;
+  --tone-active-mark: #4bbfe8;
+  --tone-danger-fg: #ffb4c1;
+  --tone-danger-bg: #43182a;
+  --tone-danger-border: #6e2a40;
+  --tone-danger-mark: #ff7d95;
+  --tone-attention-fg: #f5d48b;
+  --tone-attention-bg: #372a0d;
+  --tone-attention-border: #5e4818;
+  --tone-attention-mark: #efb840;
+  --tone-neutral-fg: #c4cedc;
+  --tone-neutral-bg: #1e2a3d;
+  --tone-neutral-border: #34445c;
+  --tone-neutral-mark: #8a9bb2;
+  --tone-interrupted-fg: #e6c0f4;
+  --tone-interrupted-bg: #351f44;
+  --tone-interrupted-border: #563569;
+  --tone-interrupted-mark: #cb90e7;
 
-  /* Elevation: borders carry structure in the dark scheme. */
-  --shadow-panel: none;
-  --shadow-card: none;
-  --shadow-overlay: 0 8px 24px rgba(0, 0, 0, 0.5), 0 0 0 1px rgba(0, 0, 0, 0.3);
-  --color-scrim: rgba(0, 0, 0, 0.5);
-
-  /* Type. System fonts only: the Tauri CSP loads nothing from outside the bundle. */
+  /* Type. Apple keeps the system SF stack below; other platforms get the bundled Söhne through design/fonts.css (ADR 0032). The CSP loads nothing from outside the bundle. */
   --font-sans: -apple-system, BlinkMacSystemFont, "SF Pro Text", "Segoe UI Variable Text", "Segoe UI", system-ui, Roboto, "Helvetica Neue", Arial, sans-serif;
   --font-display: -apple-system, BlinkMacSystemFont, "SF Pro Display", "Segoe UI Variable Display", "Segoe UI", system-ui, Roboto, "Helvetica Neue", Arial, sans-serif;
   /* Hinted, installed faces: Cascadia ships with Windows 11, Consolas everywhere on Windows. Nothing is fetched (CSP). */
   --font-mono: "Cascadia Mono", "Cascadia Code", Consolas, ui-monospace, "SF Mono", "SFMono-Regular", Menlo, "Liberation Mono", monospace;
-  --text-2xs: 11px;
-  --text-xs: 12px;
-  --text-sm: 13px;
-  --text-md: 14px;
-  --text-lg: 16px;
+  /* Role scale: size with a unitless line height. */
+  --text-display: clamp(36px, 4.5vw, 48px);
+  --leading-display: 1.08;
+  --text-h1: 28px;
+  --leading-h1: 1.21;
+  --text-h2: 20px;
+  --leading-h2: 1.4;
+  --text-h3: 16px;
+  --leading-h3: 1.5;
+  --text-body: 14px;
+  --leading-body: 1.43;
+  --text-small: 13px;
+  --leading-small: 1.38;
+  --text-caption: 12px;
+  --leading-caption: 1.33;
+  --text-label: 11px;
+  --leading-label: 1.45;
+  --tracking-display: -0.02em;
+  --tracking-h1: -0.015em;
+  --tracking-h2: -0.01em;
+  --tracking-label: 0.05em;
+  /* The older names are aliases of the roles. */
+  --text-2xs: var(--text-label);
+  --text-xs: var(--text-caption);
+  --text-sm: var(--text-small);
+  --text-md: var(--text-body);
+  --text-lg: var(--text-h3);
   --text-xl: clamp(26px, 3.2vw, 34px);
   /* The large page title of each view (h2 at the top of a view). */
-  --text-title: 26px;
+  --text-title: var(--text-h1);
   --text-wordmark: 22px;
   --text-glyph: 34px;
   --leading-none: 1;
@@ -91,9 +115,13 @@
   --leading: 1.5;
   --leading-code: 1.55;
   --leading-prose: 1.65;
+  /* Static faces ship 300 to 700. The former 550 and 650 are remapped to 500 and 600. */
+  --weight-light: 300;
   --weight-regular: 400;
-  --weight-medium: 550;
-  --weight-strong: 650;
+  --weight-medium: 500;
+  --weight-semibold: 600;
+  --weight-bold: 700;
+  --weight-strong: var(--weight-semibold);
   --tracking-tight: -0.025em;
   --tracking-title: -0.02em;
   --tracking-wide: 0.12em;
@@ -110,22 +138,7 @@
   --space-6: 32px;
   --space-7: 48px;
 
-  /* Shape. */
-  --radius-sm: 4px;
-  --radius-md: 7px;
-  --radius-lg: 11px;
-  --radius-full: 999px;
-  --border-width: 1px;
-  --rule-width: 3px;
-  --focus-width: 2px;
-  --focus-offset: 2px;
-  --focus-inset: -2px;
-  --mark-size: 8px;
-  --mark-stroke: 2px;
-  --caret-size: 4px;
-  --caret-length: 6px;
-
-  /* Controls and layout. */
+  /* Controls and layout. Shape, shadows and the scrim live in tokens-depth.css. */
   --control-height: 34px;
   --field-line: 16px;
   --control-height-sm: 28px;
@@ -144,9 +157,9 @@
   --menu-x: 0px;
   --menu-y: 0px;
   --viewport-height: 100vh;
-  --sidebar-width: 232px;
+  --sidebar-width: 240px;
   --sidebar-compact: 64px;
-  --nav-height: 32px;
+  --nav-height: 34px;
   --icon-size: 16px;
   --icon-stroke: 1.75;
   --gutter: 40px;
@@ -167,9 +180,8 @@
   --skeleton-height: 44px;
   --skeleton-short: 60%;
 
-  /* Motion: state changes only; evidence never pulses. */
+  /* Motion: state changes only; evidence never pulses. Easings and the rest are in tokens-motion.css. */
   --duration-fast: 120ms;
-  --ease: ease-out;
   /* Following live output: the glide length and how near the bottom still counts as pinned (0 ms jumps). */
   --duration-follow: 160ms;
   --follow-threshold: 48px;
@@ -182,55 +194,57 @@
 @media (prefers-color-scheme: light) {
   :root {
     color-scheme: light;
-    --color-bg: #f5f5f7;
+    --color-bg: #f6f9fc;
     --color-surface: #ffffff;
-    --color-surface-raised: #f9f9fb;
-    --color-surface-sunken: #f0f0f3;
+    --color-surface-raised: #f8fafc;
+    --color-surface-sunken: #eef2f7;
     --color-field: #ffffff;
-    --color-field-disabled: #f0f0f3;
+    --color-field-disabled: #eef2f7;
     --color-control: #ffffff;
-    --color-control-hover: #f2f2f5;
-    --color-selected: #ebebfd;
-    --color-selected-border: #a5a8f0;
-    --color-border: #e2e2e7;
-    --color-border-control: #7c7c87;
-    --color-sidebar: #ededf0;
-    --color-text: #1d1d1f;
-    --color-text-muted: #515158;
-    --color-text-subtle: #5f5f68;
-    --color-text-disabled: #8a8a94;
-    --color-accent: #4c4bd6;
-    --color-accent-hover: #3e3dbd;
+    --color-control-hover: #f3f6fa;
+    --color-selected: #efeeff;
+    --color-selected-border: #b7b3ff;
+    --color-accent-tint: #efeeff;
+    --color-border: #e3e8ee;
+    --color-border-strong: #cbd5e1;
+    --color-border-control: #7d8a9c;
+    --color-sidebar: #f0f4f8;
+    --color-text: #30405a;
+    --color-text-heading: #0a2540;
+    --color-text-muted: #55657c;
+    --color-text-subtle: #5b6b82;
+    --color-text-disabled: #a3acb9;
+    --color-accent: #5851ea;
+    --color-accent-hover: #4b45c6;
+    --color-accent-active: #3f3aa8;
     --color-on-accent: #ffffff;
-    --color-focus: #4c4bd6;
-    --tone-success-fg: #17603e;
-    --tone-success-bg: #e2f3e9;
-    --tone-success-border: #a6d6bb;
-    --tone-success-mark: #1f7a4f;
-    --tone-active-fg: #0b5c78;
-    --tone-active-bg: #e0f3fa;
-    --tone-active-border: #9fd3e6;
-    --tone-active-mark: #127a9e;
-    --tone-danger-fg: #a12538;
-    --tone-danger-bg: #fbe7ea;
-    --tone-danger-border: #e8b1ba;
-    --tone-danger-mark: #c02f46;
-    --tone-attention-fg: #7a5300;
-    --tone-attention-bg: #faf0d6;
-    --tone-attention-border: #e3cc8f;
-    --tone-attention-mark: #9a6a00;
-    --tone-neutral-fg: #465062;
-    --tone-neutral-bg: #eaedf2;
-    --tone-neutral-border: #c9d0db;
-    --tone-neutral-mark: #6b7486;
-    --tone-interrupted-fg: #74358a;
-    --tone-interrupted-bg: #f4e7f8;
-    --tone-interrupted-border: #d9b6e5;
-    --tone-interrupted-mark: #8b45a3;
-    --shadow-panel: 0 1px 2px rgba(29, 29, 31, 0.05);
-    --shadow-card: 0 1px 2px rgba(29, 29, 31, 0.05), 0 0 0 1px rgba(29, 29, 31, 0.02);
-    --shadow-overlay: 0 12px 32px rgba(29, 29, 31, 0.16), 0 1px 3px rgba(29, 29, 31, 0.08);
-    --color-scrim: rgba(29, 29, 31, 0.24);
+    --color-focus: #635bff;
+    --color-selection: #d6d3ff;
+    --color-scrollbar: #c3ccd8;
+    --tone-success-fg: #0d5c41;
+    --tone-success-bg: #d7f5df;
+    --tone-success-border: #9fd9b3;
+    --tone-success-mark: #178a5b;
+    --tone-active-fg: #075580;
+    --tone-active-bg: #ddf2fb;
+    --tone-active-border: #98d0e8;
+    --tone-active-mark: #0a7bab;
+    --tone-danger-fg: #b0102f;
+    --tone-danger-bg: #ffe7ec;
+    --tone-danger-border: #f3b3c0;
+    --tone-danger-mark: #d01a3e;
+    --tone-attention-fg: #7d5200;
+    --tone-attention-bg: #fff1cc;
+    --tone-attention-border: #e9cd82;
+    --tone-attention-mark: #a26800;
+    --tone-neutral-fg: #3c4b61;
+    --tone-neutral-bg: #ebeff4;
+    --tone-neutral-border: #c9d2de;
+    --tone-neutral-mark: #68778d;
+    --tone-interrupted-fg: #76308a;
+    --tone-interrupted-bg: #f5e8fa;
+    --tone-interrupted-border: #dab6e7;
+    --tone-interrupted-mark: #90409f;
   }
 }
 
@@ -246,6 +260,7 @@
   :root {
     --gutter: 16px;
     --topbar-height: 56px;
+    --text-h1: 24px;
     --text-title: 22px;
   }
 }

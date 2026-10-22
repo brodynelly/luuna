@@ -1,6 +1,6 @@
 # ADR 0030: a sidebar shell of separate views, and Tailwind CSS bound to the tokens
 
-Date: 2026-10-22. Status: accepted. (First merged as ADR 0028; renumbered because 0028 and 0029 were already taken by the project-component-layout and Rust terminal workbench decisions on other branches.) Amends [ADR 0013](0013-desktop-design-system.md) points 3 and "Alternatives".
+Date: 2026-10-22. Status: accepted. (First merged as ADR 0028; renumbered because 0028 and 0029 were already taken by the project-component-layout and Rust terminal workbench decisions on other branches.) Amends [ADR 0013](0013-desktop-design-system.md) points 3 and "Alternatives"; amended by [ADR 0032](0032-stripe-inspired-desktop-visual-language.md) (fonts, opacity, transform, motion).
 
 ## Context
 

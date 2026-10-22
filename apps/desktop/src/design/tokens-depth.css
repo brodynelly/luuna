@@ -1,0 +1,75 @@
+/*
+ * Design tokens, depth: shape, elevation and decorative layers (ADR 0032). A literal-holding token
+ * sheet, like tokens.css: dark is the default :root and the light block under prefers-color-scheme
+ * redefines the scheme-dependent names, every one of which is also defined in dark.
+ * Values are tuned approximations for a calm, precise product look.
+ * Decorative rule: text never sits on the vivid wash, and text over the subtle wash must meet
+ * 4.5:1 against the composited background (the rendered audit measures it).
+ */
+:root {
+  /* Shape: role radii first, then the older names as aliases. */
+  --radius-chip: 4px;
+  --radius-input: 4px;
+  --radius-button: 6px;
+  --radius-card: 8px;
+  --radius-menu: 8px;
+  --radius-dialog: 12px;
+  --radius-pill: 999px;
+  --radius-sm: var(--radius-chip);
+  --radius-md: var(--radius-button);
+  --radius-lg: var(--radius-card);
+  --radius-full: var(--radius-pill);
+  --border-width: 1px;
+  --rule-width: 3px;
+  --focus-width: 2px;
+  --focus-offset: 2px;
+  --focus-inset: -2px;
+  --focus-ring-width: 4px;
+  --mark-size: 8px;
+  --mark-stroke: 2px;
+  --caret-size: 4px;
+  --caret-length: 6px;
+
+  /* Elevation: in dark, depth comes from the lighter surface plus an inset highlight. */
+  --shadow-card: inset 0 1px 0 rgba(255, 255, 255, 0.05), 0 1px 2px rgba(2, 8, 20, 0.45);
+  --shadow-popover: inset 0 1px 0 rgba(255, 255, 255, 0.06), 0 2px 6px rgba(2, 8, 20, 0.4), 0 16px 36px rgba(2, 8, 20, 0.5), 0 0 0 1px rgba(255, 255, 255, 0.08);
+  --shadow-dialog: inset 0 1px 0 rgba(255, 255, 255, 0.06), 0 30px 60px -12px rgba(2, 8, 20, 0.6), 0 18px 36px -18px rgba(0, 0, 0, 0.6), 0 0 0 1px rgba(255, 255, 255, 0.08);
+  --shadow-button: 0 1px 1px rgba(2, 8, 20, 0.4);
+  --shadow-button-hover: 0 4px 8px rgba(2, 8, 20, 0.45), 0 1px 3px rgba(0, 0, 0, 0.3);
+  --shadow-inset-highlight: inset 0 1px 0 rgba(255, 255, 255, 0.12);
+  --shadow-kbd: inset 0 -1px 0 rgba(255, 255, 255, 0.08);
+  --color-focus-ring: rgba(162, 157, 255, 0.4);
+  --color-scrim: rgba(2, 8, 20, 0.6);
+  --color-glow: rgba(149, 144, 255, 0.12);
+
+  /* Decorative layers: violet, coral, sky, amber and the accent over transparent. Dark alpha: subtle <= 0.16, vivid <= 0.24. */
+  --gradient-aurora: radial-gradient(60% 80% at 15% 10%, rgba(169, 96, 238, 0.14), transparent 70%), radial-gradient(50% 70% at 85% 0%, rgba(144, 224, 255, 0.1), transparent 70%), radial-gradient(45% 60% at 60% 100%, rgba(149, 144, 255, 0.12), transparent 70%);
+  --gradient-aurora-vivid: radial-gradient(60% 80% at 15% 10%, rgba(169, 96, 238, 0.24), transparent 70%), radial-gradient(50% 70% at 85% 0%, rgba(255, 51, 61, 0.14), transparent 70%), radial-gradient(45% 60% at 60% 100%, rgba(144, 224, 255, 0.2), transparent 70%), radial-gradient(40% 50% at 95% 90%, rgba(255, 203, 87, 0.16), transparent 70%);
+  --gradient-wash-scrim: linear-gradient(to bottom, transparent, var(--color-bg));
+  --gradient-shimmer: linear-gradient(90deg, var(--color-surface-raised), var(--color-control-hover), var(--color-surface-raised));
+  --blur-aurora: 40px;
+  --glow-size: 320px;
+
+  /* The halo reads the scheme's ring colour; the 3:1 obligation stays on --color-focus. */
+  --shadow-focus: 0 0 0 var(--focus-ring-width) var(--color-focus-ring);
+  --shadow-panel: var(--shadow-card);
+  --shadow-overlay: var(--shadow-popover);
+}
+
+@media (prefers-color-scheme: light) {
+  :root {
+    --shadow-card: 0 1px 1px rgba(10, 37, 64, 0.04), 0 2px 5px rgba(10, 37, 64, 0.06), 0 0 0 1px rgba(10, 37, 64, 0.04);
+    --shadow-popover: 0 2px 5px rgba(10, 37, 64, 0.08), 0 15px 35px rgba(10, 37, 64, 0.12), 0 0 0 1px rgba(10, 37, 64, 0.05);
+    --shadow-dialog: 0 30px 60px -12px rgba(50, 50, 93, 0.25), 0 18px 36px -18px rgba(0, 0, 0, 0.3), 0 0 0 1px rgba(10, 37, 64, 0.05);
+    --shadow-button: 0 1px 1px rgba(10, 37, 64, 0.06), 0 1px 2px rgba(10, 37, 64, 0.06);
+    --shadow-button-hover: 0 4px 6px rgba(50, 50, 93, 0.11), 0 1px 3px rgba(0, 0, 0, 0.08);
+    --shadow-inset-highlight: inset 0 1px 0 rgba(255, 255, 255, 0.15);
+    --shadow-kbd: inset 0 -1px 0 rgba(10, 37, 64, 0.12);
+    --color-focus-ring: rgba(99, 91, 255, 0.25);
+    --color-scrim: rgba(10, 37, 64, 0.4);
+    --color-glow: rgba(99, 91, 255, 0.08);
+    /* Light alpha: subtle <= 0.22, vivid <= 0.35. */
+    --gradient-aurora: radial-gradient(60% 80% at 15% 10%, rgba(169, 96, 238, 0.2), transparent 70%), radial-gradient(50% 70% at 85% 0%, rgba(144, 224, 255, 0.22), transparent 70%), radial-gradient(45% 60% at 60% 100%, rgba(99, 91, 255, 0.14), transparent 70%);
+    --gradient-aurora-vivid: radial-gradient(60% 80% at 15% 10%, rgba(169, 96, 238, 0.35), transparent 70%), radial-gradient(50% 70% at 85% 0%, rgba(255, 51, 61, 0.2), transparent 70%), radial-gradient(45% 60% at 60% 100%, rgba(144, 224, 255, 0.35), transparent 70%), radial-gradient(40% 50% at 95% 90%, rgba(255, 203, 87, 0.3), transparent 70%);
+  }
+}
