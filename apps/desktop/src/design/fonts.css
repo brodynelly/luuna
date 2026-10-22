@@ -2,7 +2,10 @@
  * Platform fonts. Söhne is a commercial typeface (Klim Type Foundry), bundled at the sole user's
  * direction for non-Apple platforms; see THIRD-PARTY-NOTICES.md and ADR 0032. Apple platforms keep
  * the system SF stack from tokens.css; SF Pro is never bundled. This sheet is the last import of
- * the tokens layer: its :root[data-platform="other"] selector (0,2,0) beats :root (0,1,0) there.
+ * the tokens layer: its :root[data-platform="other"][data-font="soehne"] selector (0,3,0) beats :root (0,1,0) there.
+ * Söhne is OPT-IN (set document.documentElement.dataset.font = "soehne"): the web-font files are
+ * unhinted and rendered soft next to Windows' hinted Segoe UI, so non-Apple platforms default to the
+ * system stack from tokens.css (Segoe UI Variable) until the Söhne rendering is judged acceptable.
  * GSUB features in the bundled faces, available for scoped use by later items: case, tnum, zero,
  * frac, ss01, ss02 (also calt, ccmp, dnom, liga, locl, numr, ordn, sinf, sups). No global
  * font-feature-settings: it would override the mono stack's font-variant-ligatures: none.
@@ -21,7 +24,7 @@
 /* Metric-matched fallback (Söhne ascent 1171, descent 423, lineGap 0 on 1000 upem) to limit layout shift. */
 @font-face { font-family: "Söhne Fallback"; src: local("Segoe UI"), local("Arial"), local("Liberation Sans"); ascent-override: 117.1%; descent-override: 42.3%; line-gap-override: 0%; }
 
-:root[data-platform="other"] {
+:root[data-platform="other"][data-font="soehne"] {
   --font-sans: "Söhne", "Söhne Fallback", "Segoe UI Variable Text", "Segoe UI", system-ui, Roboto, "Helvetica Neue", Arial, sans-serif;
   --font-display: "Söhne", "Söhne Fallback", "Segoe UI Variable Display", "Segoe UI", system-ui, Roboto, "Helvetica Neue", Arial, sans-serif;
 }

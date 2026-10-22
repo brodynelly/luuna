@@ -178,7 +178,7 @@ ADR 0032 decisions 4 to 7 in short. Hover lifts 1 px and press scales to 0.98; e
 
 ### Fonts
 
-Apple platforms use the system stack (SF Pro). Other platforms use bundled Söhne, selected by `data-platform` and served from `'self'` (`design/fonts.css`, token-layer, linted by the tokens-only test). Nothing is fetched remotely. Söhne is a commercial face bundled at the sole user's direction; see [THIRD-PARTY-NOTICES.md](../THIRD-PARTY-NOTICES.md) before any distribution.
+Apple platforms use the system stack (SF Pro). Other platforms default to the Windows system stack (Segoe UI Variable); bundled Söhne is opt-in with `data-font="soehne"` on the root element (the unhinted web-font files rendered soft on Windows) and, when on, is selected by `data-platform` and served from `'self'` (`design/fonts.css`, token-layer, linted by the tokens-only test). Nothing is fetched remotely. Söhne is a commercial face bundled at the sole user's direction; see [THIRD-PARTY-NOTICES.md](../THIRD-PARTY-NOTICES.md) before any distribution.
 
 ## Accessibility
 

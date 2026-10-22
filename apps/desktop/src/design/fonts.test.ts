@@ -35,8 +35,8 @@ describe("Söhne font declarations", () => {
     const onDisk = readdirSync(fontDir, { recursive: true }).filter((file) => file.endsWith(".woff2")).sort();
     expect(referenced.sort()).toEqual(onDisk);
   });
-  test("the other-platform override sets sans and display to Söhne and leaves mono alone", () => {
-    const body = /:root\[data-platform="other"\]\s*\{([^}]*)\}/.exec(css)?.[1] ?? "";
+  test("the opt-in Söhne override (data-font=soehne, non-Apple) sets sans and display to Söhne and leaves mono alone", () => {
+    const body = /:root\[data-platform="other"\]\[data-font="soehne"\]\s*\{([^}]*)\}/.exec(css)?.[1] ?? "";
     expect(prop(body, "--font-sans").startsWith('"Söhne"')).toBe(true);
     expect(prop(body, "--font-display").startsWith('"Söhne"')).toBe(true);
     expect(body).not.toContain("--font-mono");
