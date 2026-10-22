@@ -172,3 +172,11 @@ unchanged), and artifact identities of such sets carry the repository.
 - Desktop and client wiring of `tasks`, `max_workers`, `GET …/tasks`, the
   task events and the multi-repository diff view is client work outside this
   ADR.
+
+Note (2026-10-22): the first two items are closed by
+[ADR 0023](0023-delegated-roles-and-dependency-overrides.md): tasks carry an
+explicit role (`implementer`, `repository_lead`, `project_orchestrator`),
+advisory roles run read-only and record a structured advisory result with an
+assignment trace (`task.assigned`, migration 12), and plans are checked
+against the confirmed relationships with justified `waive`/`add` entries in
+the hashed `dependency_overrides`. The remaining items stand.

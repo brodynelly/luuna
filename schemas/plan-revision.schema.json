@@ -135,8 +135,11 @@
             "minLength": 1
           },
           "role": {
-            "type": "string",
-            "minLength": 1
+            "enum": [
+              "implementer",
+              "repository_lead",
+              "project_orchestrator"
+            ]
           },
           "depends_on": {
             "type": "array",
@@ -180,6 +183,10 @@
             "minItems": 1
           },
           "execution_profile": {
+            "type": "string",
+            "minLength": 1
+          },
+          "derived_from_task": {
             "type": "string",
             "minLength": 1
           }
@@ -398,6 +405,40 @@
           }
         }
       ]
+    },
+    "dependency_overrides": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "consumer",
+          "producer",
+          "action",
+          "justification"
+        ],
+        "properties": {
+          "consumer": {
+            "type": "string",
+            "minLength": 1
+          },
+          "producer": {
+            "type": "string",
+            "minLength": 1
+          },
+          "action": {
+            "enum": [
+              "waive",
+              "add"
+            ]
+          },
+          "justification": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 1000
+          }
+        }
+      }
     }
   },
   "$schema": "https://json-schema.org/draft/2020-12/schema",

@@ -191,18 +191,26 @@ impl Harness {
         tasks: &[(&str, &str, &[&str])],
         budgets: Value,
     ) -> (StatusCode, Value) {
-        let tasks: Vec<Value> = tasks
-            .iter()
-            .map(|(id, scenario, depends_on)| {
-                json!({"id": id, "repository_id": id, "paths": ["src"], "operations": ["read", "write"],
-                    "acceptance_criteria": [format!("fixture:{scenario}"), "the repository's tests pass"],
-                    "depends_on": depends_on})
-            })
-            .collect();
+        self.plan_with(ticket_id, tasks_json(tasks), budgets, vec![])
+            .await
+    }
+    /// A plan request from explicit task objects and dependency overrides
+    /// (ADR 0023).
+    async fn plan_with(
+        &self,
+        ticket_id: &str,
+        tasks: Vec<Value>,
+        budgets: Value,
+        dependency_overrides: Vec<Value>,
+    ) -> (StatusCode, Value) {
+        let mut body = json!({"tasks": tasks, "budgets": budgets});
+        if !dependency_overrides.is_empty() {
+            body["dependency_overrides"] = json!(dependency_overrides);
+        }
         self.request(
             "POST",
             &format!("/api/v1/tickets/{ticket_id}/plans"),
-            Some(json!({"tasks": tasks, "budgets": budgets})),
+            Some(body),
         )
         .await
     }
@@ -217,9 +225,22 @@ impl Harness {
         assert_eq!(status, StatusCode::CREATED, "{approved}");
     }
     async fn approved(&self, tasks: &[(&str, &str, &[&str])], budgets: Value) -> (String, Value) {
+        self.approved_with(tasks_json(tasks), budgets, vec![]).await
+    }
+    async fn approved_with(
+        &self,
+        tasks: Vec<Value>,
+        budgets: Value,
+        dependency_overrides: Vec<Value>,
+    ) -> (String, Value) {
         let ticket = self.ticket().await;
         let (status, opened) = self
-            .plan(ticket["id"].as_str().unwrap(), tasks, budgets)
+            .plan_with(
+                ticket["id"].as_str().unwrap(),
+                tasks,
+                budgets,
+                dependency_overrides,
+            )
             .await;
         assert_eq!(status, StatusCode::CREATED, "{opened}");
         self.approve(&opened["plan"]).await;
@@ -287,6 +308,33 @@ impl Drop for Harness {
 
 fn python() -> String {
     if cfg!(windows) { "python" } else { "python3" }.into()
+}
+/// `(id, scenario, depends_on)` implementer tasks on the repository named by
+/// the ID.
+fn tasks_json(tasks: &[(&str, &str, &[&str])]) -> Vec<Value> {
+    tasks
+        .iter()
+        .map(|(id, scenario, depends_on)| {
+            json!({"id": id, "repository_id": id, "paths": ["src"], "operations": ["read", "write"],
+                "acceptance_criteria": [format!("fixture:{scenario}"), "the repository's tests pass"],
+                "depends_on": depends_on})
+        })
+        .collect()
+}
+/// An advisory task (ADR 0023): read-only, writes nothing, returns a
+/// structured result.
+fn advisory(id: &str, role: &str, repository: &str, scenario: &str, depends_on: &[&str]) -> Value {
+    json!({"id": id, "repository_id": repository, "role": role, "paths": ["."], "operations": ["read"],
+        "acceptance_criteria": [format!("fixture:{scenario}"), "name the affected modules and task boundaries"],
+        "depends_on": depends_on})
+}
+fn waive(consumer: &str, producer: &str) -> Value {
+    json!({"consumer": consumer, "producer": producer, "action": "waive",
+        "justification": format!("{consumer} does not consume {producer}'s change this time")})
+}
+fn add(consumer: &str, producer: &str) -> Value {
+    json!({"consumer": consumer, "producer": producer, "action": "add",
+        "justification": format!("{consumer} reads a schema {producer} generates")})
 }
 fn unit_check() -> Value {
     json!({"id": "unit", "executable": python(), "args": ["-m", "unittest", "discover", "-s", "tests", "-t", "."],
@@ -684,11 +732,15 @@ async fn independent_tasks_overlap_within_max_workers_and_more_workers_are_refus
     // A plan cannot ask for more workers than it has tasks, and never more
     // than the runtime's own limit.
     let ticket = harness.ticket().await;
+    // The confirmed relationships imply `shared -> api` and `consumer ->
+    // shared`; independent work waives both with a justification (P44).
+    let waivers = vec![waive("shared", "api"), waive("consumer", "shared")];
     let (status, refused) = harness
-        .plan(
+        .plan_with(
             ticket["id"].as_str().unwrap(),
-            &independent,
+            tasks_json(&independent),
             json!({"max_workers": 4, "max_attempts": 3}),
+            waivers.clone(),
         )
         .await;
     assert_eq!(status, StatusCode::UNPROCESSABLE_ENTITY, "{refused}");
@@ -700,10 +752,11 @@ async fn independent_tasks_overlap_within_max_workers_and_more_workers_are_refus
         "{refused}"
     );
     let (status, opened) = harness
-        .plan(
+        .plan_with(
             ticket["id"].as_str().unwrap(),
-            &independent,
+            tasks_json(&independent),
             json!({"max_workers": 2, "max_attempts": 3, "timeout_seconds": 600}),
+            waivers,
         )
         .await;
     assert_eq!(status, StatusCode::CREATED, "{opened}");
@@ -1004,13 +1057,14 @@ async fn cancellation_stops_every_running_task_and_records_cancelled() {
     let fixture = Fixture::new(dir.path());
     ready(&harness, &fixture).await;
     let (run_id, _) = harness
-        .approved(
-            &[
+        .approved_with(
+            tasks_json(&[
                 ("api", "slow", &[]),
                 ("shared", "slow", &[]),
                 ("consumer", "write_in_scope", &["api", "shared"]),
-            ],
+            ]),
             json!({"max_workers": 2, "max_attempts": 3, "timeout_seconds": 600}),
+            vec![waive("shared", "api"), add("consumer", "api")],
         )
         .await;
     assert_eq!(
@@ -1045,13 +1099,14 @@ async fn a_failed_producer_blocks_its_consumers_with_the_reason() {
     let fixture = Fixture::new(dir.path());
     ready(&harness, &fixture).await;
     let (run_id, _) = harness
-        .approved(
-            &[
+        .approved_with(
+            tasks_json(&[
                 ("api", "no_change", &[]),
                 ("shared", "write_in_scope", &["api"]),
                 ("consumer", "write_in_scope", &[]),
-            ],
+            ]),
             json!({"max_workers": 2, "max_attempts": 3, "timeout_seconds": 600}),
+            vec![waive("consumer", "shared")],
         )
         .await;
     assert_eq!(
@@ -1206,4 +1261,539 @@ async fn cyclic_plans_and_unconfirmed_relationships_are_refused() {
             "{refused}"
         );
     }
+}
+
+#[tokio::test]
+async fn a_plan_missing_a_confirmed_dependency_is_refused_unless_waived_and_the_waiver_is_traced() {
+    let harness = Harness::new();
+    let dir = tempfile::tempdir().unwrap();
+    let fixture = Fixture::new(dir.path());
+    ready(&harness, &fixture).await;
+    let before = fixture.snapshot();
+    let ticket = harness.ticket().await;
+    let ticket_id = ticket["id"].as_str().unwrap();
+    let independent_consumer: [(&str, &str, &[&str]); 3] = [
+        ("api", "write_in_scope", &[]),
+        ("shared", "write_in_scope", &["api"]),
+        ("consumer", "write_in_scope", &[]),
+    ];
+    // The confirmed `shared -> consumer` relationship implies the dependency;
+    // the refusal names the relationship and the waiver that would allow it.
+    let (status, refused) = harness
+        .plan(ticket_id, &independent_consumer, json!({}))
+        .await;
+    assert_eq!(status, StatusCode::UNPROCESSABLE_ENTITY, "{refused}");
+    let error = refused["error"].as_str().unwrap();
+    assert!(
+        error.contains(
+            "task consumer in repository consumer must depend on task shared in repository shared"
+        ),
+        "{error}"
+    );
+    assert!(
+        error.contains("confirmed relationship shared -> consumer (package npm:@fixture/shared)"),
+        "{error}"
+    );
+    assert!(error.contains("\"action\": \"waive\""), "{error}");
+    // Malformed overrides are refused by the plan contract.
+    for (overrides, expected) in [
+        (
+            vec![
+                json!({"consumer": "consumer", "producer": "shared", "action": "waive", "justification": "   "}),
+            ],
+            "needs a justification",
+        ),
+        (
+            vec![waive("consumer", "shared"), waive("consumer", "shared")],
+            "listed more than once",
+        ),
+        (vec![waive("consumer", "nope")], "names unknown task nope"),
+        (
+            vec![waive("consumer", "shared"), waive("shared", "api")],
+            "dependency override waive shared <- api does not apply",
+        ),
+    ] {
+        let (status, refused) = harness
+            .plan_with(
+                ticket_id,
+                tasks_json(&independent_consumer),
+                json!({}),
+                overrides,
+            )
+            .await;
+        assert_eq!(status, StatusCode::UNPROCESSABLE_ENTITY, "{refused}");
+        assert!(
+            refused["error"].as_str().unwrap().contains(expected),
+            "{expected}: {refused}"
+        );
+    }
+    // Waived with a justification, the plan is accepted and the override is
+    // part of the sealed plan.
+    let waiver = waive("consumer", "shared");
+    let (status, opened) = harness
+        .plan_with(
+            ticket_id,
+            tasks_json(&independent_consumer),
+            json!({"max_workers": 2, "max_attempts": 3, "timeout_seconds": 600}),
+            vec![waiver.clone()],
+        )
+        .await;
+    assert_eq!(status, StatusCode::CREATED, "{opened}");
+    let plan = &opened["plan"];
+    assert_eq!(plan["dependency_overrides"], json!([waiver]));
+    assert_eq!(plan["tasks"][0]["role"], "implementer");
+    assert!(plan["tasks"][0].get("derived_from_task").is_none());
+    harness.approve(plan).await;
+    let run_id = opened["run"]["id"].as_str().unwrap().to_owned();
+    assert_eq!(
+        harness.implement(&run_id, None).await.0,
+        StatusCode::ACCEPTED
+    );
+    assert_eq!(harness.settled(&run_id).await["state"], "validating");
+    // The trace: every task records who assigned it (the developer's exact
+    // approval), its role and the overrides that name it.
+    let tasks = harness.tasks(&run_id).await;
+    for t in &tasks {
+        assert_eq!(t["state"], "completed", "{t}");
+        assert_eq!(t["role"], "implementer", "{t}");
+        assert_eq!(t["assigned_by"]["approved_by"], "developer", "{t}");
+        assert_eq!(t["assigned_by"]["plan_hash"], plan["hash"], "{t}");
+        assert_eq!(t["assigned_by"]["plan_revision"], plan["revision"], "{t}");
+        assert!(t.get("derived_from_task").is_none(), "{t}");
+    }
+    assert_eq!(
+        task(&tasks, "consumer")["dependency_overrides"],
+        json!([waiver])
+    );
+    assert_eq!(
+        task(&tasks, "shared")["dependency_overrides"],
+        json!([waiver])
+    );
+    assert!(task(&tasks, "api").get("dependency_overrides").is_none());
+    let events = harness.events(&run_id).await;
+    let assigned: Vec<&Value> = events
+        .iter()
+        .filter(|e| e["type"] == "task.assigned")
+        .collect();
+    assert_eq!(assigned.len(), 3, "{events:?}");
+    for event in &assigned {
+        assert_eq!(event["payload"]["role"], "implementer");
+        assert_eq!(event["payload"]["assigned_by"]["approved_by"], "developer");
+        assert_eq!(event["payload"]["plan_hash"], plan["hash"]);
+    }
+    for kind in ["task.scheduled", "task.completed"] {
+        let consumer = events
+            .iter()
+            .find(|e| e["type"] == kind && e["payload"]["task_id"] == "consumer")
+            .unwrap_or_else(|| panic!("{kind} for consumer missing"));
+        assert_eq!(consumer["payload"]["dependency_overrides"], json!([waiver]));
+        assert_eq!(consumer["payload"]["role"], "implementer");
+    }
+    // The candidate set view lists the overrides and the traced tasks; the
+    // waived pair is not bound.
+    let candidate = harness.candidate(&run_id).await;
+    assert_eq!(candidate["dependency_overrides"], json!([waiver]));
+    assert_eq!(candidate["tasks"].as_array().unwrap().len(), 3);
+    let set = &candidate["evidence"]["candidate"];
+    assert_eq!(set["repository_commits"].as_object().unwrap().len(), 3);
+    assert_eq!(
+        set["dependency_bindings"],
+        json!({"shared:api": task(&tasks, "api")["candidate_commit"]})
+    );
+    assert_eq!(fixture.snapshot(), before);
+}
+
+#[tokio::test]
+async fn a_dependency_without_a_confirmed_relationship_needs_an_add_override() {
+    let harness = Harness::new();
+    let dir = tempfile::tempdir().unwrap();
+    let fixture = Fixture::new(dir.path());
+    ready(&harness, &fixture).await;
+    let ticket = harness.ticket().await;
+    let ticket_id = ticket["id"].as_str().unwrap();
+    let chain_plus: [(&str, &str, &[&str]); 3] = [
+        ("api", "write_in_scope", &[]),
+        ("shared", "write_in_scope", &["api"]),
+        ("consumer", "write_in_scope", &["shared", "api"]),
+    ];
+    let (status, refused) = harness.plan(ticket_id, &chain_plus, json!({})).await;
+    assert_eq!(status, StatusCode::UNPROCESSABLE_ENTITY, "{refused}");
+    let error = refused["error"].as_str().unwrap();
+    assert!(
+        error.contains("task consumer in repository consumer depends on task api in repository api, but no confirmed relationship api -> consumer exists"),
+        "{error}"
+    );
+    assert!(error.contains("\"action\": \"add\""), "{error}");
+    // An add override for a pair the confirmed graph already covers is idle.
+    let (status, refused) = harness
+        .plan_with(
+            ticket_id,
+            tasks_json(&chain_plus),
+            json!({}),
+            vec![add("consumer", "api"), add("shared", "api")],
+        )
+        .await;
+    assert_eq!(status, StatusCode::UNPROCESSABLE_ENTITY, "{refused}");
+    assert!(
+        refused["error"]
+            .as_str()
+            .unwrap()
+            .contains("dependency override add shared <- api does not apply"),
+        "{refused}"
+    );
+    let addition = add("consumer", "api");
+    let (status, opened) = harness
+        .plan_with(
+            ticket_id,
+            tasks_json(&chain_plus),
+            json!({"max_attempts": 3, "timeout_seconds": 600}),
+            vec![addition.clone()],
+        )
+        .await;
+    assert_eq!(status, StatusCode::CREATED, "{opened}");
+    assert_eq!(opened["plan"]["dependency_overrides"], json!([addition]));
+    harness.approve(&opened["plan"]).await;
+    let run_id = opened["run"]["id"].as_str().unwrap().to_owned();
+    assert_eq!(
+        harness.implement(&run_id, None).await.0,
+        StatusCode::ACCEPTED
+    );
+    assert_eq!(harness.settled(&run_id).await["state"], "validating");
+    let tasks = harness.tasks(&run_id).await;
+    assert_eq!(
+        task(&tasks, "consumer")["dependency_overrides"],
+        json!([addition])
+    );
+    assert_eq!(
+        task(&tasks, "api")["dependency_overrides"],
+        json!([addition])
+    );
+    // The added edge binds the producer's exact commit like a confirmed one.
+    let api_commit = task(&tasks, "api")["candidate_commit"].clone();
+    let shared_commit = task(&tasks, "shared")["candidate_commit"].clone();
+    let set = &harness.candidate(&run_id).await["evidence"]["candidate"];
+    assert_eq!(
+        set["dependency_bindings"],
+        json!({"consumer:api": api_commit, "consumer:shared": shared_commit, "shared:api": api_commit})
+    );
+    let events = harness.events(&run_id).await;
+    let consumer_args = events
+        .iter()
+        .filter(|e| e["type"] == "pi.fixture_args")
+        .map(|e| &e["payload"])
+        .nth(2)
+        .unwrap();
+    assert_eq!(
+        consumer_args["dependency_env"]["LUUNA_DEPENDENCY_API_COMMIT"],
+        api_commit
+    );
+}
+
+#[tokio::test]
+async fn an_orchestrator_task_runs_first_records_its_advisory_result_and_the_trace() {
+    let harness = Harness::new();
+    let dir = tempfile::tempdir().unwrap();
+    let fixture = Fixture::new(dir.path());
+    ready(&harness, &fixture).await;
+    let before = fixture.snapshot();
+    // Revision 1: one project orchestrator, nothing else. It reads, writes
+    // nothing, and the run completes with its result and no candidate.
+    let ticket = harness.ticket().await;
+    let ticket_id = ticket["id"].as_str().unwrap();
+    // An advisory task is read-only by contract.
+    let (status, refused) = harness
+        .plan_with(
+            ticket_id,
+            vec![json!({"id": "orchestrate", "repository_id": "api", "role": "project_orchestrator",
+                "paths": ["."], "operations": ["read", "write"], "acceptance_criteria": ["fixture:advise_json"]})],
+            json!({}),
+            vec![],
+        )
+        .await;
+    assert_eq!(status, StatusCode::UNPROCESSABLE_ENTITY, "{refused}");
+    assert!(
+        refused["error"].as_str().unwrap().contains(
+            "advisory role project_orchestrator and must carry exactly the read operation"
+        ),
+        "{refused}"
+    );
+    let (status, refused) = harness
+        .plan_with(
+            ticket_id,
+            vec![json!({"id": "orchestrate", "repository_id": "api", "role": "wizard",
+                "paths": ["."], "operations": ["read"], "acceptance_criteria": ["fixture:advise_json"]})],
+            json!({}),
+            vec![],
+        )
+        .await;
+    assert_eq!(status, StatusCode::UNPROCESSABLE_ENTITY, "{refused}");
+    assert!(
+        refused["error"]
+            .as_str()
+            .unwrap()
+            .contains("role \"wizard\""),
+        "{refused}"
+    );
+    let (status, opened) = harness
+        .plan_with(
+            ticket_id,
+            vec![advisory(
+                "orchestrate",
+                "project_orchestrator",
+                "api",
+                "advise_json",
+                &[],
+            )],
+            json!({"max_attempts": 2, "timeout_seconds": 600}),
+            vec![],
+        )
+        .await;
+    assert_eq!(status, StatusCode::CREATED, "{opened}");
+    let first = opened["plan"].clone();
+    assert_eq!(first["tasks"][0]["role"], "project_orchestrator");
+    harness.approve(&first).await;
+    let run_id = opened["run"]["id"].as_str().unwrap().to_owned();
+    assert_eq!(
+        harness.implement(&run_id, None).await.0,
+        StatusCode::ACCEPTED
+    );
+    let settled = harness.settled(&run_id).await;
+    assert_eq!(settled["state"], "completed", "{settled}");
+    let tasks = harness.tasks(&run_id).await;
+    let orchestrate = task(&tasks, "orchestrate");
+    assert_eq!(orchestrate["state"], "completed", "{orchestrate}");
+    assert_eq!(orchestrate["role"], "project_orchestrator");
+    assert!(
+        orchestrate.get("candidate_commit").is_none(),
+        "{orchestrate}"
+    );
+    assert_eq!(
+        orchestrate["advisory_result"]["risks"][0],
+        "renaming helper breaks the consumer import"
+    );
+    assert_eq!(
+        orchestrate["advisory_result"]["proposed_tasks"]
+            .as_array()
+            .unwrap()
+            .len(),
+        3
+    );
+    assert_eq!(orchestrate["assigned_by"]["approved_by"], "developer");
+    assert_eq!(orchestrate["assigned_by"]["plan_hash"], first["hash"]);
+    let events = harness.events(&run_id).await;
+    assert!(events.iter().any(|e| e["type"] == "task.assigned"
+        && e["payload"]["task_id"] == "orchestrate"
+        && e["payload"]["role"] == "project_orchestrator"));
+    let completed = events
+        .iter()
+        .find(|e| e["type"] == "task.completed")
+        .unwrap();
+    assert_eq!(completed["payload"]["role"], "project_orchestrator");
+    assert!(completed["payload"]["advisory_result"]["findings"].is_array());
+    assert!(completed["payload"]["candidate_commit"].is_null());
+    // The session had read-only tools, the scope guard and the role contract.
+    let args = events
+        .iter()
+        .find(|e| e["type"] == "pi.fixture_args")
+        .unwrap();
+    let tools = args["payload"]["tools"].as_str().unwrap();
+    assert!(
+        !tools.contains("write") && !tools.contains("edit") && tools.contains("read"),
+        "{tools}"
+    );
+    assert_eq!(args["payload"]["system_prompt_from_file"], true);
+    let attempts = harness.attempts(&run_id).await;
+    assert_eq!(attempts.len(), 1);
+    assert_eq!(attempts[0]["state"], "completed");
+    assert_eq!(
+        attempts[0]["payload"]["advisory_result"],
+        orchestrate["advisory_result"]
+    );
+    assert_eq!(attempts[0]["payload"]["role"], "project_orchestrator");
+    let candidate = harness.candidate(&run_id).await;
+    assert!(candidate["evidence"].is_null(), "{candidate}");
+    assert_eq!(
+        candidate["tasks"][0]["advisory_result"],
+        orchestrate["advisory_result"]
+    );
+    let store = luuna_storage::Store::open(harness.root.join("luuna.sqlite3")).unwrap();
+    assert!(store.active_worktree_leases().unwrap().is_empty());
+    assert_eq!(fixture.snapshot(), before);
+
+    // Revision 2: the developer copies the orchestrator's proposal. Each
+    // implementer names the advisory task it derives from (the trace's
+    // parent); a repository lead in `shared` advises before the api writer
+    // runs and shares its repository with the shared implementer.
+    let mut derived = tasks_json(&CHAIN);
+    for task in &mut derived {
+        task["derived_from_task"] = json!("orchestrate");
+    }
+    derived[0]["depends_on"] = json!(["lead"]);
+    let mut unknown = derived.clone();
+    unknown[1]["derived_from_task"] = json!("nope");
+    let (status, refused) = harness
+        .plan_with(ticket_id, unknown, json!({}), vec![])
+        .await;
+    assert_eq!(status, StatusCode::UNPROCESSABLE_ENTITY, "{refused}");
+    assert!(
+        refused["error"]
+            .as_str()
+            .unwrap()
+            .contains("names no advisory task of an earlier revision"),
+        "{refused}"
+    );
+    let mut tasks = vec![advisory(
+        "lead",
+        "repository_lead",
+        "shared",
+        "advise_json",
+        &[],
+    )];
+    tasks.extend(derived);
+    let (status, opened) = harness
+        .plan_with(
+            ticket_id,
+            tasks,
+            json!({"max_attempts": 4, "timeout_seconds": 600}),
+            vec![],
+        )
+        .await;
+    assert_eq!(status, StatusCode::CREATED, "{opened}");
+    let second = opened["plan"].clone();
+    assert_eq!(second["revision"], 2);
+    assert_eq!(second["tasks"][1]["derived_from_task"], "orchestrate");
+    assert_eq!(second["tasks"][0]["role"], "repository_lead");
+    harness.approve(&second).await;
+    let run_id = opened["run"]["id"].as_str().unwrap().to_owned();
+    assert_eq!(
+        harness.implement(&run_id, None).await.0,
+        StatusCode::ACCEPTED
+    );
+    let settled = harness.settled(&run_id).await;
+    assert_eq!(settled["state"], "validating", "{settled}");
+    let tasks = harness.tasks(&run_id).await;
+    assert_eq!(tasks.len(), 4);
+    for t in &tasks {
+        assert_eq!(t["state"], "completed", "{t}");
+    }
+    let lead = task(&tasks, "lead");
+    assert_eq!(lead["role"], "repository_lead");
+    assert!(lead.get("candidate_commit").is_none());
+    assert!(lead["advisory_result"]["findings"].is_array());
+    assert!(lead.get("derived_from_task").is_none());
+    for id in REPOSITORIES {
+        let t = task(&tasks, id);
+        assert_eq!(t["derived_from_task"], "orchestrate", "{t}");
+        assert_eq!(t["role"], "implementer");
+        assert!(t["candidate_commit"].is_string());
+        assert_eq!(t["assigned_by"]["plan_revision"], 2);
+    }
+    let events = harness.events(&run_id).await;
+    let scheduled: Vec<&str> = events
+        .iter()
+        .filter(|e| e["type"] == "task.scheduled")
+        .map(|e| e["payload"]["task_id"].as_str().unwrap())
+        .collect();
+    assert_eq!(scheduled, ["lead", "api", "shared", "consumer"]);
+    assert!(events.iter().any(|e| e["type"] == "task.assigned"
+        && e["payload"]["task_id"] == "api"
+        && e["payload"]["derived_from_task"] == "orchestrate"
+        && e["payload"]["role"] == "implementer"));
+    // The api writer depended only on the lead: no commit binding, but the
+    // lead's recorded result stated as fenced reference data.
+    let fixture_args: Vec<&Value> = events
+        .iter()
+        .filter(|e| e["type"] == "pi.fixture_args")
+        .map(|e| &e["payload"])
+        .collect();
+    assert_eq!(fixture_args.len(), 4);
+    assert_eq!(fixture_args[0]["advisories_stated"], false);
+    assert_eq!(fixture_args[1]["dependency_env"], json!({}));
+    assert_eq!(fixture_args[1]["advisories_stated"], true);
+    assert_eq!(fixture_args[2]["advisories_stated"], false);
+    let set = &harness.candidate(&run_id).await["evidence"]["candidate"];
+    assert_eq!(set["repository_commits"].as_object().unwrap().len(), 3);
+    assert_eq!(
+        set["dependency_bindings"],
+        json!({"consumer:shared": task(&tasks, "shared")["candidate_commit"], "shared:api": task(&tasks, "api")["candidate_commit"]})
+    );
+    assert_eq!(fixture.snapshot(), before);
+}
+
+#[tokio::test]
+async fn an_advisory_task_that_changes_files_fails_with_a_scope_reason() {
+    let harness = Harness::new();
+    let dir = tempfile::tempdir().unwrap();
+    let fixture = Fixture::new(dir.path());
+    ready(&harness, &fixture).await;
+    let before = fixture.snapshot();
+    let mut consumer = tasks_json(&[("consumer", "write_in_scope", &[])]);
+    consumer[0]["depends_on"] = json!(["lead"]);
+    let (run_id, _) = harness
+        .approved_with(
+            vec![
+                advisory("lead", "repository_lead", "shared", "advise_writes", &[]),
+                consumer[0].clone(),
+            ],
+            json!({"max_attempts": 2, "timeout_seconds": 600}),
+            vec![],
+        )
+        .await;
+    assert_eq!(
+        harness.implement(&run_id, None).await.0,
+        StatusCode::ACCEPTED
+    );
+    let settled = harness.settled(&run_id).await;
+    assert_eq!(settled["state"], "failed", "{settled}");
+    let tasks = harness.tasks(&run_id).await;
+    let lead = task(&tasks, "lead");
+    assert_eq!(lead["state"], "failed", "{lead}");
+    let reason = lead["reason"].as_str().unwrap();
+    assert!(reason.contains("scope violation"), "{reason}");
+    assert!(
+        reason.contains("advisory role repository_lead must leave the worktree unchanged"),
+        "{reason}"
+    );
+    assert!(reason.contains("src/main.py"), "{reason}");
+    assert!(lead.get("advisory_result").is_none(), "{lead}");
+    let dependent = task(&tasks, "consumer");
+    assert_eq!(dependent["state"], "blocked");
+    assert!(dependent["reason"]
+        .as_str()
+        .unwrap()
+        .contains("dependency task lead failed"));
+    let attempts = harness.attempts(&run_id).await;
+    assert_eq!(attempts.len(), 1);
+    assert_eq!(attempts[0]["state"], "failed");
+    // An advisory session that returns prose instead of the structured
+    // result fails by name as well.
+    let (run_id, _) = harness
+        .approved_with(
+            vec![advisory(
+                "lead",
+                "repository_lead",
+                "shared",
+                "advise_malformed",
+                &[],
+            )],
+            json!({"max_attempts": 2, "timeout_seconds": 600}),
+            vec![],
+        )
+        .await;
+    assert_eq!(
+        harness.implement(&run_id, None).await.0,
+        StatusCode::ACCEPTED
+    );
+    assert_eq!(harness.settled(&run_id).await["state"], "failed");
+    let reason = task(&harness.tasks(&run_id).await, "lead")["reason"]
+        .as_str()
+        .unwrap()
+        .to_owned();
+    assert!(
+        reason.contains("advisory role repository_lead task lead returned no usable result"),
+        "{reason}"
+    );
+    let store = luuna_storage::Store::open(harness.root.join("luuna.sqlite3")).unwrap();
+    assert!(store.active_worktree_leases().unwrap().is_empty());
+    assert_eq!(fixture.snapshot(), before);
 }

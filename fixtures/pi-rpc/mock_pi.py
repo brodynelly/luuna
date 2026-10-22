@@ -219,7 +219,10 @@ def run_writer(request_id, kind, scenario, prompt):
         # the system prompt stated them.
         "dependency_env": {name: value for name, value in sorted(os.environ.items())
                            if name.startswith("LUUNA_DEPENDENCY_")},
-        "dependencies_stated": "LUUNA_DEPENDENCY_" in (flag("--system-prompt") or "")})
+        "dependencies_stated": "LUUNA_DEPENDENCY_" in (flag("--system-prompt") or ""),
+        # ADR 0023: whether the system prompt carried a dependency's recorded
+        # advisory result as fenced reference data.
+        "advisories_stated": "<<<ADVISORY_RESULTS>>>" in (flag("--system-prompt") or "")})
     send({"type": "response", "id": request_id, "command": kind,
           "success": True, "data": {"disposition": "started"}})
     send({"type": "agent_start"})
@@ -308,8 +311,29 @@ def run_writer(request_id, kind, scenario, prompt):
         # vendor/lib is an unpopulated submodule; Git never lists its contents.
         write_file("src/main.py", "print('changed')\n")
         write_file("vendor/lib/injected.py", "x = 1\n")
+    elif scenario == "advise_writes":
+        # ADR 0023: an advisory role (project orchestrator, repository lead)
+        # that changes a file anyway; the runtime must reject the attempt.
+        write_file("src/main.py", "print('an advisor must not write')\n")
+    final_text = f"synthetic writer finished {scenario}"
+    if scenario in ("advise_json", "advise_writes"):
+        # ADR 0023: the structured advisory result an orchestrator or lead
+        # returns in its final message, surrounded by prose as a model would.
+        advice = {"findings": ["api_pkg.greet is imported by shared_pkg.banner (src/shared_pkg/__init__.py)",
+                               "consumer_pkg.use_shared imports shared_pkg.helper"],
+                  "proposed_tasks": [
+                      {"id": "api", "repository_id": "api", "role": "implementer", "depends_on": [],
+                       "paths": ["src"], "acceptance_criteria": ["api tests pass"], "rationale": "producer first"},
+                      {"id": "shared", "repository_id": "shared", "depends_on": ["api"], "paths": ["src"],
+                       "acceptance_criteria": ["shared tests pass against the api candidate"], "rationale": "binds api"},
+                      {"id": "consumer", "repository_id": "consumer", "depends_on": ["shared"], "paths": ["src"],
+                       "acceptance_criteria": ["consumer tests pass against the shared candidate"], "rationale": "binds shared"}],
+                  "risks": ["renaming helper breaks the consumer import"]}
+        final_text = "Advisory result:\n```json\n" + json.dumps(advice) + "\n```\n"
+    elif scenario == "advise_malformed":
+        final_text = "I looked around and the plan seems fine."
     message = {"role": "assistant", "stopReason": "stop", "usage": usage(cost),
-               "content": [{"type": "text", "text": f"synthetic writer finished {scenario}"}]}
+               "content": [{"type": "text", "text": final_text}]}
     send({"type": "message_update", "usage": usage(cost), "assistantMessageEvent":
           {"type": "text_delta", "contentIndex": 0, "delta": "done"}})
     send({"type": "message_end", "message": message})

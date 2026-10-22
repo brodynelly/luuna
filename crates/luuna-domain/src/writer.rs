@@ -327,6 +327,7 @@ mod tests {
             operations: vec![Operation::Read, Operation::Write],
             acceptance_criteria: vec!["ok".into()],
             execution_profile: "native".into(),
+            derived_from_task: None,
         }
     }
 

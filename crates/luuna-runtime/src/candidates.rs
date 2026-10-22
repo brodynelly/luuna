@@ -124,8 +124,19 @@ pub async fn candidate(
     // Aggregate workflow usage (writer attempts included) against the
     // approved budgets and the project's repair limit.
     let usage = store.workflow_usage_view(&id).map_err(internal)?;
+    // The plan's departures from the confirmed relationships (P44) and its
+    // assignment traces (R06) are part of the candidate's record.
+    let (dependency_overrides, tasks) = match plan_for(&store, &run) {
+        Ok(plan) => (
+            json!(plan.dependency_overrides),
+            json!(store.run_tasks(&id).map_err(internal)?),
+        ),
+        Err(_) => (json!([]), json!([])),
+    };
     Ok(Json(json!({
         "evidence": evidence,
+        "dependency_overrides": dependency_overrides,
+        "tasks": tasks,
         "active": active,
         "validate_allowed": validate.is_ok(),
         "repair_allowed": repair.is_ok(),
