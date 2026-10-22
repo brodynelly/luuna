@@ -23,7 +23,7 @@ pub fn render(frame: &mut Frame, app: &mut AppState, theme: Theme) {
         );
         return;
     }
-    let [header, menu, body, status, footer] = Layout::vertical([
+    let [menu, header, body, status, footer] = Layout::vertical([
         Constraint::Length(1),
         Constraint::Length(1),
         Constraint::Min(1),
@@ -34,7 +34,7 @@ pub fn render(frame: &mut Frame, app: &mut AppState, theme: Theme) {
     frame.render_widget(
         Paragraph::new(Line::from(vec![
             Span::styled(" LUUNA ", theme.selected()),
-            Span::raw(" / TERMINAL WORKBENCH "),
+            Span::raw(" / WORKBENCH "),
             Span::styled(
                 safe_text(&app.connection),
                 theme.tone(state_tone(&app.connection)),
@@ -43,10 +43,25 @@ pub fn render(frame: &mut Frame, app: &mut AppState, theme: Theme) {
         .style(theme.base()),
         header,
     );
-    frame.render_widget(
-        Paragraph::new(" F1 Help  F2 Actions  F5 Refresh      Local runtime").style(theme.accent()),
-        menu,
+    let menu_text = if area.width < 65 {
+        " F10 Menu  F2 Commands  F1 Help"
+    } else {
+        " Home  Projects  Missions  Atlas  Beacon  Runs  Commands  Help"
+    };
+    let menu_line = Line::from(
+        menu_text
+            .split_inclusive(' ')
+            .flat_map(|word| {
+                let mut chars = word.chars();
+                let first = chars.next().unwrap_or(' ');
+                vec![
+                    Span::styled(first.to_string(), theme.mnemonic()),
+                    Span::styled(chars.collect::<String>(), theme.chrome()),
+                ]
+            })
+            .collect::<Vec<_>>(),
     );
+    frame.render_widget(Paragraph::new(menu_line).style(theme.chrome()), menu);
     let content = if app.prompt.is_some() {
         let [result, prompt] = Layout::vertical([
             Constraint::Min(3),
@@ -60,15 +75,33 @@ pub fn render(frame: &mut Frame, app: &mut AppState, theme: Theme) {
     };
     app.approval_visible = content.height > 2 && content.width > 2;
     match app.mode {
+        Mode::Workbench => crate::views::render::render(frame, app, content, theme),
         Mode::Catalog => render_catalog(frame, app, content, theme),
         Mode::Form => render_form(frame, app, content, theme),
         Mode::Result => render_result(frame, app, content, theme),
     }
+    let status_text = if app.workbench.searching {
+        format!("Search: {}  Enter apply · Esc close", app.workbench.query)
+    } else {
+        safe_text(&app.status)
+    };
     frame.render_widget(
-        Paragraph::new(safe_text(&app.status)).style(theme.muted()),
+        Paragraph::new(status_text).style(if app.workbench.error.is_some() {
+            theme.tone("danger")
+        } else {
+            theme.muted()
+        }),
         status,
     );
-    let hint = if area.width < 55 {
+    let hint = if app.mode == Mode::Workbench {
+        if app.workbench.nav {
+            " ↑↓ section  Enter open  Tab pane  q quit"
+        } else if area.width < 55 {
+            " F10 menu Enter open Esc back q quit"
+        } else {
+            crate::views::hints(app.workbench.screen)
+        }
+    } else if area.width < 55 {
         if app.prompt.is_some() {
             " Enter answer PgUp/Dn Esc"
         } else if app.mode == Mode::Form {
@@ -87,7 +120,7 @@ pub fn render(frame: &mut Frame, app: &mut AppState, theme: Theme) {
     } else {
         " ↑↓ select · Enter open · Tab context · q quit"
     };
-    frame.render_widget(Paragraph::new(hint).style(theme.selected()), footer);
+    frame.render_widget(Paragraph::new(hint).style(theme.chrome()), footer);
 }
 
 fn panel(title: impl Into<Line<'static>>, theme: Theme) -> Block<'static> {
@@ -95,7 +128,7 @@ fn panel(title: impl Into<Line<'static>>, theme: Theme) -> Block<'static> {
         .title(title)
         .borders(Borders::ALL)
         .border_type(BorderType::Double)
-        .border_style(theme.accent())
+        .border_style(theme.focused())
         .style(theme.panel())
 }
 
@@ -137,7 +170,13 @@ fn render_form(frame: &mut Frame, app: &mut AppState, area: Rect, theme: Theme) 
     let block = panel(title, theme);
     let inner = block.inner(area);
     frame.render_widget(block, area);
-    let available = usize::from(inner.height.saturating_sub(2)).max(1);
+    let [fields_area, edit_area, hint_area] = Layout::vertical([
+        Constraint::Min(1),
+        Constraint::Length(if inner.height >= 12 { 6 } else { 2 }),
+        Constraint::Length(1),
+    ])
+    .areas(inner);
+    let available = usize::from(fields_area.height).max(1);
     let top = form.cursor.saturating_sub(available.saturating_sub(1));
     let mut lines = Vec::new();
     for (index, field) in form.fields.iter().enumerate().skip(top).take(available) {
@@ -166,10 +205,28 @@ fn render_form(frame: &mut Frame, app: &mut AppState, area: Rect, theme: Theme) 
         ));
     }
     if let Some(field) = form.fields.get(form.cursor) {
-        lines.push(Line::raw(""));
-        lines.push(Line::styled(safe_text(&field.hint), theme.muted()));
+        let value = wrapped_lines(
+            &format!("> {}_", safe_text(&field.value)),
+            edit_area.width.max(1),
+        );
+        let top = value.len().saturating_sub(usize::from(edit_area.height));
+        frame.render_widget(
+            Paragraph::new(
+                value
+                    .into_iter()
+                    .skip(top)
+                    .map(Line::raw)
+                    .collect::<Vec<_>>(),
+            )
+            .style(theme.title()),
+            edit_area,
+        );
+        frame.render_widget(
+            Paragraph::new(safe_text(&field.hint)).style(theme.muted()),
+            hint_area,
+        );
     }
-    frame.render_widget(Paragraph::new(lines), inner);
+    frame.render_widget(Paragraph::new(lines), fields_area);
 }
 
 fn render_result(frame: &mut Frame, app: &mut AppState, area: Rect, theme: Theme) {

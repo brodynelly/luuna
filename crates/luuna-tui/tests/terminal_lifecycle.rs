@@ -69,12 +69,22 @@ fn real_pty_keyboard_resize_and_terminal_cleanup() {
             writer.flush().unwrap();
         }
         let start = Instant::now();
+        let mut last_catalog_key = Instant::now();
         loop {
             let text = String::from_utf8_lossy(&captured.lock().unwrap()).into_owned();
             // Ratatui updates only changed cells: the title's initial 0 is replaced by
             // a cursor-addressed 61, so raw output need not contain one contiguous title.
             if text.contains("start-session") && text.contains("doctor") {
                 break;
+            }
+            // The workbench now lands on Home. The unreachable fixture service settles
+            // its read before F2 is admitted; drive the real function key to the catalog.
+            if text.contains("workspace health")
+                && last_catalog_key.elapsed() > Duration::from_millis(150)
+            {
+                writer.write_all(b"\x1bOQ").unwrap();
+                writer.flush().unwrap();
+                last_catalog_key = Instant::now();
             }
             if start.elapsed() > Duration::from_secs(12) {
                 let _ = child.kill();

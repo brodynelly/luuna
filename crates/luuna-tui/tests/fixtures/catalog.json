@@ -1,0 +1,1203 @@
+[
+  {
+    "id": "health",
+    "name": "health",
+    "action": "Connection",
+    "context": "runtime",
+    "args": [],
+    "flags": {}
+  },
+  {
+    "id": "doctor",
+    "name": "doctor",
+    "action": "Settings (doctor)",
+    "context": "runtime",
+    "args": [],
+    "flags": {}
+  },
+  {
+    "id": "runs.list",
+    "name": "runs",
+    "action": "Run listing",
+    "context": "runtime",
+    "args": [],
+    "flags": {
+      "limit": {
+        "description": "at most this many runs (default 200)"
+      },
+      "project": {
+        "description": "only this project's runs"
+      },
+      "before": {
+        "description": "the page of older runs before this run id"
+      }
+    }
+  },
+  {
+    "id": "runs.start",
+    "name": "start-session",
+    "action": "Session start",
+    "context": "runtime",
+    "args": [
+      {
+        "name": "prompt",
+        "description": "the prompt for an isolated Pi session (no repository tools)",
+        "prompt": "Prompt"
+      }
+    ],
+    "flags": {
+      "provider": {
+        "description": "provider override"
+      },
+      "model": {
+        "description": "model override"
+      }
+    }
+  },
+  {
+    "id": "shutdown",
+    "name": "shutdown",
+    "action": "Shutdown",
+    "context": "runtime",
+    "args": [],
+    "flags": {},
+    "confirm": "Stop the runtime? Runs, candidates and worktrees stay durable; start it again with the same data directory and token."
+  },
+  {
+    "id": "projects.list",
+    "name": "projects",
+    "action": "Project listing",
+    "context": "runtime",
+    "args": [],
+    "flags": {}
+  },
+  {
+    "id": "projects.register",
+    "name": "register",
+    "action": "Registration",
+    "context": "runtime",
+    "args": [
+      {
+        "name": "name",
+        "description": "project name",
+        "prompt": "Project name"
+      },
+      {
+        "name": "repository-id",
+        "description": "first repository id (for example app)",
+        "prompt": "Repository id"
+      },
+      {
+        "name": "path",
+        "description": "absolute path of that repository root",
+        "prompt": "Repository root path"
+      }
+    ],
+    "flags": {
+      "id": {
+        "description": "project id (derived from the name when omitted)"
+      },
+      "repository": {
+        "repeat": true,
+        "description": "another repository of the project as <id>=<absolute path> (repeatable)",
+        "prompt": "Further repositories as <id>=<path> (one per line; empty line ends)",
+        "multiline": true
+      }
+    }
+  },
+  {
+    "id": "projects.scaffold.propose",
+    "name": "propose-scaffold",
+    "action": "Scaffold proposal",
+    "context": "runtime",
+    "args": [
+      {
+        "name": "profile",
+        "description": "node, node-typescript, react, nextjs, python, go, rust, flutter, android or ios",
+        "prompt": "Stack profile"
+      },
+      {
+        "name": "name",
+        "description": "project id (^[a-z][a-z0-9-]{0,63}$)",
+        "prompt": "Project name"
+      },
+      {
+        "name": "parent-dir",
+        "description": "absolute existing directory the project is created under",
+        "prompt": "Parent directory"
+      }
+    ],
+    "flags": {}
+  },
+  {
+    "id": "projects.scaffold",
+    "name": "scaffold",
+    "action": "Scaffolding",
+    "context": "runtime",
+    "args": [
+      {
+        "name": "proposal-hash",
+        "description": "the exact proposal hash from propose-scaffold",
+        "prompt": "Proposal hash (sha256:…)"
+      }
+    ],
+    "flags": {
+      "confirm-network": {
+        "boolean": true,
+        "description": "confirms the proposal's declared network steps (for example npm install)"
+      },
+      "key": {
+        "description": "idempotency key (generated when omitted)"
+      }
+    }
+  },
+  {
+    "id": "projects.show",
+    "name": "project",
+    "action": "Project inspection",
+    "context": "project",
+    "args": [
+      {
+        "name": "project",
+        "context": true
+      }
+    ],
+    "flags": {}
+  },
+  {
+    "id": "projects.discover",
+    "name": "discover",
+    "action": "Discovery",
+    "context": "project",
+    "args": [
+      {
+        "name": "project",
+        "context": true
+      }
+    ],
+    "flags": {}
+  },
+  {
+    "id": "projects.manifest.confirm",
+    "name": "confirm",
+    "action": "Manifest confirmation",
+    "context": "project",
+    "args": [
+      {
+        "name": "project",
+        "context": true
+      },
+      {
+        "name": "manifest",
+        "description": "path of the manifest JSON to confirm, or - for standard input",
+        "prompt": "Manifest file path"
+      }
+    ],
+    "flags": {
+      "revision": {
+        "description": "the project's current manifest revision (read from the project when omitted)"
+      }
+    }
+  },
+  {
+    "id": "projects.repositories.rebind",
+    "name": "rebind",
+    "action": "Rebind",
+    "context": "project",
+    "args": [
+      {
+        "name": "project",
+        "context": true
+      },
+      {
+        "name": "repository",
+        "description": "repository id",
+        "prompt": "Repository id"
+      }
+    ],
+    "flags": {
+      "path": {
+        "description": "the new repository root path (the registered path is re-inspected when omitted)",
+        "prompt": "New repository root path (empty re-inspects the registered path)"
+      },
+      "confirm": {
+        "boolean": true,
+        "description": "confirms that the checkout was moved or re-identified on purpose",
+        "prompt": "I moved this checkout or changed its remote on purpose (yes/no)"
+      }
+    }
+  },
+  {
+    "id": "projects.export",
+    "name": "export",
+    "action": "Project export",
+    "context": "project",
+    "args": [
+      {
+        "name": "project",
+        "context": true
+      }
+    ],
+    "flags": {
+      "output": {
+        "description": "write the export JSON to this file instead of printing it"
+      }
+    }
+  },
+  {
+    "id": "projects.import",
+    "name": "import",
+    "action": "Project import",
+    "context": "runtime",
+    "args": [
+      {
+        "name": "export",
+        "description": "path of the export JSON from the other machine, or - for standard input",
+        "prompt": "Export file path"
+      },
+      {
+        "name": "repository-id",
+        "description": "exported repository id (for example app)",
+        "prompt": "Repository id"
+      },
+      {
+        "name": "path",
+        "description": "absolute path of this machine's checkout of that repository",
+        "prompt": "Repository root path"
+      }
+    ],
+    "flags": {
+      "key": {
+        "description": "idempotency key (derived from the export hash when omitted; the same key replays)"
+      }
+    }
+  },
+  {
+    "id": "projects.events",
+    "name": "project-events",
+    "action": "Project event replay",
+    "context": "project",
+    "args": [
+      {
+        "name": "project",
+        "context": true
+      }
+    ],
+    "flags": {
+      "after": {
+        "description": "replay after this sequence (default 0)"
+      },
+      "limit": {
+        "description": "page size (default 1000)"
+      }
+    }
+  },
+  {
+    "id": "baselines.start",
+    "name": "baseline",
+    "action": "Baseline",
+    "context": "project",
+    "args": [
+      {
+        "name": "project",
+        "context": true
+      },
+      {
+        "name": "repository",
+        "description": "repository id",
+        "prompt": "Repository id"
+      }
+    ],
+    "flags": {
+      "include-optional": {
+        "boolean": true,
+        "description": "also run optional recipes"
+      }
+    }
+  },
+  {
+    "id": "baselines.list",
+    "name": "baselines",
+    "action": "Baseline listing",
+    "context": "project",
+    "args": [
+      {
+        "name": "project",
+        "context": true
+      }
+    ],
+    "flags": {}
+  },
+  {
+    "id": "components.status",
+    "name": "components",
+    "action": "Component status",
+    "context": "project",
+    "args": [
+      {
+        "name": "project",
+        "context": true
+      }
+    ],
+    "flags": {}
+  },
+  {
+    "id": "components.enable",
+    "name": "enable-components",
+    "action": "Component activation",
+    "context": "project",
+    "args": [
+      {
+        "name": "project",
+        "context": true
+      }
+    ],
+    "flags": {}
+  },
+  {
+    "id": "memory.list",
+    "name": "memory",
+    "action": "Memory listing",
+    "context": "project",
+    "args": [
+      {
+        "name": "project",
+        "context": true
+      }
+    ],
+    "flags": {
+      "query": {
+        "description": "lexical search",
+        "prompt": "Search memory (empty lists everything)"
+      },
+      "include-user": {
+        "boolean": true,
+        "description": "include private user memory (explicit consent)",
+        "prompt": "Include private user memory (yes/no)"
+      }
+    }
+  },
+  {
+    "id": "memory.create",
+    "name": "remember",
+    "action": "Memory creation",
+    "context": "project",
+    "args": [
+      {
+        "name": "project",
+        "context": true
+      },
+      {
+        "name": "scope",
+        "description": "project, process or user",
+        "prompt": "Scope (project, process or user)"
+      },
+      {
+        "name": "content",
+        "description": "the memory content",
+        "prompt": "Memory content"
+      },
+      {
+        "name": "provenance",
+        "description": "where this knowledge came from",
+        "prompt": "Provenance"
+      }
+    ],
+    "flags": {
+      "key": {
+        "description": "idempotency key (generated when omitted)"
+      }
+    }
+  },
+  {
+    "id": "memory.delete",
+    "name": "forget",
+    "action": "Memory deletion",
+    "context": "project",
+    "args": [
+      {
+        "name": "project",
+        "context": true
+      },
+      {
+        "name": "memory-id",
+        "description": "the memory record id",
+        "prompt": "Memory id"
+      },
+      {
+        "name": "hash",
+        "description": "the record's exact content hash (sha256:…)",
+        "prompt": "Exact content hash"
+      }
+    ],
+    "flags": {}
+  },
+  {
+    "id": "memory.promote",
+    "name": "promote",
+    "action": "Memory promotion",
+    "context": "project",
+    "args": [
+      {
+        "name": "project",
+        "context": true
+      },
+      {
+        "name": "memory-id",
+        "description": "the memory record id",
+        "prompt": "Memory id"
+      },
+      {
+        "name": "hash",
+        "description": "the record's exact content hash (sha256:…)",
+        "prompt": "Exact content hash"
+      },
+      {
+        "name": "to-scope",
+        "description": "project (from process) or user (from project)",
+        "prompt": "Promote to scope (project or user)"
+      }
+    ],
+    "flags": {
+      "key": {
+        "description": "idempotency key (generated when omitted)"
+      }
+    }
+  },
+  {
+    "id": "memory.update",
+    "name": "correct-memory",
+    "action": "Memory correction",
+    "context": "project",
+    "args": [
+      {
+        "name": "project",
+        "context": true
+      },
+      {
+        "name": "memory-id",
+        "description": "the memory record id",
+        "prompt": "Memory id"
+      },
+      {
+        "name": "hash",
+        "description": "the record's exact content hash (sha256:…)",
+        "prompt": "Exact content hash"
+      },
+      {
+        "name": "content",
+        "description": "the corrected content (the record keeps its scope; provenance names the correction)",
+        "prompt": "Corrected content"
+      }
+    ],
+    "flags": {
+      "key": {
+        "description": "idempotency key (generated when omitted)"
+      }
+    }
+  },
+  {
+    "id": "memory.user.export",
+    "name": "export-user-memory",
+    "action": "User memory export",
+    "context": "runtime",
+    "args": [],
+    "flags": {
+      "output": {
+        "description": "write the personal export JSON to this file instead of printing it"
+      }
+    }
+  },
+  {
+    "id": "memory.retention.show",
+    "name": "retention",
+    "action": "Retention policy inspection",
+    "context": "project",
+    "args": [
+      {
+        "name": "project",
+        "context": true
+      }
+    ],
+    "flags": {}
+  },
+  {
+    "id": "memory.retention.set",
+    "name": "set-retention",
+    "action": "Retention policy",
+    "context": "project",
+    "args": [
+      {
+        "name": "project",
+        "context": true
+      }
+    ],
+    "flags": {
+      "process-days": {
+        "description": "longest age of process memory in days (1 to 3650), or none to keep it",
+        "prompt": "Process memory max age in days (empty keeps it)"
+      },
+      "project-days": {
+        "description": "longest age of project memory in days (1 to 3650), or none to keep it",
+        "prompt": "Project memory max age in days (empty keeps it)"
+      }
+    }
+  },
+  {
+    "id": "memory.retention.apply",
+    "name": "apply-retention",
+    "action": "Retention",
+    "context": "project",
+    "args": [
+      {
+        "name": "project",
+        "context": true
+      }
+    ],
+    "flags": {
+      "key": {
+        "description": "idempotency key (generated when omitted; repeat the same key to replay the recorded result)"
+      }
+    },
+    "confirm": "Delete every project and process memory record older than the retention policy allows? Each deletion is reconciled through the adapter and recorded; user memory is never touched."
+  },
+  {
+    "id": "prompts.list",
+    "name": "prompts",
+    "action": "Prompt listing",
+    "context": "project",
+    "args": [
+      {
+        "name": "project",
+        "context": true
+      }
+    ],
+    "flags": {}
+  },
+  {
+    "id": "prompts.create",
+    "name": "save-prompt",
+    "action": "Prompt creation",
+    "context": "project",
+    "args": [
+      {
+        "name": "project",
+        "context": true
+      },
+      {
+        "name": "name",
+        "description": "prompt name",
+        "prompt": "Prompt name"
+      },
+      {
+        "name": "body",
+        "description": "path of the prompt body, or - for standard input",
+        "prompt": "Prompt body file path"
+      }
+    ],
+    "flags": {
+      "expected-version": {
+        "description": "the current version when updating an existing prompt"
+      },
+      "key": {
+        "description": "idempotency key (generated when omitted)"
+      }
+    }
+  },
+  {
+    "id": "prompts.render",
+    "name": "render-prompt",
+    "action": "Prompt preview",
+    "context": "project",
+    "args": [
+      {
+        "name": "project",
+        "context": true
+      },
+      {
+        "name": "name",
+        "description": "prompt name",
+        "prompt": "Prompt name"
+      },
+      {
+        "name": "version",
+        "description": "prompt version",
+        "prompt": "Version"
+      }
+    ],
+    "flags": {}
+  },
+  {
+    "id": "tickets.create",
+    "name": "create-ticket",
+    "action": "Ticket creation",
+    "context": "project",
+    "args": [
+      {
+        "name": "project",
+        "context": true
+      }
+    ],
+    "flags": {
+      "title": {
+        "description": "ticket title",
+        "prompt": "Ticket title"
+      },
+      "intent": {
+        "description": "what should change and why",
+        "prompt": "Intent"
+      },
+      "criterion": {
+        "repeat": true,
+        "description": "an acceptance criterion (repeatable)",
+        "prompt": "Acceptance criteria (one per line; empty line ends)",
+        "multiline": true
+      },
+      "repository": {
+        "description": "repository id (the project's first registration when omitted)"
+      },
+      "purpose": {
+        "description": "feature (default) or testing_setup: the prerequisite ticket a repository without a usable testing setup is offered (ADR 0022)",
+        "prompt": "Purpose (feature or testing_setup; empty is feature)"
+      },
+      "key": {
+        "description": "idempotency key (generated when omitted)"
+      }
+    }
+  },
+  {
+    "id": "tickets.list",
+    "name": "tickets",
+    "action": "Ticket listing",
+    "context": "project",
+    "args": [
+      {
+        "name": "project",
+        "context": true
+      }
+    ],
+    "flags": {}
+  },
+  {
+    "id": "tickets.show",
+    "name": "show-ticket",
+    "action": "Ticket inspection",
+    "context": "ticket",
+    "args": [
+      {
+        "name": "ticket",
+        "context": true
+      }
+    ],
+    "flags": {}
+  },
+  {
+    "id": "tickets.source",
+    "name": "ticket-source",
+    "action": "Ticket source inspection",
+    "context": "ticket",
+    "args": [
+      {
+        "name": "ticket",
+        "context": true
+      }
+    ],
+    "flags": {}
+  },
+  {
+    "id": "tickets.reconcile",
+    "name": "reconcile-ticket",
+    "action": "Ticket reconciliation",
+    "context": "ticket",
+    "args": [
+      {
+        "name": "ticket",
+        "context": true
+      }
+    ],
+    "flags": {
+      "revision": {
+        "description": "the ticket revision this client read (read from the ticket when omitted)"
+      }
+    }
+  },
+  {
+    "id": "tickets.update",
+    "name": "edit-ticket",
+    "action": "Ticket edit",
+    "context": "ticket",
+    "args": [
+      {
+        "name": "ticket",
+        "context": true
+      }
+    ],
+    "flags": {
+      "title": {
+        "description": "the new title",
+        "prompt": "New title (empty keeps it)"
+      },
+      "intent": {
+        "description": "the new intent",
+        "prompt": "New intent (empty keeps it)"
+      },
+      "criterion": {
+        "repeat": true,
+        "description": "an acceptance criterion (repeatable; given together they replace the list)",
+        "prompt": "Acceptance criteria (one per line; empty line keeps the current list)",
+        "multiline": true
+      },
+      "repository": {
+        "repeat": true,
+        "description": "a repository id (repeatable; given together they replace the list)"
+      },
+      "revision": {
+        "description": "the ticket revision this client read (read from the ticket when omitted)"
+      }
+    }
+  },
+  {
+    "id": "plans.create",
+    "name": "plan",
+    "action": "Planning",
+    "context": "ticket",
+    "args": [
+      {
+        "name": "ticket",
+        "context": true
+      }
+    ],
+    "flags": {
+      "repository": {
+        "description": "repository id (the ticket's first repository when omitted)"
+      },
+      "path": {
+        "repeat": true,
+        "description": "a writer path (repeatable; default src)",
+        "prompt": "Writer paths (comma separated; default src)"
+      },
+      "read-only": {
+        "boolean": true,
+        "description": "allow reads only"
+      },
+      "role": {
+        "description": "the single task's role: implementer (default), repository_lead or project_orchestrator (an advisory role reads only)"
+      },
+      "derived-from": {
+        "description": "the advisory task of an earlier revision whose proposal the single task copies"
+      },
+      "criterion": {
+        "repeat": true,
+        "description": "a task acceptance criterion (repeatable)"
+      },
+      "task": {
+        "repeat": true,
+        "description": "a task for a multi-repository plan as <repository>=<path,...>[>dependency-task,...][;role=<role>][;derived_from=<task>] (repeatable; task ids are the repository ids)"
+      },
+      "override": {
+        "repeat": true,
+        "description": "a dependency override as <consumer>:<producer>:<waive|add>:<justification> (repeatable; the refusal that needs one quotes it)"
+      },
+      "workers": {
+        "description": "concurrent writers for a multi-task plan (1 to the number of tasks, at most 4)"
+      },
+      "attempts": {
+        "description": "writer attempts (1 to 10)"
+      },
+      "timeout": {
+        "description": "time budget in seconds (1 to 86400)"
+      },
+      "cost-usd": {
+        "description": "cost budget in dollars (at most 1000)"
+      },
+      "check": {
+        "repeat": true,
+        "description": "a testing-setup check recipe as <id>=<executable>[,<arg>,...][@<timeout seconds>] (repeatable; testing_setup tickets only; default timeout 600)"
+      },
+      "checks": {
+        "description": "a JSON file (or - for standard input) listing testing-setup check recipes in the manifest-check shape (id, executable, args, cwd, timeout_seconds, capabilities)"
+      },
+      "memory": {
+        "repeat": true,
+        "description": "a selected memory id (repeatable; components only)"
+      },
+      "prompt": {
+        "description": "a selected prompt as name@version#hash (components only)"
+      },
+      "key": {
+        "description": "idempotency key (generated when omitted)"
+      }
+    }
+  },
+  {
+    "id": "plans.list",
+    "name": "plans",
+    "action": "Plan listing",
+    "context": "ticket",
+    "args": [
+      {
+        "name": "ticket",
+        "context": true
+      }
+    ],
+    "flags": {}
+  },
+  {
+    "id": "plans.show",
+    "name": "show-plan",
+    "action": "Plan inspection",
+    "context": "plan",
+    "args": [
+      {
+        "name": "plan",
+        "context": true
+      }
+    ],
+    "flags": {}
+  },
+  {
+    "id": "plans.approve",
+    "name": "approve",
+    "action": "Approval",
+    "context": "plan",
+    "args": [
+      {
+        "name": "plan",
+        "context": true
+      }
+    ],
+    "flags": {
+      "acknowledge-hash": {
+        "description": "the complete plan hash you reviewed; approval binds to exactly this hash"
+      },
+      "approved-by": {
+        "description": "the approver's name (default developer)"
+      }
+    }
+  },
+  {
+    "id": "runs.show",
+    "name": "run",
+    "action": "Run inspection",
+    "context": "run",
+    "args": [
+      {
+        "name": "run",
+        "context": true
+      }
+    ],
+    "flags": {}
+  },
+  {
+    "id": "runs.events",
+    "name": "events",
+    "action": "Event replay",
+    "context": "run",
+    "args": [
+      {
+        "name": "run",
+        "context": true
+      }
+    ],
+    "flags": {
+      "after": {
+        "description": "replay after this sequence (default 0)"
+      },
+      "limit": {
+        "description": "page size (default 1000)"
+      }
+    }
+  },
+  {
+    "id": "runs.stream",
+    "name": "follow",
+    "action": "Event follow",
+    "context": "run",
+    "args": [
+      {
+        "name": "run",
+        "context": true
+      }
+    ],
+    "flags": {
+      "after": {
+        "description": "resume after this sequence (default 0)"
+      }
+    }
+  },
+  {
+    "id": "runs.cancel",
+    "name": "cancel",
+    "action": "Cancellation",
+    "context": "run",
+    "args": [
+      {
+        "name": "run",
+        "context": true
+      }
+    ],
+    "flags": {}
+  },
+  {
+    "id": "runs.implement",
+    "name": "implement",
+    "action": "Implementation",
+    "context": "run",
+    "args": [
+      {
+        "name": "run",
+        "context": true
+      }
+    ],
+    "flags": {
+      "task": {
+        "description": "the plan task to implement (the plan's task when omitted)"
+      },
+      "provider": {
+        "description": "provider override"
+      },
+      "model": {
+        "description": "model override"
+      }
+    }
+  },
+  {
+    "id": "runs.candidate",
+    "name": "candidate",
+    "action": "Candidate inspection",
+    "context": "run",
+    "args": [
+      {
+        "name": "run",
+        "context": true
+      }
+    ],
+    "flags": {}
+  },
+  {
+    "id": "runs.diff",
+    "name": "diff",
+    "action": "Diff inspection",
+    "context": "run",
+    "args": [
+      {
+        "name": "run",
+        "context": true
+      }
+    ],
+    "flags": {}
+  },
+  {
+    "id": "runs.validate",
+    "name": "validate",
+    "action": "Validation",
+    "context": "run",
+    "args": [
+      {
+        "name": "run",
+        "context": true
+      }
+    ],
+    "flags": {
+      "candidate-hash": {
+        "description": "the complete candidate hash shown by `candidate` (read from the run when omitted)"
+      },
+      "auto-repair": {
+        "boolean": true,
+        "description": "repair automatically within the approved budgets"
+      },
+      "provider": {
+        "description": "provider override"
+      },
+      "model": {
+        "description": "model override"
+      }
+    }
+  },
+  {
+    "id": "runs.repair",
+    "name": "repair",
+    "action": "Repair",
+    "context": "run",
+    "args": [
+      {
+        "name": "run",
+        "context": true
+      }
+    ],
+    "flags": {
+      "candidate-hash": {
+        "description": "the complete candidate hash shown by `candidate` (read from the run when omitted)"
+      },
+      "provider": {
+        "description": "provider override"
+      },
+      "model": {
+        "description": "model override"
+      }
+    }
+  },
+  {
+    "id": "runs.publish",
+    "name": "publish",
+    "action": "Publication",
+    "context": "run",
+    "args": [
+      {
+        "name": "run",
+        "context": true
+      }
+    ],
+    "flags": {
+      "candidate-hash": {
+        "description": "the complete candidate hash shown by `candidate` (read from the run when omitted)"
+      },
+      "key": {
+        "description": "idempotency key (generated when omitted; repeat the same key to resume)"
+      }
+    }
+  },
+  {
+    "id": "runs.publication",
+    "name": "publication",
+    "action": "Publication inspection",
+    "context": "run",
+    "args": [
+      {
+        "name": "run",
+        "context": true
+      }
+    ],
+    "flags": {}
+  },
+  {
+    "id": "runs.publication.reconcile",
+    "name": "reconcile-publication",
+    "action": "Publication reconciliation",
+    "context": "run",
+    "args": [
+      {
+        "name": "run",
+        "context": true
+      }
+    ],
+    "flags": {}
+  },
+  {
+    "id": "runs.publication.repair",
+    "name": "publication-repair",
+    "action": "Repair after a CI failure",
+    "context": "run",
+    "args": [
+      {
+        "name": "run",
+        "context": true
+      }
+    ],
+    "flags": {
+      "candidate-hash": {
+        "description": "the complete candidate hash shown by `publication` (read from the run when omitted)"
+      },
+      "provider": {
+        "description": "provider override"
+      },
+      "model": {
+        "description": "model override"
+      }
+    }
+  },
+  {
+    "id": "runs.worktrees",
+    "name": "worktrees",
+    "action": "Worktree listing",
+    "context": "run",
+    "args": [
+      {
+        "name": "run",
+        "context": true
+      }
+    ],
+    "flags": {}
+  },
+  {
+    "id": "runs.attempts",
+    "name": "attempts",
+    "action": "Attempt listing",
+    "context": "run",
+    "args": [
+      {
+        "name": "run",
+        "context": true
+      }
+    ],
+    "flags": {}
+  },
+  {
+    "id": "runs.tasks",
+    "name": "tasks",
+    "action": "Task graph listing",
+    "context": "run",
+    "args": [
+      {
+        "name": "run",
+        "context": true
+      }
+    ],
+    "flags": {}
+  },
+  {
+    "id": "artifacts.read",
+    "name": "artifact",
+    "action": "Log inspection",
+    "context": "run",
+    "args": [
+      {
+        "name": "run",
+        "context": true
+      },
+      {
+        "name": "artifact-id",
+        "description": "<recipe>.stdout or <recipe>.stderr",
+        "prompt": "Artifact id (<recipe>.stdout or <recipe>.stderr)"
+      }
+    ],
+    "flags": {}
+  },
+  {
+    "id": "projection.home",
+    "name": "home",
+    "action": "Home summary",
+    "context": "runtime",
+    "projects": [
+      "projects.list",
+      "projects.show",
+      "baselines.list",
+      "tickets.list",
+      "runs.list"
+    ],
+    "args": [],
+    "flags": {
+      "project": {
+        "description": "only this project"
+      }
+    }
+  },
+  {
+    "id": "projection.board",
+    "name": "board",
+    "action": "Kanban projection",
+    "context": "runtime",
+    "projects": [
+      "projects.list",
+      "projects.show",
+      "tickets.list",
+      "runs.list"
+    ],
+    "args": [],
+    "flags": {
+      "project": {
+        "description": "only this project"
+      }
+    }
+  }
+]

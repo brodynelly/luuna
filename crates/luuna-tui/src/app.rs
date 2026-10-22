@@ -7,6 +7,7 @@ use std::collections::{BTreeMap, VecDeque};
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Mode {
+    Workbench,
     Catalog,
     Form,
     Result,
@@ -77,6 +78,15 @@ impl ActionForm {
         let mut args = Vec::new();
         let mut flags = Map::new();
         for field in &self.fields {
+            if field.name == "@confirm" {
+                if !matches!(field.value.trim().to_lowercase().as_str(), "yes" | "y") {
+                    return Err("Type yes in the confirmation field to perform this action.".into());
+                }
+                continue;
+            }
+            if field.name.starts_with('@') {
+                continue;
+            }
             if field.argument {
                 if field.value.trim().is_empty() {
                     return Err(format!("{} is required.", field.label));
@@ -115,6 +125,7 @@ pub struct PendingPrompt {
 }
 
 pub struct AppState {
+    pub workbench: crate::views::WorkbenchState,
     pub commands: Vec<CommandDef>,
     pub selected: usize,
     pub filter: String,
@@ -142,6 +153,7 @@ pub struct AppState {
 impl Default for AppState {
     fn default() -> Self {
         Self {
+            workbench: crate::views::WorkbenchState::default(),
             commands: Vec::new(),
             selected: 0,
             filter: String::new(),
@@ -182,6 +194,12 @@ impl AppState {
         self.commands
             .iter()
             .filter(|c| self.filter.is_empty() || c.context == self.filter)
+            .filter(|c| {
+                self.workbench.query.is_empty()
+                    || format!("{} {}", c.name, c.action)
+                        .to_lowercase()
+                        .contains(&self.workbench.query.to_lowercase())
+            })
             .collect()
     }
     pub fn append(&mut self, text: &str) {
@@ -251,20 +269,53 @@ impl AppState {
         };
         match form.input() {
             Ok((args, flags)) => {
+                let document = form
+                    .fields
+                    .iter()
+                    .find(|f| f.name == "@document")
+                    .map(|f| f.value.clone());
                 let name = form.command.name.clone();
                 let read = form.command.read_only && !flags.contains_key("output");
-                for (arg, value) in form.command.args.iter().zip(&args) {
-                    if arg.context {
-                        self.context.insert(arg.name.clone(), value.clone());
+                let contexts = form
+                    .command
+                    .args
+                    .iter()
+                    .zip(&args)
+                    .filter(|(arg, _)| arg.context)
+                    .map(|(arg, value)| (arg.name.clone(), value.clone()))
+                    .collect::<Vec<_>>();
+                for (name, value) in contexts {
+                    if name == "project" {
+                        crate::views::choose_project(self, &value);
+                    } else {
+                        self.context.insert(name, value);
                     }
                 }
                 self.invoke(&name, args, flags, read);
+                if let (Some(document), Some(id)) = (document, self.active_request.clone()) {
+                    if let Some(request) = self.queue.iter_mut().find(|r| r.id == id) {
+                        request
+                            .fields
+                            .insert("stdin_document".into(), json!(document));
+                        if let Some(pending) = self.pending.get_mut(&id) {
+                            *pending = request.clone();
+                        }
+                    }
+                }
             }
             Err(error) => self.status = error,
         }
     }
     pub fn refresh(&mut self) {
         if self.active_request.is_some() {
+            return;
+        }
+        if self.mode == Mode::Form {
+            self.status = "Connection restored. Your unsent form is preserved; the runtime checks its revision when submitted.".into();
+            return;
+        }
+        if self.mode == Mode::Workbench {
+            crate::views::load(self);
             return;
         }
         if let Some(request) = self.last_read.clone() {
@@ -310,6 +361,14 @@ impl AppState {
         self.queue.clear();
     }
     pub fn apply(&mut self, event: BridgeEvent) {
+        let notification = event.clone();
+        let original = self.pending.get(&event.id).cloned();
+        let origin_name = original
+            .as_ref()
+            .and_then(|r| r.fields.get("name"))
+            .and_then(Value::as_str)
+            .map(str::to_owned);
+        let was_read = original.as_ref().is_some_and(|r| r.op == "read");
         match event.event.as_str() {
             "catalog" => {
                 match serde_json::from_value::<Vec<CommandDef>>(
@@ -396,14 +455,22 @@ impl AppState {
             }
             _ => {}
         }
+        crate::views::received(self, &notification, origin_name.as_deref(), was_read);
     }
     pub fn key(&mut self, key: KeyEvent) {
         if key.modifiers.contains(KeyModifiers::CONTROL) && key.code == KeyCode::Char('c') {
             self.quit = true;
             return;
         }
+        if crate::views::key(self, key) {
+            return;
+        }
         if key.code == KeyCode::Esc {
-            self.abort();
+            if self.prompt.is_some() || self.active_request.is_some() {
+                self.abort();
+            } else {
+                crate::views::back(self);
+            }
             return;
         }
         if matches!(key.code, KeyCode::PageUp | KeyCode::PageDown)

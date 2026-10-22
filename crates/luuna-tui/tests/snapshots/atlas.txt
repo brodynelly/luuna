@@ -1,0 +1,35 @@
+ Home  Projects  Missions  Atlas  Beacon  Runs  Commands  Help
+ LUUNA  / WORKBENCH connected
+╔ LUUNA ══════════════════════╗╔ > Atlas / scoped memory ══════════════════════════════════════════════════════════════╗
+║ 1 Home                      ║║Search:                                                                                ║
+║ 2 Projects                  ║║User memory: excluded (explicit choice)                                                ║
+║ 3 Missions                  ║║> [project] mem-1                  ║mem-1                                              ║
+║ 4 Atlas *                   ║║  Use structured errors            ║Scope: project                                     ║
+║ 5 Beacon                    ║║                                   ║Provenance: Maintainer notes                       ║
+║ 6 Runs                      ║║                                   ║Exact hash: sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa║
+║ 7 Commands                  ║║                                   ║aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa                   ║
+║ 8 Help                      ║║                                   ║                                                   ║
+║                             ║║                                   ║CONTENT                                            ║
+║                             ║║                                   ║Use structured errors                              ║
+║                             ║║                                   ║                                                   ║
+║                             ║║                                   ║Context selection is unsent until you submit a plan║
+║                             ║║                                   ║.                                                  ║
+║                             ║║                                   ║                                                   ║
+║                             ║║                                   ║                                                   ║
+║                             ║║                                   ║                                                   ║
+║                             ║║                                   ║                                                   ║
+║                             ║║                                   ║                                                   ║
+║                             ║║                                   ║                                                   ║
+║                             ║║                                   ║                                                   ║
+║                             ║║                                   ║                                                   ║
+║                             ║║                                   ║                                                   ║
+║PROJECT                      ║║                                   ║                                                   ║
+║demo                         ║║                                   ║                                                   ║
+║                             ║║                                   ║                                                   ║
+║UNSENT PLAN CONTEXT          ║║                                   ║                                                   ║
+║0 memory selection(s)        ║║                                   ║                                                   ║
+║No prompt selected           ║║                                   ║                                                   ║
+║F10 menu / Tab focus         ║║Enter inspect  n new  / search  u user memory                                          ║
+╚═════════════════════════════╝╚═══════════════════════════════════════════════════════════════════════════════════════╝
+Connecting to the local runtime…
+Enter inspect  n new  / search  u user memory

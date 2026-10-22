@@ -12,29 +12,43 @@ impl Theme {
         }
     }
     pub fn base(self) -> Style {
-        self.style(Color::Rgb(200, 213, 225), Color::Rgb(12, 20, 44))
+        self.style(Color::Rgb(170, 170, 170), Color::Rgb(0, 0, 170))
     }
     pub fn panel(self) -> Style {
-        self.style(Color::Rgb(216, 226, 232), Color::Rgb(17, 31, 57))
+        self.style(Color::Rgb(255, 255, 255), Color::Rgb(0, 0, 170))
     }
     pub fn accent(self) -> Style {
-        self.style(Color::Rgb(90, 228, 213), Color::Rgb(17, 31, 57))
+        self.style(Color::Rgb(85, 255, 255), Color::Rgb(0, 0, 170))
     }
     pub fn selected(self) -> Style {
-        self.style(Color::Rgb(9, 25, 42), Color::Rgb(90, 228, 213))
+        self.style(Color::Rgb(255, 255, 255), Color::Rgb(0, 170, 0))
             .add_modifier(Modifier::BOLD)
     }
     pub fn muted(self) -> Style {
-        self.style(Color::Rgb(137, 155, 178), Color::Rgb(17, 31, 57))
+        self.base()
+    }
+    pub fn chrome(self) -> Style {
+        self.style(Color::Black, Color::Rgb(170, 170, 170))
+    }
+    pub fn mnemonic(self) -> Style {
+        self.style(Color::Rgb(170, 0, 0), Color::Rgb(170, 170, 170))
+            .add_modifier(Modifier::BOLD)
+    }
+    pub fn title(self) -> Style {
+        self.style(Color::Rgb(255, 255, 85), Color::Rgb(0, 0, 170))
+            .add_modifier(Modifier::BOLD)
+    }
+    pub fn focused(self) -> Style {
+        self.panel()
     }
     pub fn tone(self, tone: &str) -> Style {
         let color = match tone {
-            "success" => Color::Green,
-            "active" => Color::Cyan,
-            "danger" => Color::LightRed,
-            "attention" => Color::Yellow,
-            "interrupted" => Color::Magenta,
-            _ => Color::Gray,
+            "success" => Color::Rgb(85, 255, 85),
+            "active" => Color::Rgb(85, 255, 255),
+            "danger" => Color::Rgb(255, 85, 85),
+            "attention" => Color::Rgb(255, 255, 85),
+            "interrupted" => Color::Rgb(255, 85, 255),
+            _ => Color::Rgb(170, 170, 170),
         };
         if self.color {
             self.panel().fg(color)
@@ -53,11 +67,15 @@ impl Theme {
 
 pub fn state_tone(state: &str) -> &'static str {
     match state {
-        "passed" | "accepted" | "connected" => "success",
-        "running" | "implementing" | "validating" | "reviewing" => "active",
-        "failed" | "rejected" => "danger",
-        "blocked" | "pending" | "unconfirmed" | "approved" => "attention",
-        "interrupted" | "reconnecting" | "offline" => "interrupted",
+        "passed" | "accepted" | "connected" | "reviewed" => "success",
+        "running" | "exploring" | "implementing" | "validating" | "reviewing" | "active" => {
+            "active"
+        }
+        "failed" | "rejected" | "blocked" | "testing_blocked" | "changes_required" | "blocking" => {
+            "danger"
+        }
+        "unconfirmed" | "approved" | "plan_ready" | "paused" | "warning" => "attention",
+        "interrupted" | "reconnecting" | "abandoned" => "interrupted",
         _ => "neutral",
     }
 }
