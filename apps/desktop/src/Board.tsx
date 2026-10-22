@@ -4,8 +4,9 @@ import { boardProjection } from "@luuna/api-client";
 import type { OpenRequest } from "./Home";
 import { boundedMap } from "./Workflows";
 import { describeFailure } from "./failures";
-import { StatusBadge } from "./design/StatusBadge";
 import { runTone } from "./design/tone";
+import { viewInfo } from "./content/views";
+import { Button, ContextMenuArea, copyText, EmptyState, ErrorBanner, HeadingRow, Hint, Id, Item, List, Loading, Meta, OpenCard, Page, StatusBadge, useNotify, VisuallyHidden } from "./ui";
 
 /** One read of what the board projects: every project view (with its offers), its tickets, and the run listing. */
 export async function readBoard(client: Pick<LuunaClient, "listProjects" | "project" | "listTickets" | "listRuns">, signal: AbortSignal): Promise<BoardProjection> {
@@ -18,26 +19,40 @@ function cardLabel(card: BoardCard): string {
   return card.kind === "prerequisite" ? `${card.title} in ${card.project_id}` : `${card.title} (${card.ticket_id} r${card.ticket_revision}) in ${card.project_id}`;
 }
 
+/** One card: the ticket (or offer) title, its run state through runTone, and its identities. */
+function BoardCardView({ card, busy, onOpen }: { card: BoardCard; busy: boolean; onOpen: (request: OpenRequest) => void }) {
+  const state = card.kind === "prerequisite" ? <StatusBadge tone="attention">testing setup</StatusBadge>
+    : card.state ? <StatusBadge tone={runTone[card.state]}>{card.state.replace(/_/g, " ")}</StatusBadge> : <StatusBadge>no plan</StatusBadge>;
+  const meta = <>
+    {state}
+    {card.purpose && <StatusBadge>{card.purpose.replace(/_/g, " ")}</StatusBadge>}
+    <Id>{card.kind === "prerequisite" ? card.repository_id : card.ticket_id}</Id>
+    {card.plan_revision !== undefined && <span>plan r{card.plan_revision}</span>}
+    <span>{card.project_id}</span>
+  </>;
+  const notify = useNotify();
+  const id = card.kind === "prerequisite" ? card.repository_id : card.ticket_id;
+  const open = () => onOpen({ projectId: card.project_id, ticketId: card.ticket_id });
+  return <ContextMenuArea label={`Actions for ${card.title}`} commands={() => [
+    { label: card.kind === "prerequisite" ? "Open project" : "Open ticket", onSelect: open, disabled: busy },
+    ...(card.kind === "prerequisite" ? [] : [{ label: "Open project", onSelect: () => onOpen({ projectId: card.project_id }), disabled: busy }]),
+    ...(id ? [{ label: card.kind === "prerequisite" ? "Copy repository ID" : "Copy ticket ID", group: true, onSelect: () => void copyText(id).then(() => notify("Copied")) }] : []),
+  ]}>
+    <OpenCard disabled={busy} label={`Open ${cardLabel(card)}`} onOpen={open} title={card.title} meta={meta} />
+  </ContextMenuArea>;
+}
+
 /** The board as rendered; pure, so a fixture projection renders without a runtime. */
 export function BoardView({ projection, busy, onOpen }: { projection: BoardProjection; busy: boolean; onOpen: (request: OpenRequest) => void }) {
   return <>
-    <ul className="board-columns" aria-label="Kanban columns">{projection.columns.map(({ column, cards }) => <li key={column.id} className="board-column">
-      <h3 id={`board-${column.id}`}>{column.title} <span className="board-count" aria-label={`${cards.length} card(s)`}>{cards.length}</span></h3>
-      <small className="board-column-scope">{column.description}</small>
-      {cards.length > 0 ? <ul className="board-cards" aria-labelledby={`board-${column.id}`}>{cards.map((card) => <li key={card.kind === "prerequisite" ? `offer-${card.project_id}-${card.repository_id}` : `ticket-${card.ticket_id}`}>
-        <button type="button" className="run-card" disabled={busy} aria-label={`Open ${cardLabel(card)}`} onClick={() => onOpen({ projectId: card.project_id, ticketId: card.ticket_id })}>
-          <span className="run-prompt">{card.title}</span>
-          <span className="run-meta">
-            {card.kind === "prerequisite" ? <StatusBadge tone="attention">testing setup</StatusBadge> : card.state ? <StatusBadge tone={runTone[card.state]}>{card.state.replace(/_/g, " ")}</StatusBadge> : <StatusBadge>no plan</StatusBadge>}
-            {card.purpose && <StatusBadge>{card.purpose.replace(/_/g, " ")}</StatusBadge>}
-            <code>{card.kind === "prerequisite" ? card.repository_id : card.ticket_id}</code>
-            {card.plan_revision !== undefined && <span>plan r{card.plan_revision}</span>}
-            <span>{card.project_id}</span>
-          </span>
-        </button>
-      </li>)}</ul> : <p className="empty">Nothing here.</p>}
-    </li>)}</ul>
-    <p className="meta" role="note">{projection.note}</p>
+    <List className="board-columns" label="Kanban columns">{projection.columns.map(({ column, cards }) => <Item key={column.id} className="board-column">
+      <HeadingRow level={3} id={`board-${column.id}`} title={<>{column.title} <span className="board-count" aria-label={`${cards.length} card(s)`}>{cards.length}</span></>} />
+      <Hint className="board-column-scope">{column.description}</Hint>
+      {cards.length > 0 ? <List className="board-cards" labelledBy={`board-${column.id}`}>{cards.map((card) => <Item key={card.kind === "prerequisite" ? `offer-${card.project_id}-${card.repository_id}` : `ticket-${card.ticket_id}`}>
+        <BoardCardView card={card} busy={busy} onOpen={onOpen} />
+      </Item>)}</List> : <EmptyState>Nothing here.</EmptyState>}
+    </Item>)}</List>
+    <Meta block className="board-note">{projection.note}</Meta>
   </>;
 }
 
@@ -51,6 +66,7 @@ export function Board({ client, connectionEpoch = 0, refreshEpoch = 0, onOpen }:
   const [error, setError] = useState("");
   const [busy, setBusy] = useState(false);
   const [tick, setTick] = useState(0);
+  const info = viewInfo("board");
 
   useEffect(() => {
     setProjection(null);
@@ -68,10 +84,11 @@ export function Board({ client, connectionEpoch = 0, refreshEpoch = 0, onOpen }:
     return () => controller.abort();
   }, [client, connectionEpoch, refreshEpoch, tick]);
 
-  return <section className="panel board-panel" aria-labelledby="board-heading" data-surface="board">
-    <div className="panel-heading"><h2 id="board-heading">Board</h2><span className="tag">Projection of run state · read-only</span><button type="button" className="text-button" disabled={!client || busy} onClick={() => setTick((value) => value + 1)}>Refresh board</button></div>
-    <p className="scope">Every ticket sits in the column of its latest plan revision's authoritative run state; a repository without a usable testing setup sits in Testing prerequisite. Cards open the ticket's own panel. Dragging is not implemented: moving a card can never bypass a validation gate or an approval.</p>
-    {error && <div className="error" role="alert">{error}<button className="text-button" type="button" onClick={() => setError("")}>Dismiss</button></div>}
-    {client ? projection ? <BoardView projection={projection} busy={busy} onOpen={onOpen} /> : !error && <p className="empty">Reading the runtime's tickets and workflows…</p> : <p className="empty empty-box">Connect to the runtime to see the board.</p>}
-  </section>;
+  const refresh = <Button variant="text" disabled={!client || busy} onClick={() => setTick((value) => value + 1)}>Refresh<VisuallyHidden> Board</VisuallyHidden></Button>;
+  return <Page id="board" title={info.label} description={info.description} actions={refresh} className="board-panel" data-surface="board">
+    {error && <ErrorBanner message={error} onDismiss={() => setError("")} />}
+    {client ? projection ? <BoardView projection={projection} busy={busy} onOpen={onOpen} />
+      : !error && <Loading label="Reading the runtime's tickets and workflows…" rows={4} />
+      : <EmptyState boxed>Connect to the runtime to see the board.</EmptyState>}
+  </Page>;
 }

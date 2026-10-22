@@ -178,3 +178,24 @@ ol.events summary time { margin-left: auto; color: var(--color-text-subtle); fon
   button.run-card[aria-pressed="true"] { forced-color-adjust: none; border-color: Highlight; background: SelectedItem; color: SelectedItemText; }
   summary::before { forced-color-adjust: none; border-color: transparent transparent transparent CanvasText; }
 }
+
+/* Card: an untitled raised group with the panel's padding (a project's detail). */
+.card { display: grid; grid-template-columns: minmax(0, 1fr); align-content: start; gap: var(--space-4); min-width: 0; padding: var(--panel-pad); border: var(--border-width) solid var(--color-border); border-radius: var(--radius-lg); background: var(--color-surface); box-shadow: var(--shadow-card); }
+.section-plain { display: grid; grid-template-columns: minmax(0, 1fr); gap: var(--space-3); min-width: 0; }
+
+/* Empty state with a next step: what is missing, then the control that adds it. */
+.empty-state { display: grid; justify-items: start; gap: var(--space-2); }
+.empty-state.empty-box { justify-items: center; }
+.empty-state > .empty-title { color: var(--color-text); font-size: var(--text-md); font-weight: var(--weight-medium); }
+
+/* Loading: placeholder rows in the content's shape, so something shows at once. No motion. */
+.skeleton { display: grid; gap: var(--space-2); }
+.skeleton-row { display: block; height: var(--skeleton-height); border-radius: var(--radius-md); background: var(--color-surface-raised); border: var(--border-width) solid var(--color-border); }
+.skeleton-row:nth-child(3n) { width: var(--skeleton-short); }
+
+/* Text only assistive technology reads. */
+.visually-hidden { position: absolute; width: var(--border-width); height: var(--border-width); overflow: hidden; clip-path: inset(50%); white-space: nowrap; }
+
+/* Notice: confirms a completed action at the top of the content; stays until dismissed or replaced. */
+.notice-region:empty { display: none; }
+.notice { display: flex; align-items: center; justify-content: space-between; gap: var(--space-4); margin: 0; padding: var(--space-2) var(--space-2) var(--space-2) var(--space-4); border: var(--border-width) solid var(--color-selected-border); border-left: var(--rule-width) solid var(--color-accent); border-radius: var(--radius-md); background: var(--color-selected); color: var(--color-text); font-size: var(--text-xs); }

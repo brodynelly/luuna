@@ -11,14 +11,21 @@
 .projects-layout { display: grid; grid-template-columns: var(--rail-width) minmax(0, 1fr); align-items: start; gap: var(--space-5) var(--space-6); min-width: 0; }
 .projects-rail { position: sticky; top: var(--space-5); display: grid; grid-template-columns: minmax(0, 1fr); align-content: start; gap: var(--space-4); min-width: 0; }
 
+/* Add, import and create: quiet disclosures under the project list; the open one holds its form. */
+.projects-rail > details.section > summary { color: var(--color-accent); }
+
 /* Project cards: name first, then the manifest chip and the exact project id. */
 .project-list { display: grid; grid-template-columns: minmax(0, 1fr); gap: var(--space-1); min-width: 0; margin: 0; padding: 0; list-style: none; }
 .project-list > li { min-width: 0; }
 .project-list > li > .run-card { padding: var(--space-2) var(--space-3); }
 .project-list .run-prompt { font-size: var(--text-sm); font-weight: var(--weight-medium); }
 
-/* Detail column: facts, actions, baselines, discovery, workflows, then the event record. */
-.project-detail { display: grid; grid-template-columns: minmax(0, 1fr); align-content: start; gap: var(--space-4); min-width: 0; }
+/* Detail column: the library's card (.card) holding the header, facts, actions, baselines,
+   discovery, workflows, then the event record. */
+.project-detail > .empty-box { margin: calc(var(--panel-pad) * -1); border: 0; }
+.project-header { display: flex; flex-wrap: wrap; align-items: baseline; gap: var(--space-1-5) var(--space-3); min-width: 0; }
+.project-header > h3 { min-width: 0; font-family: var(--font-display); font-size: var(--text-lg); overflow-wrap: anywhere; }
+.project-header > code { color: var(--color-text-subtle); font-size: var(--text-xs); }
 .project-facts { padding-bottom: var(--space-4); border-bottom: var(--border-width) solid var(--color-border); }
 .project-actions > small { max-width: var(--measure); }
 

@@ -8,9 +8,9 @@
  * and next step, the diff, check evidence and logs, the independent review, then usage.
  */
 
-/* Heading: the revision and its badge on one baseline. */
-.candidate-review > .candidate-heading { display: flex; flex-wrap: wrap; align-items: baseline; gap: var(--space-1-5) var(--space-3); min-width: 0; }
-.candidate-review > .candidate-heading > strong { font-size: var(--text-sm); }
+/* Heading: the revision (an h4 from the library's heading row) and its badge on one baseline. */
+.candidate-review > .panel-heading { align-items: baseline; }
+.candidate-review > .panel-heading > h4 { font-size: var(--text-sm); }
 
 /*
  * Facts (the candidate's and each check's): a value stays beside its 150 px term while it fits

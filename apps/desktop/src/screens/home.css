@@ -17,3 +17,7 @@
 /* Blockers: a leaf record per blocker, ruled in the tone of the state it reports. */
 .home-blockers > .home-blocker { grid-template-columns: auto minmax(0, 1fr); align-items: baseline; gap: var(--space-1-5) var(--space-2); }
 .home-blockers > .home-blocker > :nth-child(n + 3) { grid-column: 1 / -1; }
+
+/* Sections: "Waiting on you" first, then the projects, each a titled group on the page. */
+.home-section > .panel-heading > h3 { display: flex; align-items: baseline; gap: var(--space-2); }
+.home-section .home-count { color: var(--color-text-subtle); font-size: var(--text-xs); font-variant-numeric: tabular-nums; }

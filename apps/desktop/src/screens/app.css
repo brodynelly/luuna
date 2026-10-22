@@ -1,108 +1,167 @@
-/* Screen: app. Layout and screen-specific presentation, tokens only (docs/DESIGN-SYSTEM.md). */
+/* Screen: app. The shell and the Sessions view, tokens only (docs/DESIGN-SYSTEM.md). */
 
 /*
- * Every selector is scoped by a class unique to the shell (.app, .topbar, .connection-panel,
- * .workspace, .history, .event-panel, ...), so nothing reaches into Projects, Workflows or the
- * candidate review. Panels space their children with the components' gap model.
- * Bars span the window; their content lines up with main's centred column.
+ * A desktop window: a sidebar of views on the leading edge and one content column. Every view
+ * stays mounted (its state survives navigation) and only the selected one is shown. A view's
+ * top-level panel is the page itself: no card, a large title, and its cards inside. Every
+ * selector is scoped by a class unique to the shell (.app, .sidebar, .view, .connect-page,
+ * .sessions-panel, .workspace, .history, .event-panel, ...). Flex and gap utilities in App.tsx
+ * come from Tailwind and resolve to the same tokens.
  */
-.app > .topbar,
-.app > footer {
-  padding-inline: max(var(--gutter), calc((100% - var(--layout-max)) / 2 + var(--gutter)));
+.app {
+  display: grid;
+  grid-template-columns: var(--sidebar-width) minmax(0, 1fr);
+  align-items: start;
+  min-height: var(--viewport-height);
 }
 
-/* Topbar: a normal (non-sticky) bar. Wordmark, stage, then the connection status at the end. */
-.topbar {
-  display: flex;
-  flex-wrap: wrap;
-  align-items: center;
-  gap: var(--space-2) var(--space-5);
-  min-height: var(--topbar-height);
-  padding-block: var(--space-2);
-  border-bottom: var(--border-width) solid var(--color-border);
-  background: var(--color-surface);
+/* Sidebar: window chrome. It stays in view while the content scrolls; the current view shows by
+   fill and weight, never by colour alone. Critical actions never sit at its bottom. */
+.sidebar {
+  position: sticky;
+  top: 0;
+  height: var(--viewport-height);
+  padding: var(--space-5) var(--space-3);
+  border-right: var(--border-width) solid var(--color-border);
+  background: var(--color-sidebar);
 }
-.topbar > .wordmark {
-  display: inline-flex;
-  align-items: center;
-  gap: var(--space-2);
-  border-radius: var(--radius-sm);
+.sidebar-top > .wordmark {
+  flex: 1 1 auto;
+  min-width: 0;
+  padding-inline: var(--space-2);
   color: var(--color-text);
+  font-family: var(--font-display);
   font-size: var(--text-wordmark);
   font-weight: var(--weight-strong);
   letter-spacing: var(--tracking-tight);
   line-height: var(--leading-none);
-  text-decoration: none;
 }
-/* The brand mark: a lavender disc whose left half is cut from the bar's own surface, ringed so
-   the disc keeps its outline in both schemes. */
-.wordmark-mark { flex: none; width: var(--space-5); height: var(--space-5); overflow: visible; }
-.wordmark-mark > circle { fill: var(--color-accent); }
-.wordmark-mark > path { fill: var(--color-surface); stroke: var(--color-accent); stroke-width: var(--focus-width); vector-effect: non-scaling-stroke; }
-.topbar > .stage {
-  padding-left: var(--space-5);
-  border-left: var(--border-width) solid var(--color-border);
-  color: var(--color-text-muted);
-  font-size: var(--text-xs);
-  line-height: var(--leading-tight);
-}
-/* Connection status: a pill in the connection's tone, led by the shared tone mark. */
-.topbar > .connection {
-  display: inline-flex;
+/* The brand mark: a lavender disc whose leading half is cut from the sidebar's own surface. */
+.wordmark-mark, .connect-mark { flex: none; overflow: visible; }
+.wordmark-mark { width: var(--space-5); height: var(--space-5); }
+:is(.wordmark-mark, .connect-mark) > circle { fill: var(--color-accent); }
+.wordmark-mark > path { fill: var(--color-sidebar); stroke: var(--color-accent); stroke-width: var(--focus-width); vector-effect: non-scaling-stroke; }
+
+/* Connection status: one quiet line under the wordmark, led by the shared tone mark. */
+.sidebar > .connection {
+  display: flex;
   align-items: center;
   gap: var(--space-2);
   min-height: var(--control-height-sm);
-  margin-left: auto;
-  padding: 0 var(--space-3);
-  border: var(--border-width) solid var(--color-border);
-  border-radius: var(--radius-full);
+  margin-top: calc(var(--space-2) - var(--space-5));
+  padding: 0 var(--space-2);
   color: var(--color-text-muted);
   font-size: var(--text-xs);
   font-weight: var(--weight-medium);
   line-height: var(--leading-tight);
 }
-.topbar > .connection[data-tone] { border-color: var(--tone-border); background: var(--tone-bg); color: var(--tone-fg); }
+.sidebar > .connection[data-tone] { color: var(--tone-fg); }
 
-/* Main: one centred column; every top-level block is spaced by the section gap alone. */
-.app > main {
-  display: grid;
-  grid-template-columns: minmax(0, 1fr);
-  gap: var(--section-gap);
-  max-width: var(--layout-max);
-  margin: 0 auto;
-  padding: var(--space-7) var(--gutter);
+.sidebar-top > .sidebar-toggle {
+  flex: none;
+  min-height: var(--control-height-sm);
+  padding: 0 var(--space-1-5);
+  border-color: transparent;
+  background: transparent;
+  color: var(--color-text-muted);
 }
-
-.intro {
-  display: grid;
-  gap: var(--space-2);
-  max-width: var(--measure);
-  padding-bottom: var(--space-2);
+.sidebar-top > .sidebar-toggle:hover:not(:disabled) { background: var(--color-control-hover); color: var(--color-text); }
+.sidebar > .sidebar-search {
+  justify-content: flex-start;
+  gap: var(--space-2-5);
+  width: 100%;
+  min-height: var(--nav-height);
+  margin-top: calc(var(--space-2) - var(--space-5));
+  padding: 0 var(--space-2);
+  border-color: var(--color-border);
+  background: var(--color-surface);
+  color: var(--color-text-muted);
+  font-size: var(--text-sm);
+  font-weight: var(--weight-regular);
 }
-.intro > p:last-child {
+.sidebar > .sidebar-search > kbd { margin-left: auto; }
+.sidebar .icon { flex: none; }
+.sidebar-nav > ul { margin: 0; padding: 0; list-style: none; }
+.sidebar-nav button.nav-item {
+  justify-content: flex-start;
+  gap: var(--space-2-5);
+  width: 100%;
+  min-height: var(--nav-height);
+  padding: 0 var(--space-2);
+  border-color: transparent;
+  background: transparent;
   color: var(--color-text-muted);
   font-size: var(--text-md);
-  line-height: var(--leading-prose);
+  font-weight: var(--weight-medium);
+}
+.sidebar-nav button.nav-item:hover:not(:disabled) { background: var(--color-control-hover); color: var(--color-text); }
+.sidebar-nav button.nav-item[aria-current="page"] { background: var(--color-selected); color: var(--color-text); font-weight: var(--weight-strong); }
+.sidebar-nav button.nav-item[aria-current="page"] > .icon { stroke: var(--color-accent); }
+.sidebar-nav .nav-count {
+  margin-left: auto;
+  padding: 0 var(--space-1-5);
+  border-radius: var(--radius-full);
+  background: var(--color-surface);
+  color: var(--color-text-muted);
+  font-size: var(--text-2xs);
+  font-variant-numeric: tabular-nums;
+}
+.sidebar .icon {
+  flex: none;
+  width: var(--icon-size);
+  height: var(--icon-size);
+  fill: none;
+  stroke: currentColor;
+  stroke-width: var(--icon-stroke);
+  stroke-linecap: round;
+  stroke-linejoin: round;
 }
 
-/* Runtime connection: heading and summary, Disconnect at the end; the form takes its own row. */
-.connection-panel { grid-template-columns: minmax(0, 1fr) auto; align-items: center; column-gap: var(--space-5); }
-.connection-summary { display: grid; gap: var(--space-2); min-width: 0; }
-.connection-form {
-  display: grid;
-  grid-column: 1 / -1;
-  grid-template-columns: minmax(0, 1fr) minmax(0, 1fr) auto;
-  align-items: end;
-  gap: var(--space-3);
-  padding-top: var(--space-4);
-  border-top: var(--border-width) solid var(--color-border);
+/* Content: one left-aligned column of a readable maximum width. */
+.app > main {
+  width: 100%;
+  max-width: calc(var(--content-max) + 2 * var(--gutter));
+  min-width: 0;
+  padding: var(--space-6) var(--gutter) var(--space-7);
 }
-.connection-form > small { grid-column: 1 / -1; }
-/* The native shell's "Connect automatically" follows the hint on its own row, left-aligned. */
-.connection-form > small ~ button { grid-column: 1 / -1; justify-self: start; }
-.connection-panel > .outage { grid-column: 1 / -1; }
+.app > main > .view[hidden] { display: none; }
 
-/* Workspace: session history beside the main column; one column, in DOM order, at 920 px. */
+/* A view's own panel is the page: no card, a large title, its description under it. */
+.view > .page { gap: var(--space-5); padding: 0; border: 0; background: transparent; box-shadow: none; }
+.page > .panel-heading > h2 {
+  font-family: var(--font-display);
+  font-size: var(--text-title);
+  font-weight: var(--weight-strong);
+  letter-spacing: var(--tracking-title);
+}
+.view > .page > .panel-heading + .scope { margin-top: calc(var(--space-1) - var(--space-5)); color: var(--color-text-muted); font-size: var(--text-md); }
+
+/* Cards inside a view share one elevation. */
+.app .panel :is(.panel, .form-group) { box-shadow: var(--shadow-card); }
+.app .view .panel .panel { background: var(--color-surface); }
+
+/* Connect page: shown in place of a view until the runtime answers. Centred, one task. */
+.app > main > .connect-page {
+  justify-items: center;
+  max-width: var(--connect-width);
+  margin: var(--space-7) auto 0;
+  padding: var(--space-6);
+  text-align: center;
+  box-shadow: var(--shadow-card);
+}
+.connect-page > .connect-mark { order: -1; width: var(--space-7); height: var(--space-7); }
+.connect-page > .panel-heading { justify-content: center; }
+.connect-page > .panel-heading > h2 { margin: 0; }
+.connect-mark > path { fill: var(--color-surface); stroke: var(--color-accent); stroke-width: var(--focus-width); vector-effect: non-scaling-stroke; }
+.connect-page > .scope { font-size: var(--text-sm); }
+.connect-page > .connection-form { width: 100%; text-align: left; }
+.connection-form > fieldset > button { width: 100%; }
+.connection-form > fieldset > small { text-align: center; }
+
+/* Settings › Runtime: the address and version under the heading; Disconnect and Stop trail it. */
+.settings-panel > .connection-panel > .panel-heading + .meta { margin-top: calc(var(--space-1) - var(--space-4)); }
+
+/* Sessions: history beside the selected session's events and the start form. */
 .workspace {
   display: grid;
   grid-template-columns: var(--aside-width) minmax(0, 1fr);
@@ -125,6 +184,7 @@
   gap: var(--section-gap);
   min-width: 0;
 }
+.start-panel .model-options > .field-row { margin-top: var(--space-2); }
 
 /* Session events: heading and badge, the run bar, reason, response, then the event record. */
 .run-detail {
@@ -149,21 +209,26 @@
   line-height: var(--leading-prose);
 }
 
-/* Footer: quiet meta text under a hairline. */
-.app > footer {
-  display: flex;
-  flex-wrap: wrap;
-  justify-content: space-between;
-  gap: var(--space-1) var(--space-4);
-  padding-block: var(--space-5) var(--space-6);
-  border-top: var(--border-width) solid var(--color-border);
-  color: var(--color-text-subtle);
-  font-size: var(--text-2xs);
-}
+/* At 920 px the sidebar becomes an icon rail (names stay as accessible names and tooltips), and
+   the Sessions workspace stacks with the history as a card grid. */
+/* The icon rail: chosen with the sidebar toggle (Ctrl+backslash), and automatic at 920 px and below. */
+.app[data-sidebar="collapsed"] { grid-template-columns: var(--sidebar-compact) minmax(0, 1fr); }
+.app[data-sidebar="collapsed"] > .sidebar { padding-inline: var(--space-2); }
+.app[data-sidebar="collapsed"] .sidebar-top { flex-direction: column; }
+.app[data-sidebar="collapsed"] :is(.wordmark, .connection, .nav-item, .sidebar-search) { justify-content: center; padding-inline: 0; }
+.app[data-sidebar="collapsed"] .sidebar-label { position: absolute; width: var(--border-width); height: var(--border-width); overflow: hidden; clip-path: inset(50%); white-space: nowrap; }
+.app[data-sidebar="collapsed"] .nav-item { position: relative; }
+.app[data-sidebar="collapsed"] .nav-count { position: absolute; top: 0; right: var(--space-0-5); }
 
-/* At 920 px the workspace stacks like the Projects rail and the history becomes a card grid. */
 @media (max-width: 920px) {
-  .app > main { padding-block: var(--space-6); }
+  .app { grid-template-columns: var(--sidebar-compact) minmax(0, 1fr); }
+  .sidebar { padding-inline: var(--space-2); }
+  .sidebar-top { flex-direction: column; }
+  .sidebar :is(.wordmark, .connection, .nav-item, .sidebar-search) { justify-content: center; padding-inline: 0; }
+  .sidebar .sidebar-label { position: absolute; width: var(--border-width); height: var(--border-width); overflow: hidden; clip-path: inset(50%); white-space: nowrap; }
+  .sidebar-nav button.nav-item { position: relative; }
+  .sidebar-nav .nav-count { position: absolute; top: 0; right: var(--space-0-5); }
+  .app > main { padding-block: var(--space-5) var(--space-6); }
   .workspace { grid-template-columns: minmax(0, 1fr); }
   .history { padding-inline: var(--panel-pad); }
   .history > :is(.panel-heading, .empty) { padding-inline: 0; }
@@ -173,14 +238,11 @@
 }
 
 @media (max-width: 680px) {
-  .topbar { column-gap: var(--space-3); }
-  .topbar > .stage { padding-left: var(--space-3); }
-  .app > main { padding-block: var(--space-5) var(--space-6); }
-  .connection-form { grid-template-columns: minmax(0, 1fr); }
-  .connection-form > button { justify-self: start; }
+  .app > main > .connect-page { margin-top: var(--space-5); padding: var(--space-5); }
 }
 
 @media (forced-colors: active) {
-  .wordmark-mark > circle { fill: CanvasText; }
-  .wordmark-mark > path { fill: Canvas; stroke: CanvasText; }
+  :is(.wordmark-mark, .connect-mark) > circle { fill: CanvasText; }
+  :is(.wordmark-mark, .connect-mark) > path { fill: Canvas; stroke: CanvasText; }
+  .sidebar-nav button.nav-item[aria-current="page"] { forced-color-adjust: none; background: SelectedItem; color: SelectedItemText; }
 }

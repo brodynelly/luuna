@@ -1,6 +1,6 @@
 # Luuna desktop design system
 
-Date: 2026-10-21. Status: current; decision recorded in [ADR 0013](decisions/0013-desktop-design-system.md). This is the visual and interaction contract for the desktop client (`apps/desktop`). It is presentation only: the runtime decides every state, permission, reason and next step, and the client displays them. A design change may never change which control appears, when it is enabled, or what text the runtime's state produces.
+Date: 2026-10-21, updated 2026-10-22 for the sidebar shell and Tailwind utilities. Status: current; decisions recorded in [ADR 0013](decisions/0013-desktop-design-system.md) and [ADR 0028](decisions/0028-desktop-shell-and-tailwind.md). This is the visual and interaction contract for the desktop client (`apps/desktop`). It is presentation only: the runtime decides every state, permission, reason and next step, and the client displays them. A design change may never change which control appears, when it is enabled, or what text the runtime's state produces.
 
 ## Principles
 
@@ -11,20 +11,27 @@ Date: 2026-10-21. Status: current; decision recorded in [ADR 0013](decisions/001
 5. **Interruption is not failure.** Outages, restarts, interrupted work and abandoned leases use the interrupted tone (plum, pause bars), never danger. Their work is durable.
 6. **Lavender means the developer acts; cyan means the runtime works.** The brand lavender marks primary actions, the next step, focus and selection. The active tone is cyan, so runtime activity is never confused with a call to action. An action group has at most one primary button.
 7. **Tokens only.** Literal colours, lengths and durations live in `design/tokens.css` alone. Every colour exists in the dark and the light scheme, and every text pair meets WCAG 2.1 AA.
-8. **One page, one outline.** Heading levels follow the document outline in DOM order (h1, h2 per panel, h3 per subpanel, h4 inside a candidate). Visual order equals DOM order at every width.
+8. **One page, one outline.** Heading levels follow the document outline in DOM order (h1 the wordmark, h2 per view, h3 per section or subpanel, h4 inside a candidate or a session). Visual order equals DOM order at every width.
+9. **One view at a time, no instructions needed.** The sidebar selects a view; a view opens with a large title and one sentence that says what it is for. Rules and explanations live in Help, not above controls.
 
 ## Files and layers
 
 ```text
 apps/desktop/src/
-  styles.css                 manifest: @layer tokens, base, components, screens; then @import … layer(…)
+  styles.css                 manifest: @layer tokens, base, components, screens, utilities; then @import … layer(…)
   design/tokens.css          the only file with literals; dark :root, light under prefers-color-scheme
   design/base.css            element defaults: type, code/pre, focus, forms, buttons
   design/components.css      tone indirection and every reusable component
   design/tone.ts             Tone type and exhaustive maps from runtime unions to tones
+  ui/                        the component library every view composes (ADR 0028 amendment):
+                             controls, layout (Page, Section), content, selection, shell
+  content/views.ts           the views' titles and descriptions, the sidebar order and shortcuts
+  design/components.test.ts  enforcement: 300-line files, no raw elements in views, Page on every view
   design/StatusBadge.tsx     the one status chip
+  design/Icon.tsx            the sidebar's line icons (decorative, aria-hidden)
+  design/tailwind.css        Tailwind CSS v4 utilities; the theme only references the tokens (ADR 0028)
   design/design-system.test.ts   enforcement (run by npm test)
-  screens/app.css            shell: topbar, intro, connection, workspace, history, events, footer
+  screens/app.css            shell: sidebar, views, connect page, Settings › Runtime, Sessions workspace, history, events
   screens/home.css           Home summary: projects, validation health, blockers
   screens/board.css          Kanban projection: wrapping columns of read-only cards
   screens/projects.css       Projects panel
@@ -36,28 +43,31 @@ apps/desktop/src/
 
 Vite inlines the imports into one bundled stylesheet served from `'self'`, which the Tauri CSP allows. Later layers win regardless of specificity, so a screen rule refines a component without `!important`. No font, script or stylesheet is fetched.
 
+Tailwind CSS v4 (`@tailwindcss/vite`) compiles `design/tailwind.css` into the last layer, `utilities`. No preflight is imported and Tailwind's palette is never loaded: the theme is `@theme inline reference` over the tokens, so `gap-2` is `calc(var(--space-1) * 2)`, `text-sm` is `var(--text-sm)` and `bg-surface` is `var(--color-surface)`. Use utilities for layout in markup (flex, grid, gap); keep tones, components and anything a smoke reads in the layered stylesheets.
+
 ## Tokens
 
 Dark is the default; the light scheme redefines every colour under `@media (prefers-color-scheme: light)`. Values are hex so the contrast test computes ratios from the file itself.
 
 | Role | Dark | Light | Use |
 | --- | --- | --- | --- |
-| `--color-bg` | `#101216` | `#f5f6f9` | page |
-| `--color-surface` | `#191d24` | `#ffffff` | panel |
-| `--color-surface-raised` | `#20252e` | `#f8f9fb` | record row, tray, hover |
-| `--color-surface-sunken` | `#0d1014` | `#eceff4` | pre, scroll regions |
-| `--color-field` / `-disabled` | `#0d1014` / `#191d24` | `#ffffff` / `#eef1f5` | text fields: enabled well, disabled |
-| `--color-control` / `-hover` | `#262c36` / `#353c47` | `#f6f7f9` / `#eceff3` | secondary button (disabled buttons are ghosted: no fill) |
-| `--color-selected` / `-border` | `#262e40` / `#435579` | `#e8ecf8` / `#8f9fd6` | selected card |
-| `--color-border` | `#303640` | `#d3d9e2` | decorative dividers |
-| `--color-border-control` | `#6e788a` | `#7d8697` | control edges (3:1 non-text) |
-| `--color-text` | `#e9edf4` | `#191d24` | body text |
-| `--color-text-muted` | `#a7b0bf` | `#4a5363` | labels, terms, scope, small |
-| `--color-text-subtle` | `#8f9aac` | `#5c6576` | meta: times, event numbers, placeholders |
-| `--color-text-disabled` | `#7a8494` | `#7d8697` | disabled controls (exempt from 1.4.3) |
-| `--color-accent` / `-hover` | `#b7c8fb` / `#d1dcff` | `#3b4fa0` / `#30418a` | primary, next step, links, selection |
-| `--color-on-accent` | `#101216` | `#ffffff` | text on accent |
-| `--color-focus` | `#c3d1ff` | `#3b4fa0` | focus ring |
+| `--color-bg` | `#111114` | `#f5f5f7` | page |
+| `--color-sidebar` | `#141417` | `#ededf0` | sidebar (window chrome) |
+| `--color-surface` | `#18181c` | `#ffffff` | card |
+| `--color-surface-raised` | `#1f1f24` | `#f9f9fb` | record row, tray, hover |
+| `--color-surface-sunken` | `#0c0c0e` | `#f0f0f3` | pre, scroll regions |
+| `--color-field` / `-disabled` | `#0c0c0e` / `#18181c` | `#ffffff` / `#f0f0f3` | text fields: enabled well, disabled |
+| `--color-control` / `-hover` | `#24242a` / `#2f2f36` | `#ffffff` / `#f2f2f5` | secondary button, sidebar hover (disabled buttons are ghosted: no fill) |
+| `--color-selected` / `-border` | `#26264a` / `#4d4d9a` | `#ebebfd` / `#a5a8f0` | selected card, current view |
+| `--color-border` | `#2c2c33` | `#e2e2e7` | decorative dividers |
+| `--color-border-control` | `#75757f` | `#7c7c87` | control edges (3:1 non-text) |
+| `--color-text` | `#ededf0` | `#1d1d1f` | body text |
+| `--color-text-muted` | `#a3a3ad` | `#515158` | labels, terms, scope, small |
+| `--color-text-subtle` | `#9696a2` | `#5f5f68` | meta: times, event numbers, placeholders |
+| `--color-text-disabled` | `#74747e` | `#8a8a94` | disabled controls (exempt from 1.4.3) |
+| `--color-accent` / `-hover` | `#a9adff` / `#c3c6ff` | `#4c4bd6` / `#3e3dbd` | primary, next step, links, selection |
+| `--color-on-accent` | `#111114` | `#ffffff` | text on accent |
+| `--color-focus` | `#b4b8ff` | `#4c4bd6` | focus ring |
 
 Each tone has `--tone-<name>-fg` (text), `-bg` (tint), `-border` and `-mark` (shape) in both schemes; see `tokens.css`.
 
@@ -77,6 +87,8 @@ Scales: type `--text-2xs` 11 px (badges, eyebrow, meta), `--text-xs` 12 px (evid
 `design/tone.ts` holds these as `Record<Union, Tone>` maps over the `@luuna/api-client` unions, so a new runtime state fails `npm run typecheck` until it is given a tone. Descriptor chips (`manifest r2`, `ticket r1 · …`, `required · observed`) take no tone and render as outlined chips.
 
 ## Components
+
+Every component below is rendered by `src/ui`. A view never writes the element itself; `components.test.ts` fails if it does. A new pattern becomes a library component first, then views use it.
 
 | Component | Markup | Rules |
 | --- | --- | --- |
@@ -105,11 +117,11 @@ Scales: type `--text-2xs` 11 px (badges, eyebrow, meta), `--text-xs` 12 px (evid
 
 ## Screens
 
-- **App shell** (`App.tsx`, `screens/app.css`): skip link, topbar (wordmark, stage, connection status with a tone mark), intro, the runtime connection panel, Home, Board, Projects, then the workspace of session history and the main column (start form, session events), then Help. The workspace is two columns above 920 px and one column at 920 px and below, in DOM order, matching the Projects rail.
-- **Home** (`Home.tsx`, `screens/home.css`): one record per project (name, manifest chip, id, counts), its repositories each with the latest baseline's badge (`baselineTone`) or `no baseline`, and `testing setup needed` where the runtime offers the prerequisite; then the blockers as headed records ruled in the tone of the state they report; every control opens the Projects panel. `data-surface="home"`.
+- **App shell** (`App.tsx`, `screens/app.css`): skip link, then a sidebar (the wordmark as `h1`, the connection status with a tone mark, the view navigation with `aria-current="page"` and `Ctrl+1` to `Ctrl+6`) beside `main`. `main` holds the alert banner and the outage callout, the connect page while no runtime answers (every view but Help), then one `div.view` per view, all mounted and only the current one shown: Home, Board, Projects, Sessions (history beside the start form and the session events), Settings (Settings › Runtime with Disconnect and Stop runtime, then the environment report) and Help. A view's top-level panel renders as the page: no card, a `--text-title` heading, one sentence. At 920 px and below the sidebar is an icon rail and the Sessions workspace stacks.
+- **Home** (`Home.tsx`, `screens/home.css`): first "Waiting on you" (h3, the blockers), then "Projects" (h3): one record per project (name, manifest chip, id, counts), its repositories each with the latest baseline's badge (`baselineTone`) or `no baseline`, and `testing setup needed` where the runtime offers the prerequisite; then the blockers as headed records ruled in the tone of the state they report; every control opens the Projects panel. `data-surface="home"`.
 - **Board** (`Board.tsx`, `screens/board.css`): the eight columns of docs/09-experience.md as a wrapping grid of column records (h3 with a count, the column's scope), each a list of selectable cards whose badge is the run state through `runTone` (`testing setup` for an offer, an untoned `no plan` chip for the backlog); the note says dragging is not implemented. Columns are styled by position, never by a state name. `data-surface="board"`.
 - **Help** (`Help.tsx`, `screens/help.css`): static sections (onboarding, the six tones with their run and candidate values, where evidence lives, documents) in a wrapping grid. `data-surface="help"`.
-- **Projects** (`Projects.tsx`, `screens/projects.css`): a rail with the register form and project cards, and a detail column: facts first (the first `.facts` on the page), the "Rebind repository" disclosure, the action row (a running baseline adds its `.danger` cancel), baselines (each with its reason and next step and a log button per recipe stream, then the opened log), discovery (questions callout, problems, recipes, the manifest form), the Workflows subpanel, then the project event record.
+- **Projects** (`Projects.tsx`, `screens/projects.css`): a rail with the project cards, then the "Add a project" disclosure (the register form; open while no project exists), "Import from another machine" and "Create from a stack profile", and a detail card: the project header (h3 name, manifest chip, id), facts (the first `.facts` on the page), the "Rebind repository" disclosure, the action row (a running baseline adds its `.danger` cancel), baselines (each with its reason and next step and a log button per recipe stream, then the opened log), discovery (questions callout, problems, recipes, the manifest form), the Workflows subpanel, then the project event record.
 - **Workflows** (`Workflows.tsx`, `screens/workflows.css`): the testing-setup offers (headed records in the attention tone, the reason ruled and the runtime's next step under it, a `Create the testing-setup ticket` control), the ticket form (each field followed by its UTF-8 byte count), the run settings (paths, writes, approver, plan budgets, provider and model, automatic repair), then ticket cards. A ticket card holds its head, intent, actions with the run badge (the first writer's `.danger` cancel sits before the badge; a held-back "Plan r{n+1}" names its reason on its own line), the confirmation checkbox when the next revision would leave a pending, approved or reviewed revision behind, the writer's activity callout, the plan review with the complete plan in a bounded region, plan meta, earlier revisions with their badges, the reason and next step, worktree lines and the candidate.
 - **Candidate review** (`CandidateReview.tsx`, `screens/candidate-review.css`): heading with badge, full identities, the action row, the publication record, a setup workflow's handoff callout (attention: the proposed checks and the runtime's next step), the editor handoff (`data-surface="editor-handoff"`: each worktree path whole in `code` with a `Copy path` text button), the runtime's activity callout, reason and next step, the diff, check evidence with logs, the independent review with findings, and usage.
 

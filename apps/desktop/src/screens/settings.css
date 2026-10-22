@@ -7,7 +7,9 @@
  */
 
 .settings-report { display: grid; gap: var(--space-3); min-width: 0; }
-.settings-report > .settings-items { display: grid; gap: var(--space-1-5); margin: 0; padding: 0; list-style: none; min-width: 0; }
-.settings-report > .settings-items > .settings-item { display: flex; flex-wrap: wrap; align-items: baseline; gap: var(--space-1-5) var(--space-2); min-width: 0; font-size: var(--text-xs); }
+.settings-report > .settings-items { display: grid; margin: 0; padding: 0; list-style: none; min-width: 0; border: var(--border-width) solid var(--color-border); border-radius: var(--radius-md); }
+/* One row per item, ruled like a grouped list: badge, name, the required chip, then the detail. */
+.settings-report > .settings-items > .settings-item { display: flex; flex-wrap: wrap; align-items: baseline; gap: var(--space-1-5) var(--space-2); min-width: 0; padding: var(--space-2-5) var(--space-3); border-top: var(--border-width) solid var(--color-border); font-size: var(--text-xs); }
+.settings-report > .settings-items > .settings-item:first-child { border-top: 0; }
 .settings-item > code { color: var(--color-text); font-weight: var(--weight-medium); }
 .settings-item > .settings-detail { flex: 1 1 var(--hint-min); min-width: 0; color: var(--color-text-muted); overflow-wrap: anywhere; }

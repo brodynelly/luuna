@@ -1,4 +1,6 @@
-import { StatusBadge } from "./design/StatusBadge";
+import type React from "react";
+import { viewInfo } from "./content/views";
+import { Box, ExternalLink, Id, Item, List, Page, Section, StatusBadge, Text } from "./ui";
 import { TONES, candidateTone, runTone } from "./design/tone";
 import type { Tone } from "./design/tone";
 
@@ -6,7 +8,7 @@ import type { Tone } from "./design/tone";
 export const REPOSITORY_URL = "https://github.com/brodynelly/luuna/blob/main";
 
 export const ONBOARDING_STEPS: readonly { title: string; detail: string }[] = [
-  { title: "Connect to the runtime", detail: "The native shell starts the local runtime and connects; the web build takes the loopback address and the service token, which stays in memory. The topbar's connection status is the only green that is not evidence." },
+  { title: "Connect to the runtime", detail: "The desktop app starts the local runtime and connects; the web build takes the loopback address and the service token, which stays in memory. The sidebar's connection status is the only green that is not evidence." },
   { title: "Register a project", detail: "Register every related repository by its absolute root path. The runtime observes identity, HEAD and dirty state read-only; paths stay in this machine's registry." },
   { title: "Discover and confirm the manifest", detail: "Discovery proposes check recipes and relationships from manifests and lockfiles without running anything. Confirming records an immutable manifest revision bound to the exact base commits." },
   { title: "Establish the baseline", detail: "Run a baseline per repository: its confirmed required recipes on the developer checkout, recorded as exact evidence. A repository with no required check, or whose checks execute no test, is offered the testing-setup prerequisite: a testing_setup ticket whose plan proposes the recipes, approved and implemented like any plan; once its candidate is reviewed you merge it, confirm the recipes and run a passing baseline." },
@@ -58,27 +60,31 @@ export const DOCUMENTS: readonly { path: string; title: string }[] = [
   { path: "packages/tui/README.md", title: "The terminal client: the same actions and projections" },
 ];
 
+/** One Help topic: a titled section of the page. */
+function Topic({ id, title, children }: { id: string; title: string; children: React.ReactNode }) {
+  return <Section id={id} title={title} variant="plain" className="help-section">{children}</Section>;
+}
+
 /** The Help panel of docs/09-experience.md (ADR 0027 point 4): onboarding, what each state means, where evidence lives, and the documents. Static; it decides nothing. */
 export function Help() {
-  return <section className="panel help-panel" aria-labelledby="help-heading" data-surface="help">
-    <div className="panel-heading"><h2 id="help-heading">Help</h2><span className="tag">Onboarding · states · evidence · documents</span></div>
-    <p className="scope">How the workbench is used, what each state badge means, where the runtime keeps its evidence, and the repository documents that specify it. The runtime decides every state and next step; this page only explains them.</p>
-    <div className="help-sections">
-      <section className="help-section" aria-labelledby="help-onboarding"><h3 id="help-onboarding">Onboarding</h3>
-        <ol>{ONBOARDING_STEPS.map((step) => <li key={step.title}><strong>{step.title}.</strong> {step.detail}</li>)}</ol>
-      </section>
-      <section className="help-section" aria-labelledby="help-states"><h3 id="help-states">What each state means</h3>
-        <dl className="help-states">{TONES.map((tone) => <div key={tone}>
-          <dt><StatusBadge tone={tone}>{tone}</StatusBadge><span>{statesForTone(tone).join(", ") || "connection and chips only"}</span></dt>
-          <dd>{TONE_MEANING[tone]}</dd>
-        </div>)}</dl>
-      </section>
-      <section className="help-section" aria-labelledby="help-evidence"><h3 id="help-evidence">Where evidence lives</h3>
-        <ul>{EVIDENCE_LOCATIONS.map((location) => <li key={location.where}><strong>{location.where}.</strong> {location.what}</li>)}</ul>
-      </section>
-      <section className="help-section" aria-labelledby="help-documents"><h3 id="help-documents">Documents</h3>
-        <ul className="help-plain">{DOCUMENTS.map((document) => <li key={document.path}><a href={`${REPOSITORY_URL}/${document.path}`} target="_blank" rel="noreferrer">{document.title}</a> <code>{document.path}</code></li>)}</ul>
-      </section>
-    </div>
-  </section>;
+  const info = viewInfo("help");
+  return <Page id="help" title={info.label} description={info.description} className="help-panel" data-surface="help">
+    <Box className="help-sections">
+      <Topic id="help-onboarding" title="Onboarding">
+        <List ordered>{ONBOARDING_STEPS.map((step) => <Item key={step.title}><strong>{step.title}.</strong> {step.detail}</Item>)}</List>
+      </Topic>
+      <Topic id="help-states" title="What each state means">
+        <Box className="help-states">{TONES.map((tone) => <Box key={tone}>
+          <Box className="help-state-term"><StatusBadge tone={tone}>{tone}</StatusBadge><span>{statesForTone(tone).join(", ") || "connection and chips only"}</span></Box>
+          <Text className="help-state-meaning">{TONE_MEANING[tone]}</Text>
+        </Box>)}</Box>
+      </Topic>
+      <Topic id="help-evidence" title="Where evidence lives">
+        <List>{EVIDENCE_LOCATIONS.map((location) => <Item key={location.where}><strong>{location.where}.</strong> {location.what}</Item>)}</List>
+      </Topic>
+      <Topic id="help-documents" title="Documents">
+        <List className="help-plain">{DOCUMENTS.map((document) => <Item key={document.path}><ExternalLink href={`${REPOSITORY_URL}/${document.path}`}>{document.title}</ExternalLink> <Id>{document.path}</Id></Item>)}</List>
+      </Topic>
+    </Box>
+  </Page>;
 }

@@ -211,6 +211,8 @@ async function waitCandidateAfter(title, previous, timeoutMs) {
   if (!moved) return null;
   return waitCandidateState(title, SETTLED, timeoutMs);
 }
+// The desktop shows one view at a time (ADR 0028); the sidebar selects it.
+async function show(view, on = page) { await on.getByRole("navigation", { name: "Views" }).getByRole("button", { name: new RegExp(`^${view}`) }).click(); }
 async function connected() { return (await page.locator(".connection").innerText()).trim(); }
 async function waitConnection(text, timeoutMs) { return waitFor(async () => ((await connected()).includes(text) ? text : null), timeoutMs, 300); }
 
@@ -220,7 +222,8 @@ async function connectWithKeyboard(serviceToken) {
   if (nativeBinary) {
     // Let automatic startup settle, then explicitly switch this test view to
     // the isolated fixture runtime. Production startup is covered separately.
-    await page.locator('.connection-panel button:has-text("Disconnect"), [role="alert"]').first().waitFor({ timeout: 90_000 });
+    await page.locator('.connection[data-tone="success"], [role="alert"]').first().waitFor({ timeout: 90_000 });
+    if (await page.locator('.connection[data-tone="success"]').count()) await show("Settings");
     const disconnect = page.getByRole("button", { name: "Disconnect", exact: true });
     if (await disconnect.count()) await disconnect.click();
     const dismiss = page.locator('[role="alert"] button:has-text("Dismiss")');
@@ -259,6 +262,8 @@ async function connectWithKeyboard(serviceToken) {
 }
 
 async function registerProject(name, id, dir, expectFailure = false) {
+  const add = page.locator("details.add-project");
+  if (!(await add.evaluate((element) => element.open))) await add.locator("summary").click();
   await page.getByLabel("Project name", { exact: true }).fill(name);
   await page.getByLabel("Project ID", { exact: true }).fill(id);
   await page.getByLabel("Repository ID", { exact: true }).fill("app");
@@ -301,12 +306,51 @@ async function runBaseline() {
   }, 120_000, 500);
 }
 
+// The Tickets section lists every ticket and shows one ticket's detail (ADR 0028): select it first.
+async function showTicket(title) {
+  const row = page.locator('ul[aria-label="Ticket list"] button').filter({ hasText: title }).first();
+  await row.waitFor({ timeout: 20_000 });
+  if ((await row.getAttribute("aria-pressed")) !== "true") await row.click();
+}
 async function createTicket(title, intent, criteria) {
   await page.getByLabel("Ticket title").fill(title);
   await page.getByLabel("Intent", { exact: true }).fill(intent);
   await page.getByLabel("Acceptance criteria (one per line)", { exact: true }).fill(criteria.join("\n"));
   await page.getByRole("button", { name: "Create ticket" }).click();
+  await showTicket(title);
   await waitFor(async () => ((await ticketItem(title).count()) ? true : null), 20_000);
+}
+
+// The command palette (Ctrl+K) and context menus (secondary click, Shift+F10), by keyboard and pointer.
+async function paletteAndMenus(projectName) {
+  await show("Home");
+  await page.keyboard.press("ControlOrMeta+K");
+  const palette = page.getByRole("dialog", { name: "Command palette" });
+  const opened = await palette.isVisible().catch(() => false);
+  await page.keyboard.type(projectName);
+  const option = palette.getByRole("option").first();
+  // Projects are read from the runtime when the palette opens; wait for them to be offered.
+  const offered = opened && Boolean(await waitFor(async () => (await option.innerText().catch(() => "")).includes(projectName) ? true : null, 10_000));
+  await page.keyboard.press("Enter");
+  const landed = await waitFor(async () => (await page.locator(".nav-item[aria-current=page]").innerText()).includes("Projects") ? true : null, 10_000);
+  record("command palette: Ctrl+K opens it, typing finds the project, Enter opens it in Projects", opened && offered && Boolean(landed) && !(await palette.isVisible()));
+  await page.keyboard.press("ControlOrMeta+K");
+  await page.keyboard.press("Escape");
+  record("command palette: Escape closes it", !(await palette.isVisible()));
+  const card = page.locator('ul[aria-label="Registered projects"] button').filter({ hasText: projectName }).first();
+  await card.click({ button: "right" });
+  const menu = page.getByRole("menu", { name: `Actions for ${projectName}` });
+  const items = await menu.getByRole("menuitem").allInnerTexts().catch(() => []);
+  const focused = await page.evaluate(() => document.activeElement?.getAttribute("role") ?? "");
+  await page.keyboard.press("ArrowDown");
+  await page.keyboard.press("Escape");
+  const returned = await page.evaluate(() => document.activeElement?.closest(".run-card") !== null);
+  record("context menu: a secondary click opens the project's commands, focused, and Escape returns focus to the card", items.includes("Open project") && items.includes("Copy project ID") && focused === "menuitem" && !(await menu.isVisible()) && returned, items.join(", "));
+  await card.focus();
+  await page.keyboard.press("Shift+F10");
+  const byKey = await menu.isVisible().catch(() => false);
+  await page.keyboard.press("Escape");
+  record("context menu: Shift+F10 opens the same menu from the keyboard", byKey);
 }
 
 async function planApproveImplement(title, { settle = true } = {}) {
@@ -458,6 +502,7 @@ async function walkthrough() {
   record(`the client connects with the service token entered ${nativeBinary ? "through native form controls" : "by keyboard"}`, Boolean(online), await connected());
   const tokenCleared = await page.locator('input[type="password"]').count() === 0;
   record("the token field is gone after connecting; the token stays only in memory", tokenCleared);
+  await show("Projects");
   await screenshot("01-connected");
 
   // 2. Registration refusal, then a real import.
@@ -530,6 +575,7 @@ async function walkthrough() {
   record("walkthrough: the developer checkout is untouched (clean before and after)", checkoutBefore === "" && git(fixtures.walkthrough.dir, "status", "--porcelain") === "" && git(fixtures.walkthrough.dir, "rev-parse", "HEAD") === fixtures.walkthrough.head);
   await screenshot("04-reviewed");
   await firstWriterCancel();
+  await paletteAndMenus("Walkthrough");
   await accessibilityAudit("walkthrough page");
   await presentationAudit("walkthrough page", { widths: true });
 }
@@ -655,6 +701,7 @@ async function recovery() {
   await presentationAudit("recovery page");
 
   // D. Disconnect clears the session.
+  await show("Settings");
   await page.getByRole("button", { name: "Disconnect" }).click();
   const offline = await waitConnection("Local runtime offline", 10_000);
   record("disconnect: the client forgets the token and shows the runtime as offline", Boolean(offline) && (await page.locator('input[type="password"]').inputValue()) === "");

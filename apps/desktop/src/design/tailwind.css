@@ -1,0 +1,30 @@
+/*
+ * Utilities layer: Tailwind CSS v4 (ADR 0028), compiled at build time into the one bundled
+ * stylesheet; nothing is fetched. The theme is a reference to the design tokens, so a utility
+ * resolves to a token and never to a literal: `p-4` is four steps of the 4 px rhythm, `text-sm`
+ * is --text-sm, `bg-surface` is --color-surface. No preflight: base.css owns element defaults.
+ */
+@import "tailwindcss/utilities.css" source("../");
+
+@theme inline reference {
+  --spacing: var(--space-1);
+  --text-2xs: var(--text-2xs);
+  --text-xs: var(--text-xs);
+  --text-sm: var(--text-sm);
+  --text-md: var(--text-md);
+  --text-lg: var(--text-lg);
+  --radius-sm: var(--radius-sm);
+  --radius-md: var(--radius-md);
+  --radius-lg: var(--radius-lg);
+  --color-bg: var(--color-bg);
+  --color-surface: var(--color-surface);
+  --color-surface-raised: var(--color-surface-raised);
+  --color-text: var(--color-text);
+  --color-text-muted: var(--color-text-muted);
+  --color-text-subtle: var(--color-text-subtle);
+  --color-accent: var(--color-accent);
+  --color-border: var(--color-border);
+  --font-weight-regular: var(--weight-regular);
+  --font-weight-medium: var(--weight-medium);
+  --font-weight-strong: var(--weight-strong);
+}

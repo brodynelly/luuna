@@ -15,8 +15,10 @@ const files = readdirSync(root, { recursive: true }).map((file) => file.replaceA
 const sheets = files.filter((file) => file.endsWith(".css"));
 const TOKENS = "design/tokens.css";
 const MANIFEST = "styles.css";
-const EXPECTED_SHEETS = [MANIFEST, TOKENS, "design/base.css", "design/components.css", "screens/app.css", "screens/home.css", "screens/board.css", "screens/projects.css", "screens/workflows.css", "screens/candidate-review.css", "screens/project-components.css", "screens/help.css", "screens/settings.css"];
-const MEDIA = ["(max-width: 920px)", "(max-width: 680px)", "(prefers-reduced-motion: reduce)", "(prefers-color-scheme: light)", "(forced-colors: active)"];
+// Tailwind CSS v4 utilities (ADR 0028): last layer, its theme a reference to the tokens.
+const TAILWIND = "design/tailwind.css";
+const EXPECTED_SHEETS = [MANIFEST, TOKENS, "design/base.css", "design/components.css", "design/overlays.css", "screens/app.css", "screens/home.css", "screens/board.css", "screens/projects.css", "screens/workflows.css", "screens/candidate-review.css", "screens/project-components.css", "screens/help.css", "screens/settings.css", "design/tailwind.css"];
+const MEDIA = ["(max-width: 920px)", "(max-width: 680px)", "(prefers-reduced-motion: reduce)", "(prefers-color-scheme: light)", "(prefers-contrast: more)", "(forced-colors: active)"];
 
 const STATES = [...new Set([runTone, candidateTone, checkTone, baselineTone, verdictTone, severityTone, leaseTone, connectionTone].flatMap((map) => Object.keys(map)))];
 const STATE_SELECTOR = new RegExp(`[.="'](?:${STATES.join("|")})(?![\\w-])`);
@@ -35,8 +37,8 @@ describe("stylesheets", () => {
     for (const sheet of sheets) expect(read(sheet).trim().length, `${sheet} is empty`).toBeGreaterThan(0);
     for (const sheet of sheets.filter((name) => name !== MANIFEST)) expect(rules(read(sheet)).length, `${sheet} has no rules`).toBeGreaterThan(0);
     const manifest = read(MANIFEST).trim().split(/;\s*/).filter(Boolean);
-    expect(manifest[0]).toBe("@layer tokens, base, components, screens");
-    expect(manifest.slice(1)).toEqual(EXPECTED_SHEETS.slice(1).map((sheet) => `@import "./${sheet}" layer(${sheet === TOKENS ? "tokens" : sheet.startsWith("screens/") ? "screens" : sheet.replace(/^design\/|\.css$/g, "")})`));
+    expect(manifest[0]).toBe("@layer tokens, base, components, screens, utilities");
+    expect(manifest.slice(1)).toEqual(EXPECTED_SHEETS.slice(1).map((sheet) => `@import "./${sheet}" layer(${sheet === TOKENS ? "tokens" : sheet === TAILWIND ? "utilities" : sheet.startsWith("screens/") ? "screens" : sheet === "design/overlays.css" ? "components" : sheet.replace(/^design\/|\.css$/g, "")})`));
   });
 
   for (const file of EXPECTED_SHEETS.filter((name) => name !== TOKENS && name !== MANIFEST)) {
@@ -57,7 +59,7 @@ describe("stylesheets", () => {
       for (const { selector, body } of rules(css)) {
         for (const [property, value] of declarations(`${body};`)) {
           if (property === "outline" && /^(?:none|0)$/.test(value) && selector !== "main:focus") problems.push(`outline removed in ${selector}`);
-          if ((property === "max-height" || (/^overflow(-y)?$/.test(property) && /auto|scroll/.test(value))) && !/ol\.events|pre\[aria-label/.test(selector)) problems.push(`only labelled scroll regions may scroll: ${selector} { ${property}: ${value} }`);
+          if ((property === "max-height" || (/^overflow(-y)?$/.test(property) && /auto|scroll/.test(value))) && !/ol\.events|pre\[aria-label|\[role="listbox"\]/.test(selector)) problems.push(`only labelled scroll regions may scroll: ${selector} { ${property}: ${value} }`);
           if (/\b(?:code|pre)\b/.test(selector) && (property === "text-overflow" || property === "-webkit-line-clamp" || (property === "overflow" && value === "hidden"))) problems.push(`identities are never truncated: ${selector} { ${property}: ${value} }`);
         }
         if (/\[data-tone=/.test(selector) && file !== "design/components.css") problems.push(`tone mapping outside components.css: ${selector}`);
@@ -73,6 +75,17 @@ describe("stylesheets", () => {
       expect(problems, `\n${problems.join("\n")}`).toEqual([]);
     });
   }
+
+  test("Tailwind's theme only references tokens: no preflight, no palette, no literal", () => {
+    const css = read(TAILWIND);
+    expect(css).toMatch(/@import "tailwindcss\/utilities\.css"/);
+    expect(css).not.toMatch(/tailwindcss(?:\/(?:index|preflight|theme)\.css)?"/);
+    const theme = css.match(/@theme inline reference\s*\{([^}]*)\}/);
+    expect(theme, "@theme inline reference block").not.toBeNull();
+    const values = declarations(theme![1]);
+    expect(values.length).toBeGreaterThan(0);
+    for (const [name, value] of values) expect(value, name).toMatch(/^var\(--[\w-]+\)$/);
+  });
 
   test("every var() reference resolves to a defined custom property", () => {
     const all = sheets.map(read).join("\n");
@@ -101,7 +114,7 @@ function contrast(one: string, two: string): number {
   const [high, low] = [luminance(one), luminance(two)].sort((x, y) => y - x);
   return (high + 0.05) / (low + 0.05);
 }
-const SURFACES = ["color-bg", "color-surface", "color-surface-raised", "color-surface-sunken", "color-field", "color-control", "color-selected"];
+const SURFACES = ["color-bg", "color-sidebar", "color-surface", "color-surface-raised", "color-surface-sunken", "color-field", "color-control", "color-selected"];
 const TEXT = ["color-text", "color-text-muted", "color-text-subtle", "color-accent"];
 const PAIRS: Array<[string, string, number]> = [
   ...TEXT.flatMap((fg) => SURFACES.map((bg): [string, string, number] => [fg, bg, 4.5])),
@@ -110,6 +123,8 @@ const PAIRS: Array<[string, string, number]> = [
     [`tone-${tone}-fg`, "color-surface", 4.5],
     [`tone-${tone}-fg`, "color-surface-raised", 4.5],
     [`tone-${tone}-fg`, "color-bg", 4.5],
+    [`tone-${tone}-fg`, "color-sidebar", 4.5],
+    [`tone-${tone}-mark`, "color-sidebar", 3],
     [`tone-${tone}-mark`, `tone-${tone}-bg`, 3],
     [`tone-${tone}-mark`, "color-surface", 3],
     [`tone-${tone}-mark`, "color-surface-raised", 3],
@@ -141,29 +156,7 @@ describe("colour tokens", () => {
   }
 });
 
-// ---- Screens: structure the smoke and the accessibility audit depend on ----
-const SCREENS: Record<string, string[]> = { "App.tsx": ["h1", "h2", "h3"], "Home.tsx": ["h2"], "Board.tsx": ["h2", "h3"], "Help.tsx": ["h2", "h3"], "Settings.tsx": ["h2"], "Projects.tsx": ["h2"], "ProjectComponents.tsx": ["h3", "h4"], "Workflows.tsx": ["h3"], "CandidateReview.tsx": ["h4"], "main.tsx": [], "design/StatusBadge.tsx": [] };
-describe("screens", () => {
-  test("every component file is registered here, so a new screen inherits these checks", () => {
-    const components = files.filter((file) => file.endsWith(".tsx") && !file.includes(".test."));
-    expect(components.filter((file) => !(file in SCREENS))).toEqual([]);
-  });
-  for (const [file, levels] of Object.entries(SCREENS)) {
-    const source = raw(file);
-    test(`${file}: headings keep their level, no inline styles, no positive tabIndex, badges through StatusBadge`, () => {
-      expect([...new Set([...source.matchAll(/<(h[1-6])\b/g)].map((match) => match[1]))].sort()).toEqual(levels);
-      expect(source).not.toMatch(/style=\{\{/);
-      expect(source).not.toMatch(/tabIndex=\{[1-9]/);
-      if (file !== "design/StatusBadge.tsx") expect(source).not.toMatch(/className=\{?["'`]state\b/);
-    });
-    test(`${file}: every alert carries a Dismiss button`, () => {
-      for (const match of source.matchAll(/role="alert"/g)) {
-        const element = source.slice(match.index, source.indexOf("</div>", match.index));
-        expect(element).toContain(">Dismiss</button>");
-      }
-    });
-  }
-});
+// Screen structure (templates, components, file size) is enforced in components.test.ts.
 
 // ---- Tone taxonomy ----
 describe("tone taxonomy", () => {

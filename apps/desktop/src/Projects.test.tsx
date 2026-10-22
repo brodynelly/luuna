@@ -73,7 +73,7 @@ test("a blocked baseline with the runtime's testing-setup offer shows the offer 
   expect(html).toContain("Testing setup needed for <code>app</code>: the manifest names no required check for repository app");
   expect(html).toContain("POST /api/v1/projects/p/tickets with purpose testing_setup");
   expect(html).not.toContain("could not run meaningfully on this host");
-  expect(html).toMatch(/<p class="callout baseline-offer" data-tone="attention" role="status">/);
+  expect(html).toMatch(/<p class="baseline-offer callout" data-tone="attention" role="status">/);
   expect(renderToStaticMarkup(<BaselineList baselines={[baseline("blocked", [], "no required check")]} busy={false} onLog={() => {}} />)).toContain("could not run meaningfully on this host");
 });
 

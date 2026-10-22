@@ -29,6 +29,8 @@ try {
   assert(ready, "test-owned Vite server must start");
   browser = await chromium.launch({ headless: true, executablePath });
   const page = await browser.newPage();
+  // The desktop shows one view at a time (ADR 0028); the sidebar selects it.
+  const show = (view) => page.getByRole("navigation", { name: "Views" }).getByRole("button", { name: new RegExp(`^${view}`) }).click();
   page.setDefaultTimeout(30_000);
   const errors = [];
   page.on("pageerror", (error) => errors.push(error.message));
@@ -45,6 +47,8 @@ try {
     if (url.pathname === "/api/v1/health") body = { pi_version: "synthetic" };
     else if (url.pathname === "/api/v1/runs") body = url.searchParams.has("before") ? [older] : recent;
     else if (url.pathname === "/api/v1/projects") body = [];
+    // Settings reads the doctor report on connect; an empty passing report keeps this fixture to run paging.
+    else if (url.pathname === "/api/v1/doctor") body = { ok: true, items: [] };
     else if (url.pathname === "/api/v1/runs/history/events") {
       const cursor = Number(url.searchParams.get("after"));
       cursors.push(cursor);
@@ -62,6 +66,7 @@ try {
   await page.waitForFunction(() => document.querySelectorAll("ol.events > li").length === 200);
   const initialRenderMs = performance.now() - start;
   assert.equal(await page.locator("ol.events pre").count(), 0, "collapsed payloads must not populate the DOM");
+  await show("Sessions");
   await page.waitForFunction(() => document.querySelector(".run-detail").textContent.includes("10000"));
   const fullReplayMs = performance.now() - start;
   await page.evaluate(() => {
@@ -102,6 +107,7 @@ try {
   await page.getByRole("button", { name: "Newer sessions", exact: true }).click();
   await page.waitForFunction(() => document.querySelector(".run-detail code")?.textContent === "history");
   assert.equal(await page.getByRole("button", { name: "Cancel session", exact: true }).count(), 0);
+  await show("Settings");
   await page.getByRole("button", { name: "Disconnect", exact: true }).click();
   assert.equal(await page.locator("ol.events").count(), 0);
   assert.deepEqual(errors, []);

@@ -40,9 +40,8 @@ test("Refresh reads the doctor route once with the abort signal and nothing else
 
 test("the panel says that values are never shown and that credentials are configured in the runtime's environment, and renders nothing but the report", () => {
   const panel = renderToStaticMarkup(<Settings client={null} />);
-  expect(panel).toContain("Values are never shown, only whether each is present.");
-  expect(panel).toContain("Credentials are configured in the runtime&#x27;s environment");
-  expect(panel).toContain("not here.");
+  expect(panel).toContain("never its value.");
+  expect(panel).toContain("are configured in the runtime&#x27;s environment, not here");
   expect(panel).toContain("<code>LUUNA_API_TOKEN</code>");
   // The view shows the runtime's names, statuses and details and nothing else: no input, no
   // form, nothing editable, and no text that is not in the report.

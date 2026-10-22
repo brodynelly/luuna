@@ -1,0 +1,70 @@
+/*
+ * Overlays: the context menu and the command palette (ADR 0028). Both float above the content on
+ * the panel surface with the card elevation; neither blurs or tints what is behind it.
+ */
+
+/* An item with a context menu lays out exactly as it would without one. */
+.context-area { display: contents; }
+
+.context-menu {
+  position: fixed;
+  top: var(--menu-y);
+  left: var(--menu-x);
+  z-index: 50;
+  display: grid;
+  min-width: var(--menu-min-width);
+  padding: var(--space-1);
+  border: var(--border-width) solid var(--color-border-control);
+  border-radius: var(--radius-md);
+  background: var(--color-surface);
+  box-shadow: var(--shadow-overlay);
+}
+.context-menu button[role="menuitem"] {
+  justify-content: flex-start;
+  width: 100%;
+  min-height: var(--control-height-sm);
+  padding: 0 var(--space-3);
+  border-color: transparent;
+  background: transparent;
+  color: var(--color-text);
+  font-weight: var(--weight-regular);
+}
+.context-menu button[role="menuitem"]:is(:hover, :focus-visible):not(:disabled) { background: var(--color-selected); outline-offset: var(--focus-inset); }
+.context-menu button[role="menuitem"]:disabled { color: var(--color-text-disabled); }
+.context-separator { margin: var(--space-1) 0; border: 0; border-top: var(--border-width) solid var(--color-border); }
+
+/* The palette: a modal dialog near the top of the window, one field and the matching commands. */
+dialog.palette {
+  width: min(var(--palette-width), calc(100% - 2 * var(--gutter)));
+  margin: var(--palette-top) auto 0;
+  padding: 0;
+  border: var(--border-width) solid var(--color-border-control);
+  border-radius: var(--radius-lg);
+  background: var(--color-surface);
+  color: var(--color-text);
+  box-shadow: var(--shadow-overlay);
+}
+dialog.palette::backdrop { background: var(--color-scrim); }
+.palette-field { display: block; padding: var(--space-3); border-bottom: var(--border-width) solid var(--color-border); }
+.palette-field > input { margin: 0; font-size: var(--text-md); }
+ul.palette-list[role="listbox"] { max-height: var(--palette-list-max); margin: 0; padding: var(--space-1); overflow: auto; list-style: none; }
+.palette-option { display: flex; align-items: baseline; gap: var(--space-3); padding: var(--space-2) var(--space-3); border-radius: var(--radius-md); cursor: pointer; }
+.palette-option[aria-selected="true"] { background: var(--color-selected); box-shadow: inset var(--rule-width) 0 0 var(--color-accent); }
+.palette-option > .palette-label { flex: 1 1 auto; min-width: 0; overflow-wrap: anywhere; }
+.palette-option > .palette-group { color: var(--color-text-muted); font-size: var(--text-xs); }
+.palette-empty { padding: var(--space-4); color: var(--color-text-muted); font-size: var(--text-sm); }
+.palette-hint { margin: 0; padding: var(--space-2) var(--space-3); border-top: var(--border-width) solid var(--color-border); color: var(--color-text-muted); font-size: var(--text-xs); }
+kbd {
+  padding: 0 var(--space-1);
+  border: var(--border-width) solid var(--color-border);
+  border-radius: var(--radius-sm);
+  background: var(--color-surface-raised);
+  color: var(--color-text-muted);
+  font-family: var(--font-sans);
+  font-size: var(--text-2xs);
+}
+
+@media (forced-colors: active) {
+  .palette-option[aria-selected="true"] { forced-color-adjust: none; background: SelectedItem; color: SelectedItemText; }
+  .context-menu button[role="menuitem"]:focus-visible { forced-color-adjust: none; background: Highlight; color: HighlightText; }
+}

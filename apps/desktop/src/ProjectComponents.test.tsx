@@ -58,7 +58,8 @@ test("a memory correction is offered per record and saves only changed content a
   expect(form).toContain(record.hash);
   expect(form).toContain("keeps its project scope");
   expect(form).toContain("can no longer be implemented until it is re-planned");
-  expect(form).toMatch(/<button type="submit" class="primary" disabled="" data-capability="memory.update">Save correction<\/button>/);
+  // A submit button inside the form; the library leaves the default (submit) type implicit.
+  expect(form).toMatch(/<button (?:type="submit" )?class="primary" disabled="" data-capability="memory.update">Save correction<\/button>/);
 });
 
 test("the retention form sends null for a scope that keeps its records", () => {

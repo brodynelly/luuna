@@ -1,12 +1,13 @@
 /*
  * Luuna desktop styles: an ordered manifest of the design system (docs/DESIGN-SYSTEM.md).
  * Vite inlines every import into one bundled stylesheet served from 'self'. Later layers win
- * regardless of specificity; nothing is unlayered.
+ * regardless of specificity; nothing is unlayered. Tailwind utilities come last (ADR 0028).
  */
-@layer tokens, base, components, screens;
+@layer tokens, base, components, screens, utilities;
 @import "./design/tokens.css" layer(tokens);
 @import "./design/base.css" layer(base);
 @import "./design/components.css" layer(components);
+@import "./design/overlays.css" layer(components);
 @import "./screens/app.css" layer(screens);
 @import "./screens/home.css" layer(screens);
 @import "./screens/board.css" layer(screens);
@@ -16,3 +17,4 @@
 @import "./screens/project-components.css" layer(screens);
 @import "./screens/help.css" layer(screens);
 @import "./screens/settings.css" layer(screens);
+@import "./design/tailwind.css" layer(utilities);

@@ -1,8 +1,10 @@
 import { useEffect, useState } from "react";
+import type { ReactNode } from "react";
 import type { DoctorItem, DoctorReport, DoctorStatus, LuunaClient } from "@luuna/api-client";
 import { describeFailure } from "./failures";
-import { StatusBadge } from "./design/StatusBadge";
 import type { Tone } from "./design/tone";
+import { viewInfo } from "./content/views";
+import { Box, Button, Callout, EmptyState, ErrorBanner, Id, Item, List, Loading, Page, Section, StatusBadge, Tag } from "./ui";
 
 /**
  * The doctor statuses on the six tones: `ok` is passed evidence of the environment, `warning`
@@ -17,15 +19,15 @@ export function readDoctor(client: Pick<LuunaClient, "doctor">, signal: AbortSig
 
 /** The report as a list: status badge, item name, the required marker and the runtime's one-line detail, then the verdict. */
 export function DoctorReportView({ report }: { report: DoctorReport }) {
-  return <div className="settings-report">
-    <ul className="settings-items" aria-label="Runtime environment and credential presence">{report.items.map((item: DoctorItem) => <li key={item.name} className="settings-item">
+  return <Box className="settings-report">
+    <List className="settings-items" label="Runtime environment and credential presence">{report.items.map((item: DoctorItem) => <Item key={item.name} className="settings-item">
       <StatusBadge tone={doctorTone[item.status]}>{item.status}</StatusBadge>
-      <code>{item.name}</code>
-      {item.required && <span className="tag">required</span>}
+      <Id>{item.name}</Id>
+      {item.required && <Tag>required</Tag>}
       <span className="settings-detail">{item.detail}</span>
-    </li>)}</ul>
-    <p className="callout settings-verdict" data-tone={report.ok ? "success" : "danger"} role="status">{report.ok ? "doctor: ok. Every required item is present and the database is usable." : "doctor: FAILED. A required item is missing or the database is unusable; the items above say which."}</p>
-  </div>;
+    </Item>)}</List>
+    <Callout className="settings-verdict" tone={report.ok ? "success" : "danger"} status>{report.ok ? "doctor: ok. Every required item is present and the database is usable." : "doctor: FAILED. A required item is missing or the database is unusable; the items above say which."}</Callout>
+  </Box>;
 }
 
 /**
@@ -33,7 +35,7 @@ export function DoctorReportView({ report }: { report: DoctorReport }) {
  * credential presence as `luuna-runtime doctor` reports it for the running runtime. Nothing is
  * edited here: credentials live in the runtime's environment and only their presence is shown.
  */
-export function Settings({ client, connectionEpoch = 0, refreshEpoch = 0 }: { client: LuunaClient | null; connectionEpoch?: number; refreshEpoch?: number }) {
+export function Settings({ client, connectionEpoch = 0, refreshEpoch = 0, children }: { client: LuunaClient | null; connectionEpoch?: number; refreshEpoch?: number; children?: ReactNode }) {
   const [report, setReport] = useState<DoctorReport | null>(null);
   const [error, setError] = useState("");
   const [busy, setBusy] = useState(false);
@@ -55,10 +57,15 @@ export function Settings({ client, connectionEpoch = 0, refreshEpoch = 0 }: { cl
     return () => controller.abort();
   }, [client, connectionEpoch, refreshEpoch, tick]);
 
-  return <section className="panel settings-panel" aria-labelledby="settings-heading" data-surface="settings">
-    <div className="panel-heading"><h2 id="settings-heading">Settings</h2><span className="tag">Runtime environment · credential presence</span><button type="button" className="text-button" disabled={!client || busy} data-capability="doctor" onClick={() => setTick((value) => value + 1)}>Refresh</button></div>
-    <p className="scope">What <code>luuna-runtime doctor</code> reports for the connected runtime: Git, Python, Node, the Pi launcher, the data directory and database, the service token, the GitHub token, provider credentials, the port, the component layout and Bun. Values are never shown, only whether each is present. Credentials are configured in the runtime's environment (<code>LUUNA_API_TOKEN</code>, <code>LUUNA_GITHUB_TOKEN</code>, the provider variables), not here.</p>
-    {error && <div className="error" role="alert">{error}<button className="text-button" type="button" onClick={() => setError("")}>Dismiss</button></div>}
-    {client ? report ? <DoctorReportView report={report} /> : !error && <p className="empty">Reading the runtime's doctor report…</p> : <p className="empty empty-box">Connect to the runtime to see its environment and which credentials are configured.</p>}
-  </section>;
+  const info = viewInfo("settings");
+  const refresh = <Button variant="text" disabled={!client || busy} data-capability="doctor" onClick={() => setTick((value) => value + 1)}>Refresh</Button>;
+  const description = <>{info.description} Credentials such as <Id>LUUNA_API_TOKEN</Id> are configured in the runtime's environment, not here; Luuna shows whether each is present, never its value.</>;
+  return <Page id="settings" title={info.label} description={description} className="settings-panel" data-surface="settings">
+    {children}
+    <Section id="environment-heading" title="Environment" className="settings-environment" accessory={refresh}>
+      {error && <ErrorBanner message={error} onDismiss={() => setError("")} />}
+      {client ? report ? <DoctorReportView report={report} /> : !error && <Loading label="Reading the runtime's doctor report…" rows={6} />
+        : <EmptyState boxed>Connect to the runtime to see its environment and which credentials are configured.</EmptyState>}
+    </Section>
+  </Page>;
 }

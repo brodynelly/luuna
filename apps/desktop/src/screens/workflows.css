@@ -46,3 +46,8 @@
 .task-graph > .task-record > .task-line { display: flex; flex-wrap: wrap; align-items: center; gap: var(--space-1-5) var(--space-2); min-width: 0; overflow-wrap: anywhere; }
 .task-graph > .task-record > .advisory-result { display: grid; grid-template-columns: minmax(0, 1fr); gap: var(--space-1-5); min-width: 0; padding-left: var(--space-2); border-left: var(--rule-width) solid var(--color-border-control); }
 .task-graph > .task-record > .advisory-result > .advisory-list { display: grid; gap: var(--space-0-5); margin: 0; padding-left: var(--space-4); overflow-wrap: anywhere; }
+
+/* Ticket list: one compact selectable row per ticket; the selected ticket's detail follows it. */
+.workflows .ticket-list { display: grid; grid-template-columns: repeat(auto-fill, minmax(min(100%, var(--field-min)), 1fr)); gap: var(--space-1-5); margin: 0; padding: 0; list-style: none; }
+.workflows .ticket-list > .ticket-row { display: grid; min-width: 0; }
+.workflows .ticket-list button.run-card:not([aria-pressed="true"]) { border-color: var(--color-border); background: var(--color-surface); }

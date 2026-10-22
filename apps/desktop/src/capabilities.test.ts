@@ -9,8 +9,13 @@ const root = new URL("./", import.meta.url);
 const catalog = JSON.parse(readFileSync(new URL("../../../schemas/capability-catalog.json", root), "utf8")) as { capabilities: Capability[] };
 const sources = readdirSync(root, { recursive: true })
   .map((file) => file.replaceAll("\\", "/"))
-  .filter((file) => file.endsWith(".tsx") && !file.includes(".test."))
+  .filter((file) => /\.tsx?$/.test(file) && !file.includes(".test.") && !file.endsWith(".d.ts"))
   .map((file) => [file, readFileSync(new URL(file, root), "latin1")] as const);
+// A panel's code lives in its folder (ADR 0028); its legacy file name is a barrel.
+const AREAS: Record<string, string> = { "Projects.tsx": "projects/", "Workflows.tsx": "workflows/", "ProjectComponents.tsx": "project-components/", "CandidateReview.tsx": "candidate/" };
+function area(name: string): string {
+  return sources.filter(([file]) => file === name || file.startsWith(AREAS[name] ?? `${name}/`)).map(([, text]) => text).join("\n");
+}
 const exposed = new Map<string, string[]>();
 for (const [file, source] of sources) {
   for (const match of source.matchAll(/data-capability="([^"]+)"/g)) {
@@ -43,7 +48,7 @@ test("the desktop calls each cataloged client method it exposes directly, or the
 // are covered beside each panel (Projects.test.tsx, Workflows.test.tsx, ProjectComponents.test.tsx)
 // through the builders packages/api-client shares with the TUI. ----
 test("state-specific controls share one capability: Implement for an approved run and Resume task for a resumable task both carry runs.implement", () => {
-  const workflows = sources.find(([file]) => file === "Workflows.tsx")![1];
+  const workflows = area("Workflows.tsx");
   expect(workflows.match(/data-capability="runs.implement"/g)?.length).toBeGreaterThanOrEqual(2);
   expect(workflows).toMatch(/run\.state === "approved"[^\n]*data-capability="runs.implement"/);
   expect(workflows).toMatch(/taskResumable\(run, task\)[^\n]*data-capability="runs.implement"/);
@@ -51,13 +56,13 @@ test("state-specific controls share one capability: Implement for an approved ru
 });
 
 test("every repository, task and memory control sends the cataloged body through the shared builders", () => {
-  const projects = sources.find(([file]) => file === "Projects.tsx")![1];
+  const projects = area("Projects.tsx");
   expect(projects).toMatch(/registerProject\(registrationRequest\(name, projectId, rows\)/);
   expect(projects).toMatch(/startBaseline\(selected, \{ repository_id: repositoryId \}/);
-  const workflows = sources.find(([file]) => file === "Workflows.tsx")![1];
+  const workflows = area("Workflows.tsx");
   expect(workflows).toMatch(/planRequestFromRows\(rows, \{ \.\.\.budgets, max_workers: workers \}/);
   expect(workflows).toMatch(/updateTicket\(ticket\.id, request/);
-  const components = sources.find(([file]) => file === "ProjectComponents.tsx")![1];
+  const components = area("ProjectComponents.tsx");
   expect(components).toMatch(/updateMemory\(projectId, record\.id, \{ idempotency_key: .*expected_hash: record\.hash, content \}/);
   expect(components).toMatch(/setMemoryRetention\(projectId, retentionPolicyFromForm\(processDays, projectDays\)/);
   expect(components).toMatch(/applyMemoryRetention\(projectId, \{ idempotency_key:/);
@@ -72,7 +77,7 @@ test("the catalog traces every action to what requires it, and the required acti
 
 // ---- ADR 0022 and ADR 0023: state-specific variants and the fields the desktop sends; ADR 0027 point 4: the experience surfaces. ----
 test("the testing-setup offer's create control is a variant of ticket creation, and the setup plan, roles and overrides go through the shared builder", () => {
-  const workflows = sources.find(([file]) => file === "Workflows.tsx")![1];
+  const workflows = area("Workflows.tsx");
   expect(workflows.match(/data-capability="tickets.create"/g)?.length).toBeGreaterThanOrEqual(2);
   expect(workflows).toMatch(/prefillSetupTicket\(offer\)\}>Create the testing-setup ticket for/);
   expect(workflows).toMatch(/\.\.\.\(purpose !== "feature" && \{ purpose \}\)/);
@@ -90,14 +95,14 @@ test("the experience surfaces of ADR 0027 point 4 exist as marked desktop panels
   expect(surfaces.get("home")).toEqual(["Home.tsx"]);
   expect(surfaces.get("board")).toEqual(["Board.tsx"]);
   expect(surfaces.get("help")).toEqual(["Help.tsx"]);
-  expect(surfaces.get("editor-handoff")).toEqual(["CandidateReview.tsx"]);
+  expect(surfaces.get("editor-handoff")).toEqual(["candidate/Handoffs.tsx"]);
   expect(surfaces.get("settings")).toEqual(["Settings.tsx"]);
   // Settings are the runtime's doctor report (ADR 0027 point 4): one cataloged read, nothing editable.
-  const settings = sources.find(([file]) => file === "Settings.tsx")![1];
+  const settings = area("Settings.tsx");
   expect(settings).toContain('data-capability="doctor"');
   expect(settings).not.toMatch(/<(input|textarea|form)\b/);
-  const board = sources.find(([file]) => file === "Board.tsx")![1];
+  const board = area("Board.tsx");
   expect(board).not.toMatch(/draggable|onDragStart|onDrop/);
   expect(board).toContain("boardProjection(");
-  expect(sources.find(([file]) => file === "Home.tsx")![1]).toContain("homeSummary(");
+  expect(area("Home.tsx")).toContain("homeSummary(");
 });

@@ -48,8 +48,10 @@ test("the Home summary projects validation health per repository and the blocker
   expect(html).toMatch(/<code>lib<\/code><span class="state" data-tone="danger">blocked<\/span>/);
   expect(html).toContain("testing setup needed</span>");
   expect(html).toContain("2 ticket(s) · 1 active workflow(s)");
-  expect(html).toContain("Open project One");
-  expect(html).toContain("Create a ticket in Two");
+  expect(html).toContain("Open One");
+  expect(html).toContain('aria-label="New ticket in Two"');
+  // What waits on the developer comes before the project list.
+  expect(html.indexOf("Waiting on you")).toBeLessThan(html.indexOf("Projects and validation health"));
   expect(html).toContain('aria-label="Blockers waiting on you"');
   expect(html).toMatch(/<span class="state" data-tone="attention">paused<\/span><strong>Greeting<\/strong>/);
   expect(html).toContain("workflow run-1 (plan r2) is paused");
@@ -57,6 +59,6 @@ test("the Home summary projects validation health per repository and the blocker
   expect(html).toContain(offer.reason);
   // Green is earned: only the passed baseline is success; a completed workflow never is.
   expect(html.match(/data-tone="success"/g)).toHaveLength(1);
-  expect(renderToStaticMarkup(<HomeSummaryView summary={{ projects: [], blockers: [] }} busy={false} onOpen={() => {}} />)).toContain("No projects registered");
-  expect(renderToStaticMarkup(<HomeSummaryView summary={{ ...summary, blockers: [] }} busy={false} onOpen={() => {}} />)).toContain("No blockers");
+  expect(renderToStaticMarkup(<HomeSummaryView summary={{ projects: [], blockers: [] }} busy={false} onOpen={() => {}} />)).toContain("No projects yet");
+  expect(renderToStaticMarkup(<HomeSummaryView summary={{ ...summary, blockers: [] }} busy={false} onOpen={() => {}} />)).toContain("Nothing is waiting on you.");
 });

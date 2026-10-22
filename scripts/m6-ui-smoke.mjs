@@ -97,10 +97,13 @@ async function successful(method, route, body) {
 }
 function ticketItem(title) { return page.locator('ul[aria-label="Tickets"] > li').filter({ has: page.locator(".ticket-head strong", { hasText: title }) }); }
 function memoryItem(content) { return page.locator('ul[aria-label="Atlas memory records"] > li').filter({ hasText: content }); }
+// The desktop shows one view at a time (ADR 0028); the sidebar selects it.
+async function show(view, on = page) { await on.getByRole("navigation", { name: "Views" }).getByRole("button", { name: new RegExp(`^${view}`) }).click(); }
 async function connectFixtureView() {
   fixtureView = false;
   if (nativeBinary) {
-    await page.locator('.connection-panel button:has-text("Disconnect"), [role="alert"]').first().waitFor({ timeout: 90_000 });
+    await page.locator('.connection[data-tone="success"], [role="alert"]').first().waitFor({ timeout: 90_000 });
+    if (await page.locator('.connection[data-tone="success"]').count()) await show("Settings");
     const disconnect = page.getByRole("button", { name: "Disconnect", exact: true });
     if (await disconnect.count()) await disconnect.click();
     const dismiss = page.locator('[role="alert"] button:has-text("Dismiss")');
@@ -109,11 +112,15 @@ async function connectFixtureView() {
   await page.getByLabel("Service URL", { exact: true }).fill(uiUrl);
   await page.getByLabel("Service token", { exact: true }).fill(token);
   await page.getByRole("button", { name: "Connect", exact: true }).click();
+  await show("Settings");
   await page.getByRole("button", { name: "Disconnect", exact: true }).waitFor();
+  await show("Projects");
   fixtureView = true;
 }
 
 async function register(id, name, directory) {
+  const add = page.locator("details.add-project");
+  if (!(await add.evaluate((element) => element.open))) await add.locator("summary").click();
   await page.getByLabel("Project name", { exact: true }).fill(name);
   await page.getByLabel("Project ID", { exact: true }).fill(id);
   await page.getByLabel("Repository ID", { exact: true }).fill("app");
@@ -131,11 +138,18 @@ async function confirmManifest() {
   await page.getByRole("button", { name: "Confirm manifest", exact: true }).click();
   await waitFor("confirmed manifest", async () => (await page.locator(".facts").innerText()).includes("revision 1"));
 }
+// The Tickets section lists every ticket and shows one ticket's detail (ADR 0028): select it first.
+async function showTicket(title) {
+  const row = page.locator('ul[aria-label="Ticket list"] button').filter({ hasText: title }).first();
+  await row.waitFor({ timeout: 20_000 });
+  if ((await row.getAttribute("aria-pressed")) !== "true") await row.click();
+}
 async function createTicket(title, criteria = "Keep existing behavior") {
   await page.getByLabel("Ticket title", { exact: true }).fill(title);
   await page.getByLabel("Intent", { exact: true }).fill("Exercise the isolated component workflow.");
   await page.getByLabel("Acceptance criteria (one per line)", { exact: true }).fill(criteria);
   await page.getByRole("button", { name: "Create ticket", exact: true }).click();
+  await showTicket(title);
   await ticketItem(title).waitFor();
 }
 async function createMemory(scope, content) {
@@ -330,6 +344,7 @@ try {
   const refused = await api("POST", `/runs/${oldRun.id}/implement`, {});
   record("external Missions edit disables app planning and runtime rejects stale approved work", (await ticketItem("Component-guided writer").getByRole("button", { name: /^Plan r/ }).isDisabled()) && refused.status === 409);
   await ticketItem("Component-guided writer").getByRole("button", { name: "Reconcile external changes", exact: true }).click();
+  await showTicket("External Missions edit");
   await ticketItem("External Missions edit").waitFor();
   const reconciled = await successful("GET", `/tickets/${ticket.id}`);
   record("app reconciliation preserves ticket identity and advances the source revision", reconciled.id === ticket.id && reconciled.revision > ticket.revision && reconciled.title === "External Missions edit");
