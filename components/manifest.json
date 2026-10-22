@@ -26,7 +26,7 @@
       "license": "MIT",
       "published": false,
       "repository": "https://github.com/brodynelly/luuna-missions.git",
-      "commit": "bda5f31e8e7968af54f0d5f55f60c04dbd823d3e",
+      "commit": "5832801137dc1189915340c1f6076516b34e21b1",
       "licenseSha256": "9d36b754124311e7363b9f800e147f95b4dcaea008aa3565b70e15b8a7462f0a"
     },
     {
@@ -54,7 +54,7 @@
       "license": "MIT",
       "published": false,
       "repository": "https://github.com/brodynelly/luuna-atlas.git",
-      "commit": "3296243402ec51aa4f21a317c3379b8b8de5e7ca",
+      "commit": "7c04005c5541e7efdb652d834728602a8dcb4d29",
       "licenseSha256": "fe1956a36381a8ac9e13e229247eb1f05f951bb6a96153773025d03a0fd62519"
     },
     {
@@ -81,7 +81,7 @@
       "license": "MIT",
       "published": false,
       "repository": "https://github.com/brodynelly/luuna-beacon.git",
-      "commit": "e103e010082afaa3bde00460b5bd4ceae0f0e476",
+      "commit": "ae7741fe84df39c59a0081e8f56b13ef567bcce8",
       "licenseSha256": "fe1956a36381a8ac9e13e229247eb1f05f951bb6a96153773025d03a0fd62519"
     }
   ],
