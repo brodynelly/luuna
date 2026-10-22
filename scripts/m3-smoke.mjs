@@ -23,6 +23,7 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 import process from "node:process";
 import { pathsDigest } from "./m3-checkout-digest.mjs";
+import { settled, waitForExit } from "./smoke-process.mjs";
 import { setTimeout as sleep } from "node:timers/promises";
 
 // Linux: the harness runs under a child subreaper, so every process of the run that outlives its
@@ -973,16 +974,21 @@ async function hardKillDuringReviewReservesSpend(name) {
   const before = await api("GET", `/runs/${runId}/candidate`);
   const costBefore = before.body?.evidence?.cost_usd_micros ?? 0;
   runtime.kill("SIGKILL");
-  const killed = await waitForExit(runtime, 10_000);
+  const killed = await waitForExit(runtime, 10_000, { drain: false });
   // A runtime whose exit is not observed may still own the port and the output tree: the scenario
   // fails here and `runtime` keeps the old handle, so the final cleanup stops it again.
-  record(`${name}: the hard-killed runtime exited before the restart`, killed.exited, killed.exited ? "exit observed" : "exit NOT observed within 10s");
+  record(`${name}: the hard-killed runtime exited before the restart`, killed.exited, JSON.stringify({ exit_observed: killed.exited, exit_code: runtime.exitCode, signal: runtime.signalCode, stdio_closed: runtime.stdioClosed }));
   if (!killed.exited) throw new Error("the hard-killed runtime did not exit; restart not attempted");
   // The synthetic reviewer holds for 60s without reading stdin, so only a real Pi child can notice the closed pipe promptly.
   const childExit = await waitUntil(() => typeof pid !== "number" || !processAlive(pid), mode === "fixture" ? 75_000 : 20_000);
   // A PID alone cannot prove ownership once the runtime is gone, so an orphan is
   // reported (and fails the check below) rather than killed by a possibly recycled PID.
   const orphaned = typeof pid === "number" && processAlive(pid);
+  // On Windows the reviewer can inherit the runtime's stderr handle. Its pipe
+  // must drain after reviewer reconciliation, not before that reconciliation.
+  const drained = await waitForExit(runtime, 10_000);
+  record(`${name}: the old runtime log drained after reviewer reconciliation`, drained.exited);
+  if (!drained.exited) throw new Error("Old runtime log remains open; restart not attempted");
   runtime = await startRuntime("restarted");
   const after = await candidateSettled(runId);
   const events = await eventsOf(runId);
@@ -1221,23 +1227,6 @@ async function reapStrays() {
 
 function processAlive(pid) {
   try { process.kill(pid, 0); return true; } catch (error) { return error.code === "EPERM"; }
-}
-
-/**
- * A runtime is settled only once it has exited and its stdio has closed: Node may still deliver
- * queued stderr after 'exit', and only 'close' guarantees the log writer has seen the last chunk.
- */
-function settled(child) {
-  return (child.exitCode !== null || child.signalCode !== null) && child.stdioClosed !== false;
-}
-
-async function waitForExit(child, timeoutMs) {
-  const startedAt = Date.now();
-  while (Date.now() - startedAt < timeoutMs) {
-    if (settled(child)) return { exited: true, elapsed: Date.now() - startedAt };
-    await sleep(50);
-  }
-  return { exited: false, elapsed: Date.now() - startedAt };
 }
 
 async function waitUntil(predicate, timeoutMs) {

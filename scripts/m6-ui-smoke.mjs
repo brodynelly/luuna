@@ -177,6 +177,8 @@ async function plan(title) {
   const item = ticketItem(title);
   const pre = item.getByLabel("Complete immutable plan", { exact: true });
   const previous = await pre.count() ? JSON.parse(await pre.innerText()).revision : 0;
+  const supersede = item.locator(".plan-supersede input[type=checkbox]");
+  if (await supersede.count()) await supersede.check();
   await item.getByRole("button", { name: /^Plan(?: r\d+)?$/ }).click();
   return waitFor("new immutable plan revision", async () => {
     if (!(await pre.count())) return null;
