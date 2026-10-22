@@ -25,5 +25,5 @@ ol.events > li:last-child { border-bottom: 0; }
 ol.events > li:hover, ol.events > li:focus-within { background: var(--color-surface-raised); }
 ol.events .event-number { font-variant-numeric: tabular-nums; }
 
-/* Empty states: a soft wash behind the selection prompt. */
-.event-panel > .activity-empty { background: var(--gradient-aurora), var(--color-surface-raised); border-radius: var(--radius-card); }
+/* Empty states: a quiet ground behind the selection prompt. */
+.event-panel > .activity-empty { background: var(--color-surface-raised); border-radius: var(--radius-card); }

@@ -1,0 +1,26 @@
+<!doctype html>
+<html lang="en" data-theme="light">
+<head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><title>Ledger — PairingPage</title>
+<link rel="stylesheet" href="../tokens/tokens.css"><link rel="stylesheet" href="../components/ledger.css">
+<style>html,body{margin:0;height:100%;}body{background:var(--surface);}#root{height:100%;}.theme-toggle{position:fixed;right:12px;bottom:12px;z-index:100;}</style>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/react/18.3.1/umd/react.production.min.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/react-dom/18.3.1/umd/react-dom.production.min.js"></script>
+<script src="../components/ledger.js"></script>
+</head>
+<body>
+<div id="root"></div>
+<button class="lg-btn lg-btn-secondary theme-toggle" onclick="var r=document.documentElement;r.dataset.theme=r.dataset.theme==='dark'?'light':'dark'">Toggle theme</button>
+<script>
+  var L = window.Ledger, h = React.createElement;
+  ReactDOM.createRoot(document.getElementById('root')).render(h('div',{style:{minHeight:'100%',background:'var(--surface-muted)',display:'flex',alignItems:'center',justifyContent:'center',padding:24,boxSizing:'border-box'}},
+ h('div',{style:{width:820,display:'grid',gridTemplateColumns:'240px 1fr',gap:32,background:'var(--surface-raised)',border:'1px solid var(--separator)',borderRadius:12,padding:32,boxShadow:'var(--shadow-card)'}},
+  h('div',null,h('div',{style:{display:'flex',alignItems:'center',gap:10,marginBottom:24}},h(L.Avatar,{name:'NAS Workspace',square:true}),h('span',{style:{font:'600 14px/20px var(--font-sans)',color:'var(--ink)'}},'NAS Workspace')),
+   h(L.Stepper,{steps:[{label:'Server address',status:'done'},{label:'Approve this device',status:'current'},{label:'Ready',status:'upcoming'}]})),
+  h('div',{style:{display:'flex',flexDirection:'column',gap:16}},
+   h('h1',{style:{margin:0,font:'600 20px/28px var(--font-sans)',color:'var(--ink)'}},'Approve this device'),
+   h(L.TextField,{label:'NAS server address',mono:true,defaultValue:'https://dashboard.ts.brodynelly.com/workspace',suffix:h(L.Link,null,'Change')}),
+   h(L.PairingCode,{code:'WDJBMJHT',expiresIn:598,url:'dashboard.ts.brodynelly.com/workspace/device'}),
+   h(L.Alert,{tone:'warning'},'Your browser didn\u2019t open. Open the verification page from the button above.')))));
+</script>
+</body>
+</html>

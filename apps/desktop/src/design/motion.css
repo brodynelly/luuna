@@ -15,7 +15,6 @@
 @keyframes progress-slide { from { transform: translateX(-100%); } to { transform: translateX(250%); } }
 @keyframes dot-pulse { 0%, 100% { opacity: 0.35; transform: scale(0.7); } 40% { opacity: 1; transform: scale(1); } }
 @keyframes draw { from { stroke-dashoffset: 1; } to { stroke-dashoffset: 0; } }
-@keyframes aurora-drift { from { transform: translate(-3%, -2%) rotate(0deg) scale(1); } to { transform: translate(3%, 2%) rotate(4deg) scale(1.08); } }
 
 /* Reveal: children rise in one after another (--i is capped at 10 by the script); once data-revealed is set, children added later do not animate. */
 .reveal > * { animation: reveal-in var(--duration-large) var(--ease-out) backwards; animation-delay: calc(var(--i) * var(--duration-stagger)); }
@@ -30,18 +29,17 @@
 .check-draw :is(circle, path) { stroke-dasharray: 1; animation: draw var(--duration-draw) var(--ease-out) backwards; }
 .check-draw path { animation-delay: var(--duration-draw); }
 
-/* GlowSurface: a pale radial light behind the content, following a fine pointer (--mx, --my are written by script). */
+/* GlowSurface: the pointer glow is retired by ADR 0033 (no gradients); the rule stays inert until item L2 removes the component. */
 .glow-surface { position: relative; isolation: isolate; }
-.glow-surface::before { content: ""; position: absolute; inset: 0; z-index: -1; border-radius: inherit; background: radial-gradient(var(--glow-size) circle at var(--mx) var(--my), var(--color-glow), transparent); opacity: 0; pointer-events: none; transition: opacity var(--duration-standard) var(--ease-standard); }
+.glow-surface::before { content: ""; position: absolute; inset: 0; z-index: -1; border-radius: inherit; background: none; opacity: 0; pointer-events: none; transition: opacity var(--duration-standard) var(--ease-standard); }
 
-/* Aurora: a soft, slow colour wash behind an empty state. Decorative; the parent must be positioned and isolated. */
+/* Aurora: retired by ADR 0033; the element renders nothing until item L2 removes it. */
 .aurora-host { position: relative; isolation: isolate; overflow: hidden; }
-.aurora { position: absolute; inset: -20%; z-index: -1; background: var(--gradient-aurora); filter: blur(var(--blur-aurora)); pointer-events: none; animation: aurora-drift var(--duration-ambient) var(--ease-standard) infinite alternate; }
-.aurora[data-intensity="vivid"] { background: var(--gradient-aurora-vivid); }
+.aurora { display: none; }
 
 /* Loading skeleton: rows in the shape of the content, with a slow shimmer. */
 .skeleton { display: grid; gap: var(--space-2); }
-.skeleton-row { display: block; height: var(--skeleton-height); border: var(--border-width) solid var(--color-border); border-radius: var(--radius-button); background: var(--gradient-shimmer); background-size: 200% 100%; animation: shimmer var(--duration-shimmer) var(--ease-linear) infinite; }
+.skeleton-row { display: block; height: var(--skeleton-height); border: var(--border-width) solid var(--color-border); border-radius: var(--radius-button); background: var(--color-control-hover); background-size: 200% 100%; animation: shimmer var(--duration-shimmer) var(--ease-linear) infinite; }
 .skeleton-row:nth-child(3n) { width: var(--skeleton-short); }
 
 /* Indeterminate progress: a short segment sweeps across a thin track. */

@@ -1,4 +1,4 @@
-// Pure stylesheet lint helpers for design-system.test.ts (ADR 0032). Every function takes
+// Pure stylesheet lint helpers for design-system.test.ts (ADR 0032 motion rules, ADR 0033). Every function takes
 // comment-stripped CSS and returns a list of problems, so a fixture string can prove that a rule
 // both accepts and rejects. No file access here.
 
@@ -123,6 +123,30 @@ export function motionProblems(css: string): string[] {
   return [...opacityProblems(css), ...timingProblems(css), ...keyframeProblems(css), ...fillProblems(css), ...filterProblems(css), ...willChangeProblems(css)];
 }
 
+const GRADIENT = /\b(?:repeating-)?(?:linear|radial|conic)-gradient\(/i;
+
+/** ADR 0033: no gradients anywhere, token sheets included. Separate from motionProblems. */
+export function gradientProblems(css: string): string[] {
+  return declarations(css).filter(([, value]) => GRADIENT.test(value)).map(([property, value]) => `gradients are banned (ADR 0033): ${property}: ${value}`);
+}
+
+const LEFT_EDGE = /^(?:border-left|border-left-color|border-inline-start|border-inline-start-color)$/;
+const LEFT_RULE_VALUE = /var\(--(?:tone-|color-accent|accent|rule-width)/;
+
+/** ADR 0033: no coloured left-border cards. Returns the offending selectors, one per rule, in source order. */
+export function leftRuleSelectors(css: string): string[] {
+  const found: string[] = [];
+  for (const { selector, body } of rules(css)) {
+    const bad = declarations(`${body};`).some(([property, value]) => (LEFT_EDGE.test(property) && LEFT_RULE_VALUE.test(value)) || (property === "box-shadow" && /inset var\(--rule-width\)/.test(value)));
+    if (bad) found.push(selector.replace(/\s+/g, " "));
+  }
+  return found;
+}
+
+export function leftRuleProblems(css: string): string[] {
+  return leftRuleSelectors(css).map((selector) => `coloured left rule is banned (ADR 0033): ${selector}`);
+}
+
 /** Quoted string literals in a TSX file, with comments and template holes removed. */
 export function stringLiterals(tsx: string): string[] {
   const code = tsx.replace(/\/\*[\s\S]*?\*\//g, "").replace(/(^|[^:])\/\/.*$/gm, "$1");
@@ -133,17 +157,20 @@ export function stringLiterals(tsx: string): string[] {
 }
 
 const TW_BANNED = /^(?:opacity|animate|duration|ease|delay|will-change|blur|backdrop-blur|backdrop-opacity|shadow(?!-none$))-|^transition(?:-(?!none$)|$)/;
+const TW_GRADIENT = /^(?:bg-(?:linear|radial|conic|gradient)-|from-|via-|to-(?!$))/;
 const TW_LITERAL = /#[0-9a-f]{3,8}\b|\b(?:rgb|rgba|hsl|hsla|hwb|lab|lch|oklab|oklch|color-mix)\(|-?\d*\.?\d+(?:px|ms|s|rem|em)\b/i;
 const DECLARATION = /(?:^|[\s;"'])(?:opacity|transition(?:-[a-z]+)?|animation(?:-[a-z]+)?|will-change|filter|backdrop-filter)\s*:/;
 
-/** ADR 0032 for TSX: Tailwind utilities may not bypass the CSS lint (motion, effects, arbitrary literal values), and strings hold no CSS declarations. */
+/** ADR 0032 motion rules and ADR 0033 gradient ban for TSX: Tailwind utilities may not bypass the CSS lint (motion, effects, arbitrary literal values), and strings hold no CSS declarations. */
 export function tsxStyleProblems(tsx: string): string[] {
   const problems: string[] = [];
   for (const text of stringLiterals(tsx)) {
+    if (/gradient\(/i.test(text)) problems.push(`gradients are banned (ADR 0033): "${text.trim()}"`);
     if (DECLARATION.test(text)) problems.push(`inline CSS declaration belongs in a token-based stylesheet: "${text.trim()}"`);
     for (const word of text.split(/\s+/).filter(Boolean)) {
       const utility = word.replace(/^(?:\[[^\]]*\]:|[a-z0-9_*&>-]+:)*/i, "").replace(/^!/, "").replace(/^-/, "").replace(/!$/, "");
-      if (TW_BANNED.test(utility) && !/^shadow-\[var\(--[\w-]+\)\]$/.test(utility)) problems.push(`utility bypasses the motion and effect tokens: ${word}`);
+      if (TW_GRADIENT.test(utility)) problems.push(`gradient utilities are banned (ADR 0033): ${word}`);
+      else if (TW_BANNED.test(utility) && !/^shadow-\[var\(--[\w-]+\)\]$/.test(utility)) problems.push(`utility bypasses the motion and effect tokens: ${word}`);
       else if (/\[[^\]]*\]/.test(utility) && TW_LITERAL.test(utility.slice(utility.indexOf("[")))) problems.push(`arbitrary value holds a literal colour, length or duration: ${word}`);
     }
   }

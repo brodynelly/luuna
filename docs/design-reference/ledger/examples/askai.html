@@ -1,0 +1,34 @@
+<!doctype html>
+<html lang="en" data-theme="light">
+<head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><title>Ledger — AskAIPage</title>
+<link rel="stylesheet" href="../tokens/tokens.css"><link rel="stylesheet" href="../components/ledger.css">
+<style>html,body{margin:0;height:100%;}body{background:var(--surface);}#root{height:100%;}.theme-toggle{position:fixed;right:12px;bottom:12px;z-index:100;}</style>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/react/18.3.1/umd/react.production.min.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/react-dom/18.3.1/umd/react-dom.production.min.js"></script>
+<script src="../components/ledger.js"></script>
+</head>
+<body>
+<div id="root"></div>
+<button class="lg-btn lg-btn-secondary theme-toggle" onclick="var r=document.documentElement;r.dataset.theme=r.dataset.theme==='dark'?'light':'dark'">Toggle theme</button>
+<script>
+  var L = window.Ledger, h = React.createElement;
+  ReactDOM.createRoot(document.getElementById('root')).render((function(){ function shell(title, main, active, o){ o = o || {};
+ return h(L.AppShell,{
+  banner:h(L.Banner,{label:'Workspace',action:'Open in browser'},'Connected to dashboard.ts.brodynelly.com over Tailscale.'),
+  brand:{name:'NAS Workspace',subtitle:'Brody Nelson'},
+  nav:[h(L.NavItem.Group,{key:'a'},h(L.NavItem,{icon:'home',label:'Home',active:active==='home'}),h(L.NavItem,{icon:'folder',label:'Library',active:active==='library'}),h(L.NavItem,{icon:'sparkle',label:'Ask AI',active:active==='ai'}),h(L.NavItem,{icon:'download',label:'Downloads',active:active==='downloads'})),
+       h(L.NavItem.Group,{key:'b',label:'Device'},h(L.NavItem,{icon:'gear',label:'Settings',active:active==='settings'}))],
+  sidebarFooter:h(L.StatusIndicator,{status:'connected',label:'Connected'}),
+  search:h(L.SearchField,{width:360,shortcut:'/',placeholder:'Search files'}),
+  actions:[h(L.IconButton,{key:1,icon:'help',label:'Help'}),h(L.IconButton,{key:2,icon:'bell',label:'Notifications',dot:true}),h(L.IconButton,{key:3,icon:'sparkle',label:'Ask AI'}),h(L.Avatar,{key:4,name:'Brody Nelson'})]
+ }, h(L.PageHeader,{title:title,description:o.description,breadcrumbs:o.breadcrumbs,actions:o.actions}), main);
+}
+ return h('div',{style:{position:'relative',height:'100%'}}, shell('Home', h('div',{style:{display:'grid',gridTemplateColumns:'1fr 1fr',gap:16}},h(L.MetricCard,{title:'Storage used',value:'2.84 TB',comparison:'of 4 TB',data:[1,1.2,1.5,1.7,2.1,2.4,2.84],start:'May',end:'Oct'}),h(L.MetricCard,{title:'Files added',value:'1,284',delta:'+8.2%',comparison:'vs last month',data:[3,5,4,6,7,6,9]})), 'home'),
+  h('div',{style:{position:'absolute',inset:0}}, h(L.Drawer,{inline:true,icon:'sparkle',title:'Ask AI',onClose:function(){},headerActions:h(L.SegmentedControl,{label:'Zoom',items:[{value:'90',label:'90%'},{value:'100',label:'100%'},{value:'125',label:'125%'}],defaultValue:'100'}),footer:h(L.PromptComposer,{rows:2,onDictate:function(){}})},
+   h(L.SelectionCard,{sourceApp:'Untitled - Notepad',text:'Their going to review the the contract tomorow.',expiresIn:540,onClear:function(){}}),
+   h(L.AIResponse,{title:'Quick fix',sourceApp:'Notepad',onInsert:function(){},onRegenerate:function(){}},'They’re going to review the contract tomorrow.'))),
+  h('div',{style:{position:'absolute',left:260,bottom:24}}, h(L.Toast,{inline:true,tone:'success'},'Copied to clipboard')));
+})());
+</script>
+</body>
+</html>

@@ -208,22 +208,8 @@
   from { opacity: 0; transform: translateY(var(--reveal-offset)); }
 }
 
-/* Home alone: a pale decorative wash behind the header; it fades into the page and never carries text. */
+/* Home alone: a positioned, isolated page (ADR 0033 removed the decorative wash; item L3 restyles Home). */
 .view > .page[data-surface="home"] { position: relative; isolation: isolate; }
-.view > .page[data-surface="home"]::before {
-  content: "";
-  position: absolute;
-  z-index: -1;
-  inset: calc(-1 * var(--space-6)) 0 auto;
-  height: calc(var(--space-7) * 3);
-  background: var(--gradient-wash-scrim), var(--gradient-aurora);
-  filter: blur(var(--blur-aurora));
-  pointer-events: none;
-  animation: aurora-drift var(--duration-ambient) var(--ease-linear) infinite alternate;
-}
-@keyframes aurora-drift {
-  to { transform: translateX(var(--space-6)) scale(1.1); }
-}
 
 /* View change: the browser's transition where supported, otherwise an opacity enter from the data-entering slot. */
 .app[data-view-motion="css"] > main > .view[data-entering] { animation: view-enter var(--duration-standard) var(--ease-out) backwards; }

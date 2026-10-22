@@ -1,0 +1,203 @@
+/* Ledger — generated from tokens.json. Light is default; dark (Apple Developer palette) via [data-theme="dark"] or the OS setting. */
+:root,
+[data-theme="light"] {
+  color-scheme: light;
+  --surface: #ffffff;
+  --surface-raised: #ffffff;
+  --surface-muted: #f5f7fa;
+  --fill: #f2f4f7;
+  --fill-strong: #ebeef1;
+  --control-selected: #ffffff;
+  --surface-overlay: #ffffff;
+  --field: #ffffff;
+  --scrim: rgba(15, 23, 42, 0.40);
+  --banner: #0f2b46;
+  --separator: #ebeef1;
+  --border: #d5dbe1;
+  --border-strong: #7d8799;
+  --ink: #21252c;
+  --ink-body: #353a44;
+  --ink-muted: #596171;
+  --ink-subdued: #636c7e;
+  --ink-disabled: #a3acba;
+  --ink-on-banner: #ffffff;
+  --accent: #533afd;
+  --accent-hover: #4430e0;
+  --ink-on-accent: #ffffff;
+  --accent-text: #533afd;
+  --accent-soft: #efedff;
+  --focus-ring: #533afd;
+  --toast: #21252c;
+  --ink-on-toast: #ffffff;
+  --toast-action: #c4c1ff;
+  --chart-1: #635bff;
+  --chart-2: #0055bc;
+  --chart-3: #0095b3;
+  --chart-4: #ed6804;
+  --chart-5: #b3063d;
+  --ai: #7a3ff2;
+  --chart-muted: #c0c8d2;
+  --chart-grid: #ebeef1;
+  --success: #217005;
+  --success-soft: #d7f7c2;
+  --danger: #c0123c;
+  --ink-on-danger: #ffffff;
+  --danger-soft: #ffe7f2;
+  --warning: #a82c00;
+  --warning-soft: #fcedb9;
+  --info: #0055bc;
+  --info-soft: #e5f0ff;
+  --shadow-button: 0 1px 1px rgba(16, 24, 40, 0.05);
+  --shadow-card: 0 0 0 1px rgba(16, 24, 40, 0.04), 0 1px 2px rgba(16, 24, 40, 0.06);
+  --shadow-popover: 0 8px 24px rgba(16, 24, 40, 0.12), 0 0 0 1px rgba(16, 24, 40, 0.06);
+}
+
+[data-theme="dark"] {
+  color-scheme: dark;
+  --surface: #000000;
+  --surface-raised: #1d1d1f;
+  --surface-muted: #161617;
+  --fill: #333336;
+  --fill-strong: #424245;
+  --control-selected: #6e6e73;
+  --surface-overlay: #1d1d1f;
+  --field: #161617;
+  --scrim: rgba(0, 0, 0, 0.60);
+  --banner: #1d1d1f;
+  --separator: #333336;
+  --border: #424245;
+  --border-strong: #6e6e73;
+  --ink: #f5f5f7;
+  --ink-body: #f5f5f7;
+  --ink-muted: #a1a1a6;
+  --ink-subdued: #86868b;
+  --ink-disabled: #6e6e73;
+  --ink-on-banner: #f5f5f7;
+  --accent: #0071e3;
+  --accent-hover: #0076df;
+  --ink-on-accent: #ffffff;
+  --accent-text: #2997ff;
+  --accent-soft: #162b5b;
+  --focus-ring: #0071e3;
+  --toast: #333336;
+  --ink-on-toast: #f5f5f7;
+  --toast-action: #7dc1ff;
+  --chart-1: #2997ff;
+  --chart-2: #a95ed2;
+  --chart-3: #00c2bb;
+  --chart-4: #f56300;
+  --chart-5: #f14bf1;
+  --ai: #a95ed2;
+  --chart-muted: #424245;
+  --chart-grid: #222222;
+  --success: #03a10e;
+  --success-soft: #002b03;
+  --danger: #ff3037;
+  --ink-on-danger: #000000;
+  --danger-soft: #330000;
+  --warning: #f56300;
+  --warning-soft: #290d00;
+  --info: #2997ff;
+  --info-soft: #002a51;
+  --shadow-button: none;
+  --shadow-card: none;
+  --shadow-popover: 0 8px 24px rgba(0, 0, 0, 0.6), 0 0 0 1px rgba(255, 255, 255, 0.1);
+}
+
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) {
+    color-scheme: dark;
+    --surface: #000000;
+    --surface-raised: #1d1d1f;
+    --surface-muted: #161617;
+    --fill: #333336;
+    --fill-strong: #424245;
+    --control-selected: #6e6e73;
+    --surface-overlay: #1d1d1f;
+    --field: #161617;
+    --scrim: rgba(0, 0, 0, 0.60);
+    --banner: #1d1d1f;
+    --separator: #333336;
+    --border: #424245;
+    --border-strong: #6e6e73;
+    --ink: #f5f5f7;
+    --ink-body: #f5f5f7;
+    --ink-muted: #a1a1a6;
+    --ink-subdued: #86868b;
+    --ink-disabled: #6e6e73;
+    --ink-on-banner: #f5f5f7;
+    --accent: #0071e3;
+    --accent-hover: #0076df;
+    --ink-on-accent: #ffffff;
+    --accent-text: #2997ff;
+    --accent-soft: #162b5b;
+    --focus-ring: #0071e3;
+    --toast: #333336;
+    --ink-on-toast: #f5f5f7;
+    --toast-action: #7dc1ff;
+    --chart-1: #2997ff;
+    --chart-2: #a95ed2;
+    --chart-3: #00c2bb;
+    --chart-4: #f56300;
+    --chart-5: #f14bf1;
+    --ai: #a95ed2;
+    --chart-muted: #424245;
+    --chart-grid: #222222;
+    --success: #03a10e;
+    --success-soft: #002b03;
+    --danger: #ff3037;
+    --ink-on-danger: #000000;
+    --danger-soft: #330000;
+    --warning: #f56300;
+    --warning-soft: #290d00;
+    --info: #2997ff;
+    --info-soft: #002a51;
+    --shadow-button: none;
+    --shadow-card: none;
+    --shadow-popover: 0 8px 24px rgba(0, 0, 0, 0.6), 0 0 0 1px rgba(255, 255, 255, 0.1);
+  }
+}
+
+:root {
+  --space-1: 4px;
+  --space-2: 8px;
+  --space-3: 12px;
+  --space-4: 16px;
+  --space-5: 20px;
+  --space-6: 24px;
+  --space-8: 32px;
+  --space-12: 48px;
+  --radius-sm: 4px;
+  --radius-md: 6px;
+  --radius-lg: 8px;
+  --radius-xl: 12px;
+  --radius-full: 9999px;
+  --z-sticky: 10;
+  --z-menu: 30;
+  --z-drawer: 40;
+  --z-dialog: 50;
+  --z-toast: 60;
+  --control-sm: 28px;
+  --control-md: 32px;
+  --control-lg: 40px;
+  --sidebar-width: 240px;
+  --drawer-width: 440px;
+  --dialog-width: 480px;
+  --banner-height: 40px;
+  --topbar-height: 56px;
+  --content-max-width: 1200px;
+  --fold-reference: 768px;
+  --font-sans: -apple-system, BlinkMacSystemFont, "SF Pro Text", "Segoe UI", "Helvetica Neue", Arial, sans-serif;
+  --font-mono: ui-monospace, "SF Mono", Menlo, Consolas, monospace;
+}
+
+.page-title { font-family: var(--font-sans); font-size: 28px; line-height: 36px; font-weight: 700; letter-spacing: -0.01em; }
+.metric-lg { font-family: var(--font-sans); font-size: 24px; line-height: 32px; font-weight: 600; font-variant-numeric: tabular-nums; }
+.section-title { font-family: var(--font-sans); font-size: 20px; line-height: 28px; font-weight: 600; }
+.metric { font-family: var(--font-sans); font-size: 20px; line-height: 28px; font-weight: 600; font-variant-numeric: tabular-nums; }
+.body-strong { font-family: var(--font-sans); font-size: 14px; line-height: 20px; font-weight: 600; }
+.body { font-family: var(--font-sans); font-size: 14px; line-height: 20px; font-weight: 400; }
+.label { font-family: var(--font-sans); font-size: 13px; line-height: 18px; font-weight: 500; }
+.caption { font-family: var(--font-sans); font-size: 12px; line-height: 16px; font-weight: 400; }
+.overline { font-family: var(--font-sans); font-size: 12px; line-height: 16px; font-weight: 500; }
+.mono { font-family: var(--font-mono); font-size: 13px; line-height: 20px; font-weight: 400; }

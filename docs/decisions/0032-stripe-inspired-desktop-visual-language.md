@@ -1,6 +1,6 @@
 # ADR 0032: a blurple and navy desktop visual language, bundled fonts, layered depth and a bounded motion budget
 
-Date: 2026-10-22. Status: Accepted. Amends [ADR 0013](0013-desktop-design-system.md) decision 3 (system fonts only, never opacity) and [ADR 0030](0030-desktop-shell-and-tailwind.md) where it touches presentation rules; extends [ADR 0031](0031-client-frame-pacing.md) (token-driven, reduced-motion-aware motion, steady evidence). Amends the rules in [DESIGN-SYSTEM.md](../DESIGN-SYSTEM.md).
+Date: 2026-10-22. Status: Accepted; partly superseded by [ADR 0033](0033-ledger-design-system.md) (decisions 1 and 2, gradients/aurora/glow, and the font and gradient consequences); decisions 3 to 7 and 9 and the lint consequences remain in force. Amends [ADR 0013](0013-desktop-design-system.md) decision 3 (system fonts only, never opacity) and [ADR 0030](0030-desktop-shell-and-tailwind.md) where it touches presentation rules; extends [ADR 0031](0031-client-frame-pacing.md) (token-driven, reduced-motion-aware motion, steady evidence). Amends the rules in [DESIGN-SYSTEM.md](../DESIGN-SYSTEM.md).
 
 ## Context
 

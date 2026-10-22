@@ -1,187 +1,168 @@
 /*
- * Luuna design tokens, colour, tone, type and layout. With tokens-depth.css and tokens-motion.css,
- * these are the only stylesheets that may contain literal colours, lengths or durations. fonts.css is linted by
- * the tokens-only test like any other sheet, so it holds no such literals.
- * Dark is the default look; the light block redefines every colour for prefers-color-scheme: light.
- * Reference: docs/DESIGN-SYSTEM.md, ADR 0032. Before changing anything here:
- *   1. A new colour role is defined in both schemes and added to the contrast pairs in
+ * Luuna design tokens, colour (ADR 0033). Every role below is the exact value from the vendored Ledger
+ * tokens.json (docs/design-reference/ledger/tokens/tokens.json); design-system.test.ts proves it. With
+ * tokens-depth.css, tokens-scale.css, tokens-motion.css and tokens-legacy.css, these are the only
+ * stylesheets that may contain literal colours, lengths or durations.
+ * Themes: light is the default; dark comes from data-theme="dark", or from the OS unless data-theme="light".
+ * The dark attribute block and the dark media block must stay identical (the test compares them).
+ * Reference: docs/DESIGN-SYSTEM.md, ADR 0033. Before changing anything here:
+ *   1. A new colour role is defined in both themes and added to the contrast pairs in
  *      design/design-system.test.ts (text 4.5:1, marks, borders and focus 3:1).
  *   2. Green (the success tone) is earned: passed evidence and a live connection only.
  *   3. Run npm test, npm run typecheck and npm run build with Node 24.19.0, then
  *      node scripts/mvp-ui-smoke.mjs (contrast in both schemes, 760 px width), and report each.
  */
-:root {
+:root, :root[data-theme="light"] {
+  color-scheme: light;
+  --surface: #ffffff;
+  --surface-raised: #ffffff;
+  --surface-muted: #f5f7fa;
+  --fill: #f2f4f7;
+  --fill-strong: #ebeef1;
+  --control-selected: #ffffff;
+  --surface-overlay: #ffffff;
+  --field: #ffffff;
+  --scrim: rgba(15, 23, 42, 0.40);
+  --banner: #0f2b46;
+  --separator: #ebeef1;
+  --border: #d5dbe1;
+  --border-strong: #7d8799;
+  --ink: #21252c;
+  --ink-body: #353a44;
+  --ink-muted: #596171;
+  --ink-subdued: #636c7e;
+  --ink-disabled: #a3acba;
+  --ink-on-banner: #ffffff;
+  --accent: #533afd;
+  --accent-hover: #4430e0;
+  --ink-on-accent: #ffffff;
+  --accent-text: #533afd;
+  --accent-soft: #efedff;
+  --focus-ring: #533afd;
+  --toast: #21252c;
+  --ink-on-toast: #ffffff;
+  --toast-action: #c4c1ff;
+  --chart-1: #635bff;
+  --chart-2: #0055bc;
+  --chart-3: #0095b3;
+  --chart-4: #ed6804;
+  --chart-5: #b3063d;
+  --ai: #7a3ff2;
+  --chart-muted: #c0c8d2;
+  --chart-grid: #ebeef1;
+  --success: #217005;
+  --success-soft: #d7f7c2;
+  --danger: #c0123c;
+  --ink-on-danger: #ffffff;
+  --danger-soft: #ffe7f2;
+  --warning: #a82c00;
+  --warning-soft: #fcedb9;
+  --info: #0055bc;
+  --info-soft: #e5f0ff;
+}
+
+:root[data-theme="dark"] {
   color-scheme: dark;
+  --surface: #000000;
+  --surface-raised: #1d1d1f;
+  --surface-muted: #161617;
+  --fill: #333336;
+  --fill-strong: #424245;
+  --control-selected: #6e6e73;
+  --surface-overlay: #1d1d1f;
+  --field: #161617;
+  --scrim: rgba(0, 0, 0, 0.60);
+  --banner: #1d1d1f;
+  --separator: #333336;
+  --border: #424245;
+  --border-strong: #6e6e73;
+  --ink: #f5f5f7;
+  --ink-body: #f5f5f7;
+  --ink-muted: #a1a1a6;
+  --ink-subdued: #86868b;
+  --ink-disabled: #6e6e73;
+  --ink-on-banner: #f5f5f7;
+  --accent: #0071e3;
+  --accent-hover: #0076df;
+  --ink-on-accent: #ffffff;
+  --accent-text: #2997ff;
+  --accent-soft: #162b5b;
+  --focus-ring: #0071e3;
+  --toast: #333336;
+  --ink-on-toast: #f5f5f7;
+  --toast-action: #7dc1ff;
+  --chart-1: #2997ff;
+  --chart-2: #a95ed2;
+  --chart-3: #00c2bb;
+  --chart-4: #f56300;
+  --chart-5: #f14bf1;
+  --ai: #a95ed2;
+  --chart-muted: #424245;
+  --chart-grid: #222222;
+  --success: #03a10e;
+  --success-soft: #002b03;
+  --danger: #ff3037;
+  --ink-on-danger: #000000;
+  --danger-soft: #330000;
+  --warning: #f56300;
+  --warning-soft: #290d00;
+  --info: #2997ff;
+  --info-soft: #002a51;
+}
 
-  /* Surfaces: page, panel, record, inset, fields, controls, selection and dividers. */
-  --color-bg: #0a1628;
-  --color-surface: #101c30;
-  --color-surface-raised: #17243a;
-  --color-surface-sunken: #071121;
-  --color-field: #071121;
-  --color-field-disabled: #101c30;
-  --color-control: #17243a;
-  --color-control-hover: #1f2e47;
-  --color-selected: #1f2353;
-  --color-selected-border: #5e58d8;
-  --color-accent-tint: #1f2353;
-  --color-border: #1f2c42;
-  /* Decorative stronger divider or hover edge; never a control boundary. */
-  --color-border-strong: #2c3b55;
-  --color-border-control: #6f819b;
-  /* Sidebar: the window chrome beside the content, one step off the page. */
-  --color-sidebar: #0c192d;
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) {
+    color-scheme: dark;
+    --surface: #000000;
+    --surface-raised: #1d1d1f;
+    --surface-muted: #161617;
+    --fill: #333336;
+    --fill-strong: #424245;
+    --control-selected: #6e6e73;
+    --surface-overlay: #1d1d1f;
+    --field: #161617;
+    --scrim: rgba(0, 0, 0, 0.60);
+    --banner: #1d1d1f;
+    --separator: #333336;
+    --border: #424245;
+    --border-strong: #6e6e73;
+    --ink: #f5f5f7;
+    --ink-body: #f5f5f7;
+    --ink-muted: #a1a1a6;
+    --ink-subdued: #86868b;
+    --ink-disabled: #6e6e73;
+    --ink-on-banner: #f5f5f7;
+    --accent: #0071e3;
+    --accent-hover: #0076df;
+    --ink-on-accent: #ffffff;
+    --accent-text: #2997ff;
+    --accent-soft: #162b5b;
+    --focus-ring: #0071e3;
+    --toast: #333336;
+    --ink-on-toast: #f5f5f7;
+    --toast-action: #7dc1ff;
+    --chart-1: #2997ff;
+    --chart-2: #a95ed2;
+    --chart-3: #00c2bb;
+    --chart-4: #f56300;
+    --chart-5: #f14bf1;
+    --ai: #a95ed2;
+    --chart-muted: #424245;
+    --chart-grid: #222222;
+    --success: #03a10e;
+    --success-soft: #002b03;
+    --danger: #ff3037;
+    --ink-on-danger: #000000;
+    --danger-soft: #330000;
+    --warning: #f56300;
+    --warning-soft: #290d00;
+    --info: #2997ff;
+    --info-soft: #002a51;
+  }
+}
 
-  /* Text. Disabled text is exempt from contrast (WCAG 1.4.3 inactive components). */
-  --color-text: #e3e9f1;
-  --color-text-heading: #f5f8fc;
-  --color-text-muted: #a3b1c4;
-  --color-text-subtle: #97a6ba;
-  --color-text-disabled: #5f6f86;
-
-  /* Developer action and brand: the blurple accent. */
-  --color-accent: #9590ff;
-  --color-accent-hover: #aaa6ff;
-  --color-accent-active: #bdbaff;
-  --color-on-accent: #0a1628;
-  --color-focus: #a29dff;
-  --color-selection: #353a86;
-  --color-scrollbar: #34445c;
-
-  /* Outcome tones: text (fg), tint (bg), edge (border) and shape (mark). */
-  --tone-success-fg: #8fe0b4;
-  --tone-success-bg: #0f3326;
-  --tone-success-border: #1f5a42;
-  --tone-success-mark: #4ccf8d;
-  --tone-active-fg: #8bd6f4;
-  --tone-active-bg: #0c3044;
-  --tone-active-border: #1c5570;
-  --tone-active-mark: #4bbfe8;
-  --tone-danger-fg: #ffb4c1;
-  --tone-danger-bg: #43182a;
-  --tone-danger-border: #6e2a40;
-  --tone-danger-mark: #ff7d95;
-  --tone-attention-fg: #f5d48b;
-  --tone-attention-bg: #372a0d;
-  --tone-attention-border: #5e4818;
-  --tone-attention-mark: #efb840;
-  --tone-neutral-fg: #c4cedc;
-  --tone-neutral-bg: #1e2a3d;
-  --tone-neutral-border: #34445c;
-  --tone-neutral-mark: #8a9bb2;
-  --tone-interrupted-fg: #e6c0f4;
-  --tone-interrupted-bg: #351f44;
-  --tone-interrupted-border: #563569;
-  --tone-interrupted-mark: #cb90e7;
-
-  /* Type. Apple keeps the system SF stack below; other platforms get the bundled Söhne through design/fonts.css (ADR 0032). The CSP loads nothing from outside the bundle. */
-  --font-sans: -apple-system, BlinkMacSystemFont, "SF Pro Text", "Segoe UI Variable Text", "Segoe UI", system-ui, Roboto, "Helvetica Neue", Arial, sans-serif;
-  --font-display: -apple-system, BlinkMacSystemFont, "SF Pro Display", "Segoe UI Variable Display", "Segoe UI", system-ui, Roboto, "Helvetica Neue", Arial, sans-serif;
-  /* Hinted, installed faces: Cascadia ships with Windows 11, Consolas everywhere on Windows. Nothing is fetched (CSP). */
-  --font-mono: "Cascadia Mono", "Cascadia Code", Consolas, ui-monospace, "SF Mono", "SFMono-Regular", Menlo, "Liberation Mono", monospace;
-  /* Role scale: size with a unitless line height. */
-  --text-display: clamp(36px, 4.5vw, 48px);
-  --leading-display: 1.08;
-  --text-h1: 28px;
-  --leading-h1: 1.21;
-  --text-h2: 20px;
-  --leading-h2: 1.4;
-  --text-h3: 16px;
-  --leading-h3: 1.5;
-  --text-body: 14px;
-  --leading-body: 1.43;
-  --text-small: 13px;
-  --leading-small: 1.38;
-  --text-caption: 12px;
-  --leading-caption: 1.33;
-  --text-label: 11px;
-  --leading-label: 1.45;
-  --tracking-display: -0.02em;
-  --tracking-h1: -0.015em;
-  --tracking-h2: -0.01em;
-  --tracking-label: 0.05em;
-  /* The older names are aliases of the roles. */
-  --text-2xs: var(--text-label);
-  --text-xs: var(--text-caption);
-  --text-sm: var(--text-small);
-  --text-md: var(--text-body);
-  --text-lg: var(--text-h3);
-  --text-xl: clamp(26px, 3.2vw, 34px);
-  /* The large page title of each view (h2 at the top of a view). */
-  --text-title: var(--text-h1);
-  --text-wordmark: 22px;
-  --text-glyph: 34px;
-  --leading-none: 1;
-  --leading-tight: 1.25;
-  --leading: 1.5;
-  --leading-code: 1.55;
-  --leading-prose: 1.65;
-  /* Static faces ship 300 to 700. The former 550 and 650 are remapped to 500 and 600. */
-  --weight-light: 300;
-  --weight-regular: 400;
-  --weight-medium: 500;
-  --weight-semibold: 600;
-  --weight-bold: 700;
-  --weight-strong: var(--weight-semibold);
-  --tracking-tight: -0.025em;
-  --tracking-title: -0.02em;
-  --tracking-wide: 0.12em;
-
-  /* Space: a 4 px rhythm with two half steps. */
-  --space-0-5: 2px;
-  --space-1: 4px;
-  --space-1-5: 6px;
-  --space-2: 8px;
-  --space-2-5: 10px;
-  --space-3: 12px;
-  --space-4: 16px;
-  --space-5: 24px;
-  --space-6: 32px;
-  --space-7: 48px;
-
-  /* Controls and layout. Shape, shadows and the scrim live in tokens-depth.css. */
-  --control-height: 34px;
-  --field-line: 16px;
-  --control-height-sm: 28px;
-  --control-pad-x: 14px;
-  --control-pad-x-sm: 10px;
-  --checkbox-size: 16px;
-  --app-min-width: 360px;
-  --layout-max: 1280px;
-  --content-max: 1120px;
-  --connect-width: 440px;
-  --palette-width: 600px;
-  --palette-top: 12vh;
-  --palette-list-max: 50vh;
-  --menu-min-width: 200px;
-  /* The context menu sets its own position at runtime; these are the resting values. */
-  --menu-x: 0px;
-  --menu-y: 0px;
-  --viewport-height: 100vh;
-  --sidebar-width: 240px;
-  --sidebar-compact: 64px;
-  --nav-height: 34px;
-  --icon-size: 16px;
-  --icon-stroke: 1.75;
-  --gutter: 40px;
-  --section-gap: 24px;
-  --panel-pad: 22px;
-  --topbar-height: 64px;
-  --aside-width: 286px;
-  --rail-width: 300px;
-  --facts-term: 150px;
-  --field-min: 14rem;
-  --hint-min: 16rem;
-  --measure: 72ch;
-  --number-width: 3ch;
-  --scroll-max: 28rem;
-  --textarea-min: 68px;
-  --plan-max: 24rem;
-  --empty-min: 168px;
-  --skeleton-height: 44px;
-  --skeleton-short: 60%;
-
-  /* Motion: state changes only; evidence never pulses. Easings and the rest are in tokens-motion.css. */
+/* Motion that is not a Ledger token: state changes only; evidence never pulses. Easings and the rest are in tokens-motion.css. */
+:root {
   --duration-fast: 120ms;
   /* Following live output: the glide length and how near the bottom still counts as pinned (0 ms jumps). */
   --duration-follow: 160ms;
@@ -192,91 +173,9 @@
   --tail-caret-gap: 0.1em;
 }
 
-@media (prefers-color-scheme: light) {
-  :root {
-    color-scheme: light;
-    --color-bg: #f6f9fc;
-    --color-surface: #ffffff;
-    --color-surface-raised: #f8fafc;
-    --color-surface-sunken: #eef2f7;
-    --color-field: #ffffff;
-    --color-field-disabled: #eef2f7;
-    --color-control: #ffffff;
-    --color-control-hover: #f3f6fa;
-    --color-selected: #efeeff;
-    --color-selected-border: #b7b3ff;
-    --color-accent-tint: #efeeff;
-    --color-border: #e3e8ee;
-    --color-border-strong: #cbd5e1;
-    --color-border-control: #7d8a9c;
-    --color-sidebar: #f0f4f8;
-    --color-text: #30405a;
-    --color-text-heading: #0a2540;
-    --color-text-muted: #55657c;
-    --color-text-subtle: #5b6b82;
-    --color-text-disabled: #a3acb9;
-    --color-accent: #5851ea;
-    --color-accent-hover: #4b45c6;
-    --color-accent-active: #3f3aa8;
-    --color-on-accent: #ffffff;
-    --color-focus: #635bff;
-    --color-selection: #d6d3ff;
-    --color-scrollbar: #c3ccd8;
-    --tone-success-fg: #0d5c41;
-    --tone-success-bg: #d7f5df;
-    --tone-success-border: #9fd9b3;
-    --tone-success-mark: #178a5b;
-    --tone-active-fg: #075580;
-    --tone-active-bg: #ddf2fb;
-    --tone-active-border: #98d0e8;
-    --tone-active-mark: #0a7bab;
-    --tone-danger-fg: #b0102f;
-    --tone-danger-bg: #ffe7ec;
-    --tone-danger-border: #f3b3c0;
-    --tone-danger-mark: #d01a3e;
-    --tone-attention-fg: #7d5200;
-    --tone-attention-bg: #fff1cc;
-    --tone-attention-border: #e9cd82;
-    --tone-attention-mark: #a26800;
-    --tone-neutral-fg: #3c4b61;
-    --tone-neutral-bg: #ebeff4;
-    --tone-neutral-border: #c9d2de;
-    --tone-neutral-mark: #68778d;
-    --tone-interrupted-fg: #76308a;
-    --tone-interrupted-bg: #f5e8fa;
-    --tone-interrupted-border: #dab6e7;
-    --tone-interrupted-mark: #90409f;
-  }
-}
-
-@media (max-width: 920px) {
-  :root {
-    --gutter: 24px;
-    --section-gap: 16px;
-    --panel-pad: 18px;
-  }
-}
-
-@media (max-width: 680px) {
-  :root {
-    --gutter: 16px;
-    --topbar-height: 56px;
-    --text-h1: 24px;
-    --text-title: 22px;
-  }
-}
-
 @media (prefers-reduced-motion: reduce) {
   :root {
     --duration-fast: 0ms;
     --duration-follow: 0ms;
-  }
-}
-
-/* Increase Contrast: decorative dividers take the control edge, and meta text the label colour. */
-@media (prefers-contrast: more) {
-  :root {
-    --color-border: var(--color-border-control);
-    --color-text-subtle: var(--color-text-muted);
   }
 }

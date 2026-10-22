@@ -20,7 +20,7 @@ body {
   font-synthesis: none;
   text-rendering: optimizeLegibility;
   /* Smoothing is macOS only. On Windows, sharpness comes from DirectWrite and from not leaving text
-     layers promoted (ADR 0032): a transform on a text ancestor is only transient (hover lift, press,
+     layers promoted (ADR 0032 motion rules, retained by ADR 0033): a transform on a text ancestor is only transient (hover lift, press,
      a one-time entrance, at integer pixels), there is no will-change, and opacity appears only in keyframes. */
   -webkit-font-smoothing: antialiased;
   -moz-osx-font-smoothing: grayscale;
@@ -41,7 +41,7 @@ h1, h2, h3, h4 { color: var(--color-text-heading); }
 
 small { font-size: var(--text-caption); color: var(--color-text-muted); }
 strong { font-weight: var(--weight-strong); }
-a { color: var(--color-accent); }
+a { color: var(--accent-text); }
 
 /* Identities (hashes, commits, paths, ids) are shown whole: monospace, wrapping anywhere. */
 code, kbd, samp, pre { font-family: var(--font-mono); }

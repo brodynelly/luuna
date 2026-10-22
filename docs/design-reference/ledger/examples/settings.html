@@ -1,0 +1,41 @@
+<!doctype html>
+<html lang="en" data-theme="light">
+<head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><title>Ledger — SettingsPage</title>
+<link rel="stylesheet" href="../tokens/tokens.css"><link rel="stylesheet" href="../components/ledger.css">
+<style>html,body{margin:0;height:100%;}body{background:var(--surface);}#root{height:100%;}.theme-toggle{position:fixed;right:12px;bottom:12px;z-index:100;}</style>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/react/18.3.1/umd/react.production.min.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/react-dom/18.3.1/umd/react-dom.production.min.js"></script>
+<script src="../components/ledger.js"></script>
+</head>
+<body>
+<div id="root"></div>
+<button class="lg-btn lg-btn-secondary theme-toggle" onclick="var r=document.documentElement;r.dataset.theme=r.dataset.theme==='dark'?'light':'dark'">Toggle theme</button>
+<script>
+  var L = window.Ledger, h = React.createElement;
+  ReactDOM.createRoot(document.getElementById('root')).render((function(){ function shell(title, main, active, o){ o = o || {};
+ return h(L.AppShell,{
+  banner:h(L.Banner,{label:'Workspace',action:'Open in browser'},'Connected to dashboard.ts.brodynelly.com over Tailscale.'),
+  brand:{name:'NAS Workspace',subtitle:'Brody Nelson'},
+  nav:[h(L.NavItem.Group,{key:'a'},h(L.NavItem,{icon:'home',label:'Home',active:active==='home'}),h(L.NavItem,{icon:'folder',label:'Library',active:active==='library'}),h(L.NavItem,{icon:'sparkle',label:'Ask AI',active:active==='ai'}),h(L.NavItem,{icon:'download',label:'Downloads',active:active==='downloads'})),
+       h(L.NavItem.Group,{key:'b',label:'Device'},h(L.NavItem,{icon:'gear',label:'Settings',active:active==='settings'}))],
+  sidebarFooter:h(L.StatusIndicator,{status:'connected',label:'Connected'}),
+  search:h(L.SearchField,{width:360,shortcut:'/',placeholder:'Search files'}),
+  actions:[h(L.IconButton,{key:1,icon:'help',label:'Help'}),h(L.IconButton,{key:2,icon:'bell',label:'Notifications',dot:true}),h(L.IconButton,{key:3,icon:'sparkle',label:'Ask AI'}),h(L.Avatar,{key:4,name:'Brody Nelson'})]
+ }, h(L.PageHeader,{title:title,description:o.description,breadcrumbs:o.breadcrumbs,actions:o.actions}), main);
+}
+ function sec(t){return h('h2',{style:{margin:'24px 0 4px',font:'600 20px/28px var(--font-sans)',color:'var(--ink)'}},t)}
+ return shell('Settings', h('div',{style:{maxWidth:720}},
+  h(L.PropertyList,{items:[{label:'Server',value:'https://dashboard.ts.brodynelly.com/workspace',mono:true},{label:'Status',value:h(L.StatusIndicator,{status:'connected',label:'Paired'})},{label:'Version',value:'1.3.2',mono:true}]}),
+  sec('Desktop AI'),
+  h(L.SettingsRow,{title:'Desktop shortcuts',description:'Work from any app while NAS Workspace runs in the background.',control:h(L.Switch,{defaultChecked:true,ariaLabel:'Desktop shortcuts'})}),
+  h(L.SettingsRow,{title:'Quick AI',description:'Open Ask AI.',control:h(L.Kbd,{keys:['Ctrl','Alt','Space']})}),
+  h(L.SettingsRow,{title:'Send selection',description:'Capture the selected text from the app in front.',control:h(L.Kbd,{keys:['Ctrl','Alt','C']})}),
+  h(L.SettingsRow,{title:'Double Right Shift for Quick fix',description:'Press Right Shift twice within 450 ms.',control:h(L.Switch,{ariaLabel:'Double Right Shift'})}),
+  sec('Appearance'),
+  h(L.SettingsRow,{title:'Theme',control:h(L.SegmentedControl,{label:'Theme',items:[{value:'system',label:'System'},{value:'light',label:'Light'},{value:'dark',label:'Dark'}]})}),
+  sec('Updates'),
+  h(L.SettingsRow,{title:'Version 1.4.0 is available',description:'Signed by your NAS release key.',stacked:true},h('div',{style:{marginTop:8}},h(L.ProgressBar,{label:'Downloading',value:44,detail:'18.4 of 42 MB'})))),
+ 'settings', {description:'Connection, desktop AI, appearance and updates for this device.',actions:[h(L.Button,{key:1,size:'md'},'Change server'),h(L.Button,{key:2,size:'md',variant:'danger',icon:'logout'},'Disconnect')]}); })());
+</script>
+</body>
+</html>
