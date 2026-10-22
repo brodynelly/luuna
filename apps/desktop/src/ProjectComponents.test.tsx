@@ -1,6 +1,6 @@
 import { expect, test } from "vitest";
 import { renderToStaticMarkup } from "react-dom/server";
-import { MemorySelection, PromptPreview, promptDeliveryAfterPreview, promptEditBody, promptRetryIdentity, retryIdentity } from "./ProjectComponents";
+import { MemoryCorrection, MemorySelection, PromptPreview, promptDeliveryAfterPreview, promptEditBody, promptRetryIdentity, retentionPolicyFromForm, retryIdentity } from "./ProjectComponents";
 import type { MemoryRecord, RenderedPrompt } from "@luuna/api-client";
 
 test("memory includes scope and provenance without implicitly selecting a private record", () => {
@@ -46,4 +46,23 @@ test("an uncertain prompt retry keeps its key and expected version after a list 
 test("editing a rendered guidance prompt does not nest the runtime's section wrapper", () => {
   expect(promptEditBody("## guidance\nUse the approved scope.\n")).toBe("Use the approved scope.");
   expect(promptEditBody("An unwrapped prompt")).toBe("An unwrapped prompt");
+});
+
+test("a memory correction is offered per record and saves only changed content at the displayed hash", () => {
+  const record: MemoryRecord = { id: "mem-1", scope: "project", content: "tests use unittest", provenance: "README", hash: `sha256:${"a".repeat(64)}` };
+  const list = renderToStaticMarkup(<MemorySelection records={[record]} selected={[]} busy={false} onToggle={() => {}} onDelete={() => {}} onCorrect={() => {}} />);
+  expect(list).toContain("Correct memory");
+  expect(renderToStaticMarkup(<MemorySelection records={[record]} selected={[]} busy={false} onToggle={() => {}} onDelete={() => {}} />)).not.toContain("Correct memory");
+  const form = renderToStaticMarkup(<MemoryCorrection record={record} busy={false} onSave={() => { throw new Error("no unchanged save"); }} onCancel={() => {}} />);
+  expect(form).toContain('data-capability="memory.update"');
+  expect(form).toContain(record.hash);
+  expect(form).toContain("keeps its project scope");
+  expect(form).toContain("can no longer be implemented until it is re-planned");
+  expect(form).toMatch(/<button type="submit" class="primary" disabled="" data-capability="memory.update">Save correction<\/button>/);
+});
+
+test("the retention form sends null for a scope that keeps its records", () => {
+  expect(retentionPolicyFromForm("30", "")).toEqual({ process_max_age_days: 30, project_max_age_days: null });
+  expect(retentionPolicyFromForm("", "")).toEqual({ process_max_age_days: null, project_max_age_days: null });
+  expect(retentionPolicyFromForm(" ", "365")).toEqual({ process_max_age_days: null, project_max_age_days: 365 });
 });

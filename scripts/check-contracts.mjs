@@ -1,5 +1,5 @@
 import assert from 'node:assert/strict';
-import { readFileSync } from 'node:fs';
+import { readFileSync, readdirSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import { resolve, dirname } from 'node:path';
 import Ajv2020 from 'ajv/dist/2020.js';
@@ -113,3 +113,48 @@ const uncataloged = [...served].flatMap(([route, methods]) => [...methods].filte
 if (process.env.LUUNA_CATALOG_STRICT !== '0') assert.deepEqual(uncataloged, [], `runtime mutations missing from schemas/capability-catalog.json: ${uncataloged.join(', ')}`);
 checks += 1;
 console.log(`Capability catalog: ${capabilities.length} actions validated against ${served.size} runtime routes and the typed client.${uncataloged.length ? ` Runtime mutations without client parity yet (${uncataloged.length}): ${uncataloged.join(', ')}.` : ''}`);
+// ---- Required actions (R02, R14, A33; docs/06-memory.md, docs/09-experience.md, ADR 0017/0018/0026):
+// each product action the specification requires maps to at least one catalog entry whose desktop
+// control (a data-capability marker in apps/desktop/src) and TUI command (packages/tui/src/commands.mjs)
+// both exist, and every entry says what requires it. A catalog that merely lists routes cannot
+// establish these obligations; this check fails when either client loses the control. ----
+const REQUIRED_ACTIONS = {
+  'ticket edit (docs/09-experience.md#browser-and-tui-parity, docs/06-memory.md#personal-memory)': ['tickets.update'],
+  'memory inspect (docs/06-memory.md#personal-memory)': ['memory.list'],
+  'memory edit (docs/06-memory.md#personal-memory)': ['memory.update'],
+  'memory export, personal (docs/06-memory.md#personal-memory)': ['memory.user.export'],
+  'memory delete (docs/06-memory.md#boundaries)': ['memory.delete'],
+  'memory disable: private memory excluded unless explicitly included, retention by policy (docs/06-memory.md#boundaries)': ['memory.list', 'memory.retention.set', 'memory.retention.apply'],
+  'memory promotion (docs/06-memory.md#project-knowledge-and-process-lessons)': ['memory.promote'],
+  'multi-repository registration (R05, docs/09-experience.md#existing-project)': ['projects.register'],
+  'multi-repository planning with dependencies and workers (R05, A12, ADR 0017)': ['plans.create'],
+  'per-repository baselines (R08, ADR 0017)': ['baselines.start', 'baselines.list'],
+  'task resume by task_id (A20, ADR 0017)': ['runs.implement', 'runs.tasks'],
+  'publication reconcile (R11, R12, ADR 0018)': ['runs.publication.reconcile'],
+  'cancel (docs/09-experience.md#views)': ['runs.cancel'],
+  'recovery and reconnect (R15, A20, docs/09-experience.md#lifecycle-and-portability)': ['health', 'runs.stream', 'runs.events'],
+};
+const byId = new Map(capabilities.map((capability) => [capability.id, capability]));
+const desktopSources = readdirSync(resolve(root, 'apps/desktop/src'), { recursive: true })
+  .map((file) => String(file).replaceAll('\\', '/'))
+  .filter((file) => file.endsWith('.tsx') && !file.includes('.test.'))
+  .map((file) => readFileSync(resolve(root, 'apps/desktop/src', file), 'utf8'))
+  .join('\n');
+const desktopMarkers = new Set([...desktopSources.matchAll(/data-capability="([^"]+)"/g)].flatMap((match) => match[1].split(/\s+/).filter(Boolean)));
+const { commandsById } = await import('../packages/tui/src/commands.mjs');
+for (const [action, ids] of Object.entries(REQUIRED_ACTIONS)) {
+  const wired = ids.filter((id) => {
+    const capability = byId.get(id);
+    return capability && desktopMarkers.has(capability.desktop) && commandsById.has(id);
+  });
+  assert.ok(wired.length > 0, `required action "${action}" maps to no catalog entry with both clients wired (candidates: ${ids.join(', ')})`);
+  for (const id of ids) {
+    const capability = byId.get(id);
+    assert.ok(capability, `required action "${action}": catalog has no entry ${id}`);
+    assert.ok(desktopMarkers.has(capability.desktop), `required action "${action}": no desktop control carries data-capability="${capability.desktop}"`);
+    assert.ok(commandsById.has(id), `required action "${action}": no TUI command implements ${id}`);
+  }
+}
+for (const capability of capabilities) assert.ok(capability.required_by.length > 0, `${capability.id}: required_by names what requires this action`);
+checks += Object.keys(REQUIRED_ACTIONS).length;
+console.log(`Required actions: ${Object.keys(REQUIRED_ACTIONS).length} specification obligations traced to cataloged actions with desktop and TUI controls.`);

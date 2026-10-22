@@ -340,12 +340,17 @@ async function recovery() {
   const reviewedView = (await tui(["candidate", run.id])).value;
   record("recovery: the interrupted candidate reaches reviewed as generation 2", reviewed === "reviewed" && reviewedView?.evidence?.validation_generation === 2 && reviewedView.evidence.review?.verdict === "passed", `candidate ${reviewed}; generation ${reviewedView?.evidence?.validation_generation}`);
   await agree("recovery after the review", run.id);
-  const followerCode = await Promise.race([followerExit, sleep(30_000).then(() => null)]);
+  // A reviewed workflow can still change (publication, invalidation after the
+  // review; ADR 0018 amendment), so its stream stays open: the follower keeps
+  // following after `run reviewed` rather than exiting, and is stopped here.
+  const deadline = Date.now() + 30_000;
+  while (Date.now() < deadline && !/candidate\.review_finished\s+reviewed/.test(followOut)) await sleep(250);
+  const followerCode = await Promise.race([followerExit, sleep(2_000).then(() => null)]);
   if (followerCode === null) follower.kill();
   const followed = followOut.trim().split("\n");
   const sequences = followed.filter((line) => /^\s*\d+\s/.test(line)).map((line) => Number(line.trim().split(/\s+/)[0]));
   const apiEvents = (await api("GET", `/runs/${run.id}/events?after=0`)).body;
-  record("recovery: the follower ends with the settled run, having received every event in order across the restart, as the API records", followerCode === 0 && /run reviewed/.test(followed.at(-1) ?? "") && sequences.length === apiEvents.length && sequences.every((sequence, index) => sequence === index + 1), `${sequences.length} of ${apiEvents.length} events; exit ${followerCode}; ${followed.at(-1)}`);
+  record("recovery: the follower stays attached through the reviewed run, having received every event in order across the restart, as the API records", followerCode === null && /candidate\.review_finished\s+reviewed\s*$/.test(followed.at(-1) ?? "") && (await tuiState(run.id)) === "reviewed" && sequences.length === apiEvents.length && sequences.every((sequence, index) => sequence === index + 1), `${sequences.length} of ${apiEvents.length} events; exit ${followerCode}; ${followed.at(-1)}`);
 }
 
 // ---------- run ----------

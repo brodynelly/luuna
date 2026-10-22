@@ -174,7 +174,7 @@ fn prepare(state: &AppState, id: &str, expected_hash: &str) -> Result<Prepared, 
             "workflow has active work; wait for it to settle, then publish",
         ));
     }
-    let store = state.store.lock().map_err(internal)?;
+    let mut store = state.store.lock().map_err(internal)?;
     let run = store.get_run(id).map_err(internal)?.ok_or_else(not_found)?;
     if run.metadata["kind"] != "workflow" {
         return Err(unprocessable("only a plan workflow can be published"));
@@ -249,6 +249,25 @@ fn prepare(state: &AppState, id: &str, expected_hash: &str) -> Result<Prepared, 
         return Err(conflict(
             "the confirmed manifest changed since the plan; create the next plan revision before publishing",
         ));
+    }
+    // An edited ticket (PUT /api/v1/tickets/{id}, or a reconciled external
+    // edit) is a changed source: the candidate was reviewed against intent
+    // the ticket no longer states. Record the refusal durably, as `admit`
+    // does for a source that changed under the components, before the
+    // generic authorization gate below refuses the same binding.
+    if ticket.revision != plan.ticket_revision {
+        let reason = format!(
+            "Ticket changed since plan approval (ticket {} is at revision {}, the plan was made for revision {}); create a new plan",
+            ticket.id, ticket.revision, plan.ticket_revision
+        );
+        store
+            .append_event(
+                id,
+                "publication.refused",
+                json!({"kind": "source_changed", "candidate_hash": evidence.candidate.hash, "reason": reason}),
+            )
+            .map_err(internal)?;
+        return Err(conflict(reason));
     }
     // The same authorization gate validation and repair apply: the stored
     // approval must authorize the latest revision of the plan (a newer

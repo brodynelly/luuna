@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from "vitest";
-import { ApiError, EventReplay, EventWindow, LuunaClient, assistantText, awaitsValidation, checkResults, confirmedManifest, isTerminal, loopbackUrl, mergeEvents } from "../src/index";
+import { ApiError, EventReplay, EventWindow, LuunaClient, assistantText, awaitsValidation, checkResults, confirmedManifest, isTerminal, loopbackUrl, mergeEvents, planRequestForTasks, registerProjectRequest } from "../src/index";
 import type { EventEnvelope, ProjectManifest, ProjectExport } from "../src/index";
 
 it("retains bounded event payloads while replaying text and rejects a gap atomically", () => {
@@ -411,5 +411,72 @@ describe("live event following over SSE", () => {
     const client = new LuunaClient("http://127.0.0.1:4242", "t", fetcher);
     await expect((async () => { for await (const _event of client.followEvents("run", 0, undefined, { wait: async () => undefined })) { /* consume */ } })()).rejects.toMatchObject({ status: 401 });
     expect(fetcher).toHaveBeenCalledTimes(1);
+  });
+});
+
+describe("ticket editing, memory correction, the personal export and retention (ADR 0026)", () => {
+  it("sends each edit at the revision or hash the client read, and the retention routes as cataloged", async () => {
+    const fetcher = vi.fn<typeof fetch>().mockImplementation(() => Promise.resolve(new Response("{}")));
+    const client = new LuunaClient("http://localhost:4242", "t", fetcher);
+    await client.updateTicket("ticket/one", { expected_revision: 3, title: "Edited", repository_ids: ["app", "web"] });
+    await client.updateMemory("p", "mem/1", { idempotency_key: "k1", expected_hash: "sha256:exact", content: "corrected" });
+    await client.exportUserMemory();
+    await client.memoryRetention("p");
+    await client.setMemoryRetention("p", { process_max_age_days: 30, project_max_age_days: null });
+    await client.applyMemoryRetention("p", { idempotency_key: "k2" });
+    expect(fetcher.mock.calls.map(([url, init]) => [String(url), init?.method ?? "GET", init?.body])).toEqual([
+      ["http://localhost:4242/api/v1/tickets/ticket%2Fone", "PUT", JSON.stringify({ expected_revision: 3, title: "Edited", repository_ids: ["app", "web"] })],
+      ["http://localhost:4242/api/v1/projects/p/memory/mem%2F1", "PUT", JSON.stringify({ idempotency_key: "k1", expected_hash: "sha256:exact", content: "corrected" })],
+      ["http://localhost:4242/api/v1/memory/user/export", "GET", undefined],
+      ["http://localhost:4242/api/v1/projects/p/memory/retention", "GET", undefined],
+      ["http://localhost:4242/api/v1/projects/p/memory/retention", "PUT", JSON.stringify({ process_max_age_days: 30, project_max_age_days: null })],
+      ["http://localhost:4242/api/v1/projects/p/memory/retention/apply", "POST", JSON.stringify({ idempotency_key: "k2" })],
+    ]);
+    for (const [, init] of fetcher.mock.calls) expect(new Headers(init?.headers).get("Authorization")).toBe("Bearer t");
+    expect(() => client.updateTicket("t", { expected_revision: 0, title: "x" })).toThrow("Invalid ticket revision");
+    expect(() => client.updateTicket("t", { expected_revision: 1 })).toThrow("at least one ticket field");
+    expect(() => client.updateMemory("p", "m", { idempotency_key: "k", expected_hash: "", content: "x" })).toThrow("exact content hash");
+    expect(() => client.updateMemory("p", "m", { idempotency_key: "k", expected_hash: "sha256:x", content: " " })).toThrow("content is required");
+    expect(() => client.setMemoryRetention("p", { process_max_age_days: 0, project_max_age_days: null })).toThrow("between 1 and 3650");
+    expect(() => client.setMemoryRetention("p", { process_max_age_days: null, project_max_age_days: 4000 })).toThrow("between 1 and 3650");
+    expect(() => client.applyMemoryRetention("p", { idempotency_key: " " })).toThrow("idempotency key");
+  });
+});
+
+describe("shared request builders (R02, A33: the desktop and the TUI send the same body)", () => {
+  it("registers every repository row once, trimmed, and refuses a row without an id or a path", () => {
+    expect(registerProjectRequest(" Walkthrough ", [{ id: "app", path: "/srv/app" }, { id: " web ", path: " /srv/web " }], " walkthrough ")).toEqual({ name: "Walkthrough", id: "walkthrough", repositories: [{ id: "app", path: "/srv/app" }, { id: "web", path: "/srv/web" }] });
+    expect(registerProjectRequest("One", [{ id: "app", path: "/srv/app" }, { id: "", path: "" }])).toEqual({ name: "One", repositories: [{ id: "app", path: "/srv/app" }] });
+    expect(() => registerProjectRequest("One", [{ id: "app", path: "" }])).toThrow("needs an id and an absolute root path");
+    expect(() => registerProjectRequest("One", [{ id: "app", path: "/a" }, { id: "app", path: "/b" }])).toThrow("unique");
+    expect(() => registerProjectRequest("One", [])).toThrow("at least one repository");
+    expect(() => registerProjectRequest(" ", [{ id: "app", path: "/a" }])).toThrow("needs a name");
+  });
+
+  it("keeps a single task in its pre-M4 shape and builds a task graph with dependencies and workers", () => {
+    expect(planRequestForTasks([{ repository_id: "app", paths: [" src ", ""], operations: ["read", "write"] }], { max_attempts: 2, timeout_seconds: 600, cost_usd_micros: 1_000_000, max_workers: 1 }))
+      .toEqual({ task: { repository_id: "app", paths: ["src"], operations: ["read", "write"] }, budgets: { max_attempts: 2, timeout_seconds: 600, cost_usd_micros: 1_000_000 } });
+    expect(planRequestForTasks([{ repository_id: "app", paths: [], operations: ["read"] }])).toEqual({ task: { repository_id: "app", paths: ["src"], operations: ["read"] } });
+    const graph = planRequestForTasks([
+      { repository_id: "shared", paths: ["lib"], operations: ["read", "write"] },
+      { repository_id: "api", paths: ["src"], operations: ["read", "write"], depends_on: ["shared"] },
+      { repository_id: "consumer", paths: ["src", "tests"], operations: ["read", "write"], depends_on: ["shared", "api"], acceptance_criteria: ["imports the shared package"] },
+    ], { max_workers: 2, max_attempts: 3 }, { componentContext: { memory_ids: ["mem-1"], prompt: null } });
+    expect(graph).toEqual({
+      tasks: [
+        { id: "shared", repository_id: "shared", paths: ["lib"], operations: ["read", "write"] },
+        { id: "api", repository_id: "api", paths: ["src"], operations: ["read", "write"], depends_on: ["shared"] },
+        { id: "consumer", repository_id: "consumer", paths: ["src", "tests"], operations: ["read", "write"], acceptance_criteria: ["imports the shared package"], depends_on: ["shared", "api"] },
+      ],
+      budgets: { max_attempts: 3, max_workers: 2 },
+      component_context: { memory_ids: ["mem-1"], prompt: null },
+    });
+    expect(planRequestForTasks([{ repository_id: "a", paths: ["src"], operations: ["read"] }], {}, { componentContext: { memory_ids: [], prompt: null } })).not.toHaveProperty("component_context");
+    expect(() => planRequestForTasks([])).toThrow("at least one task");
+    expect(() => planRequestForTasks([{ repository_id: "a", paths: [], operations: ["read"] }, { repository_id: "a", paths: [], operations: ["read"] }])).toThrow("distinct repository");
+    expect(() => planRequestForTasks([{ repository_id: "a", paths: [], operations: ["read"], depends_on: ["a"] }, { repository_id: "b", paths: [], operations: ["read"] }])).toThrow("cannot depend on itself");
+    expect(() => planRequestForTasks([{ repository_id: "a", paths: [], operations: ["read"], depends_on: ["zzz"] }, { repository_id: "b", paths: [], operations: ["read"] }])).toThrow("not a task of this plan");
+    expect(() => planRequestForTasks([{ repository_id: "a", paths: [], operations: ["read"] }, { repository_id: "b", paths: [], operations: ["read"] }], { max_workers: 3 })).toThrow("between 1 and 2");
+    expect(() => planRequestForTasks([{ repository_id: "a", paths: [], operations: ["read"] }], { max_attempts: 0 })).toThrow("budgets.max_attempts");
   });
 });

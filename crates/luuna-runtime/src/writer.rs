@@ -26,7 +26,9 @@ use luuna_domain::{
 use luuna_engine_pi::{
     install_scope_guard, PiConfig, PiProcess, SessionProfile, WriterProfile, PI_VERSION,
 };
-use luuna_storage::{AttemptRecord, RepositoryRegistration, RunRecord, StorageError};
+use luuna_storage::{
+    AttemptRecord, RepositoryRegistration, RunRecord, StorageError, TicketRevision,
+};
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 use std::{
@@ -416,6 +418,70 @@ pub async fn get_ticket(
     view["usage"] =
         serde_json::to_value(store.ticket_usage(&id).map_err(internal)?).map_err(internal)?;
     Ok(Json(view))
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct UpdateTicket {
+    /// The ticket revision this client read; anything else is a stale edit.
+    pub expected_revision: u64,
+    #[serde(default)]
+    pub title: Option<String>,
+    #[serde(default)]
+    pub intent: Option<String>,
+    #[serde(default)]
+    pub acceptance_criteria: Option<Vec<String>>,
+    #[serde(default)]
+    pub repository_ids: Option<Vec<String>>,
+}
+
+/// `PUT /api/v1/tickets/{id}`: edit a ticket's intent at its expected
+/// revision. A legacy ticket is revised in SQLite (`ticket.updated`); an
+/// enabled project's ticket is edited through the Missions adapter and
+/// reconciled. Either way the revision advances, so a plan made for the
+/// earlier revision is refused by the scheduling, evidence and publication
+/// gates until the developer re-plans.
+pub async fn update_ticket(
+    State(state): State<AppState>,
+    Path(id): Path<String>,
+    Json(request): Json<UpdateTicket>,
+) -> Result<Json<Ticket>, ApiError> {
+    if !valid_id(&id) {
+        return Err(ticket_not_found());
+    }
+    let changes = TicketRevision {
+        title: request.title,
+        intent: request.intent,
+        acceptance_criteria: request.acceptance_criteria,
+        repository_ids: request.repository_ids,
+    };
+    if changes.is_empty() {
+        return Err(unprocessable(
+            "name at least one field to change: title, intent, acceptance_criteria or repository_ids",
+        ));
+    }
+    let _components = state.component_locks.lock().await;
+    let ticket = state
+        .store
+        .lock()
+        .map_err(internal)?
+        .get_ticket(&id)
+        .map_err(internal)?
+        .ok_or_else(ticket_not_found)?;
+    let updated = if crate::integrations::enabled(&state, &ticket.project_id)? {
+        crate::missions::update(&state, &ticket, request.expected_revision, &changes).await?
+    } else {
+        state
+            .store
+            .lock()
+            .map_err(internal)?
+            .revise_ticket(&id, request.expected_revision, &changes)
+            .map_err(|error| match error {
+                StorageError::NotFound(_) => ticket_not_found(),
+                other => storage_error(other),
+            })?
+    };
+    Ok(Json(updated))
 }
 
 #[derive(Deserialize)]

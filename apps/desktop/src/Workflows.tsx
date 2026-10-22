@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState } from "react";
 import type { FormEvent } from "react";
-import type { AttemptRecord, CandidateDiff, CandidateView, ComponentContext, CreatePlanRequest, LuunaClient, Operation, PlanBudgetRequest, PlanRevision, PublicationRecord, RunRecord, TaskRecord, Ticket, TicketSourceStatus, WorktreeLease } from "@luuna/api-client";
-import { DEFAULT_PLAN_BUDGETS, planBudgetProblem } from "@luuna/api-client";
+import type { AttemptRecord, CandidateDiff, CandidateView, ComponentContext, CreatePlanRequest, LuunaClient, PlanBudgetRequest, PlanRevision, PublicationRecord, RunRecord, TaskRecord, TaskState, Ticket, TicketSourceStatus, UpdateTicketRequest, WorktreeLease } from "@luuna/api-client";
+import { DEFAULT_PLAN_BUDGETS, planBudgetProblem, planRequestForTasks } from "@luuna/api-client";
 import { advanceWorkflowReplay, allowedActions, canCancel, planBlocker, planSupersedes, settleAction, workflowNeedsRefresh } from "./workflow-state";
 import { CandidateReview } from "./CandidateReview";
 import { retryIdentity } from "./ProjectComponents";
@@ -21,6 +21,49 @@ export const TEXT_LIMITS = { title: 200, intent: 16_000, criterion: 16_000, appr
 export function parseBudgets(attempts: string, timeoutSeconds: string, costDollars: string): PlanBudgetRequest {
   const number = (text: string) => (text.trim() === "" ? Number.NaN : Number(text));
   return { max_attempts: number(attempts), timeout_seconds: number(timeoutSeconds), cost_usd_micros: Math.round(number(costDollars) * 1_000_000) };
+}
+
+/** One row of the desktop's task-graph editor (ADR 0017): a repository, its writer paths and the rows it waits for. */
+export interface TaskRow { repository_id: string; paths: string; write: boolean; depends_on: string[] }
+
+/**
+ * The plan request the desktop sends, through the builder the TUI shares (R02): one row is the
+ * single-task form in its pre-M4 shape; several rows are a task graph whose task ids are the
+ * repository ids, with `max_workers` sent only when it is not the default.
+ */
+export function planRequestFromRows(rows: TaskRow[], budgets: PlanBudgetRequest, componentContext?: ComponentContext): Omit<CreatePlanRequest, "idempotency_key"> {
+  return planRequestForTasks(rows.map((row) => ({ repository_id: row.repository_id, paths: row.paths.split(","), operations: row.write ? ["read", "write"] : ["read"], depends_on: row.depends_on })), budgets, { componentContext });
+}
+
+/** Task states `POST …/implement` with `task_id` resumes (ADR 0017 point 8). */
+export const RESUMABLE_TASK_STATES: readonly TaskState[] = ["failed", "blocked", "interrupted"];
+
+/** Whether a task of this run can be resumed under the original approval: the run settled failed or interrupted and the task did not complete. */
+export function taskResumable(run: Pick<RunRecord, "state">, task: Pick<TaskRecord, "state">): boolean {
+  return (run.state === "failed" || run.state === "interrupted") && RESUMABLE_TASK_STATES.includes(task.state);
+}
+
+/** The draft of a ticket edit as the form holds it. */
+export interface TicketDraft { title: string; intent: string; criteria: string; repositoryIds: string[] }
+
+/**
+ * The edit request for a ticket: only the fields whose value differs from the ticket, at the
+ * revision the panel displayed; `null` when nothing changed.
+ */
+export function ticketEditRequest(ticket: Ticket, draft: TicketDraft): UpdateTicketRequest | null {
+  const title = draft.title.trim();
+  const intent = draft.intent.trim();
+  const criteria = draft.criteria.split("\n").map((line) => line.trim()).filter(Boolean);
+  const repositories = draft.repositoryIds.filter(Boolean);
+  const same = (a: string[], b: string[]) => a.length === b.length && a.every((item, index) => item === b[index]);
+  const request: UpdateTicketRequest = {
+    expected_revision: ticket.revision,
+    ...(title && title !== ticket.title && { title }),
+    ...(intent && intent !== ticket.intent && { intent }),
+    ...(criteria.length && !same(criteria, ticket.acceptance_criteria) && { acceptance_criteria: criteria }),
+    ...(repositories.length && !same(repositories, ticket.repository_ids) && { repository_ids: repositories }),
+  };
+  return Object.keys(request).length > 1 ? request : null;
 }
 
 /** Each ticket field measured as the runtime measures it; criteria count their longest line. */
@@ -137,6 +180,8 @@ interface Props {
   client: LuunaClient | null;
   projectId: string;
   repositoryId: string;
+  /** Every registered repository; the task-graph editor and ticket scope choose among them. */
+  repositoryIds?: string[];
   manifestConfirmed: boolean;
   /** Incremented when the runtime answers again after an outage. */
   connectionEpoch?: number;
@@ -150,7 +195,7 @@ interface Props {
  * A source-revisioned ticket, an exact plan approval and the candidate workflow.
  * The runtime owns all execution, validation, review and repair decisions.
  */
-export function Workflows({ client, projectId, repositoryId, manifestConfirmed, connectionEpoch = 0, componentContext, componentsEnabled = false, componentEpoch = 0, onChanged }: Props) {
+export function Workflows({ client, projectId, repositoryId, repositoryIds = [repositoryId], manifestConfirmed, connectionEpoch = 0, componentContext, componentsEnabled = false, componentEpoch = 0, onChanged }: Props) {
   const [tickets, setTickets] = useState<TicketState>({ list: [], sources: {}, plans: {} });
   const [runs, setRuns] = useState<RunRecord[]>([]);
   const [snapshots, setSnapshots] = useState<Map<string, RunSnapshot>>(new Map());
@@ -164,6 +209,10 @@ export function Workflows({ client, projectId, repositoryId, manifestConfirmed, 
   const [criteria, setCriteria] = useState("");
   const [paths, setPaths] = useState("src");
   const [write, setWrite] = useState(true);
+  const [ticketRepositories, setTicketRepositories] = useState<string[]>([repositoryId]);
+  // The task graph editor: the single-task form is the default; adding a row opens the graph.
+  const [taskRows, setTaskRows] = useState<TaskRow[]>([]);
+  const [maxWorkers, setMaxWorkers] = useState("1");
   const [approver, setApprover] = useState("developer");
   const [provider, setProvider] = useState("");
   const [model, setModel] = useState("");
@@ -258,9 +307,10 @@ export function Workflows({ client, projectId, repositoryId, manifestConfirmed, 
     });
   }
 
+  const scopedRepositories = ticketRepositories.filter((id) => repositoryIds.includes(id));
   const ticketRequest = {
     title: title.trim(), intent: intent.trim(),
-    acceptance_criteria: criteria.split("\n").map((line) => line.trim()).filter(Boolean), repository_ids: [repositoryId],
+    acceptance_criteria: criteria.split("\n").map((line) => line.trim()).filter(Boolean), repository_ids: scopedRepositories.length ? scopedRepositories : [repositoryId],
   };
   const sizes = ticketTextSizes(ticketRequest.title, ticketRequest.intent, ticketRequest.acceptance_criteria);
   const tooLong = sizes.title > TEXT_LIMITS.title || sizes.intent > TEXT_LIMITS.intent || sizes.criterion > TEXT_LIMITS.criterion;
@@ -288,12 +338,10 @@ export function Workflows({ client, projectId, repositoryId, manifestConfirmed, 
       const budgets = parseBudgets(attempts, timeoutSeconds, costDollars);
       const problem = planBudgetProblem(budgets);
       if (problem) throw new Error(problem);
-      const operations: Operation[] = write ? ["read", "write"] : ["read"];
-      const request = {
-        task: { repository_id: repositoryId, paths: paths.split(",").map((p) => p.trim()).filter(Boolean), operations },
-        budgets,
-        ...(componentsEnabled && componentContext && (componentContext.memory_ids.length > 0 || componentContext.prompt) ? { component_context: componentContext } : {}),
-      };
+      const rows: TaskRow[] = taskRows.length ? taskRows : [{ repository_id: ticket.repository_ids.includes(repositoryId) ? repositoryId : ticket.repository_ids[0] ?? repositoryId, paths, write, depends_on: [] }];
+      const workers = taskRows.length ? Number(maxWorkers) : DEFAULT_PLAN_BUDGETS.max_workers;
+      // The same builder the TUI uses, so both clients send one body for the same tasks.
+      const request = planRequestFromRows(rows, { ...budgets, max_workers: workers }, componentsEnabled ? componentContext : undefined);
       const delivery = planRetryIdentity(planDelivery.current[ticket.id] ?? null, latestRevision, request);
       planDelivery.current[ticket.id] = delivery;
       await client.createPlan(ticket.id, { ...request, idempotency_key: delivery.key }, signal);
@@ -323,7 +371,8 @@ export function Workflows({ client, projectId, repositoryId, manifestConfirmed, 
     reconcile: (ticket) => guarded("Ticket reconciliation", async (signal) => { await client!.reconcileTicket(ticket.id, ticket.revision, signal); }),
     plan,
     approve,
-    implement: (run) => guarded("Implementation", async (signal) => { if (client) await client.implement(run.id, modelSettings(), signal); }),
+    update: (ticket, request) => guarded("Ticket edit", async (signal) => { if (client) await client.updateTicket(ticket.id, request, signal); }),
+    implement: (run, taskId) => guarded(taskId ? "Task resumption" : "Implementation", async (signal) => { if (client) await client.implement(run.id, { ...(taskId && { task_id: taskId }), ...modelSettings() }, signal); }),
     cancel: (run) => guarded("Cancellation", async (signal) => { if (client) await client.cancelRun(run.id, signal); }),
     validate: (run, view) => guarded("Validation", async (signal) => {
       if (!client || !view.evidence) return;
@@ -388,15 +437,32 @@ export function Workflows({ client, projectId, repositoryId, manifestConfirmed, 
         <ByteCount id="ticket-intent-bytes" bytes={sizes.intent} limit={TEXT_LIMITS.intent} />
         <label>Acceptance criteria (one per line)<textarea value={criteria} onChange={(event) => setCriteria(event.target.value)} required rows={2} aria-describedby="ticket-criteria-bytes" /></label>
         <ByteCount id="ticket-criteria-bytes" prefix="Longest criterion: " bytes={sizes.criterion} limit={TEXT_LIMITS.criterion} />
-        <div className="form-footer"><small>{!manifestConfirmed ? "Confirm a manifest before creating tickets." : tooLong ? "Shorten the field marked too long: the runtime counts UTF-8 bytes, so accented letters, CJK text and emoji take more than one." : "Tickets are scoped to this project's registered repository."}</small><button className="primary" disabled={!title.trim() || !intent.trim() || !criteria.trim() || tooLong} data-capability="tickets.create">Create ticket</button></div>
+        {repositoryIds.length > 1 && <div className="ticket-repositories field-row" role="group" aria-label="Repositories the ticket may touch">{repositoryIds.map((id) => <label key={id} className="checkbox"><input type="checkbox" checked={scopedRepositories.includes(id)} onChange={(event) => setTicketRepositories((current) => event.target.checked ? [...current.filter((item) => item !== id), id] : current.filter((item) => item !== id))} /> {id}</label>)}</div>}
+        <div className="form-footer"><small>{!manifestConfirmed ? "Confirm a manifest before creating tickets." : tooLong ? "Shorten the field marked too long: the runtime counts UTF-8 bytes, so accented letters, CJK text and emoji take more than one." : repositoryIds.length > 1 ? "Tickets are scoped to the registered repositories you tick; a plan's tasks stay within them." : "Tickets are scoped to this project's registered repository."}</small><button className="primary" disabled={!title.trim() || !intent.trim() || !criteria.trim() || tooLong} data-capability="tickets.create">Create ticket</button></div>
       </fieldset>
     </form>
     <div className="tray run-settings">
-      <div className="plan-controls field-row">
+      {taskRows.length === 0 ? <div className="plan-controls field-row">
         <label>Writer paths (comma separated)<input value={paths} onChange={(event) => setPaths(event.target.value)} spellCheck={false} /></label>
         <label className="checkbox"><input type="checkbox" checked={write} onChange={(event) => setWrite(event.target.checked)} /> allow writes</label>
         <label>Approver<input value={approver} onChange={(event) => setApprover(event.target.value)} /></label>
-      </div>
+        {repositoryIds.length > 1 && <button type="button" className="text-button" onClick={() => setTaskRows([{ repository_id: repositoryId, paths, write, depends_on: [] }, { repository_id: repositoryIds.find((id) => id !== repositoryId) ?? repositoryId, paths: "src", write: true, depends_on: [] }])}>Plan a task graph across repositories</button>}
+      </div> : <div className="plan-task-graph">
+        <ul className="task-rows record-list" aria-label="Plan tasks">{taskRows.map((row, index) => <li key={index} className="record task-row field-row">
+          <label>Repository<select aria-label={`Task ${index + 1} repository`} value={row.repository_id} onChange={(event) => setTaskRows((rows) => rows.map((item, i) => i === index ? { ...item, repository_id: event.target.value } : item))}>{repositoryIds.map((id) => <option key={id} value={id}>{id}</option>)}</select></label>
+          <label>Writer paths (comma separated)<input value={row.paths} onChange={(event) => setTaskRows((rows) => rows.map((item, i) => i === index ? { ...item, paths: event.target.value } : item))} spellCheck={false} /></label>
+          <label className="checkbox"><input type="checkbox" checked={row.write} onChange={(event) => setTaskRows((rows) => rows.map((item, i) => i === index ? { ...item, write: event.target.checked } : item))} /> allow writes</label>
+          <span className="task-dependencies" role="group" aria-label={`Task ${index + 1} waits for`}>after: {taskRows.filter((_, i) => i !== index).map((other) => <label key={other.repository_id} className="checkbox"><input type="checkbox" checked={row.depends_on.includes(other.repository_id)} onChange={(event) => setTaskRows((rows) => rows.map((item, i) => i === index ? { ...item, depends_on: event.target.checked ? [...item.depends_on, other.repository_id] : item.depends_on.filter((id) => id !== other.repository_id) } : item))} /> {other.repository_id}</label>)}</span>
+          <button type="button" className="text-button" onClick={() => setTaskRows((rows) => rows.filter((_, i) => i !== index).map((item) => ({ ...item, depends_on: item.depends_on.filter((id) => id !== row.repository_id) })))}>Remove task {index + 1}</button>
+        </li>)}</ul>
+        <div className="field-row">
+          <button type="button" className="text-button" onClick={() => setTaskRows((rows) => [...rows, { repository_id: repositoryIds.find((id) => !rows.some((row) => row.repository_id === id)) ?? repositoryId, paths: "src", write: true, depends_on: [] }])}>Add task</button>
+          <label>Concurrent writers<input type="number" inputMode="numeric" min={1} max={Math.min(4, Math.max(1, taskRows.length))} step={1} value={maxWorkers} onChange={(event) => setMaxWorkers(event.target.value)} aria-describedby="plan-workers-note" /></label>
+          <label>Approver<input value={approver} onChange={(event) => setApprover(event.target.value)} /></label>
+          <button type="button" className="text-button" onClick={() => setTaskRows([])}>Back to one task</button>
+        </div>
+        <small id="plan-workers-note">Each task targets a distinct repository; a task runs after the tasks it waits for, and the runtime binds their exact candidates into its writer and checks. Writers run concurrently up to this many (1 to the number of tasks, at most 4).</small>
+      </div>}
       <div className="plan-budgets field-row">
         <label>Writer attempts<input type="number" inputMode="numeric" min={1} max={10} step={1} value={attempts} onChange={(event) => setAttempts(event.target.value)} /></label>
         <label>Time budget (seconds)<input type="number" inputMode="numeric" min={1} max={86400} step={1} value={timeoutSeconds} onChange={(event) => setTimeoutSeconds(event.target.value)} /></label>
@@ -412,16 +478,18 @@ export function Workflows({ client, projectId, repositoryId, manifestConfirmed, 
     </div>
     {tickets.list.length > 0 && <ul className="tickets record-list" aria-label="Tickets" data-capability="tickets.list">{tickets.list.map((ticket) => {
       const revisions = tickets.plans[ticket.id] ?? [];
-      return <TicketCard key={ticket.id} ticket={ticket} source={tickets.sources[ticket.id]} revisions={revisions.map((plan) => ({ plan, run: runFor(plan) }))} snapshots={snapshots} diffs={diffs} attempts={attemptLists} publications={publications} tasks={taskLists} logs={logs} busy={busy} connected={client !== null} actions={actions} />;
+      return <TicketCard key={ticket.id} ticket={ticket} source={tickets.sources[ticket.id]} revisions={revisions.map((plan) => ({ plan, run: runFor(plan) }))} snapshots={snapshots} diffs={diffs} attempts={attemptLists} publications={publications} tasks={taskLists} logs={logs} busy={busy} connected={client !== null} actions={actions} repositoryIds={repositoryIds} />;
     })}</ul>}
   </section>;
 }
 
 export interface TicketActions {
   reconcile: (ticket: Ticket) => void;
+  update: (ticket: Ticket, request: UpdateTicketRequest) => void;
   plan: (ticket: Ticket, latestRevision: number) => void;
   approve: (plan: PlanRevision) => void;
-  implement: (run: RunRecord) => void;
+  /** With `taskId`, resumes that failed, blocked or interrupted task of a settled graph under the original approval. */
+  implement: (run: RunRecord, taskId?: string) => void;
   cancel: (run: RunRecord) => void;
   validate: (run: RunRecord, view: CandidateView) => void;
   repair: (run: RunRecord, view: CandidateView) => void;
@@ -436,9 +504,11 @@ export interface TicketActions {
 }
 
 /** One ticket: its latest plan revision's workflow, with earlier revisions summarised. */
-export function TicketCard({ ticket, source, revisions, snapshots, diffs, attempts = {}, publications = {}, tasks = {}, logs, busy, connected, actions }: {
+export function TicketCard({ ticket, source, revisions, snapshots, diffs, attempts = {}, publications = {}, tasks = {}, logs, busy, connected, actions, repositoryIds = ticket.repository_ids }: {
   ticket: Ticket;
   source?: TicketSourceStatus;
+  /** The registered repositories a ticket edit may scope the ticket to. */
+  repositoryIds?: string[];
   revisions: { plan: PlanRevision; run?: RunRecord }[];
   snapshots: Map<string, RunSnapshot>;
   diffs: Record<string, CandidateDiff>;
@@ -477,6 +547,7 @@ export function TicketCard({ ticket, source, revisions, snapshots, diffs, attemp
       {run && <StatusBadge tone={runTone[run.state]}>{run.state.replace(/_/g, " ")}</StatusBadge>}
       {blocker && <small className="plan-blocker">{blocker}</small>}
     </div>
+    <TicketEditor ticket={ticket} repositoryIds={repositoryIds} busy={busy || !connected} latestRevision={latest?.revision} onSave={(request) => actions.update(ticket, request)} />
     {supersedes && latest && <label className="plan-supersede"><input type="checkbox" checked={acknowledged === supersedes} disabled={busy || !connected} onChange={(event) => setAcknowledged(event.target.checked ? supersedes : "")} /> Plan r{latest.revision + 1} anyway: {supersedes}</label>}
     {writerActive && latest && <p className="callout writer-status" data-tone="active" role="status">The runtime is running the scoped writer for plan r{latest.revision}. Closing this view does not cancel the workflow.</p>}
     <p className="meta" aria-label="Cumulative ticket usage">{ticket.usage ? <>All plan revisions: {ticket.usage.workflows} workflow(s), {ticket.usage.attempts} writer attempt(s), {ticket.usage.repairs} repair(s), {ticket.usage.elapsed_seconds}s, ${(ticket.usage.cost_usd_micros / 1_000_000).toFixed(4)} recorded or reserved.{ticket.usage.cost_unreported && " Some provider usage has no reported price; this is not the complete cost."} A new revision does not erase this usage.</> : "Cumulative ticket usage is unavailable from this runtime."}</p>
@@ -485,10 +556,49 @@ export function TicketCard({ ticket, source, revisions, snapshots, diffs, attemp
     {earlier.length > 0 && <small className="plan-history meta">Earlier revisions: {earlier.map(({ plan, run: earlierRun }, index) => <span key={plan.id}>{index > 0 && " · "}r{plan.revision} <StatusBadge tone={runTone[earlierRun.state]}>{earlierRun.state.replace(/_/g, " ")}</StatusBadge></span>)}</small>}
     {run && reason && <small className="failure-note" data-tone={runTone[run.state]}>{reason}{step && <> <span className="recovery-note">{step}</span></>}</small>}
     {(snapshot?.leases ?? []).map((lease) => <small key={lease.id} className="worktree-line meta" data-capability="runs.worktrees">worktree <code>{lease.path}</code> · {lease.state}{lease.candidate_commit && <> · candidate <code>{lease.candidate_commit.slice(0, 12)}</code></>}{lease.reason && ` · ${lease.reason}`}</small>)}
-    {run && latest && latest.tasks.length > 1 && <div className="tasks-inspection actions"><button type="button" className="text-button" disabled={busy || !connected} data-capability="runs.tasks" onClick={() => actions.tasks(run)}>Show task graph</button>{tasks[run.id] && <ul className="record-list" aria-label="Task graph">{tasks[run.id].map((task) => <li key={task.task_id}><code>{task.task_id}</code> ({task.repository_id}) · {task.state}{task.depends_on.length ? ` · after ${task.depends_on.join(", ")}` : ""}{task.candidate_commit ? ` · commit ${task.candidate_commit.slice(0, 12)}` : ""}{task.reason ? ` · ${task.reason}` : ""}</li>)}</ul>}</div>}
+    {run && latest && latest.tasks.length > 1 && <div className="tasks-inspection actions"><button type="button" className="text-button" disabled={busy || !connected} data-capability="runs.tasks" onClick={() => actions.tasks(run)}>Show task graph</button>{tasks[run.id] && <TaskGraph run={run} tasks={tasks[run.id]} busy={busy || !connected || source?.reconciliation_required === true} onResume={(taskId) => actions.implement(run, taskId)} />}</div>}
     {run && <div className="attempts-inspection actions"><button type="button" className="text-button" disabled={busy || !connected} data-capability="runs.attempts" onClick={() => actions.attempts(run)}>Show writer attempts</button>{attempts[run.id] && <small className="meta" aria-label="Writer attempts">{attempts[run.id].length === 0 ? "No writer attempts recorded." : attempts[run.id].map((attempt) => `attempt ${attempt.number} (${attempt.task_id}): ${attempt.state}`).join(" · ")}</small>}</div>}
     {run && candidate && <CandidateReview run={run} view={candidate} diff={diffs[run.id]} log={logs[run.id]} busy={busy} onValidate={() => actions.validate(run, candidate)} onRepair={() => actions.repair(run, candidate)} onCancel={() => actions.cancel(run)} onDiff={() => actions.diff(run)} onArtifact={(id) => actions.artifact(run, candidate, id)} publication={publications[run.id]} onPublish={() => actions.publish(run, candidate)} onPublication={() => actions.publication(run)} onReconcilePublication={() => actions.reconcilePublication(run)} onRepairPublication={() => actions.repairPublication(run, candidate)} />}
   </li>;
+}
+
+/**
+ * The durable task graph of a workflow with a state-specific control: a failed, blocked or
+ * interrupted task of a settled (failed or interrupted) graph resumes by `task_id` under the
+ * original approval, keeping completed tasks' commits and worktrees (ADR 0017 point 8). The
+ * runtime re-checks the approval, the budgets and every binding before anything runs.
+ */
+export function TaskGraph({ run, tasks, busy, onResume }: { run: RunRecord; tasks: TaskRecord[]; busy: boolean; onResume: (taskId: string) => void }) {
+  return <ul className="record-list task-graph" aria-label="Task graph">{tasks.map((task) => <li key={task.task_id} className="task-record">
+    <code>{task.task_id}</code> ({task.repository_id}) · {task.state}{task.depends_on.length ? ` · after ${task.depends_on.join(", ")}` : ""}{task.candidate_commit ? ` · commit ${task.candidate_commit.slice(0, 12)}` : ""}{task.reason ? ` · ${task.reason}` : ""}
+    {taskResumable(run, task) && <button type="button" disabled={busy} data-capability="runs.implement" onClick={() => onResume(task.task_id)}>Resume task {task.task_id}</button>}
+  </li>)}</ul>;
+}
+
+/**
+ * Edits a ticket at the revision shown. The runtime advances the revision, so every plan made
+ * for the earlier revision is stale and must be re-planned; the form says so before saving.
+ */
+export function TicketEditor({ ticket, repositoryIds, busy, latestRevision, onSave }: { ticket: Ticket; repositoryIds: string[]; busy: boolean; latestRevision?: number; onSave: (request: UpdateTicketRequest) => void }) {
+  const [draft, setDraft] = useState<TicketDraft>({ title: ticket.title, intent: ticket.intent, criteria: ticket.acceptance_criteria.join("\n"), repositoryIds: ticket.repository_ids });
+  const request = ticketEditRequest(ticket, draft);
+  const sizes = ticketTextSizes(draft.title, draft.intent, draft.criteria.split("\n"));
+  const tooLong = sizes.title > TEXT_LIMITS.title || sizes.intent > TEXT_LIMITS.intent || sizes.criterion > TEXT_LIMITS.criterion;
+  const choices = [...new Set([...repositoryIds, ...ticket.repository_ids])];
+  return <details className="ticket-editor section"><summary>Edit ticket r{ticket.revision}</summary>
+    <form className="form-group" onSubmit={(event) => { event.preventDefault(); if (request && !tooLong) onSave(request); }}>
+      <fieldset disabled={busy}>
+        <label>Title<input value={draft.title} onChange={(event) => setDraft({ ...draft, title: event.target.value })} required aria-describedby={`edit-title-bytes-${ticket.id}`} /></label>
+        <ByteCount id={`edit-title-bytes-${ticket.id}`} bytes={sizes.title} limit={TEXT_LIMITS.title} />
+        <label>Intent<textarea value={draft.intent} onChange={(event) => setDraft({ ...draft, intent: event.target.value })} required rows={3} aria-describedby={`edit-intent-bytes-${ticket.id}`} /></label>
+        <ByteCount id={`edit-intent-bytes-${ticket.id}`} bytes={sizes.intent} limit={TEXT_LIMITS.intent} />
+        <label>Acceptance criteria (one per line)<textarea value={draft.criteria} onChange={(event) => setDraft({ ...draft, criteria: event.target.value })} required rows={2} aria-describedby={`edit-criteria-bytes-${ticket.id}`} /></label>
+        <ByteCount id={`edit-criteria-bytes-${ticket.id}`} prefix="Longest criterion: " bytes={sizes.criterion} limit={TEXT_LIMITS.criterion} />
+        {choices.length > 1 && <div className="ticket-repositories field-row" role="group" aria-label="Repositories the ticket may touch">{choices.map((id) => <label key={id} className="checkbox"><input type="checkbox" checked={draft.repositoryIds.includes(id)} onChange={(event) => setDraft({ ...draft, repositoryIds: event.target.checked ? [...draft.repositoryIds.filter((item) => item !== id), id] : draft.repositoryIds.filter((item) => item !== id) })} /> {id}</label>)}</div>}
+        <div className="form-footer"><small>{latestRevision ? `Saving advances the ticket to r${ticket.revision + 1}: plan r${latestRevision} was made for r${ticket.revision} and must be re-planned before any further implementation, validation or publication.` : `Saving advances the ticket to r${ticket.revision}; its plans bind to the revision they were made for.`}</small><button className="primary" disabled={!request || tooLong} data-capability="tickets.update">Save ticket r{ticket.revision + 1}</button></div>
+      </fieldset>
+    </form>
+  </details>;
 }
 
 export function PlanReview({ plan, canApprove, busy, onApprove }: { plan: PlanRevision; canApprove: boolean; busy: boolean; onApprove: () => void }) {

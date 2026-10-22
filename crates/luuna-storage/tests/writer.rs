@@ -346,7 +346,7 @@ fn tickets_are_idempotent_revisioned_and_project_scoped() {
     assert_eq!(store.get_ticket("ticket-1").unwrap().unwrap().revision, 2);
     let events = store.project_events_after("project", 0).unwrap();
     assert!(events.iter().any(|e| e.event_type == "ticket.created"));
-    assert!(events.iter().any(|e| e.event_type == "ticket.revised"));
+    assert!(events.iter().any(|e| e.event_type == "ticket.updated"));
 }
 
 #[test]

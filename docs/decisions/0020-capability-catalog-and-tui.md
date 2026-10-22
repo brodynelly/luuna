@@ -21,6 +21,10 @@ The desktop gained two small controls so that every cataloged action has a contr
 
 `npm test` fails when a catalog entry names a route the runtime does not serve, a client method that does not exist, a failure class that is not shared, a TUI command that is missing or an action no desktop control exposes. It does not yet fail for a runtime mutation that no client exposes: those are reported, so that M4/M5/M7 routes can land in the runtime first.
 
+## Amendment, 2026-10-22
+
+A green catalog check established wiring, not behaviour: an entry proved a route, a client method, a marker and a command existed, not that the desktop sent every registered repository, baselined every repository, sent a task graph, or offered a resume control in the states ADR 0017 admits; and the catalog could not establish the ticket-edit and memory obligations of `docs/06-memory.md` while the runtime served no such routes. [ADR 0026](0026-ticket-and-memory-controls-and-client-parity.md) adds those routes and controls, gives every entry a `required_by` trace, makes `scripts/check-contracts.mjs` map a fixed list of required actions to entries with both clients wired, moves the registration and plan request builders into `@luuna/api-client` so both clients send one body, and makes the TUI command test and the desktop tests assert request bodies and state-specific controls rather than marker presence. Adding a product action now also costs its `required_by` list; a state-specific control of an existing action (for example `Resume task` beside `Implement`) carries the action's existing marker, and `apps/desktop/src/capabilities.test.ts` allows several markers per action.
+
 ## What remains
 
 - Parity for later actions: the scaffolding proposals and scaffolds of ADR 0019, the publication, publication record and reconciliation of ADR 0018, the memory promotion and project export of ADR 0021 and the multi-repository task listing of ADR 0017 were cataloged the same day with their client methods, desktop controls and TUI commands (49 actions); `scripts/check-contracts.mjs` names any later runtime mutation until it is cataloged.

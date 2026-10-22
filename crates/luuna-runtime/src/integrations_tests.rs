@@ -6,6 +6,7 @@ use axum::{
     Json,
 };
 use luuna_domain::{DirtyState, PromptReference, RepositoryIdentity, RepositoryObservation};
+use luuna_storage::MemoryRetentionPolicy;
 use serde_json::json;
 
 fn setup(root: &std::path::Path) -> AppState {
@@ -1278,4 +1279,283 @@ async fn components_real_import_round_trips_tickets_memory_and_prompts_from_an_e
     assert_eq!(again["tickets"][0]["id"], export["tickets"][0]["id"]);
     assert_eq!(again["memory"].as_array().unwrap().len(), 2);
     assert_eq!(again["prompts"][0]["body"], export["prompts"][0]["body"]);
+}
+
+#[tokio::test]
+#[ignore = "requires pinned Bun and real component checkouts; run with --ignored"]
+async fn components_real_memory_correction_stales_the_plan_that_selected_it_and_exports_user_memory(
+) {
+    let root = tempfile::tempdir().unwrap();
+    let state = setup(root.path());
+    let _ = enable(State(state.clone()), Path("context-a".into()))
+        .await
+        .unwrap();
+    let selected = memory(&state, "context-a", "c1", "project", "tests use unittest").await;
+    let selection = SelectContext {
+        memory_ids: vec![selected.id.clone()],
+        prompt: None,
+    };
+    let snapshot = resolve_selection(&state, "context-a", Some(&selection))
+        .await
+        .unwrap()
+        .unwrap();
+    assert!(resolve_approved(&state, "context-a", Some(&snapshot))
+        .await
+        .is_ok());
+    let correct = |key: &str, hash: String, content: &str| {
+        let state = state.clone();
+        let key = key.to_owned();
+        let content = content.to_owned();
+        let id = selected.id.clone();
+        async move {
+            update_memory(
+                State(state),
+                Path(("context-a".into(), id)),
+                Json(UpdateMemory {
+                    idempotency_key: key,
+                    expected_hash: hash,
+                    content,
+                }),
+            )
+            .await
+        }
+    };
+    // A stale displayed hash and an unknown record are refused without a write.
+    assert_eq!(
+        correct(
+            "stale",
+            format!("sha256:{}", "0".repeat(64)),
+            "tests use pytest"
+        )
+        .await
+        .err()
+        .unwrap()
+        .0,
+        StatusCode::CONFLICT
+    );
+    assert_eq!(
+        update_memory(
+            State(state.clone()),
+            Path(("context-a".into(), "mem-missing".into())),
+            Json(UpdateMemory {
+                idempotency_key: "missing".into(),
+                expected_hash: selected.hash.clone(),
+                content: "x".into()
+            })
+        )
+        .await
+        .err()
+        .unwrap()
+        .0,
+        StatusCode::NOT_FOUND
+    );
+    let corrected = correct("c2", selected.hash.clone(), "tests use pytest")
+        .await
+        .unwrap()
+        .0;
+    assert_eq!(corrected.id, selected.id);
+    assert_eq!(corrected.scope, "project");
+    assert_eq!(corrected.content, "tests use pytest");
+    assert_ne!(corrected.hash, selected.hash);
+    assert!(
+        corrected
+            .provenance
+            .starts_with(&format!("corrected from {}: ", selected.hash)),
+        "{}",
+        corrected.provenance
+    );
+    assert!(corrected.provenance.ends_with("Explicit synthetic fixture"));
+    // Replaying the key returns the recorded correction; the stale hash now refuses.
+    let replayed = correct("c2", selected.hash.clone(), "tests use pytest")
+        .await
+        .unwrap()
+        .0;
+    assert_eq!(replayed.hash, corrected.hash);
+    assert_eq!(
+        correct("c3", selected.hash.clone(), "another correction")
+            .await
+            .err()
+            .unwrap()
+            .0,
+        StatusCode::CONFLICT
+    );
+    // The plan that selected the original snapshot can no longer be implemented.
+    let refused = resolve_approved(&state, "context-a", Some(&snapshot))
+        .await
+        .err()
+        .unwrap();
+    assert_eq!(refused.0, StatusCode::CONFLICT);
+    assert!(refused.1.contains("approve a new plan"), "{}", refused.1);
+    let listed = list_memory(
+        State(state.clone()),
+        Path("context-a".into()),
+        Query(MemoryQuery {
+            include_user: false,
+            q: None,
+        }),
+    )
+    .await
+    .unwrap()
+    .0;
+    assert_eq!(listed.len(), 1);
+    assert_eq!(listed[0].hash, corrected.hash);
+
+    // The personal export carries user memory with provenance and nothing of the project.
+    let empty = export_user_memory(State(state.clone())).await.unwrap().0;
+    assert_eq!(empty["kind"], "luuna-user-memory-export");
+    assert_eq!(empty["memory"].as_array().unwrap().len(), 0);
+    let private = memory(&state, "context-a", "u1", "user", "PRIVATE_USER_ONLY").await;
+    let export = export_user_memory(State(state.clone())).await.unwrap().0;
+    let records = export["memory"].as_array().unwrap();
+    assert_eq!(records.len(), 1);
+    assert_eq!(records[0]["id"], private.id);
+    assert_eq!(records[0]["scope"], "user");
+    assert_eq!(records[0]["provenance"], "Explicit synthetic fixture");
+    assert!(!export.to_string().contains("tests use pytest"));
+    let leaking = memory(
+        &state,
+        "context-a",
+        "u2",
+        "user",
+        "see /home/dev/private/notes.md",
+    )
+    .await;
+    let refused = export_user_memory(State(state.clone()))
+        .await
+        .err()
+        .unwrap();
+    assert_eq!(refused.0, StatusCode::CONFLICT);
+    assert!(refused.1.contains("Export refused"), "{}", refused.1);
+    let _ = delete_memory(
+        State(state.clone()),
+        Path(("context-a".into(), leaking.id)),
+        Query(DeleteMemoryQuery {
+            expected_hash: leaking.hash,
+        }),
+    )
+    .await
+    .unwrap();
+    assert_eq!(
+        export_user_memory(State(state.clone())).await.unwrap().0["memory"]
+            .as_array()
+            .unwrap()
+            .len(),
+        1
+    );
+}
+
+#[tokio::test]
+#[ignore = "requires pinned Bun and real component checkouts; run with --ignored"]
+async fn components_real_retention_deletes_only_expired_process_memory_under_the_ledger() {
+    let root = tempfile::tempdir().unwrap();
+    let state = setup(root.path());
+    let _ = enable(State(state.clone()), Path("context-a".into()))
+        .await
+        .unwrap();
+    let old = memory(
+        &state,
+        "context-a",
+        "r1",
+        "process",
+        "an old process lesson",
+    )
+    .await;
+    let fresh = memory(
+        &state,
+        "context-a",
+        "r2",
+        "process",
+        "a fresh process lesson",
+    )
+    .await;
+    let project = memory(
+        &state,
+        "context-a",
+        "r3",
+        "project",
+        "an old project convention",
+    )
+    .await;
+    let private = memory(&state, "context-a", "r4", "user", "an old private note").await;
+    // Age the records in the binding table: creation time is Luuna's record, not Atlas's.
+    {
+        let store = state.store.lock().unwrap();
+        for id in [&old.id, &project.id, &private.id] {
+            store
+                .set_memory_binding_created_at(id, "2020-01-01T00:00:00Z")
+                .unwrap();
+        }
+    }
+    let apply = |key: &str| {
+        let state = state.clone();
+        let key = key.to_owned();
+        async move {
+            apply_memory_retention(
+                State(state),
+                Path("context-a".into()),
+                Json(ApplyRetention {
+                    idempotency_key: key,
+                }),
+            )
+            .await
+        }
+    };
+    // No policy: nothing expires.
+    let nothing = apply("a0").await.unwrap().0;
+    assert_eq!(nothing["deleted"].as_array().unwrap().len(), 0);
+    let _ = set_memory_retention(
+        State(state.clone()),
+        Path("context-a".into()),
+        Json(MemoryRetentionPolicy {
+            process_max_age_days: Some(30),
+            project_max_age_days: None,
+        }),
+    )
+    .await
+    .unwrap();
+    let applied = apply("a1").await.unwrap().0;
+    let deleted = applied["deleted"].as_array().unwrap();
+    assert_eq!(deleted.len(), 1, "{applied}");
+    assert_eq!(deleted[0]["id"], old.id);
+    assert_eq!(deleted[0]["scope"], "process");
+    // Replaying the key returns the recorded result; a new key finds nothing left to delete.
+    assert_eq!(apply("a1").await.unwrap().0, applied);
+    assert_eq!(
+        apply("a2").await.unwrap().0["deleted"]
+            .as_array()
+            .unwrap()
+            .len(),
+        0
+    );
+    let remaining = list_memory(
+        State(state.clone()),
+        Path("context-a".into()),
+        Query(MemoryQuery {
+            include_user: true,
+            q: None,
+        }),
+    )
+    .await
+    .unwrap()
+    .0;
+    let ids: Vec<&str> = remaining.iter().map(|record| record.id.as_str()).collect();
+    assert!(ids.contains(&fresh.id.as_str()));
+    assert!(ids.contains(&project.id.as_str()));
+    assert!(ids.contains(&private.id.as_str()));
+    assert!(!ids.contains(&old.id.as_str()));
+    let events = state
+        .store
+        .lock()
+        .unwrap()
+        .project_events_after("context-a", 0)
+        .unwrap();
+    let recorded = events
+        .iter()
+        .filter(|event| event.event_type == "memory.retention_applied")
+        .count();
+    assert_eq!(recorded, 3);
+    assert!(events
+        .iter()
+        .any(|event| event.event_type == "memory.retention_applied"
+            && event.payload["deleted"][0]["id"] == old.id));
 }

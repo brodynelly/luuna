@@ -21,6 +21,57 @@ use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 use std::collections::BTreeMap;
 
+/// The fields a ticket revision changes; `None` keeps the current value.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct TicketRevision {
+    pub title: Option<String>,
+    pub intent: Option<String>,
+    pub acceptance_criteria: Option<Vec<String>>,
+    pub repository_ids: Option<Vec<String>>,
+}
+
+impl TicketRevision {
+    /// Whether the revision names any field at all.
+    pub fn is_empty(&self) -> bool {
+        self.title.is_none()
+            && self.intent.is_none()
+            && self.acceptance_criteria.is_none()
+            && self.repository_ids.is_none()
+    }
+    /// The names of the fields this revision changes, for the durable event.
+    pub fn named(&self) -> Vec<&'static str> {
+        let mut fields = Vec::new();
+        if self.title.is_some() {
+            fields.push("title");
+        }
+        if self.intent.is_some() {
+            fields.push("intent");
+        }
+        if self.acceptance_criteria.is_some() {
+            fields.push("acceptance_criteria");
+        }
+        if self.repository_ids.is_some() {
+            fields.push("repository_ids");
+        }
+        fields
+    }
+    /// Apply the named fields to a ticket (revision and timestamps untouched).
+    pub fn apply(&self, ticket: &mut Ticket) {
+        if let Some(title) = &self.title {
+            ticket.title = title.clone();
+        }
+        if let Some(intent) = &self.intent {
+            ticket.intent = intent.clone();
+        }
+        if let Some(criteria) = &self.acceptance_criteria {
+            ticket.acceptance_criteria = criteria.clone();
+        }
+        if let Some(ids) = &self.repository_ids {
+            ticket.repository_ids = ids.clone();
+        }
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct AttemptRecord {
     pub id: String,
@@ -210,6 +261,29 @@ impl Store {
         intent: &str,
         acceptance_criteria: &[String],
     ) -> Result<Ticket> {
+        self.revise_ticket(
+            ticket_id,
+            expected_revision,
+            &TicketRevision {
+                title: Some(title.to_owned()),
+                intent: Some(intent.to_owned()),
+                acceptance_criteria: Some(acceptance_criteria.to_vec()),
+                repository_ids: None,
+            },
+        )
+    }
+
+    /// Revise the fields of a legacy local ticket that the request names
+    /// (`None` keeps the current value) and bump its revision, recording
+    /// `ticket.updated`. A Missions-backed ticket is refused here: its intent is
+    /// edited through the Missions adapter and reconciled into the projection.
+    /// Plans bound to the previous revision are stale from this point.
+    pub fn revise_ticket(
+        &mut self,
+        ticket_id: &str,
+        expected_revision: u64,
+        changes: &TicketRevision,
+    ) -> Result<Ticket> {
         let tx = self
             .connection
             .transaction_with_behavior(rusqlite::TransactionBehavior::Immediate)?;
@@ -228,11 +302,23 @@ impl Store {
             });
         }
         ticket.revision += 1;
-        ticket.title = title.to_owned();
-        ticket.intent = intent.to_owned();
-        ticket.acceptance_criteria = acceptance_criteria.to_vec();
+        changes.apply(&mut ticket);
         ticket.updated_at = now();
         ticket.validate()?;
+        let registered: Vec<String> = crate::projects::repositories_in(&tx, &ticket.project_id)?
+            .into_iter()
+            .map(|r| r.repository_id)
+            .collect();
+        if let Some(unknown) = ticket
+            .repository_ids
+            .iter()
+            .find(|id| !registered.contains(id))
+        {
+            return Err(StorageError::Invalid(format!(
+                "repository {unknown} is not registered in project {}",
+                ticket.project_id
+            )));
+        }
         tx.execute(
             "UPDATE tickets SET revision=?1,payload=?2,updated_at=?3 WHERE id=?4 AND revision=?5",
             params![
@@ -246,8 +332,8 @@ impl Store {
         append_project_event(
             &tx,
             &ticket.project_id,
-            "ticket.revised",
-            json!({"ticket_id": ticket.id, "revision": ticket.revision}),
+            "ticket.updated",
+            json!({"ticket_id": ticket.id, "revision": ticket.revision, "previous_revision": expected_revision, "source": ticket.source, "fields": changes.named()}),
         )?;
         tx.commit()?;
         Ok(ticket)
