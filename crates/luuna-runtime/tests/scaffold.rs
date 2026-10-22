@@ -232,6 +232,15 @@ async fn node_scaffold_runs_a_real_node_test_baseline_and_registers_the_project(
         .unwrap()
         .iter()
         .any(|q| q["topic"] == "typescript-typecheck"));
+    assert!(
+        proposal["notes"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|n| n.as_str().unwrap().contains("type stripping")),
+        "the typecheck gap is stated on the proposal: {}",
+        proposal["notes"]
+    );
     // Node strips types itself from 22.18 on; older hosts fail the baseline honestly.
     let (status, result) = harness
         .scaffold(proposal["hash"].as_str().unwrap(), "key-ts")
@@ -406,6 +415,100 @@ async fn platform_profiles_block_when_their_capability_is_missing() {
             .contains("confirm_network"));
         assert!(!harness.projects.join("web").exists());
     }
+}
+
+/// Next.js is modelled like React: a complete offline template whose baseline
+/// needs `npm install`, so the scaffold is refused without network consent and
+/// only ever executes the exact proposal its hash names.
+#[tokio::test]
+async fn nextjs_scaffold_declares_its_network_step_and_is_refused_without_consent() {
+    let host = probe_host_cached();
+    let harness = Harness::new();
+    let (status, proposal) = harness.propose("nextjs", "site").await;
+    assert_eq!(status, StatusCode::OK, "{proposal}");
+    assert_eq!(proposal["profile"], "nextjs");
+    assert!(proposal["generator"].is_null());
+    let files: Vec<&str> = proposal["files"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|f| f["path"].as_str().unwrap())
+        .collect();
+    for path in [
+        "package.json",
+        "next.config.mjs",
+        "tsconfig.json",
+        "app/layout.tsx",
+        "app/page.tsx",
+        "tests/page.test.tsx",
+    ] {
+        assert!(files.contains(&path), "{path} missing from {files:?}");
+    }
+    let package: Value =
+        serde_json::from_str(proposal["files"][0]["contents"].as_str().unwrap()).unwrap();
+    assert_eq!(package["name"], "site");
+    assert!(package["dependencies"]["next"].is_string());
+    assert_eq!(proposal["preparation"][0]["id"], "npm-install");
+    assert_eq!(proposal["preparation"][0]["network"], true);
+    assert_eq!(proposal["preparation"][0]["executable"], "npm");
+    assert!(proposal["network_steps"][0]
+        .as_str()
+        .unwrap()
+        .contains("npm install"));
+    let required: Vec<&Value> = proposal["baseline"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .filter(|c| c["required"] == true)
+        .collect();
+    assert_eq!(required.len(), 1);
+    assert_eq!(required[0]["id"], "npm-test");
+    assert!(proposal["questions"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .any(|q| q["topic"] == "nextjs-dependencies"));
+    assert!(proposal["notes"].as_array().is_some_and(|n| !n.is_empty()));
+    assert!(
+        !harness.projects.join("site").exists(),
+        "a proposal writes nothing"
+    );
+
+    // Deterministic: the same request yields the same hash to confirm.
+    let (_, again) = harness.propose("nextjs", "site").await;
+    assert_eq!(again["hash"], proposal["hash"]);
+    let hash = proposal["hash"].as_str().unwrap().to_owned();
+    assert!(hash.starts_with("sha256:"));
+
+    if !(host.available("node") && host.available("npm")) {
+        assert_eq!(proposal["status"], "blocked", "{proposal}");
+        let (status, refused) = harness.scaffold(&hash, "key-nextjs").await;
+        assert_eq!(status, StatusCode::UNPROCESSABLE_ENTITY, "{refused}");
+        assert!(refused["error"].as_str().unwrap().contains("blocked"));
+        return;
+    }
+    assert_eq!(proposal["status"], "ready", "{proposal}");
+    // Without network consent nothing is written or run.
+    let (status, refused) = harness.scaffold(&hash, "key-nextjs").await;
+    assert_eq!(status, StatusCode::UNPROCESSABLE_ENTITY, "{refused}");
+    let error = refused["error"].as_str().unwrap();
+    assert!(error.contains("confirm_network") && error.contains("npm install"));
+    assert!(!harness.projects.join("site").exists());
+    // A hash that names no current proposal is refused even with consent.
+    let (status, refused) = harness
+        .request(
+            "POST",
+            "/api/v1/projects/scaffold",
+            Some(json!({
+                "proposal_hash": format!("sha256:{}", "1".repeat(64)),
+                "idempotency_key": "key-nextjs-other",
+                "confirm": true,
+                "confirm_network": true,
+            })),
+        )
+        .await;
+    assert_eq!(status, StatusCode::CONFLICT, "{refused}");
+    assert!(!harness.projects.join("site").exists());
 }
 
 #[tokio::test]

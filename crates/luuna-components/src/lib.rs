@@ -2,8 +2,19 @@
 //!
 //! These are native host processes, not a sandbox. Callers choose private,
 //! project-scoped workspaces; no developer store is discovered or imported.
+//!
+//! Two layouts are accepted (ADR 0024). A *source checkout* is the Luuna
+//! repository with its exact-commit submodules: identity is proved by Git
+//! metadata (gitlinks, the committed manifest, a clean checkout at the pin). A
+//! *portable layout* is what `scripts/stage-components.mjs` writes for the
+//! installer: the same `components/manifest.json`, a
+//! `components/dist-manifest.json` recording each pin's commit and a content
+//! digest of its staged tree, and optionally the pinned Bun executable. Its
+//! identity is proved by recomputing those digests; a mismatch is refused by
+//! component name and never silently degraded.
 use serde::Deserialize;
 use serde_json::Value;
+use sha2::{Digest, Sha256};
 use std::{
     collections::BTreeMap,
     ffi::{OsStr, OsString},
@@ -22,6 +33,13 @@ const MAX_STDOUT: usize = 4 * 1024 * 1024;
 const MAX_STDERR: usize = 64 * 1024;
 const TIMEOUT: Duration = Duration::from_secs(30);
 const CLI_BRIDGE: &str = include_str!("../assets/cli-bridge.mjs");
+/// Written by `scripts/stage-components.mjs`; its presence selects the portable layout.
+pub const DIST_MANIFEST: &str = "components/dist-manifest.json";
+const DIST_KIND: &str = "luuna-portable-components";
+const DIST_SCHEMA_VERSION: u32 = 1;
+const DIGEST_MAX_ENTRIES: usize = 200_000;
+const DIGEST_MAX_BYTES: u64 = 2 * 1024 * 1024 * 1024;
+const DIGEST_MAX_DEPTH: usize = 64;
 
 #[derive(Debug, Error)]
 pub enum ComponentError {
@@ -45,6 +63,15 @@ pub enum ComponentError {
     Refused,
     #[error("component configuration contains executable hooks; managed integration does not authorize them")]
     Hooks,
+    #[error("portable component `{component}` does not match its distribution manifest: {detail}; reinstall the packaged distribution")]
+    Distribution { component: String, detail: String },
+}
+
+fn distribution(component: &str, detail: impl Into<String>) -> ComponentError {
+    ComponentError::Distribution {
+        component: component.to_owned(),
+        detail: detail.into(),
+    }
 }
 
 #[derive(Clone, Debug, Deserialize)]
@@ -77,6 +104,55 @@ struct Runtime {
     version: String,
 }
 
+#[derive(Deserialize)]
+struct DistManifest {
+    #[serde(rename = "schemaVersion")]
+    schema_version: u32,
+    kind: String,
+    source: DistSource,
+    runtime: DistRuntime,
+    components: Vec<DistComponent>,
+}
+#[derive(Deserialize)]
+struct DistSource {
+    #[serde(rename = "manifestSha256")]
+    manifest_sha256: String,
+}
+#[derive(Deserialize)]
+struct DistRuntime {
+    name: String,
+    version: String,
+    #[serde(default)]
+    executable: Option<String>,
+    #[serde(default)]
+    sha256: Option<String>,
+}
+#[derive(Deserialize)]
+struct DistComponent {
+    name: String,
+    path: String,
+    commit: String,
+    digest: String,
+}
+
+/// How the pinned components were found and how their identity is proved.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum LayoutKind {
+    /// The Luuna repository with exact-commit submodules (Git metadata).
+    SourceCheckout,
+    /// A staged layout with `components/dist-manifest.json` (content digests).
+    Portable,
+}
+
+#[derive(Clone, Debug)]
+enum Layout {
+    Source,
+    Portable {
+        /// Component name to the recorded `sha256:` tree digest.
+        digests: BTreeMap<String, String>,
+    },
+}
+
 #[derive(Clone, Debug)]
 pub struct Components {
     root: PathBuf,
@@ -84,14 +160,22 @@ pub struct Components {
     version: String,
     manifest: Value,
     pins: BTreeMap<String, Pin>,
+    layout: Layout,
 }
 
 impl Components {
     /// Resolve installation paths without reading a developer credential store.
     /// The exact checkout and Bun executable are revalidated before every call.
+    ///
+    /// The root is `LUUNA_COMPONENTS_ROOT`, else a portable layout beside the
+    /// running executable (the packaged installation of ADR 0011/0024), else
+    /// the compile-time source checkout. Bun is `LUUNA_BUN`, else the staged
+    /// `bun/bun[.exe]` of a portable root, else the checkout's `.tools` copy,
+    /// else `PATH`.
     pub fn discover() -> Result<Self> {
         let root = std::env::var_os("LUUNA_COMPONENTS_ROOT")
             .map(PathBuf::from)
+            .or_else(packaged_root_beside_executable)
             .unwrap_or_else(|| PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../.."));
         let platform = if cfg!(windows) {
             "windows"
@@ -104,11 +188,13 @@ impl Components {
             other => other,
         };
         let file = if cfg!(windows) { "bun.exe" } else { "bun" };
+        let staged = root.join("bun").join(file);
         let local = root
             .join(".tools/bun/node_modules/@oven")
             .join(format!("bun-{platform}-{arch}/bin/{file}"));
         let bun = std::env::var_os("LUUNA_BUN")
             .map(PathBuf::from)
+            .or_else(|| (staged.is_file() && root.join(DIST_MANIFEST).is_file()).then_some(staged))
             .or_else(|| local.is_file().then_some(local))
             .or_else(|| find_on_path(file))
             .ok_or(ComponentError::Unavailable)?;
@@ -171,13 +257,51 @@ impl Components {
                 return Err(ComponentError::Identity);
             }
         }
+        let layout = if root.join(DIST_MANIFEST).is_file() {
+            Layout::Portable {
+                digests: portable_digests(&root, &bun, &bytes, &manifest.runtime.version, &pins)?,
+            }
+        } else {
+            Layout::Source
+        };
         Ok(Self {
             root,
             bun,
             version: manifest.runtime.version,
             manifest: manifest_value,
             pins,
+            layout,
         })
+    }
+
+    pub fn layout(&self) -> LayoutKind {
+        match self.layout {
+            Layout::Source => LayoutKind::SourceCheckout,
+            Layout::Portable { .. } => LayoutKind::Portable,
+        }
+    }
+    pub fn root(&self) -> &Path {
+        &self.root
+    }
+    pub fn bun(&self) -> &Path {
+        &self.bun
+    }
+    /// The pinned Bun version every call revalidates.
+    pub fn runtime_version(&self) -> &str {
+        &self.version
+    }
+    /// One line for diagnostics: the layout kind and where it was found.
+    pub fn describe(&self) -> String {
+        match self.layout {
+            Layout::Source => format!(
+                "source checkout at {} (Git gitlinks and pins)",
+                self.root.display()
+            ),
+            Layout::Portable { .. } => format!(
+                "portable layout at {} (distribution manifest digests verified)",
+                self.root.display()
+            ),
+        }
     }
 
     /// Invoke only the pinned source entrypoint, with explicit argument arrays.
@@ -233,6 +357,33 @@ impl Components {
             return Err(ComponentError::Identity);
         }
         let directory = self.root.join(&pin.path);
+        match &self.layout {
+            Layout::Source => self.validate_source(pin, &directory, workspace).await?,
+            Layout::Portable { digests } => {
+                let name = pin.cli.primary.strip_prefix("luuna-").unwrap_or("");
+                let expected = digests.get(name).ok_or(ComponentError::Identity)?;
+                verify_portable_tree(&self.root, name, &directory, expected)?;
+            }
+        }
+        let pkg: Value = serde_json::from_slice(
+            &std::fs::read(directory.join("package.json")).map_err(|_| ComponentError::Identity)?,
+        )
+        .map_err(|_| ComponentError::Identity)?;
+        if pkg["name"].as_str() != Some(&pin.package)
+            || pkg["version"].as_str() != Some(&pin.source_version)
+            || [&pin.cli.primary, &pin.cli.short]
+                .into_iter()
+                .chain(pin.cli.legacy.iter())
+                .any(|alias| pkg["bin"][alias].as_str() != Some(&pin.cli.entrypoint))
+        {
+            return Err(ComponentError::Identity);
+        }
+        Ok(())
+    }
+
+    /// Source-checkout identity: the exact gitlink, committed manifest,
+    /// submodule URL and a clean checkout at the pinned commit.
+    async fn validate_source(&self, pin: &Pin, directory: &Path, workspace: &Path) -> Result<()> {
         if !directory.join(".git").exists()
             || !directory.join("node_modules").is_dir()
             || !directory
@@ -290,27 +441,14 @@ impl Components {
         )
         .await?
             != pin.repository
-            || git(&directory, &["rev-parse", "HEAD"], workspace).await? != pin.commit
+            || git(directory, &["rev-parse", "HEAD"], workspace).await? != pin.commit
             || !git(
-                &directory,
+                directory,
                 &["status", "--porcelain", "--untracked-files=all"],
                 workspace,
             )
             .await?
             .is_empty()
-        {
-            return Err(ComponentError::Identity);
-        }
-        let pkg: Value = serde_json::from_slice(
-            &std::fs::read(directory.join("package.json")).map_err(|_| ComponentError::Identity)?,
-        )
-        .map_err(|_| ComponentError::Identity)?;
-        if pkg["name"].as_str() != Some(&pin.package)
-            || pkg["version"].as_str() != Some(&pin.source_version)
-            || [&pin.cli.primary, &pin.cli.short]
-                .into_iter()
-                .chain(pin.cli.legacy.iter())
-                .any(|alias| pkg["bin"][alias].as_str() != Some(&pin.cli.entrypoint))
         {
             return Err(ComponentError::Identity);
         }
@@ -351,6 +489,237 @@ fn nonempty_hooks(value: &Value) -> bool {
         _ => true,
     }
 }
+fn packaged_root_beside_executable() -> Option<PathBuf> {
+    let directory = std::env::current_exe().ok()?.parent()?.to_path_buf();
+    directory.join(DIST_MANIFEST).is_file().then_some(directory)
+}
+
+fn sha256_hex(bytes: &[u8]) -> String {
+    format!("{:x}", Sha256::digest(bytes))
+}
+
+fn sha256_file(path: &Path) -> std::io::Result<String> {
+    let mut file = std::fs::File::open(path)?;
+    let mut hasher = Sha256::new();
+    std::io::copy(&mut file, &mut hasher)?;
+    Ok(format!("{:x}", hasher.finalize()))
+}
+
+/// Deterministic SHA-256 over a directory tree, shared with
+/// `scripts/stage-components.mjs` (`treeDigest`): one line per regular file
+/// (`<relative path>\0file\0<sha256 of contents>`) or symbolic link
+/// (`<relative path>\0link\0<sha256 of the link target>`), relative paths
+/// with `/` separators sorted by their UTF-8 bytes and joined with `\n`.
+/// Empty directories contribute nothing; any other entry kind is an error.
+pub fn tree_digest(directory: &Path) -> std::io::Result<String> {
+    fn invalid(detail: &str) -> std::io::Error {
+        std::io::Error::new(std::io::ErrorKind::InvalidData, detail.to_owned())
+    }
+    fn visit(
+        directory: &Path,
+        rel: &str,
+        depth: usize,
+        lines: &mut Vec<(Vec<u8>, String)>,
+        bytes: &mut u64,
+    ) -> std::io::Result<()> {
+        if depth > DIGEST_MAX_DEPTH {
+            return Err(invalid("tree nests too deeply"));
+        }
+        let full = if rel.is_empty() {
+            directory.to_path_buf()
+        } else {
+            directory.join(rel)
+        };
+        for entry in std::fs::read_dir(&full)? {
+            let entry = entry?;
+            let name = entry
+                .file_name()
+                .into_string()
+                .map_err(|_| invalid("file name is not valid UTF-8"))?;
+            let entry_rel = if rel.is_empty() {
+                name
+            } else {
+                format!("{rel}/{name}")
+            };
+            if lines.len() >= DIGEST_MAX_ENTRIES {
+                return Err(invalid("tree has too many entries"));
+            }
+            let metadata = std::fs::symlink_metadata(entry.path())?;
+            let kind = metadata.file_type();
+            if kind.is_symlink() {
+                let target = std::fs::read_link(entry.path())?;
+                let target = target
+                    .to_str()
+                    .ok_or_else(|| invalid("link target is not valid UTF-8"))?;
+                let line = format!("{entry_rel}\0link\0{}", sha256_hex(target.as_bytes()));
+                lines.push((entry_rel.into_bytes(), line));
+            } else if kind.is_dir() {
+                visit(directory, &entry_rel, depth + 1, lines, bytes)?;
+            } else if kind.is_file() {
+                *bytes += metadata.len();
+                if *bytes > DIGEST_MAX_BYTES {
+                    return Err(invalid("tree is too large"));
+                }
+                let line = format!("{entry_rel}\0file\0{}", sha256_file(&entry.path())?);
+                lines.push((entry_rel.into_bytes(), line));
+            } else {
+                return Err(invalid("tree contains a special file"));
+            }
+        }
+        Ok(())
+    }
+    let mut lines = Vec::new();
+    let mut bytes = 0;
+    visit(directory, "", 0, &mut lines, &mut bytes)?;
+    lines.sort_by(|a, b| a.0.cmp(&b.0));
+    let joined = lines
+        .iter()
+        .map(|(_, line)| line.as_str())
+        .collect::<Vec<_>>()
+        .join("\n");
+    Ok(format!("sha256:{}", sha256_hex(joined.as_bytes())))
+}
+
+/// Recompute one staged component's digest and refuse any difference by name.
+fn verify_portable_tree(root: &Path, name: &str, directory: &Path, expected: &str) -> Result<()> {
+    if !directory.is_dir() {
+        return Err(distribution(name, "its staged tree is missing"));
+    }
+    if !directory.join("node_modules").is_dir() {
+        return Err(distribution(name, "its staged dependencies are missing"));
+    }
+    if !directory
+        .canonicalize()
+        .map_err(|_| ComponentError::Identity)?
+        .starts_with(root)
+    {
+        return Err(ComponentError::Identity);
+    }
+    let actual = tree_digest(directory)
+        .map_err(|error| distribution(name, format!("its staged tree cannot be read ({error})")))?;
+    if actual != expected {
+        return Err(distribution(
+            name,
+            format!("its staged tree digest {actual} differs from the recorded {expected}"),
+        ));
+    }
+    Ok(())
+}
+
+/// Load and check `components/dist-manifest.json` against the pins, prove the
+/// Bun executable is the staged one and verify every staged tree now, so a
+/// tampered or incomplete installation is refused at discovery.
+fn portable_digests(
+    root: &Path,
+    bun: &Path,
+    manifest_bytes: &[u8],
+    version: &str,
+    pins: &BTreeMap<String, Pin>,
+) -> Result<BTreeMap<String, String>> {
+    let bytes = std::fs::read(root.join(DIST_MANIFEST)).map_err(|_| ComponentError::Unavailable)?;
+    if bytes.len() > 256 * 1024 {
+        return Err(ComponentError::Identity);
+    }
+    let dist: DistManifest = serde_json::from_slice(&bytes)
+        .map_err(|_| distribution("manifest", "it is not readable"))?;
+    if dist.schema_version != DIST_SCHEMA_VERSION || dist.kind != DIST_KIND {
+        return Err(distribution("manifest", "its schema is not supported"));
+    }
+    if dist.source.manifest_sha256 != sha256_hex(manifest_bytes) {
+        return Err(distribution(
+            "manifest",
+            "components/manifest.json is not the one it was staged with",
+        ));
+    }
+    if dist.runtime.name != "bun" || dist.runtime.version != version {
+        return Err(distribution(
+            "bun",
+            "the recorded Bun version differs from the pin",
+        ));
+    }
+    if dist.components.len() != pins.len() {
+        return Err(distribution(
+            "manifest",
+            "it does not stage exactly Missions, Atlas and Beacon",
+        ));
+    }
+    let mut digests = BTreeMap::new();
+    for component in dist.components {
+        let pin = pins
+            .get(&component.name)
+            .ok_or_else(|| distribution(&component.name, "it is not a pinned component"))?;
+        if component.path != pin.path {
+            return Err(distribution(&component.name, "its staged path differs"));
+        }
+        if component.commit != pin.commit {
+            return Err(distribution(
+                &component.name,
+                format!(
+                    "its recorded commit {} differs from the pinned {}",
+                    component.commit, pin.commit
+                ),
+            ));
+        }
+        let hex = component.digest.strip_prefix("sha256:").unwrap_or("");
+        if hex.len() != 64
+            || !hex
+                .bytes()
+                .all(|b| b.is_ascii_hexdigit() && !b.is_ascii_uppercase())
+        {
+            return Err(distribution(
+                &component.name,
+                "its recorded digest is malformed",
+            ));
+        }
+        if digests
+            .insert(component.name.clone(), component.digest)
+            .is_some()
+        {
+            return Err(distribution(&component.name, "it is recorded twice"));
+        }
+    }
+    if let Some(executable) = dist.runtime.executable {
+        let relative = Path::new(&executable);
+        if relative.is_absolute()
+            || relative
+                .components()
+                .any(|part| !matches!(part, Component::Normal(_)))
+        {
+            return Err(distribution(
+                "bun",
+                "its recorded path is not inside the layout",
+            ));
+        }
+        let staged = root.join(relative);
+        let same = match (staged.canonicalize(), bun.canonicalize()) {
+            (Ok(a), Ok(b)) => a == b,
+            _ => false,
+        };
+        if !same {
+            return Err(distribution(
+                "bun",
+                "the Bun executable in use is not the staged one",
+            ));
+        }
+        let expected = dist.runtime.sha256.unwrap_or_default();
+        let actual = sha256_file(&staged)
+            .map_err(|_| distribution("bun", "the staged executable cannot be read"))?;
+        if actual != expected {
+            return Err(distribution(
+                "bun",
+                "the staged executable differs from its recorded hash",
+            ));
+        }
+    }
+    for (name, pin) in pins {
+        let expected = digests
+            .get(name)
+            .ok_or_else(|| distribution(name, "it is not recorded in the distribution manifest"))?;
+        verify_portable_tree(root, name, &root.join(&pin.path), expected)?;
+    }
+    Ok(digests)
+}
+
 fn find_on_path(name: &str) -> Option<PathBuf> {
     find_in(&std::env::var_os("PATH")?, name)
 }
@@ -727,6 +1096,7 @@ mod tests {
             version: "1.4.3".into(),
             manifest: Value::Null,
             pins: BTreeMap::new(),
+            layout: Layout::Source,
         };
         let args = ["list".into()];
         let call = runner.call("atlas", Path::new("unused"), &args);
@@ -941,6 +1311,231 @@ mod tests {
         .await
         .unwrap();
         assert_eq!(result.stdout, b"false");
+    }
+
+    /// A synthetic portable layout: three pinned trees with installed
+    /// dependencies, a Bun stand-in answering the pinned version and the
+    /// distribution manifest the stager would write for them.
+    struct PortableFixture {
+        root: PathBuf,
+        bun: PathBuf,
+    }
+    impl PortableFixture {
+        fn write(dir: &Path) -> Self {
+            let root = dir.canonicalize().unwrap();
+            let pins = [
+                (
+                    "missions",
+                    "0.6.0",
+                    "src/index.ts",
+                    "lm",
+                    vec!["sd", "seeds"],
+                ),
+                ("atlas", "0.11.0", "src/cli.ts", "la", vec!["ml", "mulch"]),
+                ("beacon", "0.2.6", "src/index.ts", "lb", vec!["cn"]),
+            ];
+            let mut components = Vec::new();
+            let mut staged = Vec::new();
+            for (index, (name, version, entrypoint, short, legacy)) in pins.iter().enumerate() {
+                let commit = format!("{index}").repeat(40);
+                let directory = root.join("components").join(name);
+                std::fs::create_dir_all(directory.join("src")).unwrap();
+                std::fs::create_dir_all(directory.join("node_modules/dep")).unwrap();
+                let mut bin = serde_json::Map::new();
+                for alias in [format!("luuna-{name}"), (*short).to_owned()]
+                    .into_iter()
+                    .chain(legacy.iter().map(|alias| (*alias).to_owned()))
+                {
+                    bin.insert(alias, Value::String((*entrypoint).to_owned()));
+                }
+                std::fs::write(
+                    directory.join("package.json"),
+                    serde_json::to_vec(&serde_json::json!({
+                        "name": format!("@luuna/{name}-cli"), "version": version, "bin": bin
+                    }))
+                    .unwrap(),
+                )
+                .unwrap();
+                std::fs::write(
+                    directory.join(entrypoint),
+                    format!("console.log(JSON.stringify({{success:true,component:{name:?}}}));\n"),
+                )
+                .unwrap();
+                std::fs::write(
+                    directory.join("node_modules/dep/index.js"),
+                    "module.exports = 1;\n",
+                )
+                .unwrap();
+                components.push(serde_json::json!({
+                    "brand": format!("Luuna {name}"), "path": format!("components/{name}"),
+                    "sourceVersion": version, "package": format!("@luuna/{name}-cli"),
+                    "cli": {"primary": format!("luuna-{name}"), "short": short, "legacy": legacy, "entrypoint": entrypoint},
+                    "license": "MIT", "published": false,
+                    "repository": format!("https://github.com/brodynelly/luuna-{name}.git"),
+                    "commit": commit,
+                }));
+                staged.push(serde_json::json!({
+                    "name": name, "path": format!("components/{name}"), "commit": commit,
+                    "digest": tree_digest(&directory).unwrap(),
+                }));
+            }
+            let manifest = serde_json::to_vec_pretty(&serde_json::json!({
+                "schemaVersion": 2, "components": components, "runtime": {"name": "bun", "version": "1.4.3"}
+            }))
+            .unwrap();
+            std::fs::write(root.join("components/manifest.json"), &manifest).unwrap();
+            std::fs::create_dir_all(root.join("bun")).unwrap();
+            let (file, script) = if cfg!(windows) {
+                ("bun.exe", "")
+            } else {
+                ("bun", "#!/bin/sh\necho 1.4.3\n")
+            };
+            let bun = root.join("bun").join(file);
+            std::fs::write(&bun, script).unwrap();
+            #[cfg(unix)]
+            {
+                use std::os::unix::fs::PermissionsExt;
+                std::fs::set_permissions(&bun, std::fs::Permissions::from_mode(0o755)).unwrap();
+            }
+            let dist = serde_json::json!({
+                "schemaVersion": 1, "kind": "luuna-portable-components",
+                "generatedAt": "2026-10-22T00:00:00.000Z",
+                "source": {"luunaCommit": null, "manifestSha256": sha256_hex(&manifest)},
+                "runtime": {"name": "bun", "version": "1.4.3", "executable": format!("bun/{file}"), "sha256": sha256_file(&bun).unwrap()},
+                "components": staged,
+            });
+            std::fs::write(
+                root.join(DIST_MANIFEST),
+                serde_json::to_vec_pretty(&dist).unwrap(),
+            )
+            .unwrap();
+            Self { root, bun }
+        }
+        fn components(&self) -> Result<Components> {
+            Components::from_root(self.root.clone(), self.bun.clone())
+        }
+        fn rewrite_dist(&self, edit: impl FnOnce(&mut Value)) {
+            let path = self.root.join(DIST_MANIFEST);
+            let mut dist: Value = serde_json::from_slice(&std::fs::read(&path).unwrap()).unwrap();
+            edit(&mut dist);
+            std::fs::write(&path, serde_json::to_vec(&dist).unwrap()).unwrap();
+        }
+    }
+
+    fn component_named(error: &ComponentError) -> Option<&str> {
+        match error {
+            ComponentError::Distribution { component, .. } => Some(component),
+            _ => None,
+        }
+    }
+
+    #[test]
+    fn tree_digests_agree_with_the_staging_script() {
+        let dir = tempfile::tempdir().unwrap();
+        let fixture = PortableFixture::write(dir.path());
+        let script =
+            Path::new(env!("CARGO_MANIFEST_DIR")).join("../../scripts/stage-components.mjs");
+        for name in ["missions", "atlas", "beacon"] {
+            let directory = fixture.root.join("components").join(name);
+            let printed = std::process::Command::new(node())
+                .arg(&script)
+                .arg("digest")
+                .arg(&directory)
+                .output()
+                .unwrap();
+            assert!(printed.status.success());
+            assert_eq!(
+                String::from_utf8(printed.stdout).unwrap().trim(),
+                tree_digest(&directory).unwrap(),
+                "{name}"
+            );
+        }
+        // Order-independent, byte-sensitive, and empty directories do not count.
+        let directory = fixture.root.join("components/atlas");
+        let before = tree_digest(&directory).unwrap();
+        std::fs::create_dir(directory.join("empty")).unwrap();
+        assert_eq!(tree_digest(&directory).unwrap(), before);
+        std::fs::write(directory.join("src/cli.ts"), "changed\n").unwrap();
+        assert_ne!(tree_digest(&directory).unwrap(), before);
+    }
+
+    #[tokio::test]
+    async fn portable_layout_is_verified_against_its_distribution_manifest() {
+        if cfg!(windows) {
+            eprintln!("the Bun stand-in is a POSIX shell script");
+            return;
+        }
+        let dir = tempfile::tempdir().unwrap();
+        let fixture = PortableFixture::write(dir.path());
+        let components = fixture.components().unwrap();
+        assert_eq!(components.layout(), LayoutKind::Portable);
+        assert!(components.describe().contains("portable layout"));
+        assert_eq!(components.bun(), fixture.bun);
+        let workspace_dir = tempfile::tempdir().unwrap();
+        let workspace = prepare_workspace(&workspace_dir.path().canonicalize().unwrap()).unwrap();
+        let atlas = components.pins["atlas"].clone();
+        components.validate(&atlas, &workspace).await.unwrap();
+
+        // A file changed after discovery is refused at the next call, by name.
+        let edited = fixture.root.join("components/atlas/src/cli.ts");
+        let original = std::fs::read(&edited).unwrap();
+        std::fs::write(&edited, "console.log('tampered');\n").unwrap();
+        let refused = components.validate(&atlas, &workspace).await.unwrap_err();
+        assert_eq!(component_named(&refused), Some("atlas"));
+        assert!(refused.to_string().contains("digest"));
+        components
+            .validate(&components.pins["beacon"].clone(), &workspace)
+            .await
+            .unwrap();
+        // And at discovery.
+        let refused = fixture.components().unwrap_err();
+        assert_eq!(component_named(&refused), Some("atlas"));
+        std::fs::write(&edited, original).unwrap();
+        fixture.components().unwrap();
+
+        // A missing component tree and missing dependencies are refused by name.
+        std::fs::rename(
+            fixture.root.join("components/beacon"),
+            fixture.root.join("components/beacon-moved"),
+        )
+        .unwrap();
+        let refused = fixture.components().unwrap_err();
+        assert_eq!(component_named(&refused), Some("beacon"));
+        assert!(refused.to_string().contains("missing"));
+        std::fs::rename(
+            fixture.root.join("components/beacon-moved"),
+            fixture.root.join("components/beacon"),
+        )
+        .unwrap();
+        fixture.components().unwrap();
+
+        // A pin that differs between the manifests, and a replaced Bun, are refused.
+        fixture
+            .rewrite_dist(|dist| dist["components"][0]["commit"] = Value::String("f".repeat(40)));
+        let refused = fixture.components().unwrap_err();
+        assert_eq!(component_named(&refused), Some("missions"));
+        assert!(refused.to_string().contains("commit"));
+        fixture
+            .rewrite_dist(|dist| dist["components"][0]["commit"] = Value::String("0".repeat(40)));
+        fixture.components().unwrap();
+        std::fs::write(&fixture.bun, "#!/bin/sh\necho 1.4.3\n# replaced\n").unwrap();
+        let refused = fixture.components().unwrap_err();
+        assert_eq!(component_named(&refused), Some("bun"));
+        let other = fixture.root.join("other-bun");
+        std::fs::copy(&fixture.bun, &other).unwrap();
+        fixture.rewrite_dist(|dist| {
+            dist["runtime"]["sha256"] = Value::String(sha256_file(&fixture.bun).unwrap())
+        });
+        fixture.components().unwrap();
+        let refused = Components::from_root(fixture.root.clone(), other).unwrap_err();
+        assert_eq!(component_named(&refused), Some("bun"));
+        assert!(refused.to_string().contains("not the staged one"));
+
+        // Without the distribution manifest the same root is a source checkout.
+        std::fs::remove_file(fixture.root.join(DIST_MANIFEST)).unwrap();
+        let source = fixture.components().unwrap();
+        assert_eq!(source.layout(), LayoutKind::SourceCheckout);
+        assert!(source.validate(&atlas, &workspace).await.is_err());
     }
 
     #[test]

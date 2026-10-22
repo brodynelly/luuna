@@ -103,6 +103,28 @@ confirms its manifest and records a baseline run before implementation. No
 storage migration was needed; proposals and idempotency records are private
 JSON files, and `project.scaffolded` uses the existing project stream.
 
+## Amendment 2026-10-22: Next.js profile and proposal notes
+
+The `nextjs` profile joins the template profiles: a written-out minimal App
+Router project (`package.json` with `next`, `react`, `react-dom`,
+`typescript` and `vitest`; `next.config.mjs`; `tsconfig.json`;
+`vitest.config.mts`; `app/layout.tsx`; `app/page.tsx`; `tests/page.test.tsx`)
+rather than `create-next-app`, so the proposal is complete and offline. Like
+`react` it declares `npm install` as its network step: the baseline
+`npm test` (Vitest), the optional `npm run typecheck` and `npm run build` all
+need the installed packages, so the scaffold is refused without
+`confirm_network` and names the step; with consent the install runs under
+the supervised executor after the commit and before the baseline. Discovery
+already recognised Next.js from `dependencies.next`; the baseline recipes are
+the ones it proposes for the result. Proposals gain an optional `notes` list
+(absent when empty, so earlier hashes are unchanged) that states the limits
+the developer accepts with the hash; the Node TypeScript template's typecheck
+gap (the template relies on Node's built-in type stripping, so nothing checks
+types until `typescript` and a `typecheck` script are added) is now stated
+there as well as in its question. The Next.js baseline has not been executed
+on a networked host; its evidence is the proposal shape, the refusal without
+consent and the exact-hash confirmation in `crates/luuna-runtime/tests/scaffold.rs`.
+
 ## What remains
 
 - **Capable-runner evidence per platform.** This decision was implemented and

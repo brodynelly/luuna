@@ -321,7 +321,7 @@ export interface ProjectExport {
   omitted: string[];
 }
 
-export type ScaffoldProfile = "node" | "node-typescript" | "react" | "python" | "go" | "rust" | "flutter" | "android" | "ios";
+export type ScaffoldProfile = "node" | "node-typescript" | "react" | "nextjs" | "python" | "go" | "rust" | "flutter" | "android" | "ios";
 
 export interface ScaffoldProposalRequest {
   profile: ScaffoldProfile;
