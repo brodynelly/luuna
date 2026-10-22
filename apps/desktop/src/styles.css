@@ -5,6 +5,7 @@
  */
 @layer tokens, base, components, screens, utilities;
 @import "./design/tokens.css" layer(tokens);
+@import "./design/fonts.css" layer(tokens);
 @import "./design/base.css" layer(base);
 @import "./design/components.css" layer(components);
 @import "./design/overlays.css" layer(components);
