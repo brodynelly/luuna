@@ -16,6 +16,8 @@ body {
   line-height: var(--leading);
   font-synthesis: none;
   text-rendering: optimizeLegibility;
+  /* macOS only. On Windows, sharpness comes from DirectWrite and from never promoting text layers
+     (no transform, will-change or opacity on text ancestors, which drops LCD antialiasing). */
   -webkit-font-smoothing: antialiased;
 }
 
@@ -32,6 +34,9 @@ a { color: var(--color-accent); }
 
 /* Identities (hashes, commits, paths, ids) are shown whole: monospace, wrapping anywhere. */
 code, kbd, samp, pre { font-family: var(--font-mono); }
+/* Monospace reads character by character: no ligatures (they would merge != or ->, and none also
+   disables calt), no kerning on a fixed grid, and cheaper layout while streaming re-lays out each delta. */
+code, kbd, samp, pre { font-kerning: none; font-variant-ligatures: none; text-rendering: optimizeSpeed; }
 code { overflow-wrap: anywhere; }
 pre {
   margin: 0;

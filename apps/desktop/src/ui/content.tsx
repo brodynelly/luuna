@@ -1,5 +1,6 @@
 import type { AnchorHTMLAttributes, HTMLAttributes, ReactNode } from "react";
 import type { Tone } from "../design/tone";
+import { useStickyScroll } from "./useStickyScroll";
 
 /**
  * Content: lists, facts, notes and the feedback states every view shares. Tones follow
@@ -50,9 +51,10 @@ export function RecordItem({ tone, headed = false, className, id, focusable = fa
   return <li className={classes} id={id} tabIndex={focusable ? -1 : undefined} data-tone={tone}>{children}</li>;
 }
 
-/** A labelled, focusable, bounded scroll region of records (an event log). */
-export function ScrollList({ label, children, ...marker }: { label: string; "data-capability"?: string; children: ReactNode }) {
-  return <ol className="events" aria-label={label} tabIndex={0} {...marker}>{children}</ol>;
+/** A labelled, focusable, bounded scroll region of records (an event log). With `follow` it glides to new records while the reader is at the bottom. */
+export function ScrollList({ label, follow, followKey, children, ...marker }: { label: string; "data-capability"?: string; follow?: boolean; followKey?: unknown; children: ReactNode }) {
+  const ref = useStickyScroll<HTMLOListElement>({ enabled: follow ?? false, followKey });
+  return <ol className="events" aria-label={label} tabIndex={0} ref={follow === undefined ? undefined : ref} {...marker}>{children}</ol>;
 }
 
 /** A plain, unstyled list (rows inside a record, links in Help). */

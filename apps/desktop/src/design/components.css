@@ -149,6 +149,12 @@ details.section > summary { color: var(--color-text); font-size: var(--text-sm);
 
 /* Scroll regions: labelled, focusable, bounded. Only these may scroll. */
 ol.events, pre[aria-label] { max-height: var(--scroll-max); overflow: auto; overscroll-behavior: contain; border: var(--border-width) solid var(--color-border); border-radius: var(--radius-md); background: var(--color-surface-sunken); scrollbar-color: var(--color-border-control) transparent; }
+/* Stable gutter: a region that starts to overflow does not reflow its text. Paint containment only
+   clips what the region already clips. overflow-anchor stays auto: it holds a reader's place while the
+   bounded event window trims rows from the top, and the follow controller tolerates it. */
+ol.events, pre[aria-label] { scrollbar-gutter: stable; contain: content; }
+/* Tail caret: steady (evidence never pulses), CSS only so it is never selected, copied or announced. */
+pre[data-live]::after { content: ""; display: inline-block; width: var(--tail-caret-width); height: var(--tail-caret-height); margin-inline-start: var(--tail-caret-gap); vertical-align: text-bottom; background: var(--tone-active-mark); }
 ol.events:focus-visible, pre[aria-label]:focus-visible { outline-offset: var(--focus-inset); }
 
 /* Event list. */
@@ -177,6 +183,7 @@ ol.events summary time { margin-left: auto; color: var(--color-text-subtle); fon
   .state[data-tone="active"]::before, .state[data-tone="interrupted"]::before, .tone-mark[data-tone="active"], .tone-mark[data-tone="interrupted"] { background: transparent; }
   button.run-card[aria-pressed="true"] { forced-color-adjust: none; border-color: Highlight; background: SelectedItem; color: SelectedItemText; }
   summary::before { forced-color-adjust: none; border-color: transparent transparent transparent CanvasText; }
+  pre[data-live]::after { forced-color-adjust: none; background: CanvasText; }
 }
 
 /* Card: an untitled raised group with the panel's padding (a project's detail). */

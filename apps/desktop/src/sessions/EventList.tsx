@@ -45,7 +45,7 @@ export const EventList = memo(function EventList({ events, client, runId }: { ev
   return <>
     {(first > 1 || page !== null) && <Toolbar><Meta>Events {first}–{last}</Meta>{paging}</Toolbar>}
     {error && <ErrorBanner message={error} onDismiss={() => setError("")} />}
-    <ScrollList label="Durable session events" data-capability="runs.events runs.stream">{shown.map((event) => <EventRow key={event.event_id} event={event} />)}</ScrollList>
+    <ScrollList label="Durable session events" follow={page === null} followKey={shown.at(-1)?.event_id} data-capability="runs.events runs.stream">{shown.map((event) => <EventRow key={event.event_id} event={event} />)}</ScrollList>
   </>;
 });
 

@@ -1,9 +1,9 @@
 import { useState } from "react";
-import type { EventEnvelope, LuunaClient, RunRecord } from "@luuna/api-client";
+import { isTerminal, type EventEnvelope, type LuunaClient, type RunRecord } from "@luuna/api-client";
 import { canCancel } from "../workflow-state";
 import { runTone } from "../design/tone";
 import { localTime, runTitle, sessionStatus } from "../shell/runtime";
-import { Box, Button, ContextMenuArea, copyText, Disclosure, EmptyState, FieldRow, Form, FormFooter, HeadingRow, Id, Item, List, Meta, Output, Placeholder, ReasonNote, Section, SelectableCard, StatusBadge, submitted, Tag, TextArea, TextField, Toolbar, useNotify } from "../ui";
+import { Box, Button, ContextMenuArea, copyText, Disclosure, EmptyState, FieldRow, Form, FormFooter, HeadingRow, Id, Item, List, LiveOutput, Meta, Placeholder, ReasonNote, Section, SelectableCard, StatusBadge, submitted, Tag, TextArea, TextField, Toolbar, useNotify } from "../ui";
 import { EventList } from "./EventList";
 
 /** The history rail: every recorded run as a selectable card, newest first, paged by 200. */
@@ -69,7 +69,7 @@ export function EventPanel({ client, active, events, output, live, candidateActi
         {canCancel(active.state, candidateActive) && <Button variant="danger" disabled={busy} data-capability="runs.cancel" onClick={onCancel}>Cancel session</Button>}
       </Box>
       {active.state === "failed" && <ReasonNote block tone="danger" reason="This session failed. Open the final events below for the runtime’s recorded reason." />}
-      {output && <Box className="assistant-output"><HeadingRow level={4} title="Pi response" /><Output>{output}</Output></Box>}
+      {output && <Box className="assistant-output"><HeadingRow level={4} title="Pi response" /><LiveOutput label="Pi response" live={!isTerminal(active.state)} followKey={output.length}>{output}</LiveOutput></Box>}
       <EventList key={active.id} events={events} client={client} runId={active.id} />
       {!events.length && <EmptyState>Waiting for the runtime’s event record…</EmptyState>}
       <Meta block className="event-caption">Events replay from the last received sequence after an interruption. A completed session is not a validation result.</Meta>

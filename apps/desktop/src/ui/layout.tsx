@@ -1,4 +1,5 @@
 import type { ReactNode } from "react";
+import { useStickyScroll } from "./useStickyScroll";
 
 /**
  * Layout: the page template every view renders through, and the containers inside it. One
@@ -117,6 +118,15 @@ export function CodeBlock({ label, className, children, ...marker }: { label: st
 /** Machine output that is short enough not to scroll on its own. */
 export function Output({ children }: { children: ReactNode }) {
   return <pre>{children}</pre>;
+}
+
+/**
+ * Live machine or assistant output: a labelled, focusable, bounded region that follows new text
+ * while the reader is at the bottom. No aria-live: the run status line announces transitions.
+ */
+export function LiveOutput({ label, live, followKey, children }: { label: string; live: boolean; followKey: unknown; children: ReactNode }) {
+  const ref = useStickyScroll<HTMLPreElement>({ enabled: true, followKey });
+  return <pre aria-label={label} tabIndex={0} data-live={live ? "true" : undefined} ref={ref}>{children}</pre>;
 }
 
 /** A side-by-side layout: a rail and a detail column that stack at 920 px. */
