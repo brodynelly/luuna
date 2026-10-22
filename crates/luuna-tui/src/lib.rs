@@ -4,3 +4,4 @@ pub mod protocol;
 pub mod terminal;
 pub mod theme;
 pub mod ui;
+pub mod views;
