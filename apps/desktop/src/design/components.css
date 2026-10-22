@@ -11,6 +11,10 @@
 [data-tone="neutral"] { --tone-fg: var(--tone-neutral-fg); --tone-bg: var(--tone-neutral-bg); --tone-border: var(--tone-neutral-border); --tone-mark: var(--tone-neutral-mark); }
 [data-tone="interrupted"] { --tone-fg: var(--tone-interrupted-fg); --tone-bg: var(--tone-interrupted-bg); --tone-border: var(--tone-interrupted-border); --tone-mark: var(--tone-interrupted-mark); }
 
+/* Danger button: reads the danger tone; the other buttons are in controls.css. */
+button.danger { min-height: var(--control-height-sm); padding: 0 var(--control-pad-x-sm); border-color: var(--tone-danger-border); background: var(--tone-danger-bg); color: var(--tone-danger-fg); font-size: var(--text-xs); }
+button.danger:hover:not(:disabled) { border-color: var(--tone-danger-mark); background: var(--tone-danger-bg); }
+
 /* Skip link: the first Tab stop, visible only while focused. */
 .skip-link {
   position: absolute;
@@ -35,16 +39,6 @@
 .meta { margin: 0; color: var(--color-text-muted); font-size: var(--text-xs); font-variant-numeric: tabular-nums; overflow-wrap: anywhere; }
 .meta code { color: var(--color-text); }
 
-/* Button variants. */
-button.primary { border-color: var(--color-accent); background: var(--color-accent); color: var(--color-on-accent); }
-button.primary:hover:not(:disabled) { border-color: var(--color-accent-hover); background: var(--color-accent-hover); }
-button.danger { min-height: var(--control-height-sm); padding: 0 var(--control-pad-x-sm); border-color: var(--tone-danger-border); background: var(--tone-danger-bg); color: var(--tone-danger-fg); font-size: var(--text-xs); }
-button.danger:hover:not(:disabled) { border-color: var(--tone-danger-mark); background: var(--tone-danger-bg); }
-button.text-button { min-height: var(--control-height-sm); padding: 0 var(--space-1); border-color: transparent; background: transparent; color: var(--color-accent); font-size: var(--text-xs); }
-button.text-button:hover:not(:disabled) { background: transparent; text-decoration: underline; }
-button.primary:disabled, button.danger:disabled, button.text-button:disabled { border-color: var(--color-border); background: transparent; color: var(--color-text-disabled); }
-button.text-button:disabled { border-color: transparent; background: transparent; }
-
 /* Panel and subpanel. A panel is a section or aside labelled by its heading. */
 /* Spacing model: a panel or subpanel is a grid that spaces its children with gap; components
    carry no outer margin. A heading is followed by its description at --space-2. */
@@ -55,7 +49,7 @@ button.text-button:disabled { border-color: transparent; background: transparent
 :is(.panel, .subpanel) > .panel-heading + .scope { margin-top: calc(var(--space-2) - var(--space-4)); }
 .subpanel > .panel-heading + .scope { margin-top: calc(var(--space-2) - var(--space-3)); }
 /* Tray: a raised group of related settings inside a panel. */
-.tray { display: grid; grid-template-columns: minmax(0, 1fr); gap: var(--space-3); min-width: 0; padding: var(--space-4); border: var(--border-width) solid var(--color-border); border-radius: var(--radius-md); background: var(--color-surface-raised); }
+.tray { display: grid; grid-template-columns: minmax(0, 1fr); gap: var(--space-3); min-width: 0; padding: var(--space-4); border: var(--border-width) solid var(--color-border); border-radius: var(--radius-card); background: var(--color-surface-raised); box-shadow: var(--shadow-card); }
 
 /* Status badge (.state): the runtime's value as text; data-tone adds colour and a shape. */
 .state {
@@ -71,6 +65,7 @@ button.text-button:disabled { border-color: transparent; background: transparent
   font-size: var(--text-2xs);
   font-weight: var(--weight-medium);
   line-height: var(--leading);
+  font-variant-numeric: tabular-nums;
   overflow-wrap: anywhere;
 }
 .state[data-tone] { border-color: var(--tone-border); background: var(--tone-bg); color: var(--tone-fg); }
@@ -82,6 +77,11 @@ button.text-button:disabled { border-color: transparent; background: transparent
 .state[data-tone="neutral"]::before, .tone-mark[data-tone="neutral"] { height: var(--mark-stroke); }
 /* Interrupted is a pause, not a spinner: two bars, so it never reads as work in progress. */
 .state[data-tone="interrupted"]::before, .tone-mark[data-tone="interrupted"] { border: 0; border-inline: var(--mark-stroke) solid var(--tone-mark); border-radius: 0; background: transparent; }
+/* Live pulse: a ring over the active tone's mark, CSS only. Evidence never pulses (pre[data-live]::after stays steady). */
+.state[data-tone="active"] { position: relative; }
+.state[data-tone="active"]::after { content: ""; position: absolute; top: 50%; left: calc(var(--border-width) + var(--space-1-5)); width: var(--mark-size); height: var(--mark-size); margin-top: calc(var(--mark-size) / -2); border: var(--mark-stroke) solid var(--tone-mark); border-radius: var(--radius-full); pointer-events: none; animation: pulse-ring var(--duration-pulse) var(--ease-out) infinite; }
+/* The completion check draws in the success mark (the drawing is in motion.css). */
+.check-draw { color: var(--tone-success-mark); }
 .tag { display: inline-flex; align-items: center; padding: var(--space-0-5) var(--space-1-5); border: var(--border-width) solid var(--color-border); border-radius: var(--radius-sm); color: var(--color-text-muted); font-size: var(--text-2xs); font-weight: var(--weight-medium); overflow-wrap: anywhere; }
 
 /* Facts: a definition list of exact, full identities. */
@@ -93,10 +93,16 @@ button.text-button:disabled { border-color: transparent; background: transparent
 /* Records: bordered rows in a list (baselines, recipes, tickets, checks, findings). */
 .record-list { display: grid; gap: var(--space-2); min-width: 0; margin: 0; padding: 0; list-style: none; }
 .record-list:empty { display: none; }
-.record { display: grid; grid-template-columns: minmax(0, 1fr); gap: var(--space-1-5); min-width: 0; padding: var(--space-3); border: var(--border-width) solid var(--color-border); border-radius: var(--radius-md); background: var(--color-surface-raised); font-size: var(--text-xs); }
+.record { display: grid; grid-template-columns: minmax(0, 1fr); gap: var(--space-1-5); min-width: 0; padding: var(--space-3); border: var(--border-width) solid var(--color-border); border-radius: var(--radius-card); background: var(--color-surface-raised); font-size: var(--text-xs); }
 .record .record { background: var(--color-surface); }
 .record > .state { justify-self: start; }
 .record[data-tone] { border-left: var(--rule-width) solid var(--tone-mark); }
+/* Rows variant: no card chrome, hairline dividers, a row-height rhythm and a hover wash. */
+.record-list.record-rows { gap: 0; }
+.record-list.record-rows > .record { min-height: var(--row-height); padding: var(--space-2) var(--space-3); border: 0; border-bottom: var(--border-width) solid var(--color-border); border-radius: 0; background: transparent; font-variant-numeric: tabular-nums; transition: background-color var(--duration-micro) var(--ease-standard); }
+.record-list.record-rows > .record:hover { background: var(--color-surface-raised); }
+.record-list.record-rows > .record:last-child { border-bottom: 0; }
+.record-list.record-rows > .record[data-tone] { box-shadow: inset var(--rule-width) 0 0 var(--tone-mark); }
 .record-headed { grid-template-columns: auto minmax(0, 1fr); align-items: baseline; gap: var(--space-1-5) var(--space-2); }
 .record-headed > :nth-child(n + 3) { grid-column: 1 / -1; }
 
@@ -116,9 +122,9 @@ button.text-button:disabled { border-color: transparent; background: transparent
 .field-row > small { flex-basis: 100%; }
 
 /* Selectable card: a full-width toggle button in a list (runs, projects). */
-button.run-card { display: grid; justify-content: stretch; justify-items: start; gap: var(--space-2); width: 100%; min-height: 0; padding: var(--space-3) var(--space-2); border-color: transparent; background: transparent; color: var(--color-text); font-size: var(--text-xs); font-weight: var(--weight-regular); text-align: left; }
+button.run-card { display: grid; justify-content: stretch; justify-items: start; gap: var(--space-2); width: 100%; min-height: 0; padding: var(--space-3) var(--space-2); border-color: transparent; background: transparent; color: var(--color-text); font-size: var(--text-xs); font-weight: var(--weight-regular); text-align: left; border-radius: var(--radius-button); box-shadow: none; }
 button.run-card:hover:not(:disabled) { background: var(--color-surface-raised); }
-button.run-card.selected, button.run-card[aria-pressed="true"] { border-color: var(--color-selected-border); background: var(--color-selected); box-shadow: inset var(--rule-width) 0 0 var(--color-accent); }
+button.run-card.selected, button.run-card[aria-pressed="true"] { border-color: var(--color-selected-border); background: var(--color-accent-tint); box-shadow: inset var(--rule-width) 0 0 var(--color-accent); }
 .run-prompt { display: -webkit-box; overflow: hidden; -webkit-box-orient: vertical; -webkit-line-clamp: 2; color: var(--color-text); overflow-wrap: anywhere; }
 .run-meta { display: flex; flex-wrap: wrap; align-items: center; gap: var(--space-1-5) var(--space-2); color: var(--color-text-subtle); font-size: var(--text-2xs); font-variant-numeric: tabular-nums; }
 
@@ -131,11 +137,11 @@ button.run-card.selected, button.run-card[aria-pressed="true"] { border-color: v
 .failure-note + .recovery-note { margin-top: var(--space-1); }
 :is(.subpanel, .record, .panel) > .failure-note + .recovery-note { margin-top: calc(var(--space-1) - var(--space-3)); }
 .panel > .failure-note + .recovery-note { margin-top: calc(var(--space-1) - var(--space-4)); }
-.callout { margin: 0; padding: var(--space-2) var(--space-3); border: var(--border-width) solid var(--color-border); border-left: var(--rule-width) solid var(--color-border-control); border-radius: var(--radius-md); background: var(--color-surface-raised); color: var(--color-text); font-size: var(--text-xs); overflow-wrap: anywhere; }
+.callout { margin: 0; padding: var(--space-2) var(--space-3); border: var(--border-width) solid var(--color-border); border-left: var(--rule-width) solid var(--color-border-control); border-radius: var(--radius-card); background: var(--color-surface-raised); color: var(--color-text); font-size: var(--text-xs); overflow-wrap: anywhere; }
 .callout[data-tone] { border-color: var(--tone-border); border-left-color: var(--tone-mark); background: var(--tone-bg); color: var(--tone-fg); }
 
 /* Alert banner: a refused action or failed load; always dismissible. */
-.error { display: flex; align-items: center; justify-content: space-between; gap: var(--space-4); margin: 0; padding: var(--space-2) var(--space-2) var(--space-2) var(--space-4); border: var(--border-width) solid var(--tone-danger-border); border-left: var(--rule-width) solid var(--tone-danger-mark); border-radius: var(--radius-md); background: var(--tone-danger-bg); color: var(--tone-danger-fg); font-size: var(--text-xs); overflow-wrap: anywhere; }
+.error { display: flex; align-items: center; justify-content: space-between; gap: var(--space-4); margin: 0; padding: var(--space-2) var(--space-2) var(--space-2) var(--space-4); border: var(--border-width) solid var(--tone-danger-border); border-left: var(--rule-width) solid var(--tone-danger-mark); border-radius: var(--radius-card); background: var(--tone-danger-bg); color: var(--tone-danger-fg); font-size: var(--text-xs); overflow-wrap: anywhere; }
 .error button.text-button { flex: none; color: inherit; text-decoration: underline; }
 
 /* Disclosure: a CSS caret, never text, so it adds nothing to the accessible name. */
@@ -159,10 +165,11 @@ ol.events:focus-visible, pre[aria-label]:focus-visible { outline-offset: var(--f
 
 /* Event list. */
 ol.events { margin: 0; padding: 0; list-style: none; }
-ol.events > li { border-bottom: var(--border-width) solid var(--color-border); }
+ol.events > li { border-bottom: var(--border-width) solid var(--color-border); transition: background-color var(--duration-micro) var(--ease-standard); }
+ol.events > li:hover { background: var(--color-surface-raised); }
 ol.events > li:last-child { border-bottom: 0; }
 ol.events summary { margin-inline: 0; padding: var(--space-2) var(--space-3); border-radius: 0; font-family: var(--font-mono); }
-ol.events summary:hover { background: var(--color-surface); }
+ol.events summary:hover { background: transparent; }
 ol.events details > pre { margin: 0 var(--space-3) var(--space-3); border: var(--border-width) solid var(--color-border); background: var(--color-surface); }
 .event-number { min-width: var(--number-width); color: var(--color-text-subtle); font-variant-numeric: tabular-nums; text-align: right; }
 ol.events summary time { margin-left: auto; color: var(--color-text-subtle); font-family: var(--font-sans); font-size: var(--text-2xs); font-variant-numeric: tabular-nums; }
@@ -178,7 +185,13 @@ ol.events summary time { margin-left: auto; color: var(--color-text-subtle); fon
   .facts > div { grid-template-columns: minmax(0, 1fr); gap: var(--space-0-5); }
 }
 
+@media (prefers-reduced-motion: reduce) {
+  .state[data-tone="active"]::after, .notice { animation: none; }
+  .state[data-tone="active"]::after { display: none; }
+}
+
 @media (forced-colors: active) {
+  .state[data-tone="active"]::after { animation: none; display: none; }
   .state[data-tone]::before, .tone-mark[data-tone] { forced-color-adjust: none; background: CanvasText; border-color: CanvasText; }
   .state[data-tone="active"]::before, .state[data-tone="interrupted"]::before, .tone-mark[data-tone="active"], .tone-mark[data-tone="interrupted"] { background: transparent; }
   button.run-card[aria-pressed="true"] { forced-color-adjust: none; border-color: Highlight; background: SelectedItem; color: SelectedItemText; }
@@ -195,14 +208,9 @@ ol.events summary time { margin-left: auto; color: var(--color-text-subtle); fon
 .empty-state.empty-box { justify-items: center; }
 .empty-state > .empty-title { color: var(--color-text); font-size: var(--text-md); font-weight: var(--weight-medium); }
 
-/* Loading: placeholder rows in the content's shape, so something shows at once. No motion. */
-.skeleton { display: grid; gap: var(--space-2); }
-.skeleton-row { display: block; height: var(--skeleton-height); border-radius: var(--radius-md); background: var(--color-surface-raised); border: var(--border-width) solid var(--color-border); }
-.skeleton-row:nth-child(3n) { width: var(--skeleton-short); }
-
 /* Text only assistive technology reads. */
 .visually-hidden { position: absolute; width: var(--border-width); height: var(--border-width); overflow: hidden; clip-path: inset(50%); white-space: nowrap; }
 
 /* Notice: confirms a completed action at the top of the content; stays until dismissed or replaced. */
 .notice-region:empty { display: none; }
-.notice { display: flex; align-items: center; justify-content: space-between; gap: var(--space-4); margin: 0; padding: var(--space-2) var(--space-2) var(--space-2) var(--space-4); border: var(--border-width) solid var(--color-selected-border); border-left: var(--rule-width) solid var(--color-accent); border-radius: var(--radius-md); background: var(--color-selected); color: var(--color-text); font-size: var(--text-xs); }
+.notice { display: flex; align-items: center; justify-content: space-between; gap: var(--space-4); margin: 0; padding: var(--space-2) var(--space-2) var(--space-2) var(--space-4); border: var(--border-width) solid var(--color-selected-border); border-left: var(--rule-width) solid var(--color-accent); border-radius: var(--radius-card); background: var(--color-accent-tint); color: var(--color-text); font-size: var(--text-xs); box-shadow: var(--shadow-popover); animation: toast-in var(--duration-large) var(--ease-out) backwards; }
