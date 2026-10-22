@@ -1,0 +1,884 @@
+{
+  "$schema": "./capability-catalog.schema.json",
+  "schema_version": "0.1",
+  "description": "Every product action the Luuna clients expose, once. Each entry names the runtime route, the @luuna/api-client method, the desktop control (its data-capability attribute value) and the TUI command, plus the failure classes (packages/api-client/src/failures.ts) the action can meet. scripts/check-contracts.mjs validates it against the runtime's routes and the client; the desktop and TUI parity tests read it (R02, A33).",
+  "capabilities": [
+    {
+      "id": "health",
+      "title": "Check the runtime's health and build identity",
+      "method": "GET",
+      "route": "/api/v1/health",
+      "client_method": "health",
+      "desktop": "health",
+      "tui": "health",
+      "failure_modes": [
+        "unreachable",
+        "aborted",
+        "rejected_token",
+        "internal"
+      ]
+    },
+    {
+      "id": "projects.list",
+      "title": "List registered projects",
+      "method": "GET",
+      "route": "/api/v1/projects",
+      "client_method": "listProjects",
+      "desktop": "projects.list",
+      "tui": "projects",
+      "failure_modes": [
+        "unreachable",
+        "aborted",
+        "rejected_token",
+        "internal"
+      ]
+    },
+    {
+      "id": "projects.register",
+      "title": "Register an existing repository as a project",
+      "method": "POST",
+      "route": "/api/v1/projects",
+      "client_method": "registerProject",
+      "desktop": "projects.register",
+      "tui": "register",
+      "failure_modes": [
+        "unreachable",
+        "aborted",
+        "rejected_token",
+        "refused",
+        "shutting_down",
+        "internal"
+      ]
+    },
+    {
+      "id": "projects.scaffold.propose",
+      "title": "Propose a new project scaffold for a stack profile",
+      "method": "POST",
+      "route": "/api/v1/projects/scaffold/propose",
+      "client_method": "proposeScaffold",
+      "desktop": "projects.scaffold.propose",
+      "tui": "propose-scaffold",
+      "failure_modes": [
+        "unreachable",
+        "aborted",
+        "rejected_token",
+        "not_found",
+        "refused",
+        "shutting_down",
+        "internal",
+        "client"
+      ]
+    },
+    {
+      "id": "projects.scaffold",
+      "title": "Confirm a scaffold proposal by exact hash: write files, commit, run the real baseline, register",
+      "method": "POST",
+      "route": "/api/v1/projects/scaffold",
+      "client_method": "scaffold",
+      "desktop": "projects.scaffold",
+      "tui": "scaffold",
+      "failure_modes": [
+        "unreachable",
+        "aborted",
+        "rejected_token",
+        "not_found",
+        "refused",
+        "shutting_down",
+        "internal",
+        "client"
+      ],
+      "acknowledgment": "the proposal hash"
+    },
+    {
+      "id": "projects.show",
+      "title": "Show a project, its registrations, manifest and discovery",
+      "method": "GET",
+      "route": "/api/v1/projects/{id}",
+      "client_method": "project",
+      "desktop": "projects.show",
+      "tui": "project",
+      "failure_modes": [
+        "unreachable",
+        "aborted",
+        "rejected_token",
+        "not_found",
+        "internal"
+      ]
+    },
+    {
+      "id": "projects.discover",
+      "title": "Propose a manifest from read-only discovery",
+      "method": "POST",
+      "route": "/api/v1/projects/{id}/discover",
+      "client_method": "discover",
+      "desktop": "projects.discover",
+      "tui": "discover",
+      "failure_modes": [
+        "unreachable",
+        "aborted",
+        "rejected_token",
+        "not_found",
+        "refused",
+        "shutting_down",
+        "internal"
+      ]
+    },
+    {
+      "id": "projects.manifest.confirm",
+      "title": "Confirm an exact manifest revision",
+      "method": "PUT",
+      "route": "/api/v1/projects/{id}/manifest",
+      "client_method": "confirmManifest",
+      "desktop": "projects.manifest.confirm",
+      "tui": "confirm",
+      "failure_modes": [
+        "unreachable",
+        "aborted",
+        "rejected_token",
+        "not_found",
+        "refused",
+        "shutting_down",
+        "internal",
+        "client"
+      ]
+    },
+    {
+      "id": "projects.repositories.rebind",
+      "title": "Rebind a moved or re-identified checkout",
+      "method": "POST",
+      "route": "/api/v1/projects/{id}/repositories/{repository_id}/rebind",
+      "client_method": "rebindRepository",
+      "desktop": "projects.repositories.rebind",
+      "tui": "rebind",
+      "failure_modes": [
+        "unreachable",
+        "aborted",
+        "rejected_token",
+        "not_found",
+        "refused",
+        "shutting_down",
+        "internal"
+      ]
+    },
+    {
+      "id": "projects.events",
+      "title": "Replay the project's durable event record",
+      "method": "GET",
+      "route": "/api/v1/projects/{id}/events",
+      "client_method": "projectEvents",
+      "desktop": "projects.events",
+      "tui": "project-events",
+      "failure_modes": [
+        "unreachable",
+        "aborted",
+        "rejected_token",
+        "not_found",
+        "internal",
+        "client"
+      ]
+    },
+    {
+      "id": "projects.export",
+      "title": "Export a project without user memory, credentials or host paths",
+      "method": "GET",
+      "route": "/api/v1/projects/{id}/export",
+      "client_method": "exportProject",
+      "desktop": "projects.export",
+      "tui": "export",
+      "failure_modes": [
+        "unreachable",
+        "aborted",
+        "rejected_token",
+        "not_found",
+        "refused",
+        "shutting_down",
+        "internal",
+        "client"
+      ]
+    },
+    {
+      "id": "baselines.start",
+      "title": "Run the confirmed required checks as a baseline",
+      "method": "POST",
+      "route": "/api/v1/projects/{id}/baselines",
+      "client_method": "startBaseline",
+      "desktop": "baselines.start",
+      "tui": "baseline",
+      "failure_modes": [
+        "unreachable",
+        "aborted",
+        "rejected_token",
+        "not_found",
+        "refused",
+        "shutting_down",
+        "internal",
+        "capacity"
+      ]
+    },
+    {
+      "id": "baselines.list",
+      "title": "List recorded baselines with their evidence",
+      "method": "GET",
+      "route": "/api/v1/projects/{id}/baselines",
+      "client_method": "listBaselines",
+      "desktop": "baselines.list",
+      "tui": "baselines",
+      "failure_modes": [
+        "unreachable",
+        "aborted",
+        "rejected_token",
+        "not_found",
+        "internal"
+      ]
+    },
+    {
+      "id": "components.status",
+      "title": "Show whether project components are enabled",
+      "method": "GET",
+      "route": "/api/v1/projects/{id}/components",
+      "client_method": "components",
+      "desktop": "components.status",
+      "tui": "components",
+      "failure_modes": [
+        "unreachable",
+        "aborted",
+        "rejected_token",
+        "not_found",
+        "internal"
+      ]
+    },
+    {
+      "id": "components.enable",
+      "title": "Enable Missions, Atlas and Beacon for a project",
+      "method": "POST",
+      "route": "/api/v1/projects/{id}/components",
+      "client_method": "enableComponents",
+      "desktop": "components.enable",
+      "tui": "enable-components",
+      "failure_modes": [
+        "unreachable",
+        "aborted",
+        "rejected_token",
+        "not_found",
+        "refused",
+        "shutting_down",
+        "internal"
+      ]
+    },
+    {
+      "id": "memory.list",
+      "title": "List Atlas memory (private user memory only on request)",
+      "method": "GET",
+      "route": "/api/v1/projects/{id}/memory",
+      "client_method": "listMemory",
+      "desktop": "memory.list",
+      "tui": "memory",
+      "failure_modes": [
+        "unreachable",
+        "aborted",
+        "rejected_token",
+        "not_found",
+        "internal"
+      ]
+    },
+    {
+      "id": "memory.create",
+      "title": "Record an Atlas memory with scope and provenance",
+      "method": "POST",
+      "route": "/api/v1/projects/{id}/memory",
+      "client_method": "createMemory",
+      "desktop": "memory.create",
+      "tui": "remember",
+      "failure_modes": [
+        "unreachable",
+        "aborted",
+        "rejected_token",
+        "not_found",
+        "refused",
+        "shutting_down",
+        "internal",
+        "client"
+      ]
+    },
+    {
+      "id": "memory.delete",
+      "title": "Delete an Atlas memory by its exact content hash",
+      "method": "DELETE",
+      "route": "/api/v1/projects/{id}/memory/{memory_id}",
+      "client_method": "deleteMemory",
+      "desktop": "memory.delete",
+      "tui": "forget",
+      "failure_modes": [
+        "unreachable",
+        "aborted",
+        "rejected_token",
+        "not_found",
+        "refused",
+        "shutting_down",
+        "internal",
+        "client"
+      ]
+    },
+    {
+      "id": "memory.promote",
+      "title": "Promote an Atlas memory one scope step (process to project, project to user) by its exact hash",
+      "method": "POST",
+      "route": "/api/v1/projects/{id}/memory/{memory_id}/promote",
+      "client_method": "promoteMemory",
+      "desktop": "memory.promote",
+      "tui": "promote",
+      "failure_modes": [
+        "unreachable",
+        "aborted",
+        "rejected_token",
+        "not_found",
+        "refused",
+        "shutting_down",
+        "internal",
+        "client"
+      ]
+    },
+    {
+      "id": "prompts.list",
+      "title": "List Beacon prompts and versions",
+      "method": "GET",
+      "route": "/api/v1/projects/{id}/prompts",
+      "client_method": "listPrompts",
+      "desktop": "prompts.list",
+      "tui": "prompts",
+      "failure_modes": [
+        "unreachable",
+        "aborted",
+        "rejected_token",
+        "not_found",
+        "internal"
+      ]
+    },
+    {
+      "id": "prompts.create",
+      "title": "Save a Beacon prompt version",
+      "method": "POST",
+      "route": "/api/v1/projects/{id}/prompts",
+      "client_method": "createPrompt",
+      "desktop": "prompts.create",
+      "tui": "save-prompt",
+      "failure_modes": [
+        "unreachable",
+        "aborted",
+        "rejected_token",
+        "not_found",
+        "refused",
+        "shutting_down",
+        "internal",
+        "client"
+      ]
+    },
+    {
+      "id": "prompts.render",
+      "title": "Render an exact Beacon prompt version",
+      "method": "GET",
+      "route": "/api/v1/projects/{id}/prompts/{name}/render",
+      "client_method": "renderPrompt",
+      "desktop": "prompts.render",
+      "tui": "render-prompt",
+      "failure_modes": [
+        "unreachable",
+        "aborted",
+        "rejected_token",
+        "not_found",
+        "internal",
+        "client"
+      ]
+    },
+    {
+      "id": "tickets.create",
+      "title": "Create a ticket through the project's authoritative source",
+      "method": "POST",
+      "route": "/api/v1/projects/{id}/tickets",
+      "client_method": "createTicket",
+      "desktop": "tickets.create",
+      "tui": "create-ticket",
+      "failure_modes": [
+        "unreachable",
+        "aborted",
+        "rejected_token",
+        "not_found",
+        "refused",
+        "shutting_down",
+        "internal",
+        "client"
+      ]
+    },
+    {
+      "id": "tickets.list",
+      "title": "List a project's tickets",
+      "method": "GET",
+      "route": "/api/v1/projects/{id}/tickets",
+      "client_method": "listTickets",
+      "desktop": "tickets.list",
+      "tui": "tickets",
+      "failure_modes": [
+        "unreachable",
+        "aborted",
+        "rejected_token",
+        "not_found",
+        "internal"
+      ]
+    },
+    {
+      "id": "tickets.show",
+      "title": "Show one ticket",
+      "method": "GET",
+      "route": "/api/v1/tickets/{id}",
+      "client_method": "ticket",
+      "desktop": "tickets.show",
+      "tui": "show-ticket",
+      "failure_modes": [
+        "unreachable",
+        "aborted",
+        "rejected_token",
+        "not_found",
+        "internal"
+      ]
+    },
+    {
+      "id": "tickets.source",
+      "title": "Show a ticket's source identity and reconciliation state",
+      "method": "GET",
+      "route": "/api/v1/tickets/{id}/source",
+      "client_method": "ticketSource",
+      "desktop": "tickets.source",
+      "tui": "ticket-source",
+      "failure_modes": [
+        "unreachable",
+        "aborted",
+        "rejected_token",
+        "not_found",
+        "internal"
+      ]
+    },
+    {
+      "id": "tickets.reconcile",
+      "title": "Reconcile a ticket edited outside Luuna",
+      "method": "POST",
+      "route": "/api/v1/tickets/{id}/reconcile",
+      "client_method": "reconcileTicket",
+      "desktop": "tickets.reconcile",
+      "tui": "reconcile-ticket",
+      "failure_modes": [
+        "unreachable",
+        "aborted",
+        "rejected_token",
+        "not_found",
+        "refused",
+        "shutting_down",
+        "internal",
+        "client"
+      ]
+    },
+    {
+      "id": "plans.create",
+      "title": "Record the next immutable plan revision",
+      "method": "POST",
+      "route": "/api/v1/tickets/{id}/plans",
+      "client_method": "createPlan",
+      "desktop": "plans.create",
+      "tui": "plan",
+      "failure_modes": [
+        "unreachable",
+        "aborted",
+        "rejected_token",
+        "not_found",
+        "refused",
+        "shutting_down",
+        "internal",
+        "client"
+      ]
+    },
+    {
+      "id": "plans.list",
+      "title": "List a ticket's plan revisions",
+      "method": "GET",
+      "route": "/api/v1/tickets/{id}/plans",
+      "client_method": "listPlans",
+      "desktop": "plans.list",
+      "tui": "plans",
+      "failure_modes": [
+        "unreachable",
+        "aborted",
+        "rejected_token",
+        "not_found",
+        "internal"
+      ]
+    },
+    {
+      "id": "plans.show",
+      "title": "Show one plan revision with its hash",
+      "method": "GET",
+      "route": "/api/v1/plans/{id}",
+      "client_method": "plan",
+      "desktop": "plans.show",
+      "tui": "show-plan",
+      "failure_modes": [
+        "unreachable",
+        "aborted",
+        "rejected_token",
+        "not_found",
+        "internal"
+      ],
+      "desktop_note": "The desktop shows every revision from the ticket's plan list (plans.list); the plan route itself is read on demand by the TUI."
+    },
+    {
+      "id": "plans.approve",
+      "title": "Approve exactly one plan revision by its full hash",
+      "method": "POST",
+      "route": "/api/v1/plans/{id}/approvals",
+      "client_method": "approvePlan",
+      "desktop": "plans.approve",
+      "tui": "approve",
+      "failure_modes": [
+        "unreachable",
+        "aborted",
+        "rejected_token",
+        "not_found",
+        "refused",
+        "shutting_down",
+        "internal",
+        "client"
+      ],
+      "acknowledgment": "The developer acknowledges the complete plan hash: the desktop checkbox stands for the hash shown beside it; the TUI's typed or --acknowledge-hash value must equal the plan's hash exactly."
+    },
+    {
+      "id": "runs.list",
+      "title": "List runs, newest first",
+      "method": "GET",
+      "route": "/api/v1/runs",
+      "client_method": "listRuns",
+      "desktop": "runs.list",
+      "tui": "runs",
+      "failure_modes": [
+        "unreachable",
+        "aborted",
+        "rejected_token",
+        "internal",
+        "client"
+      ]
+    },
+    {
+      "id": "runs.start",
+      "title": "Start an isolated Pi session without repository tools",
+      "method": "POST",
+      "route": "/api/v1/runs",
+      "client_method": "startRun",
+      "desktop": "runs.start",
+      "tui": "start-session",
+      "failure_modes": [
+        "unreachable",
+        "aborted",
+        "rejected_token",
+        "refused",
+        "shutting_down",
+        "internal",
+        "capacity"
+      ]
+    },
+    {
+      "id": "runs.show",
+      "title": "Show one run's authoritative state",
+      "method": "GET",
+      "route": "/api/v1/runs/{id}",
+      "client_method": "run",
+      "desktop": "runs.show",
+      "tui": "run",
+      "failure_modes": [
+        "unreachable",
+        "aborted",
+        "rejected_token",
+        "not_found",
+        "internal"
+      ]
+    },
+    {
+      "id": "runs.events",
+      "title": "Replay a run's durable events after a cursor",
+      "method": "GET",
+      "route": "/api/v1/runs/{id}/events",
+      "client_method": "events",
+      "desktop": "runs.events",
+      "tui": "events",
+      "failure_modes": [
+        "unreachable",
+        "aborted",
+        "rejected_token",
+        "not_found",
+        "internal",
+        "client"
+      ]
+    },
+    {
+      "id": "runs.stream",
+      "title": "Follow a run's events live, resuming from the last sequence",
+      "method": "GET",
+      "route": "/api/v1/runs/{id}/stream",
+      "client_method": "followEvents",
+      "desktop": "runs.stream",
+      "tui": "follow",
+      "failure_modes": [
+        "unreachable",
+        "aborted",
+        "rejected_token",
+        "not_found",
+        "internal",
+        "capacity"
+      ],
+      "desktop_note": "The desktop follows the same durable record by authenticated cursor replay of runs.events; the TUI follows the SSE stream with Last-Event-ID resumption. Both resume from the last received sequence after an outage."
+    },
+    {
+      "id": "runs.cancel",
+      "title": "Cancel a run or workflow",
+      "method": "POST",
+      "route": "/api/v1/runs/{id}/cancel",
+      "client_method": "cancelRun",
+      "desktop": "runs.cancel",
+      "tui": "cancel",
+      "failure_modes": [
+        "unreachable",
+        "aborted",
+        "rejected_token",
+        "not_found",
+        "refused",
+        "shutting_down",
+        "internal"
+      ]
+    },
+    {
+      "id": "runs.implement",
+      "title": "Start the approved workflow's scoped writer",
+      "method": "POST",
+      "route": "/api/v1/runs/{id}/implement",
+      "client_method": "implement",
+      "desktop": "runs.implement",
+      "tui": "implement",
+      "failure_modes": [
+        "unreachable",
+        "aborted",
+        "rejected_token",
+        "not_found",
+        "refused",
+        "shutting_down",
+        "internal"
+      ]
+    },
+    {
+      "id": "runs.candidate",
+      "title": "Show the candidate, its evidence and the runtime's decisions",
+      "method": "GET",
+      "route": "/api/v1/runs/{id}/candidate",
+      "client_method": "candidate",
+      "desktop": "runs.candidate",
+      "tui": "candidate",
+      "failure_modes": [
+        "unreachable",
+        "aborted",
+        "rejected_token",
+        "not_found",
+        "internal"
+      ]
+    },
+    {
+      "id": "runs.diff",
+      "title": "Inspect the candidate diff bound to its hash",
+      "method": "GET",
+      "route": "/api/v1/runs/{id}/diff",
+      "client_method": "candidateDiff",
+      "desktop": "runs.diff",
+      "tui": "diff",
+      "failure_modes": [
+        "unreachable",
+        "aborted",
+        "rejected_token",
+        "not_found",
+        "internal"
+      ]
+    },
+    {
+      "id": "runs.validate",
+      "title": "Validate (or re-validate) the exact candidate and start an independent review",
+      "method": "POST",
+      "route": "/api/v1/runs/{id}/validate",
+      "client_method": "validateCandidate",
+      "desktop": "runs.validate",
+      "tui": "validate",
+      "failure_modes": [
+        "unreachable",
+        "aborted",
+        "rejected_token",
+        "not_found",
+        "refused",
+        "shutting_down",
+        "internal",
+        "client"
+      ]
+    },
+    {
+      "id": "runs.repair",
+      "title": "Request a bounded writer repair under the existing approval",
+      "method": "POST",
+      "route": "/api/v1/runs/{id}/repair",
+      "client_method": "repairCandidate",
+      "desktop": "runs.repair",
+      "tui": "repair",
+      "failure_modes": [
+        "unreachable",
+        "aborted",
+        "rejected_token",
+        "not_found",
+        "refused",
+        "shutting_down",
+        "internal",
+        "client"
+      ]
+    },
+    {
+      "id": "runs.publish",
+      "title": "Publish a reviewed candidate: push exact commits and open linked pull requests once",
+      "method": "POST",
+      "route": "/api/v1/runs/{id}/publish",
+      "client_method": "publish",
+      "desktop": "runs.publish",
+      "tui": "publish",
+      "failure_modes": [
+        "unreachable",
+        "aborted",
+        "rejected_token",
+        "not_found",
+        "refused",
+        "shutting_down",
+        "internal",
+        "client"
+      ],
+      "acknowledgment": "the candidate hash"
+    },
+    {
+      "id": "runs.publication",
+      "title": "Show the publication record with CI and merge observation",
+      "method": "GET",
+      "route": "/api/v1/runs/{id}/publication",
+      "client_method": "publication",
+      "desktop": "runs.publication",
+      "tui": "publication",
+      "failure_modes": [
+        "unreachable",
+        "aborted",
+        "rejected_token",
+        "not_found",
+        "refused",
+        "shutting_down",
+        "internal",
+        "client"
+      ]
+    },
+    {
+      "id": "runs.publication.reconcile",
+      "title": "Reconcile a partial publication, retrying only missing steps",
+      "method": "POST",
+      "route": "/api/v1/runs/{id}/publication/reconcile",
+      "client_method": "reconcilePublication",
+      "desktop": "runs.publication.reconcile",
+      "tui": "reconcile-publication",
+      "failure_modes": [
+        "unreachable",
+        "aborted",
+        "rejected_token",
+        "not_found",
+        "refused",
+        "shutting_down",
+        "internal",
+        "client"
+      ]
+    },
+    {
+      "id": "runs.worktrees",
+      "title": "List the workflow's Luuna-owned worktree leases",
+      "method": "GET",
+      "route": "/api/v1/runs/{id}/worktrees",
+      "client_method": "worktrees",
+      "desktop": "runs.worktrees",
+      "tui": "worktrees",
+      "failure_modes": [
+        "unreachable",
+        "aborted",
+        "rejected_token",
+        "not_found",
+        "internal"
+      ]
+    },
+    {
+      "id": "runs.attempts",
+      "title": "List the workflow's writer attempts",
+      "method": "GET",
+      "route": "/api/v1/runs/{id}/attempts",
+      "client_method": "attempts",
+      "desktop": "runs.attempts",
+      "tui": "attempts",
+      "failure_modes": [
+        "unreachable",
+        "aborted",
+        "rejected_token",
+        "not_found",
+        "internal"
+      ]
+    },
+    {
+      "id": "runs.tasks",
+      "title": "List the workflow's task graph: per-task state, attempt and exact candidate commit",
+      "method": "GET",
+      "route": "/api/v1/runs/{id}/tasks",
+      "client_method": "tasks",
+      "desktop": "runs.tasks",
+      "tui": "tasks",
+      "failure_modes": [
+        "unreachable",
+        "aborted",
+        "rejected_token",
+        "not_found",
+        "refused",
+        "shutting_down",
+        "internal",
+        "client"
+      ]
+    },
+    {
+      "id": "artifacts.read",
+      "title": "Read a private check log by record identity",
+      "method": "GET",
+      "route": "/api/v1/runs/{id}/artifacts/{artifact_id}",
+      "client_method": "artifact",
+      "desktop": "artifacts.read",
+      "tui": "artifact",
+      "failure_modes": [
+        "unreachable",
+        "aborted",
+        "rejected_token",
+        "not_found",
+        "internal",
+        "client"
+      ]
+    },
+    {
+      "id": "shutdown",
+      "title": "Stop the runtime in an orderly way",
+      "method": "POST",
+      "route": "/api/v1/shutdown",
+      "client_method": "shutdown",
+      "desktop": "shutdown",
+      "tui": "shutdown",
+      "failure_modes": [
+        "unreachable",
+        "aborted",
+        "rejected_token",
+        "internal"
+      ]
+    }
+  ]
+}

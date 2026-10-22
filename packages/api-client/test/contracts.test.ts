@@ -87,7 +87,7 @@ describe("plan creation (contracts 5 and 7)", () => {
       await expect(client.createPlan("t", { task, budgets })).rejects.toThrow(reason);
     }
     expect(planBudgetProblem(DEFAULT_PLAN_BUDGETS)).toBeNull();
-    expect(DEFAULT_PLAN_BUDGETS).toEqual({ max_attempts: 2, timeout_seconds: 600, cost_usd_micros: 1_000_000 });
+    expect(DEFAULT_PLAN_BUDGETS).toEqual({ max_workers: 1, max_attempts: 2, timeout_seconds: 600, cost_usd_micros: 1_000_000 });
     for (const key of ["", " spaced", "x".repeat(129), "kéy"]) {
       expect(validIdempotencyKey(key)).toBe(false);
       await expect(client.createPlan("t", { task, idempotency_key: key })).rejects.toThrow("idempotency key");

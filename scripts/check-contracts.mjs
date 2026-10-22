@@ -70,3 +70,46 @@ assert.equal(reviewValidator({ ...review, verdict: 'changes_required', findings:
 assert.equal(reviewValidator({ ...review, evidence: [' \n\t'] }), false, 'Whitespace-only review evidence was accepted');
 checks += 5;
 console.log(`Contracts: ${checks} positive/negative checks passed across ${compiled.size + starterPairs.length} schemas.`);
+// ---- Client capability catalog (R02, A33): one entry per product action, validated against
+// the runtime's served routes, the typed client and the shared failure classes. ----
+const catalogSchema = read('schemas/capability-catalog.schema.json');
+const validateCatalog = ajv.compile(catalogSchema);
+const catalog = read('schemas/capability-catalog.json');
+assert.equal(validateCatalog(catalog), true, `capability catalog: ${ajv.errorsText(validateCatalog.errors)}`);
+const capabilities = catalog.capabilities;
+for (const field of ['id', 'tui', 'desktop']) {
+  const values = capabilities.map((capability) => capability[field]);
+  assert.equal(new Set(values).size, values.length, `capability ${field} values must be unique`);
+}
+const endpoints = capabilities.map((capability) => `${capability.method} ${capability.route}`);
+assert.equal(new Set(endpoints).size, endpoints.length, 'each method and route pair is cataloged once');
+// The routes the runtime serves, read from its router source (read-only): `.route("<path>", <handlers>)`.
+const runtimeSource = readFileSync(resolve(root, 'crates/luuna-runtime/src/lib.rs'), 'utf8');
+const served = new Map();
+for (const match of runtimeSource.matchAll(/\.route\(\s*"([^"]+)"\s*,([\s\S]*?)\)\s*(?=\n\s*\.(?:route|route_layer|layer|merge)\b|\n\s*;|;)/g)) {
+  const methods = served.get(match[1]) ?? new Set();
+  for (const handler of match[2].matchAll(/\b(get|post|put|delete)\(/g)) methods.add(handler[1].toUpperCase());
+  served.set(match[1], methods);
+}
+assert.ok(served.size >= 30, `expected the runtime router to declare its routes; found ${served.size}`);
+for (const capability of capabilities) {
+  const methods = served.get(capability.route);
+  assert.ok(methods, `${capability.id}: the runtime serves no route ${capability.route}`);
+  assert.ok(methods.has(capability.method), `${capability.id}: the runtime serves ${capability.route} with ${[...methods].join('/')}, not ${capability.method}`);
+}
+checks += capabilities.length;
+// Every cataloged client method exists on the typed client, and every failure mode is a shared class.
+const client = await import('../packages/api-client/src/index.ts');
+for (const capability of capabilities) {
+  assert.equal(typeof client.LuunaClient.prototype[capability.client_method], 'function', `${capability.id}: LuunaClient has no method ${capability.client_method}`);
+  for (const mode of capability.failure_modes) assert.ok(client.FAILURE_CLASSES.includes(mode), `${capability.id}: unknown failure class ${mode}`);
+}
+checks += capabilities.length;
+// Runtime mutations that no client exposes yet are named, so a new runtime action cannot stay
+// invisible: each one still needs a catalog entry, a desktop control and a TUI command (R02).
+// Every served mutation is cataloged since ADR 0020's parity closed; a new one fails here unless
+// LUUNA_CATALOG_STRICT=0 is set while it is being wired.
+const uncataloged = [...served].flatMap(([route, methods]) => [...methods].filter((method) => method !== 'GET' && route.startsWith('/api/v1/') && !endpoints.includes(`${method} ${route}`)).map((method) => `${method} ${route}`));
+if (process.env.LUUNA_CATALOG_STRICT !== '0') assert.deepEqual(uncataloged, [], `runtime mutations missing from schemas/capability-catalog.json: ${uncataloged.join(', ')}`);
+checks += 1;
+console.log(`Capability catalog: ${capabilities.length} actions validated against ${served.size} runtime routes and the typed client.${uncataloged.length ? ` Runtime mutations without client parity yet (${uncataloged.length}): ${uncataloged.join(', ')}.` : ''}`);

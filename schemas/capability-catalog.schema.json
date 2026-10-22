@@ -1,0 +1,114 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://luuna.dev/schemas/capability-catalog.schema.json",
+  "title": "Luuna client capability catalog",
+  "description": "One entry per product action the clients expose; see schemas/capability-catalog.json.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema_version",
+    "description",
+    "capabilities"
+  ],
+  "properties": {
+    "$schema": {
+      "type": "string"
+    },
+    "schema_version": {
+      "const": "0.1"
+    },
+    "description": {
+      "type": "string",
+      "minLength": 1
+    },
+    "capabilities": {
+      "type": "array",
+      "minItems": 1,
+      "items": {
+        "$ref": "#/$defs/capability"
+      }
+    }
+  },
+  "$defs": {
+    "capability": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "id",
+        "title",
+        "method",
+        "route",
+        "client_method",
+        "desktop",
+        "tui",
+        "failure_modes"
+      ],
+      "properties": {
+        "id": {
+          "type": "string",
+          "pattern": "^[a-z][a-z0-9]*(\\.[a-z][a-z0-9]*)*$"
+        },
+        "title": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 120
+        },
+        "method": {
+          "enum": [
+            "GET",
+            "POST",
+            "PUT",
+            "DELETE"
+          ]
+        },
+        "route": {
+          "type": "string",
+          "pattern": "^/api/v1(/[A-Za-z0-9_{}-]+)+$"
+        },
+        "client_method": {
+          "type": "string",
+          "pattern": "^[a-z][A-Za-z0-9]*$"
+        },
+        "desktop": {
+          "type": "string",
+          "pattern": "^[a-z][a-z0-9]*(\\.[a-z][a-z0-9]*)*$",
+          "description": "The data-capability attribute value on the desktop control that triggers the action; a control may carry several values separated by spaces."
+        },
+        "desktop_note": {
+          "type": "string",
+          "minLength": 1,
+          "description": "How the desktop reaches the same product action when it does not call this route directly."
+        },
+        "tui": {
+          "type": "string",
+          "pattern": "^[a-z][a-z0-9-]*$",
+          "description": "The TUI command: an interactive menu item and the non-interactive subcommand."
+        },
+        "acknowledgment": {
+          "type": "string",
+          "minLength": 1,
+          "description": "What the developer must acknowledge before the action is sent."
+        },
+        "failure_modes": {
+          "type": "array",
+          "minItems": 1,
+          "uniqueItems": true,
+          "items": {
+            "enum": [
+              "unreachable",
+              "aborted",
+              "rejected_token",
+              "denied",
+              "not_found",
+              "refused",
+              "capacity",
+              "shutting_down",
+              "internal",
+              "client"
+            ]
+          }
+        }
+      }
+    }
+  }
+}

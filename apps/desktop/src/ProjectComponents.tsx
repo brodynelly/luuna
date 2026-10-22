@@ -33,15 +33,20 @@ export function promptEditBody(body: string) {
   return body.startsWith(prefix) && body.endsWith("\n") ? body.slice(prefix.length, -1) : body;
 }
 
-export function MemorySelection({ records, selected, busy, onToggle, onDelete }: {
+/** The one wider scope a memory may move to; `null` for user memory, which is already the widest. */
+export function promotionTarget(scope: MemoryScope): "project" | "user" | null {
+  return scope === "process" ? "project" : scope === "project" ? "user" : null;
+}
+
+export function MemorySelection({ records, selected, busy, onToggle, onDelete, onPromote }: {
   records: MemoryRecord[]; selected: string[]; busy: boolean;
-  onToggle: (record: MemoryRecord) => void; onDelete: (record: MemoryRecord) => void;
+  onToggle: (record: MemoryRecord) => void; onDelete: (record: MemoryRecord) => void; onPromote?: (record: MemoryRecord, toScope: "project" | "user") => void;
 }) {
   return <ul className="component-records" aria-label="Atlas memory records">{records.map((record) => <li key={record.id}>
     <label className="component-selection"><input type="checkbox" checked={selected.includes(record.id)} disabled={busy} onChange={() => onToggle(record)} /> Include this memory in the next plan</label>
     <p>{record.content}</p>
     <small>{record.scope === "user" ? "Private user memory" : `${record.scope} memory`} · provenance: {record.provenance}</small>
-    <div className="component-record-meta"><code>{record.id}</code><button type="button" className="text-button" disabled={busy} onClick={() => onDelete(record)}>Delete memory</button></div>
+    <div className="component-record-meta"><code>{record.id}</code><button type="button" className="text-button" disabled={busy} data-capability="memory.delete" onClick={() => onDelete(record)}>Delete memory</button>{onPromote && promotionTarget(record.scope) && <button type="button" className="text-button" disabled={busy} data-capability="memory.promote" onClick={() => onPromote(record, promotionTarget(record.scope)!)}>Promote to {promotionTarget(record.scope)} memory</button>}</div>
   </li>)}</ul>;
 }
 
@@ -176,11 +181,11 @@ export function ProjectComponents({ client, projectId, connectionEpoch = 0, onCo
   }
 
   return <section className="project-components subpanel" aria-labelledby="components-heading">
-    <div className="panel-heading"><h3 id="components-heading">Tickets, memory and prompts</h3><button type="button" className="text-button" disabled={!client || busy || loading} onClick={() => setRefreshTick((value) => value + 1)}>Refresh components</button></div>
+    <div className="panel-heading"><h3 id="components-heading">Tickets, memory and prompts</h3><button type="button" className="text-button" disabled={!client || busy || loading} data-capability="components.status" onClick={() => setRefreshTick((value) => value + 1)}>Refresh components</button></div>
     <p className="scope">luuna-missions owns enabled project tickets. luuna-atlas stores explicitly selected knowledge; luuna-beacon provides versioned prompts. The runtime binds selected resources into the exact plan you approve.</p>
     {error && <div className="error" role="alert">{error}<button type="button" className="text-button" onClick={() => setError("")}>Dismiss</button></div>}
     <p role="status">{loading ? "Refreshing component state…" : status?.enabled ? "Project components enabled" : status?.reason ?? "Project components are not enabled."}</p>
-    {!status?.enabled && <button type="button" className="primary" disabled={!client || busy || loading || status === null} onClick={() => void guarded("Component activation", async (signal) => {
+    {!status?.enabled && <button type="button" className="primary" disabled={!client || busy || loading || status === null} data-capability="components.enable" onClick={() => void guarded("Component activation", async (signal) => {
       const next = await client!.enableComponents(projectId, signal);
       if (signal.aborted) return;
       setStatus(next); onStatusChange(next);
@@ -192,17 +197,20 @@ export function ProjectComponents({ client, projectId, connectionEpoch = 0, onCo
           <label className="checkbox"><input type="checkbox" checked={includeUser} disabled={busy} onChange={(event) => toggleUserMemory(event.target.checked)} /> Include private user memory</label>
           <form onSubmit={(event) => { event.preventDefault(); setAppliedQuery(query.trim()); }} className="component-search">
             <label>Search memory<input value={query} onChange={(event) => setQuery(event.target.value)} /></label>
-            <button type="submit" disabled={busy || loading}>Search memory</button>
+            <button type="submit" disabled={busy || loading} data-capability="memory.list">Search memory</button>
             {appliedQuery && <button type="button" disabled={busy} onClick={() => { setQuery(""); setAppliedQuery(""); }}>Clear search</button>}
           </form>
           <form onSubmit={saveMemory}><fieldset disabled={busy || !client}>
             <label>Memory scope<select aria-label="Memory scope" value={scope} onChange={(event) => setScope(event.target.value as MemoryScope)}><option value="project">Project</option><option value="process">Process</option><option value="user">Private user</option></select></label>
             <label>Memory content<textarea value={content} onChange={(event) => setContent(event.target.value)} required rows={3} maxLength={16000} /></label>
             <label>Memory provenance<input value={provenance} onChange={(event) => setProvenance(event.target.value)} required maxLength={1000} placeholder="Where this knowledge came from" /></label>
-            <button type="submit" disabled={!content.trim() || !provenance.trim()}>Save memory</button>
+            <button type="submit" disabled={!content.trim() || !provenance.trim()} data-capability="memory.create">Save memory</button>
           </fieldset></form>
           <MemorySelection records={records} selected={selectedMemory} busy={busy || loading} onToggle={(record) => setSelectedMemory((ids) => ids.includes(record.id) ? ids.filter((id) => id !== record.id) : [...ids, record.id])} onDelete={(record) => void guarded("Memory deletion", async (signal) => {
             await client!.deleteMemory(projectId, record.id, record.hash, signal);
+            setSelectedMemory((ids) => ids.filter((id) => id !== record.id));
+          })} onPromote={(record, toScope) => void guarded("Memory promotion", async (signal) => {
+            await client!.promoteMemory(projectId, record.id, { idempotency_key: `promote-${record.id}-${record.hash.slice(7, 19)}-${toScope}`, expected_hash: record.hash, to_scope: toScope }, signal);
             setSelectedMemory((ids) => ids.filter((id) => id !== record.id));
           })} />
           {!records.length && <p className="empty">No memory records in this view.</p>}
@@ -212,9 +220,9 @@ export function ProjectComponents({ client, projectId, connectionEpoch = 0, onCo
             <label>Prompt name<input value={promptName} onChange={(event) => setPromptName(event.target.value)} required maxLength={100} /></label>
             <label>Prompt body<textarea value={promptBody} onChange={(event) => setPromptBody(event.target.value)} required rows={5} maxLength={16000} /></label>
             <small>Saving an existing name creates its next version after the runtime checks the expected version.</small>
-            <button type="submit" disabled={!promptName.trim() || !promptBody.trim()}>Save prompt</button>
+            <button type="submit" disabled={!promptName.trim() || !promptBody.trim()} data-capability="prompts.create">Save prompt</button>
           </fieldset></form>
-          <ul className="component-records" aria-label="Beacon prompts">{prompts.map((prompt) => <li key={prompt.name}><strong>{prompt.name} · version {prompt.version}</strong><button type="button" disabled={busy} onClick={() => void guarded("Prompt preview", async (signal) => {
+          <ul className="component-records" aria-label="Beacon prompts" data-capability="prompts.list">{prompts.map((prompt) => <li key={prompt.name}><strong>{prompt.name} · version {prompt.version}</strong><button type="button" disabled={busy} data-capability="prompts.render" onClick={() => void guarded("Prompt preview", async (signal) => {
             const rendered = await client!.renderPrompt(projectId, prompt.name, prompt.version, signal);
             if (!signal.aborted) { promptDelivery.current = promptDeliveryAfterPreview(promptDelivery.current, rendered.version); setPreview(rendered); setPromptName(prompt.name); setPromptBody(promptEditBody(rendered.body)); }
           })}>Preview prompt</button></li>)}</ul>

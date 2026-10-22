@@ -213,7 +213,13 @@ def run_writer(request_id, kind, scenario, prompt):
         "no_tools": "--no-tools" in sys.argv,
         "system_prompt_bytes": len((flag("--system-prompt") or "").encode("utf-8")),
         "system_prompt_from_file": "--system-prompt" in sys.argv
-            and os.path.isfile(sys.argv[sys.argv.index("--system-prompt") + 1])})
+            and os.path.isfile(sys.argv[sys.argv.index("--system-prompt") + 1]),
+        # M4: the dependency bindings a consumer task's writer received (paths
+        # and commits of Luuna-owned worktrees, never credentials), and whether
+        # the system prompt stated them.
+        "dependency_env": {name: value for name, value in sorted(os.environ.items())
+                           if name.startswith("LUUNA_DEPENDENCY_")},
+        "dependencies_stated": "LUUNA_DEPENDENCY_" in (flag("--system-prompt") or "")})
     send({"type": "response", "id": request_id, "command": kind,
           "success": True, "data": {"disposition": "started"}})
     send({"type": "agent_start"})
@@ -233,6 +239,31 @@ def run_writer(request_id, kind, scenario, prompt):
         sys.exit(9)
     if scenario == "slow":
         time.sleep(60)
+    elif scenario.startswith("write_hold_"):
+        # M4 concurrency: hold for N seconds (`write_hold_3`), then write in
+        # scope, so overlapping attempts of a task graph can be observed.
+        time.sleep(float(scenario[len("write_hold_"):]))
+        write_file("src/main.py", "print('implemented by the synthetic writer after a hold')\n")
+    elif scenario == "write_until_released":
+        # M4 restart: wait until the run's worktree directory
+        # (`worktrees/<run>/`, two levels above this attempt's worktree) holds
+        # a RELEASE file, so a task can be interrupted mid-graph and resumed.
+        release = os.path.join(os.getcwd(), os.pardir, os.pardir, "RELEASE")
+        for _ in range(4800):
+            if os.path.exists(release):
+                break
+            time.sleep(0.025)
+        write_file("src/main.py", "print('implemented by the synthetic writer after release')\n")
+    elif scenario == "write_if_released":
+        # M4 resume: changes nothing (the attempt fails as empty) until the
+        # run's worktree directory holds a RELEASE file; a later attempt of
+        # the same task then writes in scope.
+        if os.path.exists(os.path.join(os.getcwd(), os.pardir, os.pardir, "RELEASE")):
+            write_file("src/main.py", "print('implemented by the synthetic writer after release')\n")
+    elif scenario == "write_rename_function":
+        # M4 integration: an incompatible producer change that renames the
+        # function its consumers import; the producer's own check still passes.
+        write_file("src/shared_pkg/__init__.py", "def helper_v2():\n    return 'renamed'\n\ndef banner():\n    import api_pkg\n    return api_pkg.greet('shared')\n")
     elif scenario in ("write_in_scope", "component_context", "large_session", "write_unpriced", "write_compaction") or scenario.startswith("review_"):
         repairing = "Repair feedback:" in prompt or "Repair feedback:" in (flag("--system-prompt") or "")
         write_file("src/main.py", "print('revised by the synthetic repair writer')\n" if repairing else "print('implemented by the synthetic writer')\n")

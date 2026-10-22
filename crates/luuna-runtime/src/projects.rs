@@ -467,11 +467,17 @@ pub async fn discover(
         manifest_revision: project.revision + 1,
         created_at: now(),
         repositories,
+        host_capabilities: None,
     };
-    let discovery = tokio::task::spawn_blocking(move || luuna_discovery::discover(request))
-        .await
-        .map_err(internal)?
-        .map_err(|e| ApiError(StatusCode::UNPROCESSABLE_ENTITY, e.to_string()))?;
+    // The host probe (M5) annotates every proposed check available or missing.
+    let discovery = tokio::task::spawn_blocking(move || {
+        let mut request = request;
+        request.host_capabilities = Some(luuna_discovery::capabilities::probe_host_cached());
+        luuna_discovery::discover(request)
+    })
+    .await
+    .map_err(internal)?
+    .map_err(|e| ApiError(StatusCode::UNPROCESSABLE_ENTITY, e.to_string()))?;
     state
         .store
         .lock()

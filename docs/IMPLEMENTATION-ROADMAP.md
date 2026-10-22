@@ -17,7 +17,7 @@ Keep the application and all three maintained CLI components in **this monorepo*
 | Maintained CLIs | Independent public Missions, Atlas, Beacon repositories with passing standalone CI, compatible legacy aliases and exact-commit submodule consumption (ADR 0012) | Runtime ticket/knowledge/prompt adapters are not integrated; packages remain private/unpublished |
 | Product workflow | Foundational contracts and negative tests; M2a read-only import, discovery proposals and confirmed manifest revisions with replay; M2b supervised baseline execution with commit/tree/environment-bound evidence and the transactional implementation gate; M2c temporary tickets, immutable plans, exact-hash approvals, Luuna-owned worktree leases and one scoped writer (October 17, 2026) | Candidate validation and independent review (M3), multi-repo scheduling, Missions/Atlas/Beacon adapters, publication, TUI parity and release installation remain planned |
 
-M0 is substantially established, with remaining API/capability/threat-model details completed alongside their first executable consumers. It is not proof of the operational workflow. M1 is closed on Linux as of October 17, 2026; its native-host step is carried by the MVP native-lifecycle item. M2a, M2b and M2c closed later the same day (see the status report). Do not restart bootstrap or jump to broad orchestration; the next slice is M3.
+M0 is substantially established, with remaining API/capability/threat-model details completed alongside their first executable consumers. It is not proof of the operational workflow. M1 is closed on Linux as of October 17, 2026; its native-host step is carried by the MVP native-lifecycle item. M2a, M2b and M2c closed later the same day (see the status report). M3 and the MVP gate closed on Linux and Windows, and the M4–M8 slices recorded under each milestone below landed on October 21, 2026 with the gaps each status names; the next assignments are evidence on hosts this one is not (Mac, capable mobile runners, a clean machine, real GitHub), never a shortcut around them.
 
 ## What counts as a usable product
 
@@ -91,7 +91,7 @@ Complete project import, baseline, plan approval, live execution, diff/evidence/
 
 **Exit:** another developer follows the documented setup and completes the representative fixture workflow without undocumented database edits or fake data. Publish a requirement/evidence report naming MVP omissions. A native package may be a development distribution; signed fresh-host installation remains M7 evidence.
 
-**Status (October 21, 2026): the cloud-doable part is closed on Linux; the native-host part remains.** A candidate whose required checks passed but whose reviewer left no verdict can be re-validated in place as a fresh generation of the same revision under the same approval and budgets (ADR 0009, point 7). An orderly shutdown now records interruption, never cancellation (ADR 0004 note). The desktop client shows outages, reconnects and reloads by itself, names the next allowed action with every refusal and recorded reason, and is operable by keyboard; `node scripts/mvp-ui-smoke.mjs` drives it through the documented [walkthrough](MVP-WALKTHROUGH.md) with recovery, refusal, keyboard and accessibility checks, and [MVP-EVIDENCE.md](MVP-EVIDENCE.md) is the requirement/evidence report naming the omissions. Still open: the native Mac/Windows smoke (launch, connect, run the harness against the packaged service, stop/restart) and the backup/migration recovery drill.
+**Status (October 21, 2026): the cloud-doable part is closed on Linux; the native-host part remains.** A candidate whose required checks passed but whose reviewer left no verdict can be re-validated in place as a fresh generation of the same revision under the same approval and budgets (ADR 0009, point 7). An orderly shutdown now records interruption, never cancellation (ADR 0004 note). The desktop client shows outages, reconnects and reloads by itself, names the next allowed action with every refusal and recorded reason, and is operable by keyboard; `node scripts/mvp-ui-smoke.mjs` drives it through the documented [walkthrough](MVP-WALKTHROUGH.md) with recovery, refusal, keyboard and accessibility checks, and [MVP-EVIDENCE.md](MVP-EVIDENCE.md) is the requirement/evidence report naming the omissions. **Later on October 21, 2026, on Windows:** the backup/migration recovery drill is scripted (`node scripts/backup-recovery-drill.mjs`, 31/31 on this host, walkthrough step 7b) and the Windows native smoke is covered by the PR 11 bundled-WebView2 lifecycle run plus `scripts/package-windows.ps1`; the Mac smoke remains open for lack of a host.
 
 ### M4 — Multi-repository coordination
 
@@ -101,6 +101,8 @@ Add confirmed repository relationships, task DAG scheduling, scoped project/repo
 
 **Exit:** an API/shared-package/consumer fixture produces three exact candidate commits, independent work runs within limits, incompatible consumer integration blocks completion, and partial failure/restart preserves the graph and evidence. Map to R05/R06; single-repository check success cannot stand in for integration success.
 
+**Status (October 21, 2026): closed with the synthetic writer on Windows.** Validated task graphs, relationship proposals and confirmation, durable per-task state, the dependency-ordered scheduler with `max_workers`, cross-repository candidate sets with bindings, per-repository validation with a combined review diff, integration blocking, and resumption by task exist and are tested by the three-repository fixture (`crates/luuna-runtime/tests/multirepo.rs`, 9 scenarios); see [ADR 0017](decisions/0017-multi-repository-coordination.md) and the status report. Open: delegated roles (P42), dependency overrides (P44), repair of a multi-repository set (re-planning by decision) and a genuine-provider multi-repository feature.
+
 ### M5 — New projects and verified stack profiles
 
 **Depends on:** M2's executor/baseline contracts; end-to-end acceptance uses M3/M4 as appropriate.
@@ -108,6 +110,8 @@ Add confirmed repository relationships, task DAG scheduling, scoped project/repo
 Add approved scaffolding and check profiles for React/Next.js/TypeScript, Node, Go, Python, Flutter, native Android and iOS. Probe host capabilities; let the developer confirm discovered recipes.
 
 **Exit:** every advertised profile has a genuine scaffold/import baseline on a capable runner. Required Apple/device/emulator checks have real evidence or explicitly block that workflow. Do not call an unavailable platform passing. Map to R04/R13.
+
+**Status (October 21, 2026): implemented; closed only for the profiles this Windows host can run.** Host capability probing, capability-annotated discovery for every advertised profile, and hashed, confirmed scaffolding with a real baseline exist ([ADR 0019](decisions/0019-stack-profiles-and-scaffolding.md)); Node, TypeScript, Python and Rust scaffolds ran passing baselines here, Go, Flutter, Android and iOS are proved only as correctly blocked proposals and annotated discoveries. Capable-runner evidence for those four and the Mac-only checks remain the exit.
 
 ### M6 — Integrated components, scoped memory and client parity
 
@@ -119,6 +123,8 @@ Complete browser and TUI actions against a shared capability catalog, alongside 
 
 **Exit:** external Missions edits cause a detected conflict; stale prompts/schema mismatches fail visibly; private memory never crosses project/export scope; every cataloged action and failure path has parity evidence; reconnect yields the same authoritative state. Map to R02/R14/R15.
 
+**Status (October 21, 2026): closed for the cataloged actions on Windows and Linux.** Missions migration and reconciliation and selected Atlas/Beacon context (ADR 0014), memory promotion and the scope-safe export (ADR 0021), the capability catalog, shared failure explanations and the terminal client with parity tests and `scripts/tui-smoke.mjs` (ADR 0020) exist; see the status report. Open: a keyboard audit and tones for the interactive TUI, import of an export, memory retention policy.
+
 ### M7 — Publication and portable installation
 
 **Depends on:** M3 evidence gates, M4 candidate sets, and a verified publication credential mechanism.
@@ -127,6 +133,8 @@ Implement push/linked PR creation, durable idempotency and remote reconciliation
 
 **Exit:** approved three-repo candidates create linked PRs once, timeout-after-success and partial publication recover without duplicates, failing CI is distinct from integration, and no automatic merge path exists. Clean supported Mac/Windows computers install, configure and run the fixture without NAS/cloud dependence. Map to R01/R11/R12.
 
+**Status (October 21, 2026): implemented against a fake GitHub API and a local remote; installer built unsigned on Windows.** Publication with a durable intent ledger, reconciliation, CI and merge observation and no merge path, plus `luuna-runtime doctor`, exist and pass six scenarios ([ADR 0018](decisions/0018-publication-and-doctor.md)); `scripts/package-windows.ps1` produces an NSIS development installer carrying the runtime, helper scripts and the pinned Pi tree. Open: real GitHub evidence, a clean-machine Windows installation, Mac packaging, signing.
+
 ### M8 — Full-v1 release evidence
 
 **Depends on:** M4–M7 and every advertised capability's prerequisites.
@@ -134,6 +142,8 @@ Implement push/linked PR creation, durable idempotency and remote reconciliation
 Run all A01–A34 scenarios, supported-host/version matrix, real-project pilot, failure/recovery drills, migrations/backups, dependency/security review and performance measurements. Inspect resource growth, cancellation latency, event delivery and usage accounting; define targets from observed measurements.
 
 **Exit:** every R01–R15 requirement has passing linked evidence on relevant hosts; unresolved required checks block the v1 label. Document limitations, credential/retention boundaries, installer provenance and reproducible recovery. No required path depends on synthetic model output.
+
+**Status (October 21, 2026): report produced; the v1 label is not granted.** [RELEASE-EVIDENCE.md](RELEASE-EVIDENCE.md) links every requirement and scenario to the evidence that exists, `node scripts/release-evidence.mjs` runs the checks and harnesses into one requirement-mapped report, and the blocking items (Mac, clean-machine installation, real GitHub, capable runners for Flutter/Android/iOS, a genuine run on the current tree, a real-project pilot) are named there.
 
 ## Requirement coverage
 

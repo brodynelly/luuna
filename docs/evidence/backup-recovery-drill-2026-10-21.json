@@ -1,0 +1,243 @@
+{
+  "started": "2026-10-22T03:19:39.852Z",
+  "finished": "2026-10-22T03:20:05.381Z",
+  "platform": "win32 x64",
+  "node": "v26.10.0",
+  "runtime_binary": "target/debug/luuna-runtime.exe (private copy under <out>)",
+  "runtime_sha256": "a1d7de4685e0c67c2153ac3ef7a53e4015488e6345c3917368551d5e45fc958b",
+  "out": "<out>",
+  "checks": [
+    {
+      "name": "runtime starts on an empty data directory",
+      "ok": true,
+      "detail": ""
+    },
+    {
+      "name": "project registered",
+      "ok": true,
+      "detail": "status 201"
+    },
+    {
+      "name": "discovery proposed without executing repository commands",
+      "ok": true,
+      "detail": "status 201"
+    },
+    {
+      "name": "manifest revision 1 confirmed",
+      "ok": true,
+      "detail": "status 200"
+    },
+    {
+      "name": "ticket created",
+      "ok": true,
+      "detail": "status 201"
+    },
+    {
+      "name": "synthetic demo run accepted",
+      "ok": true,
+      "detail": "status 202"
+    },
+    {
+      "name": "demo run settled before the backup",
+      "ok": true,
+      "detail": "completed"
+    },
+    {
+      "name": "authoritative state captured",
+      "ok": true,
+      "detail": "1 project, 1 run(s), 5 project events"
+    },
+    {
+      "name": "online backup written while the runtime runs",
+      "ok": true,
+      "detail": "schema 9, 290816 bytes"
+    },
+    {
+      "name": "backup reports the snapshot digest",
+      "ok": true,
+      "detail": "digest matches the file"
+    },
+    {
+      "name": "restore refused while a runtime owns the data directory",
+      "ok": true,
+      "detail": "Error: a Luuna runtime owns <out>\\runtime-data; stop it (POST /api/v1/shutdown, Ctrl+C or the stop script) before restoring"
+    },
+    {
+      "name": "runtime unaffected by the refused restore",
+      "ok": true,
+      "detail": ""
+    },
+    {
+      "name": "orderly authenticated shutdown exits",
+      "ok": true,
+      "detail": "exit 0"
+    },
+    {
+      "name": "check reports a usable database after the stop",
+      "ok": true,
+      "detail": "schema_version: 9 (this build supports up to 9)"
+    },
+    {
+      "name": "check reports the damaged database",
+      "ok": true,
+      "detail": "Error: database <out>\\runtime-data\\luuna.sqlite3 failed its integrity check (database disk image is malformed); stop the runtime and restore a backup with `luuna-runtime restore --input <backup>`; automatic pre-migration backups are kept in the data directory's backups/ folder (see crates/luuna-runtime/README.md)"
+    },
+    {
+      "name": "runtime refuses to start on the damaged database before writing",
+      "ok": true,
+      "detail": "Error: database <out>\\runtime-data\\luuna.sqlite3 failed its integrity check (database disk image is malformed); stop the runtime and restore a backup with `luuna-runtime restore --input <backup>`; automatic pre-migration backups are kept in the data directory's backups/ folder (see crates/luuna-runtime/README.md)"
+    },
+    {
+      "name": "restore installs the verified snapshot",
+      "ok": true,
+      "detail": "previous database moved to: <out>\\runtime-data\\backups\\replaced-20261022T031942921Z"
+    },
+    {
+      "name": "the damaged database was moved aside, not deleted",
+      "ok": true,
+      "detail": "<out>\\runtime-data\\backups\\replaced-20261022T031942921Z"
+    },
+    {
+      "name": "check passes after the restore",
+      "ok": true,
+      "detail": ""
+    },
+    {
+      "name": "runtime starts on the restored database",
+      "ok": true,
+      "detail": ""
+    },
+    {
+      "name": "projects, manifest events, tickets, runs and run events are identical after the restore",
+      "ok": true,
+      "detail": "1 run(s), 12 run events"
+    },
+    {
+      "name": "new work completes on the restored database",
+      "ok": true,
+      "detail": "completed"
+    },
+    {
+      "name": "second orderly shutdown exits",
+      "ok": true,
+      "detail": "exit 0"
+    },
+    {
+      "name": "drill marks the database as written by a newer schema",
+      "ok": true,
+      "detail": ""
+    },
+    {
+      "name": "check names the newer schema version and the restore step",
+      "ok": true,
+      "detail": "Error: database <out>\\runtime-data\\luuna.sqlite3 has schema version 10, newer than version 9 supported by this Luuna build; run the Luuna build that wrote it, or stop the runtime and restore a backup this build can read with `luuna-runtime restore --input <backup>` (see crates/luuna-runtime/README.md)"
+    },
+    {
+      "name": "runtime refuses a newer database before writing to it",
+      "ok": true,
+      "detail": "Error: database <out>\\runtime-data\\luuna.sqlite3 has schema version 10, newer than version 9 supported by this Luuna build; run the Luuna build that wrote it, or stop the runtime and restore a backup this build can read with `luuna-runtime restore --input <backup>` (see crates/luuna-runtime/README.md)"
+    },
+    {
+      "name": "restore recovers from the newer database",
+      "ok": true,
+      "detail": ""
+    },
+    {
+      "name": "runtime starts again after the second restore",
+      "ok": true,
+      "detail": ""
+    },
+    {
+      "name": "state after the second restore equals the backup again",
+      "ok": true,
+      "detail": ""
+    },
+    {
+      "name": "final orderly shutdown exits",
+      "ok": true,
+      "detail": ""
+    },
+    {
+      "name": "every earlier schema version upgrades with rows intact under an automatic pre-migration snapshot (luuna-storage migrations suite)",
+      "ok": true,
+      "detail": "7 passed, 0 failed, 0 ignored"
+    }
+  ],
+  "notes": [],
+  "maintenance_commands": [
+    {
+      "command": [
+        "backup",
+        "--output",
+        "<out>\\snapshot.sqlite3",
+        "--data-dir",
+        "<data-dir>"
+      ],
+      "status": 0
+    },
+    {
+      "command": [
+        "restore",
+        "--input",
+        "<out>\\snapshot.sqlite3",
+        "--data-dir",
+        "<data-dir>"
+      ],
+      "status": 1
+    },
+    {
+      "command": [
+        "check",
+        "--data-dir",
+        "<data-dir>"
+      ],
+      "status": 0
+    },
+    {
+      "command": [
+        "check",
+        "--data-dir",
+        "<data-dir>"
+      ],
+      "status": 1
+    },
+    {
+      "command": [
+        "restore",
+        "--input",
+        "<out>\\snapshot.sqlite3",
+        "--data-dir",
+        "<data-dir>"
+      ],
+      "status": 0
+    },
+    {
+      "command": [
+        "check",
+        "--data-dir",
+        "<data-dir>"
+      ],
+      "status": 0
+    },
+    {
+      "command": [
+        "check",
+        "--data-dir",
+        "<data-dir>"
+      ],
+      "status": 1
+    },
+    {
+      "command": [
+        "restore",
+        "--input",
+        "<out>\\snapshot.sqlite3",
+        "--data-dir",
+        "<data-dir>"
+      ],
+      "status": 0
+    }
+  ],
+  "summary": "31/31 checks passed",
+  "note": "Sanitized copy of the drill report; personal paths replaced. Synthetic Pi fixture only; no provider."
+}

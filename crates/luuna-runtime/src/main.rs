@@ -13,13 +13,15 @@ const DRAIN_DEADLINE: Duration = Duration::from_secs(10);
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
-    // `backup`, `restore` and `check` maintain the data directory and exit.
+    // `backup`, `restore`, `check` and `doctor` maintain or diagnose the data
+    // directory and host, then exit.
     if let Some(outcome) = admin::dispatch(std::env::args_os().skip(1)) {
         return outcome;
     }
     let settings = ServiceSettings::from_env(|name| std::env::var_os(name))?;
-    let state =
-        AppState::open(settings.runtime).map_err(|error| StartupError(error.to_string()))?;
+    let state = AppState::open(settings.runtime)
+        .map_err(|error| StartupError(error.to_string()))?
+        .with_publication(settings.publication);
     let address = SocketAddrV4::new(Ipv4Addr::LOCALHOST, settings.port);
     let listener = tokio::net::TcpListener::bind(address)
         .await

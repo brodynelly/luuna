@@ -1,0 +1,18 @@
+{
+  "name": "@luuna/tui",
+  "version": "0.1.0",
+  "private": true,
+  "license": "MIT",
+  "description": "Keyboard-driven terminal client for the Luuna runtime, with parity to the desktop client through the shared capability catalog.",
+  "type": "module",
+  "bin": { "luuna-tui": "./bin/luuna-tui.mjs" },
+  "exports": { ".": "./src/cli.mjs", "./commands": "./src/commands.mjs" },
+  "engines": { "node": ">=22.12.0" },
+  "scripts": {
+    "start": "node bin/luuna-tui.mjs",
+    "test": "node --test test/"
+  },
+  "dependencies": {
+    "@luuna/api-client": "0.1.0"
+  }
+}

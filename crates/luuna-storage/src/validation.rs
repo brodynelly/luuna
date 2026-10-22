@@ -20,6 +20,9 @@ pub const STAGE_HEARTBEAT_SECONDS: u64 = 5;
 /// without a provider cost: the cost budget cannot meter that spend.
 pub const COST_UNREPORTED_EVENT: &str = "usage.cost_unreported";
 
+/// Why a multi-repository candidate set has no repair path (ADR 0017).
+pub const MULTI_REPOSITORY_REPAIR: &str = "repair is not available for a multi-repository candidate set: create the next plan revision (re-plan) so every task runs again against the recorded evidence";
+
 const REVIEW_PROMPT_SENT: &str = "review.prompt_sent";
 const REVIEW_USAGE_SETTLED: &str = "review.usage_settled";
 
@@ -241,8 +244,16 @@ impl Store {
         {
             return invalid("check inputs do not match the exact candidate and approved recipe");
         }
+        // The index column is unique per candidate and generation; recipes of
+        // a multi-repository set are keyed by repository too (results are
+        // read back from the payload, which names both).
+        let recipe_key = if evidence.candidate.repository_commits.len() > 1 {
+            format!("{}/{}", result.repository_id, result.recipe_id)
+        } else {
+            result.recipe_id.clone()
+        };
         tx.execute("INSERT INTO candidate_check_results(id,candidate_hash,generation,recipe_id,payload) VALUES (?1,?2,?3,?4,?5)",
-            params![result.id,hash,evidence.validation_generation,result.recipe_id,serde_json::to_string(result)?])?;
+            params![result.id,hash,evidence.validation_generation,recipe_key,serde_json::to_string(result)?])?;
         append(
             &tx,
             run_id,
@@ -284,6 +295,31 @@ impl Store {
                     .map(|r| r.status)
             })
             .collect();
+        // A failing or blocked required check is named with its repository:
+        // for a multi-repository set a consumer's failing check is the
+        // integration verdict, and no other repository's success stands for it.
+        let named = |wanted: CheckStatus| -> String {
+            let names: Vec<String> = required
+                .iter()
+                .zip(&statuses)
+                .filter(|(_, status)| **status == Some(wanted))
+                .map(|(recipe, _)| format!("{}/{}", recipe.repository_id, recipe.id))
+                .collect();
+            let integration = if plan.base_commits.len() > 1 {
+                "; integration blocked: the candidate set is not accepted"
+            } else {
+                ""
+            };
+            format!(" ({}{integration})", names.join(", "))
+        };
+        let failed_reason = format!(
+            "required candidate checks failed{}",
+            named(CheckStatus::Failed)
+        );
+        let blocked_reason = format!(
+            "required candidate checks could not run meaningfully{}",
+            named(CheckStatus::Blocked)
+        );
         let (mut next, mut status, mut reason) = if statuses.contains(&None) {
             (
                 RunState::Failed,
@@ -306,13 +342,13 @@ impl Store {
             (
                 RunState::TestingBlocked,
                 CandidateStatus::TestingBlocked,
-                Some("required candidate checks could not run meaningfully"),
+                Some(blocked_reason.as_str()),
             )
         } else if statuses.contains(&Some(CheckStatus::Failed)) {
             (
                 RunState::Failed,
                 CandidateStatus::Failed,
-                Some("required candidate checks failed"),
+                Some(failed_reason.as_str()),
             )
         } else {
             (RunState::Reviewing, CandidateStatus::Reviewing, None)
@@ -972,6 +1008,12 @@ fn repair_gate(connection: &Connection, run_id: &str, hash: &str) -> Result<Budg
         return invalid("candidate is not repairable");
     }
     let plan = bound_plan(connection, run_id)?;
+    // Repair of a multi-repository candidate set is re-planning (ADR 0017):
+    // a repair writer in one repository cannot re-establish the other
+    // repositories' bindings, so no single-repository fix stands for the set.
+    if plan.base_commits.len() > 1 {
+        return invalid(MULTI_REPOSITORY_REPAIR);
+    }
     // Read the same immutable authorization/bindings without requiring a mutation.
     let approval: Option<String> = connection
         .query_row(

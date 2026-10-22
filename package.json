@@ -9,12 +9,15 @@
   "packageManager": "npm@11.9.0",
   "workspaces": [
     "apps/desktop",
-    "packages/api-client"
+    "packages/api-client",
+    "packages/tui"
   ],
   "scripts": {
     "dev": "npm run dev --workspace @luuna/desktop",
     "desktop": "npm run tauri --workspace @luuna/desktop -- dev",
     "build": "npm run build --workspace @luuna/desktop",
+    "tui": "node packages/tui/bin/luuna-tui.mjs",
+    "test:tui-smoke": "node scripts/tui-smoke.mjs",
     "typecheck": "npm run typecheck --workspaces --if-present",
     "test": "npm run test:contracts && npm run test:guard && npm run test:component-pins && npm run test:smoke-harness && npm run test --workspaces --if-present",
     "test:smoke-harness": "node --test scripts/m3-checkout-digest.test.mjs scripts/windows-m3-job.test.mjs scripts/smoke-process.test.mjs scripts/m3-evidence.test.mjs",

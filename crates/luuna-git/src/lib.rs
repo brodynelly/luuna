@@ -25,7 +25,9 @@ use tokio::{
 
 pub const MAX_OUTPUT_BYTES: usize = 8 * 1024 * 1024;
 
+mod remote;
 mod worktree;
+pub use remote::*;
 pub use worktree::*;
 const MAX_ROOT_COMMITS: usize = 64;
 /// Roots reachable from any local branch, observed only to match a registration.
@@ -282,7 +284,14 @@ impl GitInspector {
         overrides: &[String],
     ) -> Result<Output, GitError> {
         let name = args.first().copied().unwrap_or("git").to_owned();
-        let mut child = self.command(cwd, args, overrides).spawn()?;
+        self.run(self.command(cwd, args, overrides), &name).await
+    }
+
+    /// Run a prepared command (from [`Self::command`], possibly with extra
+    /// environment) under the output cap and deadline; `name` labels a timeout.
+    async fn run(&self, mut command: Command, name: &str) -> Result<Output, GitError> {
+        let name = name.to_owned();
+        let mut child = command.spawn()?;
         let stdout_pipe = child.stdout.take().expect("stdout is piped");
         let stderr_pipe = child.stderr.take().expect("stderr is piped");
         let max = self.max_output_bytes;

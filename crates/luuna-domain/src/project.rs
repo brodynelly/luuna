@@ -132,6 +132,62 @@ impl ProjectManifest {
         self.repositories.iter().map(|r| r.id.as_str()).collect()
     }
 
+    /// Relationships the developer has not confirmed yet (`confirmed: false`),
+    /// as discovery proposes them. A manifest is confirmed only once each is
+    /// confirmed or removed.
+    pub fn unconfirmed_relationships(&self) -> Vec<&Relationship> {
+        self.relationships.iter().filter(|r| !r.confirmed).collect()
+    }
+
+    /// One cycle among the confirmed producer -> consumer relationships, closed
+    /// (its first and last repository are the same), or `None` when the
+    /// confirmed graph is acyclic. Proposed relationships are not scheduled
+    /// against, so they do not count.
+    pub fn confirmed_relationship_cycle(&self) -> Option<Vec<String>> {
+        let edges: Vec<(&str, &str)> = self
+            .relationships
+            .iter()
+            .filter(|r| r.confirmed)
+            .map(|r| (r.producer.as_str(), r.consumer.as_str()))
+            .collect();
+        let nodes: BTreeSet<&str> = edges.iter().flat_map(|(p, c)| [*p, *c]).collect();
+        // Kahn's algorithm: whatever cannot be ordered lies on or behind a cycle.
+        let mut remaining: BTreeSet<&str> = nodes.clone();
+        loop {
+            let free: Vec<&str> = remaining
+                .iter()
+                .copied()
+                .filter(|node| {
+                    !edges
+                        .iter()
+                        .any(|(p, c)| c == node && remaining.contains(p))
+                })
+                .collect();
+            if free.is_empty() {
+                break;
+            }
+            for node in free {
+                remaining.remove(node);
+            }
+        }
+        let start = *remaining.iter().next()?;
+        let mut path: Vec<&str> = vec![start];
+        loop {
+            let current = *path.last().expect("path starts non-empty");
+            let next = edges
+                .iter()
+                .find(|(p, c)| *p == current && remaining.contains(c))
+                .map(|(_, c)| *c)?;
+            if let Some(position) = path.iter().position(|node| *node == next) {
+                let mut cycle: Vec<String> =
+                    path[position..].iter().map(|s| s.to_string()).collect();
+                cycle.push(next.to_owned());
+                return Some(cycle);
+            }
+            path.push(next);
+        }
+    }
+
     pub fn validate(&self) -> Result<(), DomainError> {
         if self.schema_version != SCHEMA_VERSION {
             return invalid("unsupported manifest schema version");
@@ -190,6 +246,12 @@ impl ProjectManifest {
                     "relationships must link two distinct known repositories with evidence",
                 );
             }
+        }
+        if let Some(cycle) = self.confirmed_relationship_cycle() {
+            return Err(DomainError::Invalid(format!(
+                "confirmed relationships form a cycle: {}",
+                cycle.join(" -> ")
+            )));
         }
         let policy = &self.policy;
         if policy.approval != "plan"
@@ -549,12 +611,66 @@ pub enum Confidence {
     Inferred,
 }
 
+/// Whether this host can run a proposed check: every tool its declared
+/// capabilities name was found (`available`) or at least one was not (`missing`).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum CapabilityStatus {
+    Available,
+    Missing,
+}
+
+/// One host tool a stack profile's checks need, as a version probe observed it.
+/// Only `<tool> --version` (or the tool's equivalent) ever runs, never
+/// repository text.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct ToolProbe {
+    pub tool: String,
+    pub status: CapabilityStatus,
+    /// First line the version probe printed, when it exited successfully.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub version: Option<String>,
+    /// Why the tool is missing, or why its version is unknown although it exists.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub detail: Option<String>,
+}
+
+/// The host's observed toolchain at discovery time. Machine evidence, never
+/// part of a manifest or its hash.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct HostCapabilities {
+    pub probed_at: String,
+    pub os: String,
+    pub arch: String,
+    pub tools: Vec<ToolProbe>,
+}
+
+impl HostCapabilities {
+    pub fn tool(&self, name: &str) -> Option<&ToolProbe> {
+        self.tools.iter().find(|t| t.tool == name)
+    }
+    pub fn available(&self, name: &str) -> bool {
+        self.tool(name)
+            .is_some_and(|t| t.status == CapabilityStatus::Available)
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct ProposedCheck {
     pub check: ManifestCheck,
     pub evidence: Vec<String>,
     pub confidence: Confidence,
+    /// Host capability annotation (M5). Absent in discoveries recorded before
+    /// hosts were probed.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub capability: Option<CapabilityStatus>,
+    /// Tools this host lacks for the check; the check stays proposed and the
+    /// executor records it `blocked` if it is run.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub missing_tools: Vec<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -588,6 +704,10 @@ pub struct Discovery {
     /// Empty when the proposal already satisfies manifest validation.
     pub manifest_problems: Vec<String>,
     pub questions: Vec<DiscoveryQuestion>,
+    /// The toolchain probe that annotated the proposed checks (M5). Absent in
+    /// discoveries recorded before hosts were probed.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub host_capabilities: Option<HostCapabilities>,
 }
 
 #[cfg(test)]
@@ -788,5 +908,54 @@ mod tests {
         let mut respelled = pushed.clone();
         respelled.push_remote = Some("deploy@example.invalid:org/app-push".into());
         pushed.matches(&respelled).unwrap();
+    }
+}
+
+#[cfg(test)]
+mod relationship_tests {
+    use super::*;
+
+    fn manifest() -> ProjectManifest {
+        serde_json::from_str(include_str!("../../../examples/project.json")).unwrap()
+    }
+    fn relationship(producer: &str, consumer: &str, confirmed: bool) -> Relationship {
+        Relationship {
+            producer: producer.into(),
+            consumer: consumer.into(),
+            kind: RelationshipKind::Package,
+            contract: format!("{producer} package"),
+            confirmed,
+            evidence: vec!["fixture".into()],
+        }
+    }
+
+    #[test]
+    fn confirmed_relationship_cycles_are_refused_and_proposed_ones_are_listed() {
+        let base = manifest();
+        let ids: Vec<String> = base.repositories.iter().map(|r| r.id.clone()).collect();
+        assert!(ids.len() >= 2, "{ids:?}");
+        let (a, b) = (ids[0].as_str(), ids[1].as_str());
+        let mut cyclic = base.clone();
+        cyclic.relationships = vec![relationship(a, b, true), relationship(b, a, true)];
+        let error = cyclic.validate().unwrap_err().to_string();
+        assert!(
+            error.contains("confirmed relationships form a cycle"),
+            "{error}"
+        );
+        assert!(
+            error.contains(&format!("{a} -> {b} -> {a}"))
+                || error.contains(&format!("{b} -> {a} -> {b}")),
+            "{error}"
+        );
+        // A proposed edge closing the loop is not scheduled against: it is
+        // reported for confirmation, not refused as a cycle.
+        let mut proposed = base.clone();
+        proposed.relationships = vec![relationship(a, b, true), relationship(b, a, false)];
+        proposed.validate().unwrap();
+        assert_eq!(proposed.unconfirmed_relationships().len(), 1);
+        assert!(proposed.confirmed_relationship_cycle().is_none());
+        let acyclic = base;
+        acyclic.validate().unwrap();
+        assert!(acyclic.unconfirmed_relationships().is_empty());
     }
 }

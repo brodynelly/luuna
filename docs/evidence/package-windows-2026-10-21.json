@@ -1,0 +1,36 @@
+{
+  "built_at": "2026-10-22T04:28:00.0540879Z",
+  "profile": "release",
+  "host": {
+    "os": "Microsoft Windows NT 10.0.26300.0",
+    "architecture": "AMD64",
+    "rust": "cargo 1.90.0 (840b83a10 2025-07-30)",
+    "node": "v26.10.0",
+    "pi": "1.3.0"
+  },
+  "signed": false,
+  "webview_install_mode": "downloadBootstrapper",
+  "prerequisites_on_target": [
+    "WebView2 Runtime (bootstrapped by the installer when absent)",
+    "Node.js 24.19 or newer on PATH for the pinned Pi engine",
+    "Git 2.43 or newer on PATH",
+    "Python 3 for Python check recipes",
+    "a provider key saved with Configure Luuna.cmd"
+  ],
+  "artifacts": [
+    {
+      "path": "<checkout>\\apps\\desktop\\src-tauri\\target\\release\\bundle\\nsis\\Luuna_0.1.0_x64-setup.exe",
+      "sha256": "774bdba7284aa172f0ad7776194aecab31a34992010500f4b870c79392361d24",
+      "size_bytes": 19596016
+    }
+  ],
+  "desktop_executable": {
+    "path": "<checkout>\\apps\\desktop\\src-tauri\\target\\release\\luuna-desktop.exe",
+    "sha256": "63b4003c7bb6564d0f5716ba08e1556a1f33530ae7c99de2b3d1ff1575225935"
+  },
+  "runtime_executable": {
+    "path": "<checkout>\\apps\\desktop\\src-tauri\\target\\release\\luuna\\luuna-runtime.exe",
+    "sha256": "a04d6d1288399ff34e687a11ff7e950f3f33294ff599ac7321244394c0565180"
+  },
+  "note": "Sanitized copy of the packaging report; the checkout path is replaced. Unsigned development distribution built on the development host."
+}

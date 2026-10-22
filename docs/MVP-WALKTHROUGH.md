@@ -112,6 +112,25 @@ Stop the runtime at any point (Ctrl+C or SIGTERM for an orderly stop; a crash or
 
 Closing or reloading the browser never cancels anything; reopening the client replays the durable event record from the last sequence. "Disconnect" clears the token from memory and shows the runtime as offline; the runtime keeps running.
 
+## 7b. Backup, loss and restore (ADR 0016)
+
+While the runtime runs, take a consistent snapshot of the database; it prints the schema version, size and SHA-256 of the file it wrote:
+
+```sh
+cargo run --locked -p luuna-runtime -- backup --output ~/luuna-backups/before-upgrade.sqlite3 --data-dir "$LUUNA_DATA_DIR"
+```
+
+A restore is refused while a runtime owns the data directory. Stop the runtime first (the shutdown control, Ctrl+C or `Stop Luuna.cmd`), then:
+
+```sh
+cargo run --locked -p luuna-runtime -- check --data-dir "$LUUNA_DATA_DIR"
+cargo run --locked -p luuna-runtime -- restore --input ~/luuna-backups/before-upgrade.sqlite3 --data-dir "$LUUNA_DATA_DIR"
+```
+
+`check` names a damaged database or one written by a newer Luuna and the restore step; the runtime refuses to start on either before writing anything. `restore` moves the current database and its sidecars into `backups/replaced-<timestamp>/` instead of deleting them, verifies the snapshot and installs it. After the runtime starts again the client shows the same projects, tickets, runs and event streams the snapshot held. A snapshot covers the database only; check artifacts and worktrees are files, so a complete backup is the data directory copied after an orderly stop. Upgrading a database from an earlier schema takes an automatic pre-migration snapshot under `backups/` first.
+
+`node scripts/backup-recovery-drill.mjs` rehearses exactly this against a disposable data directory: durable state, an online backup, the refused live restore, an orderly stop, a deliberately damaged database and a database marked as written by a newer schema (both refused by `check` and by startup), the restore, identical authoritative state afterwards and new work on the restored database, then the storage suite's upgrade drill across every earlier schema version. It writes `report.md` and `report.json` to `--out`.
+
 ## 8. What "done" means here
 
 A `reviewed` candidate is evidence for its exact frozen commit and tree, under one approved plan revision: the required checks passed in the owned worktree and an independent reviewer found no blocking issue. It is a local commit in a Luuna-owned worktree, inspectable with Git at the path shown; publishing it, opening a pull request and merging stay with the developer until M7. The evidence survives client disconnects, runtime restarts and shutdowns, and nothing in the client can mark a candidate reviewed.
@@ -122,4 +141,4 @@ A `reviewed` candidate is evidence for its exact frozen commit and tree, under o
 node scripts/mvp-ui-smoke.mjs --out /tmp/luuna-ui-smoke
 ```
 
-The harness builds the runtime, starts it with the synthetic Pi fixture and a random token, starts the Vite client, and drives headless Chromium through steps 1 to 7 on two generated fixture repositories, including a wrong token, a refused registration, an unreadable manifest draft, baseline logs, a plan with chosen budgets, cancelling the first writer from its ticket while the next revision is held back, an invalid review followed by re-validation, a hard kill and an orderly shutdown during checks, a hard kill during review with the budget refusal, keyboard operation of every control it touches, an accessibility audit of the rendered pages, a presentation audit (WCAG AA contrast against painted backgrounds in the dark and light schemes, scheme following, no horizontal scroll at the 760 px window minimum) and the final disconnect. It writes `report.md`, `report.json` and screenshots to the output directory. It is synthetic: the writer and reviewer are the fixture, so it proves the client and the runtime lifecycle, never a model.
+The harness builds the runtime, starts it with the synthetic Pi fixture and a random token, starts the Vite client, and drives headless Chromium through steps 1 to 7 on two generated fixture repositories (step 7b has its own harness, `node scripts/backup-recovery-drill.mjs`), including a wrong token, a refused registration, an unreadable manifest draft, baseline logs, a plan with chosen budgets, cancelling the first writer from its ticket while the next revision is held back, an invalid review followed by re-validation, a hard kill and an orderly shutdown during checks, a hard kill during review with the budget refusal, keyboard operation of every control it touches, an accessibility audit of the rendered pages, a presentation audit (WCAG AA contrast against painted backgrounds in the dark and light schemes, scheme following, no horizontal scroll at the 760 px window minimum) and the final disconnect. It writes `report.md`, `report.json` and screenshots to the output directory. It is synthetic: the writer and reviewer are the fixture, so it proves the client and the runtime lifecycle, never a model.

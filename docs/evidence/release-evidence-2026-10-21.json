@@ -1,0 +1,291 @@
+{
+  "note": "Sanitized: personal paths replaced. First full run plus the reruns of the two browser smokes. m3-fixture requires a clean committed revision (strict harness) and could not run on the uncommitted tree; genuine steps were skipped (no provider named).",
+  "started": "2026-10-22T04:06:58.969Z",
+  "platform": "win32 x64",
+  "node": "v26.10.0",
+  "tools": {
+    "cargo": "cargo 1.90.0 (840b83a10 2025-07-30)",
+    "rustc": "rustc 1.90.0 (1159e78c4 2025-09-14)",
+    "git": "git version 2.55.0.windows.5",
+    "python": "Python 3.11.9",
+    "npm": "11.19.1"
+  },
+  "steps": [
+    {
+      "id": "fmt",
+      "title": "Rust formatting",
+      "requirements": [
+        "E"
+      ],
+      "kind": "deterministic",
+      "command": "cargo fmt --all -- --check",
+      "status": "passed",
+      "exit": 0,
+      "elapsed_seconds": 1,
+      "detail": ""
+    },
+    {
+      "id": "clippy",
+      "title": "Rust lint, warnings denied",
+      "requirements": [
+        "E"
+      ],
+      "kind": "deterministic",
+      "command": "cargo clippy --locked --workspace --all-targets -- -D warnings",
+      "status": "passed",
+      "exit": 0,
+      "elapsed_seconds": 5,
+      "detail": ""
+    },
+    {
+      "id": "cargo-test",
+      "title": "Rust workspace tests",
+      "requirements": [
+        "R04",
+        "R05",
+        "R06",
+        "R07",
+        "R08",
+        "R09",
+        "R10",
+        "R11",
+        "R12",
+        "R13",
+        "R14",
+        "R15"
+      ],
+      "kind": "deterministic",
+      "command": "cargo test --locked --workspace",
+      "status": "passed",
+      "exit": 0,
+      "elapsed_seconds": 232,
+      "detail": "388 passed, 0 failed, 13 ignored across 43 suites"
+    },
+    {
+      "id": "npm-test",
+      "title": "Contracts, scope guard, component pins, harness, client, desktop and TUI tests",
+      "requirements": [
+        "R02",
+        "R07"
+      ],
+      "kind": "deterministic",
+      "command": "npm.cmd test",
+      "status": "passed",
+      "exit": 0,
+      "elapsed_seconds": 11,
+      "detail": "251 vitest, 39 vitest"
+    },
+    {
+      "id": "typecheck",
+      "title": "Frontend type check",
+      "requirements": [
+        "R02"
+      ],
+      "kind": "deterministic",
+      "command": "npm.cmd run typecheck",
+      "status": "passed",
+      "exit": 0,
+      "elapsed_seconds": 4,
+      "detail": ""
+    },
+    {
+      "id": "build",
+      "title": "Frontend production build",
+      "requirements": [
+        "R02"
+      ],
+      "kind": "deterministic",
+      "command": "npm.cmd run build",
+      "status": "passed",
+      "exit": 0,
+      "elapsed_seconds": 4,
+      "detail": ""
+    },
+    {
+      "id": "hygiene",
+      "title": "Repository hygiene",
+      "requirements": [
+        "E"
+      ],
+      "kind": "deterministic",
+      "command": "node.exe scripts/check-hygiene.mjs",
+      "status": "passed",
+      "exit": 0,
+      "elapsed_seconds": 0,
+      "detail": ""
+    },
+    {
+      "id": "diff-check",
+      "title": "Whitespace check",
+      "requirements": [
+        "E"
+      ],
+      "kind": "deterministic",
+      "command": "git diff --check",
+      "status": "passed",
+      "exit": 0,
+      "elapsed_seconds": 0,
+      "detail": ""
+    },
+    {
+      "id": "native-check",
+      "title": "Native desktop crate type check",
+      "requirements": [
+        "R01"
+      ],
+      "kind": "deterministic",
+      "command": "cargo check --locked --manifest-path apps/desktop/src-tauri/Cargo.toml",
+      "status": "passed",
+      "exit": 0,
+      "elapsed_seconds": 12,
+      "detail": ""
+    },
+    {
+      "id": "components",
+      "title": "Pinned component CLI smoke (real Missions, Atlas, Beacon)",
+      "requirements": [
+        "R14"
+      ],
+      "kind": "real-cli",
+      "command": "node.exe scripts/components-smoke.mjs",
+      "status": "passed",
+      "exit": 0,
+      "elapsed_seconds": 7,
+      "detail": ""
+    },
+    {
+      "id": "components-real",
+      "title": "Explicit real-component runtime tests",
+      "requirements": [
+        "R14"
+      ],
+      "kind": "real-cli",
+      "command": "cargo test --locked -p luuna-runtime --lib components_real_ -- --ignored",
+      "status": "passed",
+      "exit": 0,
+      "elapsed_seconds": 56,
+      "detail": "6 passed, 0 failed, 0 ignored across 1 suites"
+    },
+    {
+      "id": "missions-real",
+      "title": "Explicit real-Missions runtime tests",
+      "requirements": [
+        "R14"
+      ],
+      "kind": "real-cli",
+      "command": "cargo test --locked -p luuna-runtime --lib missions_real_ -- --ignored",
+      "status": "passed",
+      "exit": 0,
+      "elapsed_seconds": 26,
+      "detail": "3 passed, 0 failed, 0 ignored across 1 suites"
+    },
+    {
+      "id": "m1-fixture",
+      "title": "M1 lifecycle harness",
+      "requirements": [
+        "R03",
+        "R15"
+      ],
+      "kind": "synthetic",
+      "command": "node.exe scripts/m1-smoke.mjs --mode fixture --out <out>/m1-fixture",
+      "status": "passed",
+      "exit": 0,
+      "elapsed_seconds": 3,
+      "detail": ""
+    },
+    {
+      "id": "m3-fixture",
+      "title": "M3 candidate, review, repair and recovery harness",
+      "requirements": [
+        "R07",
+        "R08",
+        "R09",
+        "R10"
+      ],
+      "kind": "synthetic",
+      "command": "node.exe scripts/m3-smoke.mjs --mode fixture --out <out>/m3-fixture",
+      "status": "failed",
+      "exit": 1,
+      "elapsed_seconds": 2,
+      "detail": ""
+    },
+    {
+      "id": "backup-drill",
+      "title": "Backup, loss, restore and newer-schema drill",
+      "requirements": [
+        "R15",
+        "E10"
+      ],
+      "kind": "synthetic",
+      "command": "node.exe scripts/backup-recovery-drill.mjs --out <out>/backup-drill --skip-migration-tests",
+      "status": "passed",
+      "exit": 0,
+      "elapsed_seconds": 10,
+      "detail": "30/30"
+    },
+    {
+      "id": "mvp-ui",
+      "title": "Browser client walkthrough with recovery, keyboard and accessibility audit",
+      "requirements": [
+        "R02",
+        "R15"
+      ],
+      "kind": "synthetic",
+      "command": "node.exe scripts/mvp-ui-smoke.mjs --out <out>/mvp-ui",
+      "status": "passed",
+      "exit": 0,
+      "elapsed_seconds": 115,
+      "detail": "64/64",
+      "note": "rerun after fixing the harness Bun resolution and a duplicated form label; the first run of this step failed for those harness reasons"
+    },
+    {
+      "id": "components-ui",
+      "title": "Browser client component workflows with real Missions, Atlas and Beacon",
+      "requirements": [
+        "R14",
+        "R02"
+      ],
+      "kind": "real-cli",
+      "command": "node.exe scripts/m6-ui-smoke.mjs --out <out>/components-ui",
+      "status": "passed",
+      "exit": 0,
+      "elapsed_seconds": 216,
+      "detail": "23/23",
+      "note": "rerun after fixing the harness Bun resolution and a duplicated form label; the first run of this step failed for those harness reasons"
+    },
+    {
+      "id": "tui",
+      "title": "Terminal client walkthrough and parity",
+      "requirements": [
+        "R02",
+        "R15"
+      ],
+      "kind": "synthetic",
+      "command": "node.exe scripts/tui-smoke.mjs --out <out>/tui",
+      "status": "passed",
+      "exit": 0,
+      "elapsed_seconds": 77,
+      "detail": "53/53"
+    },
+    {
+      "id": "m1-genuine",
+      "title": "M1 genuine provider run",
+      "requirements": [
+        "R03"
+      ],
+      "kind": "genuine",
+      "status": "skipped"
+    },
+    {
+      "id": "m3-genuine",
+      "title": "M3 genuine provider run",
+      "requirements": [
+        "R03",
+        "R09",
+        "R10"
+      ],
+      "kind": "genuine",
+      "status": "skipped"
+    }
+  ]
+}

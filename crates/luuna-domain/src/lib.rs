@@ -22,6 +22,10 @@ pub const CANONICALIZATION: &str = "luuna-json-v1";
 pub const MAX_PLAN_ATTEMPTS: u32 = 10;
 pub const MAX_PLAN_TIMEOUT_SECONDS: u64 = 86_400;
 pub const MAX_PLAN_COST_USD_MICROS: u64 = 1_000_000_000;
+/// Most writers a plan may run at once (M4). The runtime's global limit of
+/// four active runs bounds it from above; a plan never needs more workers
+/// than it has tasks.
+pub const MAX_PLAN_WORKERS: u32 = 4;
 
 #[derive(Debug, Error)]
 pub enum DomainError {
@@ -102,6 +106,11 @@ impl RunState {
                 )
                 | (Paused, Exploring | Cancelled)
                 | (Paused | Failed | TestingBlocked, Implementing)
+                // Structural only: storage admits `Interrupted -> Implementing`
+                // solely to resume an interrupted task of a plan's task graph
+                // under the original approval (M4); completed tasks keep
+                // their commits and worktrees.
+                | (Interrupted, Implementing)
                 | (Failed | TestingBlocked, Paused)
                 | (Failed, Cancelled)
                 // Structural only: storage admits `Failed -> Validating` solely for a
@@ -339,8 +348,14 @@ impl PlanRevision {
             }
         }
         let budgets = &self.budgets;
-        if budgets.max_workers != 1 {
-            return invalid("budgets.max_workers must be exactly 1");
+        // One writer per task at most, and never more than the runtime's own
+        // active-work limit: a single-task plan still requires exactly 1.
+        let max_workers = (self.tasks.len() as u32).clamp(1, MAX_PLAN_WORKERS);
+        if !(1..=max_workers).contains(&budgets.max_workers) {
+            return Err(DomainError::Invalid(format!(
+                "budgets.max_workers must be between 1 and {max_workers} for a plan with {} task(s)",
+                self.tasks.len()
+            )));
         }
         if !(1..=MAX_PLAN_ATTEMPTS).contains(&budgets.max_attempts) {
             return Err(DomainError::Invalid(format!(
@@ -389,25 +404,17 @@ impl PlanRevision {
                 return invalid("task exceeds permissions or omits executable requirements");
             }
         }
-        let mut complete = BTreeSet::new();
-        while complete.len() < self.tasks.len() {
-            let before = complete.len();
-            for task in &self.tasks {
-                if task.depends_on.iter().all(|id| complete.contains(id)) {
-                    complete.insert(task.id.clone());
-                }
-            }
-            if complete.len() == before {
-                return invalid("task dependencies contain a cycle or unknown ID");
-            }
-        }
+        self.validate_task_graph()?;
         if self.required_checks.is_empty() || !self.required_checks.iter().any(|c| c.required) {
             return invalid("at least one required check is necessary");
         }
+        // Recipe IDs are unique within their repository (results bind to the
+        // pair), so every repository of a multi-repository plan may carry its
+        // manifest's `unit` recipe.
         let mut checks = BTreeSet::new();
         for check in &self.required_checks {
             if check.id.is_empty()
-                || !checks.insert(&check.id)
+                || !checks.insert((&check.repository_id, &check.id))
                 || !self.base_commits.contains_key(&check.repository_id)
                 || check.executable.is_empty()
                 || !valid_relative_path(&check.cwd)
@@ -419,6 +426,151 @@ impl PlanRevision {
         }
         Ok(())
     }
+
+    /// The task DAG (M4): every dependency names another task of this plan,
+    /// no task depends on itself or lists a dependency twice, and the
+    /// dependencies are acyclic. A refusal names the task and the offending
+    /// dependency or the cycle it found. Task IDs are already unique here.
+    fn validate_task_graph(&self) -> Result<(), DomainError> {
+        let ids: BTreeSet<&str> = self.tasks.iter().map(|task| task.id.as_str()).collect();
+        for task in &self.tasks {
+            let mut seen = BTreeSet::new();
+            for dependency in &task.depends_on {
+                if dependency == &task.id {
+                    return Err(DomainError::Invalid(format!(
+                        "task {} depends on itself",
+                        task.id
+                    )));
+                }
+                if !ids.contains(dependency.as_str()) {
+                    return Err(DomainError::Invalid(format!(
+                        "task {} depends on unknown task {dependency}",
+                        task.id
+                    )));
+                }
+                if !seen.insert(dependency.as_str()) {
+                    return Err(DomainError::Invalid(format!(
+                        "task {} lists dependency {dependency} more than once",
+                        task.id
+                    )));
+                }
+            }
+        }
+        match self.dependency_order() {
+            Ok(_) => Ok(()),
+            Err(cycle) => Err(DomainError::Invalid(format!(
+                "task dependencies contain a cycle: {}",
+                cycle.join(" -> ")
+            ))),
+        }
+    }
+
+    /// Tasks in an order that runs every dependency before its dependents,
+    /// stable with respect to the plan's own order among independent tasks.
+    /// `Err` carries one dependency cycle (closed, so its first and last
+    /// elements are the same task) when the graph has one.
+    pub fn dependency_order(&self) -> Result<Vec<&PlanTask>, Vec<String>> {
+        let mut ordered: Vec<&PlanTask> = Vec::with_capacity(self.tasks.len());
+        let mut placed: BTreeSet<&str> = BTreeSet::new();
+        while ordered.len() < self.tasks.len() {
+            let before = ordered.len();
+            for task in &self.tasks {
+                if !placed.contains(task.id.as_str())
+                    && task
+                        .depends_on
+                        .iter()
+                        .all(|dependency| placed.contains(dependency.as_str()))
+                {
+                    placed.insert(task.id.as_str());
+                    ordered.push(task);
+                }
+            }
+            if ordered.len() == before {
+                return Err(self.find_cycle(&placed));
+            }
+        }
+        Ok(ordered)
+    }
+
+    /// One cycle among the tasks that could not be ordered: walk unplaced
+    /// dependencies from the first stuck task until a task repeats.
+    fn find_cycle(&self, placed: &BTreeSet<&str>) -> Vec<String> {
+        let stuck: Vec<&PlanTask> = self
+            .tasks
+            .iter()
+            .filter(|task| !placed.contains(task.id.as_str()))
+            .collect();
+        let Some(start) = stuck.first() else {
+            return Vec::new();
+        };
+        let mut path: Vec<String> = vec![start.id.clone()];
+        let mut current = *start;
+        loop {
+            let Some(next_id) = current.depends_on.iter().find(|dependency| {
+                !placed.contains(dependency.as_str())
+                    && stuck.iter().any(|task| &task.id == *dependency)
+            }) else {
+                // Every unplaced dependency was already reported or missing;
+                // the path so far is the best description available.
+                return path;
+            };
+            if let Some(position) = path.iter().position(|id| id == next_id) {
+                let mut cycle = path.split_off(position);
+                cycle.push(next_id.clone());
+                return cycle;
+            }
+            path.push(next_id.clone());
+            current = stuck
+                .iter()
+                .find(|task| &task.id == next_id)
+                .expect("dependency is a stuck task");
+        }
+    }
+}
+
+/// Durable state of one plan task inside a workflow run (M4). A task is one
+/// writer attempt in its own worktree; the run records every task's state so
+/// a restart can show the graph and resume what was interrupted.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum TaskState {
+    Queued,
+    Running,
+    /// An in-scope candidate commit exists in the task's preserved worktree.
+    Completed,
+    Failed,
+    /// The runtime stopped while the writer ran; resumable by task ID.
+    Interrupted,
+    /// A dependency failed, was blocked or was interrupted; never started.
+    Blocked,
+    Cancelled,
+}
+
+impl TaskState {
+    pub fn is_terminal(self) -> bool {
+        !matches!(self, Self::Queued | Self::Running)
+    }
+}
+
+/// The environment variable prefix under which a consumer task's writer and
+/// its repository's checks receive a completed producer's candidate worktree
+/// root (`…_PATH`) and commit (`…_COMMIT`): the repository ID is uppercased
+/// with dashes replaced by underscores.
+pub fn dependency_variable(repository_id: &str, suffix: &str) -> String {
+    let name: String = repository_id
+        .chars()
+        .map(|c| match c {
+            '-' => '_',
+            other => other.to_ascii_uppercase(),
+        })
+        .collect();
+    format!("LUUNA_DEPENDENCY_{name}_{suffix}")
+}
+
+/// The `dependency_bindings` key of a candidate set for one consumer and
+/// producer repository pair.
+pub fn dependency_binding_key(consumer: &str, producer: &str) -> String {
+    format!("{consumer}:{producer}")
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -486,6 +638,21 @@ impl CandidateSet {
             || self.hash != self.computed_hash()?
         {
             return invalid("invalid candidate identity");
+        }
+        // A binding `<consumer>:<producer>` names two distinct repositories of
+        // this set and the producer's exact commit, so the bindings the checks
+        // and the review saw are the commits the set freezes.
+        for (key, commit) in &self.dependency_bindings {
+            let bound = key.split_once(':').filter(|(consumer, producer)| {
+                consumer != producer
+                    && self.repository_commits.contains_key(*consumer)
+                    && self.repository_commits.get(*producer) == Some(commit)
+            });
+            if bound.is_none() {
+                return Err(DomainError::Invalid(format!(
+                    "candidate dependency binding {key} must name a consumer and a producer repository of this set and the producer's exact commit"
+                )));
+            }
         }
         Ok(())
     }
@@ -677,6 +844,10 @@ pub(crate) fn path_within(path: &str, prefix: &str) -> bool {
         || path
             .strip_prefix(prefix)
             .is_some_and(|p| p.starts_with('/'))
+}
+/// Whether `value` is an exact Git object identity (40 or 64 lowercase hex digits).
+pub fn is_commit_id(value: &str) -> bool {
+    is_commit(value)
 }
 pub(crate) fn is_commit(value: &str) -> bool {
     matches!(value.len(), 40 | 64)
@@ -1006,9 +1177,13 @@ mod tests {
         assert!(review
             .validate_for(&candidate, &review.reviewer_session)
             .is_err());
+        // A binding names a producer of the set and its exact commit (M4).
+        candidate
+            .repository_commits
+            .insert("api".into(), "c".repeat(40));
         candidate
             .dependency_bindings
-            .insert("app->api".into(), "api-v2".into());
+            .insert("app:api".into(), "c".repeat(40));
         candidate.hash = candidate.computed_hash().unwrap();
         assert!(review.validate_for(&candidate, "implementer-1").is_err());
         review.candidate_hash = candidate.hash.clone();
@@ -1034,5 +1209,150 @@ mod tests {
         assignment.validate_for(&plan).unwrap();
         assignment.repository_id = "outside-scope".into();
         assert!(assignment.validate_for(&plan).is_err());
+    }
+}
+
+#[cfg(test)]
+mod task_graph_tests {
+    use super::*;
+
+    fn plan() -> PlanRevision {
+        serde_json::from_str(include_str!("../../../fixtures/domain/plan.valid.json")).unwrap()
+    }
+    /// A plan whose tasks are `a`, `b` and `c` in one repository, with the
+    /// given dependencies; the second repository `lib` is added for `c`.
+    fn graph(deps: &[(&str, &[&str])]) -> PlanRevision {
+        let mut plan = plan();
+        let template = plan.tasks[0].clone();
+        plan.base_commits.insert("lib".into(), "b".repeat(40));
+        plan.permissions
+            .repositories
+            .insert("lib".into(), vec!["src".into()]);
+        plan.tasks = deps
+            .iter()
+            .map(|(id, depends_on)| PlanTask {
+                id: (*id).to_owned(),
+                repository_id: if *id == "c" {
+                    "lib".into()
+                } else {
+                    "app".into()
+                },
+                depends_on: depends_on.iter().map(|d| (*d).to_owned()).collect(),
+                ..template.clone()
+            })
+            .collect();
+        plan
+    }
+
+    #[test]
+    fn single_task_plans_hash_exactly_as_before() {
+        // The fixture hash was sealed before M4: the graph rules add no field.
+        let plan = plan();
+        plan.validate().unwrap();
+        assert_eq!(plan.computed_hash().unwrap(), plan.hash);
+    }
+
+    #[test]
+    fn a_dag_is_ordered_with_dependencies_first_and_workers_bounded_by_tasks() {
+        let mut plan = graph(&[("c", &["b"]), ("a", &[]), ("b", &["a"])]);
+        plan.budgets.max_workers = 3;
+        let sealed = plan.seal().unwrap();
+        let order: Vec<&str> = sealed
+            .dependency_order()
+            .unwrap()
+            .iter()
+            .map(|task| task.id.as_str())
+            .collect();
+        assert_eq!(order, ["a", "b", "c"]);
+        let mut too_many = sealed.clone();
+        too_many.budgets.max_workers = 4;
+        let error = too_many.seal().unwrap_err().to_string();
+        assert!(
+            error.contains("budgets.max_workers must be between 1 and 3"),
+            "{error}"
+        );
+        let mut single = plan_with_one_task();
+        single.budgets.max_workers = 2;
+        assert!(single
+            .seal()
+            .unwrap_err()
+            .to_string()
+            .contains("between 1 and 1"));
+    }
+
+    fn plan_with_one_task() -> PlanRevision {
+        plan()
+    }
+
+    #[test]
+    fn self_unknown_duplicate_and_cyclic_dependencies_are_named() {
+        let error = graph(&[("a", &["a"])]).seal().unwrap_err().to_string();
+        assert!(error.contains("task a depends on itself"), "{error}");
+        let error = graph(&[("a", &["zzz"])]).seal().unwrap_err().to_string();
+        assert!(
+            error.contains("task a depends on unknown task zzz"),
+            "{error}"
+        );
+        let error = graph(&[("a", &[]), ("b", &["a", "a"])])
+            .seal()
+            .unwrap_err()
+            .to_string();
+        assert!(
+            error.contains("task b lists dependency a more than once"),
+            "{error}"
+        );
+        let error = graph(&[("a", &["c"]), ("b", &["a"]), ("c", &["b"])])
+            .seal()
+            .unwrap_err()
+            .to_string();
+        assert!(
+            error.contains("task dependencies contain a cycle: a -> c -> b -> a"),
+            "{error}"
+        );
+        // A task on a repository outside the permissions is refused as before.
+        let mut outside = graph(&[("a", &[])]);
+        outside.tasks[0].repository_id = "other".into();
+        assert!(outside
+            .seal()
+            .unwrap_err()
+            .to_string()
+            .contains("unknown repository"));
+    }
+
+    #[test]
+    fn dependency_bindings_must_name_set_repositories_and_exact_producer_commits() {
+        let mut candidate: CandidateSet = serde_json::from_str(include_str!(
+            "../../../fixtures/domain/candidate.valid.json"
+        ))
+        .unwrap();
+        candidate.validate().unwrap();
+        candidate
+            .repository_commits
+            .insert("lib".into(), "c".repeat(40));
+        candidate
+            .dependency_bindings
+            .insert(dependency_binding_key("app", "lib"), "c".repeat(40));
+        candidate.hash = candidate.computed_hash().unwrap();
+        candidate.validate().unwrap();
+        for (key, commit) in [
+            ("app:lib", "d".repeat(40)),
+            ("app:app", "b".repeat(40)),
+            ("app:zzz", "c".repeat(40)),
+            ("lib", "c".repeat(40)),
+        ] {
+            let mut wrong = candidate.clone();
+            wrong.dependency_bindings = BTreeMap::from([(key.to_owned(), commit)]);
+            wrong.hash = wrong.computed_hash().unwrap();
+            let error = wrong.validate().unwrap_err().to_string();
+            assert!(error.contains("dependency binding"), "{key}: {error}");
+        }
+        assert_eq!(
+            dependency_variable("shared-lib", "PATH"),
+            "LUUNA_DEPENDENCY_SHARED_LIB_PATH"
+        );
+        assert_eq!(
+            dependency_variable("api", "COMMIT"),
+            "LUUNA_DEPENDENCY_API_COMMIT"
+        );
     }
 }

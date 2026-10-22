@@ -107,6 +107,7 @@ fn discovery() -> Discovery {
         proposed_manifest: manifest(),
         manifest_problems: vec![],
         questions: vec![],
+        host_capabilities: None,
     }
 }
 fn ticket(id: &str) -> Ticket {
@@ -721,7 +722,7 @@ fn a_database_from_a_newer_schema_is_refused_before_anything_is_written() {
         .unwrap();
     connection
         .execute_batch(
-            "CREATE TABLE publications(id TEXT PRIMARY KEY); UPDATE runs SET state='\"publishing\"';",
+            "CREATE TABLE future_records(id TEXT PRIMARY KEY); UPDATE runs SET state='\"publishing\"';",
         )
         .unwrap();
     drop(connection);
