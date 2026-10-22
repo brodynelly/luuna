@@ -5,13 +5,12 @@
  * continuously, so they get no entrance animation and no transition.
  */
 
-/* History rail: cards lift on hover and focus; the selected card keeps its accent rule. */
-.history-list > li button.run-card { border-radius: var(--radius-button); transition: box-shadow var(--duration-micro) var(--ease-out), transform var(--duration-micro) var(--ease-out), background-color var(--duration-micro) var(--ease-out); }
-.history-list > li button.run-card:hover:not(:disabled), .history-list > li button.run-card:focus-visible { box-shadow: var(--shadow-button-hover); transform: translateY(var(--lift-y)); }
-.history-list > li button.run-card[aria-pressed="true"] { box-shadow: var(--shadow-card); }
+/* History rail: hover and focus change the background only; the selected card keeps its accent tint. */
+.history-list > li button.run-card { border-radius: var(--radius-md); transition: background-color var(--duration-micro) var(--ease-standard); }
+.history-list > li button.run-card:hover:not(:disabled):not([aria-pressed="true"]), .history-list > li button.run-card:focus-visible:not([aria-pressed="true"]) { background: var(--fill); }
 
 /* The run bar and its streaming dots sit above the response, outside the output region. */
-.event-panel > .run-detail { box-shadow: var(--shadow-card); border-radius: var(--radius-card); }
+.event-panel > .run-detail { border-radius: var(--radius-lg); }
 .run-detail > .streaming-dots { flex: none; }
 
 /* Live output: a raised card; the response region inside is untouched. */

@@ -203,12 +203,8 @@ describe("colour tokens", () => {
 });
 
 // ---- Banned decoration (ADR 0033) ----
-// Selectors that still draw a coloured left rule. Item L2 emptied the component-sheet entries; L3/L4 own the screen ones, and a stale entry fails.
-const LEFT_RULE_PENDING: string[] = [
-  "screens/candidate-review.css: .candidate-review > .candidate-verdict",
-  "screens/candidate-review.css: .candidate-review > .candidate-verdict[data-tone]",
-  "screens/workflows.css: .task-graph > .task-record > .advisory-result",
-];
+// Coloured left rules are banned outright: the list of tolerated selectors is empty (L2 emptied the component sheets, L4 the screen sheets), so any new one fails.
+const LEFT_RULE_PENDING: string[] = [];
 
 describe("decoration bans", () => {
   test("no stylesheet holds a gradient", () => {

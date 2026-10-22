@@ -1,27 +1,20 @@
 /* Screen: settings. Layout and screen-specific presentation, tokens only (docs/DESIGN-SYSTEM.md). */
 /*
  * The Settings panel (docs/09-experience.md, ADR 0027 point 4) is the runtime's doctor report:
- * one line per item with its status badge, name, the required marker and the runtime's detail,
- * then the verdict as a toned callout. Nothing is edited here. Every rule is scoped by a class
- * unique to this screen; badges, tags and callouts come from components.css.
+ * titled groups (required tools, runtime, credentials, optional tools) of settings rows, each with
+ * the item name, the required marker, the runtime's detail and its status badge, then the verdict
+ * as a toned callout. Nothing is edited here. Every rule is scoped by a class unique to this
+ * screen; badges, tags, settings rows and callouts come from components.css.
  */
 
-.settings-report { display: grid; gap: var(--space-3); min-width: 0; }
-.settings-report > .settings-items { display: grid; margin: 0; padding: 0; list-style: none; min-width: 0; border: var(--border-width) solid var(--color-border); border-radius: var(--radius-card); background: var(--color-surface-raised); box-shadow: var(--shadow-card); }
-/* A small label opens each section (required tools, optional tools, runtime, credentials). */
-.settings-report > .settings-items > .settings-group { padding: var(--space-4) var(--space-4) var(--space-2); border-top: var(--border-width) solid var(--color-border); color: var(--color-text-subtle); font-size: var(--text-label); font-weight: var(--weight-semibold); letter-spacing: var(--tracking-label); line-height: var(--leading-label); text-transform: uppercase; }
-.settings-report > .settings-items > .settings-group:first-child { border-top: 0; padding-top: var(--space-3); }
-/* One row per item on aligned columns: badge, name, the required chip, then the detail. */
-.settings-report > .settings-items > .settings-item { display: grid; grid-template-columns: calc(var(--space-6) * 2) calc(var(--space-7) * 3) auto minmax(0, 1fr); align-items: baseline; gap: var(--space-1-5) var(--space-3); min-width: 0; min-height: var(--row-height); padding: var(--space-3) var(--space-4); border-top: var(--border-width) solid var(--color-border); font-size: var(--text-xs); line-height: var(--leading-h3); }
-.settings-report > .settings-items > .settings-group + .settings-item { border-top: 0; }
-.settings-item > .settings-detail { grid-column: 4; }
-@media (max-width: 680px) {
-  .settings-report > .settings-items > .settings-item { grid-template-columns: auto minmax(0, 1fr); }
-  .settings-item > .settings-detail { grid-column: 1 / -1; }
-}
-.settings-item > code { color: var(--color-text); font-weight: var(--weight-medium); }
-.settings-item > .settings-detail { min-width: 0; color: var(--color-text-muted); overflow-wrap: anywhere; }
-.settings-report > .settings-items > .settings-item:hover { background: var(--color-surface); }
-/* The verdict keeps its own callout; a success check draws once beside it. */
-.settings-report > .settings-verdict-row { display: flex; align-items: center; gap: var(--space-3); min-width: 0; }
-.settings-verdict-row > .settings-verdict { flex: 1 1 auto; min-width: 0; }
+.settings-report { display: grid; gap: var(--space-4); min-width: 0; }
+.settings-report > .settings-groups { display: grid; gap: var(--space-4); min-width: 0; }
+/* A group is a raised card of rows; its title is a sentence-case section title, never all caps. */
+.settings-groups > .settings-group { padding: var(--space-4) var(--space-4) var(--space-1); border: var(--border-width) solid var(--separator); border-radius: var(--radius-lg); background: var(--surface-raised); box-shadow: var(--shadow-card); }
+.settings-group > .panel-heading > h4 { margin: 0; color: var(--ink); font-size: var(--text-body-strong); font-weight: var(--weight-semibold); }
+.settings-rows { display: grid; min-width: 0; }
+/* Rows stay compact; the detail wraps under the title and the badge sits at the end (the row stacks under 680 px). */
+.settings-rows > .settings-item { padding-block: var(--space-3); min-height: var(--row-height); }
+.settings-item .settings-row-title > code { font-weight: var(--weight-medium); }
+.settings-item .settings-row-desc { font-size: var(--text-caption); }
+.settings-item .settings-row-control { min-width: var(--facts-term); justify-content: flex-start; }

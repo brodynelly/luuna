@@ -9,7 +9,7 @@
 /* Layout: a rail (register form, project cards) beside the selected project's detail. Above
    920 px the rail stays in view while a long ticket scrolls the detail column. */
 .projects-layout { display: grid; grid-template-columns: var(--rail-width) minmax(0, 1fr); align-items: start; gap: var(--space-5) var(--space-6); min-width: 0; }
-.projects-rail { position: sticky; top: var(--space-5); display: grid; grid-template-columns: minmax(0, 1fr); align-content: start; gap: var(--space-4); min-width: 0; }
+.projects-rail { position: sticky; top: calc(var(--topbar-height) + var(--space-5)); display: grid; grid-template-columns: minmax(0, 1fr); align-content: start; gap: var(--space-4); min-width: 0; }
 
 /* Add, import and create: quiet disclosures under the project list; the open one holds its form. */
 .projects-rail > details.section > summary { color: var(--color-accent); }
@@ -57,20 +57,14 @@
   .recipe-record > .state { justify-self: start; }
 }
 
-/* Rail: table-like project rows with a selected pill; actions are always visible. */
-.project-list > li .run-card { min-height: var(--row-height); border-radius: var(--radius-pill); transition: box-shadow var(--duration-micro) var(--ease-out), background-color var(--duration-micro) var(--ease-out); }
-.project-list > li .run-card:hover:not(:disabled), .project-list > li .run-card:focus-visible { box-shadow: var(--shadow-card); }
-.project-list > li .run-card[aria-pressed="true"] { box-shadow: var(--shadow-card); }
+/* Rail: compact record rows; the selected row takes the accent tint, and hover is a background change only. */
+.project-list > li .run-card { min-height: var(--row-height); border-radius: var(--radius-md); transition: background-color var(--duration-micro) var(--ease-standard); }
+.project-list > li .run-card:hover:not(:disabled):not([aria-pressed="true"]), .project-list > li .run-card:focus-visible:not([aria-pressed="true"]) { background: var(--fill); }
 
-/* Detail: the elevated panel. Its header stays in view while a long ticket scrolls (stacked layouts do not stick). */
-.projects-layout > .project-detail { border-radius: var(--radius-card); box-shadow: var(--shadow-popover); }
-.project-detail > .project-header { position: sticky; top: 0; padding-block: var(--space-2); background: var(--color-surface); }
+/* Detail: a drawer-like panel with a hairline border and no popover shadow; its header scrolls with the page (no extra sticky bar). */
+.projects-layout > .project-detail { border: var(--border-width) solid var(--separator); border-radius: var(--radius-lg); box-shadow: none; }
 .project-detail > .empty-state { margin: calc(var(--panel-pad) * -1); padding: var(--space-6); }
 
 /* Baseline and discovery records are table-like rows with tabular numbers. */
 .project-detail .record-list.record-rows > .record, .repository-baselines .record { min-height: var(--row-height); font-variant-numeric: tabular-nums; }
-.recipe-record:hover { background: var(--color-surface-raised); }
-
-@media (max-width: 920px) {
-  .project-detail > .project-header { position: static; }
-}
+.recipe-record:hover { background: var(--surface-muted); }

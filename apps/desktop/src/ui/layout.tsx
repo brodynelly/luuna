@@ -28,6 +28,8 @@ export interface PageProps {
   description?: ReactNode;
   /** Toolbar actions for the whole view, on the trailing side of the title. */
   actions?: ReactNode;
+  /** Where a nested page sits (`Breadcrumbs`); rendered first, above the title, only where a real hierarchy exists. */
+  breadcrumbs?: ReactNode;
   /** The experience surface the contracts trace, written literally as a data-surface attribute. */
   "data-surface"?: string;
   className?: string;
@@ -40,8 +42,9 @@ export function Toolbar({ className, children }: { className?: string; children:
 }
 
 /** The template of every view. */
-export function Page({ id, title, description, actions, className, children, ...marker }: PageProps) {
+export function Page({ id, title, description, actions, breadcrumbs, className, children, ...marker }: PageProps) {
   return <section className={["panel page", className].filter(Boolean).join(" ")} aria-labelledby={`${id}-heading`} {...marker}>
+    {breadcrumbs}
     <HeadingRow level={2} id={`${id}-heading`} title={title} accessory={actions} />
     {description && <p className="scope">{description}</p>}
     {children}
