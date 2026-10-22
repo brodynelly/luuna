@@ -15,13 +15,10 @@
       "cli": {
         "primary": "luuna-missions",
         "short": "lm",
-        "legacy": [
-          "sd",
-          "seeds"
-        ],
+        "legacy": [],
         "entrypoint": "src/index.ts"
       },
-      "dataFormatPath": ".seeds/",
+      "dataFormatPath": ".luuna/missions/",
       "interfaces": [
         "CLI",
         "JSON output"
@@ -29,7 +26,7 @@
       "license": "MIT",
       "published": false,
       "repository": "https://github.com/brodynelly/luuna-missions.git",
-      "commit": "e1b5db171892de653e7462e630d64d4964d01422",
+      "commit": "bda5f31e8e7968af54f0d5f55f60c04dbd823d3e",
       "licenseSha256": "9d36b754124311e7363b9f800e147f95b4dcaea008aa3565b70e15b8a7462f0a"
     },
     {
@@ -45,13 +42,10 @@
       "cli": {
         "primary": "luuna-atlas",
         "short": "la",
-        "legacy": [
-          "ml",
-          "mulch"
-        ],
+        "legacy": [],
         "entrypoint": "src/cli.ts"
       },
-      "dataFormatPath": ".mulch/",
+      "dataFormatPath": ".luuna/atlas/",
       "interfaces": [
         "CLI",
         "JSON output",
@@ -60,7 +54,7 @@
       "license": "MIT",
       "published": false,
       "repository": "https://github.com/brodynelly/luuna-atlas.git",
-      "commit": "76ad209daf404dd9a12aeaf46293e05e9f41e517",
+      "commit": "3296243402ec51aa4f21a317c3379b8b8de5e7ca",
       "licenseSha256": "fe1956a36381a8ac9e13e229247eb1f05f951bb6a96153773025d03a0fd62519"
     },
     {
@@ -76,12 +70,10 @@
       "cli": {
         "primary": "luuna-beacon",
         "short": "lb",
-        "legacy": [
-          "cn"
-        ],
+        "legacy": [],
         "entrypoint": "src/index.ts"
       },
-      "dataFormatPath": ".canopy/",
+      "dataFormatPath": ".luuna/beacon/",
       "interfaces": [
         "CLI",
         "JSON output"
@@ -89,7 +81,7 @@
       "license": "MIT",
       "published": false,
       "repository": "https://github.com/brodynelly/luuna-beacon.git",
-      "commit": "072e482169e0d469c3744ec712222f8b310fa7da",
+      "commit": "e103e010082afaa3bde00460b5bd4ceae0f0e476",
       "licenseSha256": "fe1956a36381a8ac9e13e229247eb1f05f951bb6a96153773025d03a0fd62519"
     }
   ],

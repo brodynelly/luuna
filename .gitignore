@@ -20,11 +20,8 @@
 **/.codex/
 **/.factory/
 
-# Local Luuna runtime data and imported authoring stores
+# Local Luuna runtime data and project component stores (.luuna/missions, atlas, beacon)
 .luuna/
-**/.seeds/
-**/.mulch/
-**/.canopy/
 **/.warren/
 *.sqlite
 *.sqlite3

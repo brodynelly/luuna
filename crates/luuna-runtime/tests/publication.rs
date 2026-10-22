@@ -1461,7 +1461,9 @@ async fn a_ci_failure_drives_a_bounded_repair_that_invalidates_the_published_can
     assert_ne!(second_commit, first_commit);
     let worktree = harness.worktree(&run_id).await;
     assert_eq!(
-        fs::read_to_string(worktree.join("src/main.py")).unwrap(),
+        fs::read_to_string(worktree.join("src/main.py"))
+            .unwrap()
+            .replace("\r\n", "\n"),
         "print('repaired after the ci failure')\n"
     );
     let (status, body) = harness.validate(&run_id, &second_hash).await;
