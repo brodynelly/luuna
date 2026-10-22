@@ -2,16 +2,19 @@
  * Luuna desktop styles: an ordered manifest of the design system (docs/DESIGN-SYSTEM.md).
  * Vite inlines every import into one bundled stylesheet served from 'self'. Later layers win
  * regardless of specificity; nothing is unlayered. Tailwind utilities come last (ADR 0030).
- * The full list is registered once (ADR 0032); later items replace a sheet's content and never
- * edit this file. Owners: fonts.css is item F1 and is the last token sheet; controls.css and
- * motion.css are item B; screens/shell.css is item C, directly after app.css; screens/sessions.css
- * is item D, after settings and before the Tailwind utilities.
+ * The full list is registered once (ADR 0032) and edited once more by ADR 0033 (the Ledger token
+ * sheets replace fonts.css); later items replace a sheet's content and never edit this file.
+ * tokens-legacy.css is the last token sheet: it aliases the old names to Ledger roles until the
+ * restyle items migrate them. Owners: controls.css and motion.css are item B; screens/shell.css is
+ * item C, directly after app.css; screens/sessions.css is item D, after settings and before the
+ * Tailwind utilities.
  */
 @layer tokens, base, components, screens, utilities;
 @import "./design/tokens.css" layer(tokens);
 @import "./design/tokens-depth.css" layer(tokens);
+@import "./design/tokens-scale.css" layer(tokens);
 @import "./design/tokens-motion.css" layer(tokens);
-@import "./design/fonts.css" layer(tokens);
+@import "./design/tokens-legacy.css" layer(tokens);
 @import "./design/base.css" layer(base);
 @import "./design/components.css" layer(components);
 @import "./design/overlays.css" layer(components);

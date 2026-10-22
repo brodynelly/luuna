@@ -18,9 +18,8 @@ Pi remains an external pinned dependency, not a rewritten or bundled agent engin
 Other dependencies retain their own licenses in their package distributions and
 lockfiles. This file records source provenance, not a complete legal dependency audit.
 
-## Bundled fonts
+## Design reference
 
-- **Söhne** is a commercial typeface by Klim Type Foundry (https://klim.co.nz). It is bundled in `apps/desktop/src/assets/fonts/soehne/` at the sole user's direction, for personal, non-distributed use on non-Apple platforms.
-- Söhne is **not** covered by Luuna's MIT license or any Luuna license grant.
-- The fonts must be removed or properly licensed before any distribution, publication or packaging of the desktop app.
-- Apple platforms use the system SF stack; SF Pro is not bundled.
+- `docs/design-reference/ledger/` is a byte-for-byte copy of the project owner's Ledger design system (copied 2026-10-22, adopted by ADR 0033). The source contained no license file, so it is treated as the owner's own material and is **not** covered by Luuna's MIT grant.
+- It is documentation and reference data only: nothing under it is built, imported, tested or shipped in the desktop app. See `docs/design-reference/README.md`.
+- Söhne was removed by ADR 0033; earlier commits still contain the files. The desktop uses the system font stack and bundles no fonts.

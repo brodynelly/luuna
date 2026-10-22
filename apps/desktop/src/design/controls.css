@@ -15,16 +15,16 @@ button {
   transition: transform var(--duration-micro) var(--ease-standard), box-shadow var(--duration-micro) var(--ease-standard), background-color var(--duration-micro) var(--ease-standard), border-color var(--duration-micro) var(--ease-standard), color var(--duration-micro) var(--ease-standard);
 }
 button:hover:not(:disabled) { background: var(--color-control-hover); }
-button:focus-visible { box-shadow: var(--shadow-button), var(--shadow-focus); }
+button:focus-visible { box-shadow: var(--shadow-button); }
 button:disabled { border-color: var(--color-border); background: transparent; color: var(--color-text-disabled); box-shadow: none; transform: none; }
 /* Lift and press: the secondary, primary and danger buttons. Quiet, text, selectable and menu buttons stay put. */
 button:not(.quiet, .text-button, .run-card, .nav-item, [role="tab"], [role="menuitem"]):hover:not(:disabled) { transform: translateY(var(--lift-y)); box-shadow: var(--shadow-button-hover); }
 button:not(.quiet, .text-button, .run-card, .nav-item, [role="tab"], [role="menuitem"]):active:not(:disabled) { transform: scale(var(--press-scale)); transition: transform var(--duration-press) var(--ease-standard), box-shadow var(--duration-press) var(--ease-standard), background-color var(--duration-press) var(--ease-standard); }
 
-button.primary { border-color: var(--color-accent); background: var(--color-accent); color: var(--color-on-accent); box-shadow: var(--shadow-inset-highlight), var(--shadow-button); }
-button.primary:hover:not(:disabled) { border-color: var(--color-accent-hover); background: var(--color-accent-hover); box-shadow: var(--shadow-inset-highlight), var(--shadow-button-hover); }
+button.primary { border-color: var(--color-accent); background: var(--color-accent); color: var(--color-on-accent); box-shadow: var(--shadow-button); }
+button.primary:hover:not(:disabled) { border-color: var(--color-accent-hover); background: var(--color-accent-hover); box-shadow: var(--shadow-button-hover); }
 button.primary:active:not(:disabled) { border-color: var(--color-accent-active); background: var(--color-accent-active); }
-button.primary:focus-visible { box-shadow: var(--shadow-inset-highlight), var(--shadow-button), var(--shadow-focus); }
+button.primary:focus-visible { box-shadow: var(--shadow-button); }
 button.quiet { border-color: transparent; background: transparent; color: var(--color-text-muted); box-shadow: none; }
 button.quiet:hover:not(:disabled) { background: var(--color-control-hover); color: var(--color-text); }
 button.text-button { min-height: var(--control-height-sm); padding: 0 var(--space-1); border-color: transparent; background: transparent; color: var(--color-accent); font-size: var(--text-xs); box-shadow: none; }

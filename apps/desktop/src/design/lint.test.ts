@@ -1,7 +1,7 @@
 import { describe, expect, test } from "vitest";
-import { fillProblems, filterProblems, keyframeProblems, opacityProblems, splitAtRules, timingProblems, tsxStyleProblems, willChangeProblems } from "./lint";
+import { fillProblems, filterProblems, gradientProblems, keyframeProblems, leftRuleProblems, leftRuleSelectors, opacityProblems, splitAtRules, timingProblems, tsxStyleProblems, willChangeProblems } from "./lint";
 
-// A rule that cannot fail is not evidence: each rule is shown to accept and to reject (ADR 0032).
+// A rule that cannot fail is not evidence: each rule is shown to accept and to reject (ADR 0032, ADR 0033).
 describe("lint rules", () => {
   test("splitAtRules balances nested braces", () => {
     const { inside, outside } = splitAtRules("a { x: 1 } @keyframes k { from { opacity: 0 } to { opacity: 1 } } b { y: 2 }", "keyframes");
@@ -53,12 +53,44 @@ describe("lint rules", () => {
   });
 
   test("filters are tokens and will-change is banned", () => {
-    expect(filterProblems(".x { filter: blur(var(--blur-aurora)) }")).toEqual([]);
+    expect(filterProblems(".x { filter: blur(var(--blur-sm)) }")).toEqual([]);
     expect(filterProblems(".x { backdrop-filter: none }")).toEqual([]);
     expect(filterProblems(".x { filter: blur(4px) }")).toHaveLength(1);
     expect(filterProblems(".x { -webkit-backdrop-filter: blur(4px) }")).toHaveLength(1);
     expect(willChangeProblems(".x { transform: none }")).toEqual([]);
     expect(willChangeProblems(".x { will-change: transform }")).toHaveLength(1);
+  });
+});
+
+describe("ADR 0033 rules", () => {
+  test("gradients are rejected in every value", () => {
+    expect(gradientProblems(".x { background: var(--surface); box-shadow: none }")).toEqual([]);
+    expect(gradientProblems(".x { background: var(--wash-token) }")).toEqual([]);
+    expect(gradientProblems(".x { background: linear-gradient(90deg, red, blue) }")).toHaveLength(1);
+    expect(gradientProblems(".x { background-image: radial-gradient(circle, red, blue) }")).toHaveLength(1);
+    expect(gradientProblems(".x { background: repeating-conic-gradient(red, blue) }")).toHaveLength(1);
+    expect(gradientProblems(":root { --wash: LINEAR-GRADIENT(red, blue) }")).toHaveLength(1);
+  });
+
+  test("a coloured left rule is rejected", () => {
+    expect(leftRuleProblems(".card { border: var(--border-width) solid var(--separator); border-left: var(--border-width) solid var(--separator) }")).toEqual([]);
+    expect(leftRuleProblems(".card { border-right: var(--rule-width) solid var(--tone-mark) }")).toEqual([]);
+    expect(leftRuleProblems(".card { box-shadow: var(--shadow-card) }")).toEqual([]);
+    expect(leftRuleProblems(".a { border-left: var(--rule-width) solid var(--tone-mark) }")).toHaveLength(1);
+    expect(leftRuleProblems(".a { border-left-color: var(--color-accent) }")).toHaveLength(1);
+    expect(leftRuleProblems(".a { border-inline-start: var(--border-width) solid var(--accent) }")).toHaveLength(1);
+    expect(leftRuleProblems(".a { border-inline-start-color: var(--tone-fg) }")).toHaveLength(1);
+    expect(leftRuleProblems(".a { box-shadow: inset var(--rule-width) 0 0 var(--tone-mark) }")).toHaveLength(1);
+    expect(leftRuleSelectors(".a,\n .b > .c { border-left: var(--rule-width) solid var(--tone-mark) } .d { color: var(--ink) }")).toEqual([".a, .b > .c"]);
+  });
+
+  test("gradient utilities and strings in TSX are rejected", () => {
+    expect(tsxStyleProblems('<div className="flex items-center bg-surface to" />')).toEqual([]);
+    expect(tsxStyleProblems('<p>{"Back to the list"}</p>')).toEqual([]);
+    for (const bad of ["bg-gradient-to-r", "bg-linear-to-b", "bg-radial-[at_top]", "bg-conic-90", "from-accent", "via-surface", "to-accent", "hover:from-accent"]) {
+      expect(tsxStyleProblems('<div className="flex ' + bad + '" />'), bad).not.toEqual([]);
+    }
+    expect(tsxStyleProblems("const s = 'linear-gradient(red, blue)'")).not.toEqual([]);
   });
 });
 

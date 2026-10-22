@@ -1,9 +1,9 @@
 /*
  * Design tokens, motion: easings, durations, motion distances, component sizes and the resting
- * values of runtime-written variables (ADR 0032). Durations are written in ms because
+ * values of runtime-written variables (ADR 0032, kept by ADR 0033). Durations are written in ms because
  * ui/glide.ts parseCssTime reads them. Every duration here is zeroed under reduced motion; a new
  * duration must be added to the reduced-motion block too (design-system.test.ts derives the list).
- * --duration-fast and --duration-follow stay in tokens.css (ADR 0031).
+ * --duration-fast and --duration-follow stay in tokens.css (ADR 0031). Values unchanged by ADR 0033.
  */
 :root {
   /* Easings. --ease is the base easing that base.css uses. */

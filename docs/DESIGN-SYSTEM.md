@@ -1,15 +1,15 @@
 # Luuna desktop design system
 
-Date: 2026-10-21, updated 2026-10-22 for the sidebar shell and Tailwind utilities. Status: current; decisions recorded in [ADR 0013](decisions/0013-desktop-design-system.md) [ADR 0030](decisions/0030-desktop-shell-and-tailwind.md) and [ADR 0032](decisions/0032-stripe-inspired-desktop-visual-language.md) (visual language, fonts, opacity, transform, motion). This is the visual and interaction contract for the desktop client (`apps/desktop`). It is presentation only: the runtime decides every state, permission, reason and next step, and the client displays them. A design change may never change which control appears, when it is enabled, or what text the runtime's state produces.
+Date: 2026-10-21, updated 2026-10-22 for the sidebar shell, Tailwind utilities and the Ledger design system. Status: current; decisions recorded in [ADR 0013](decisions/0013-desktop-design-system.md) [ADR 0030](decisions/0030-desktop-shell-and-tailwind.md) and [ADR 0032](decisions/0032-stripe-inspired-desktop-visual-language.md) (opacity, transform, motion budget; its palette, fonts and gradients are superseded) and [ADR 0033](decisions/0033-ledger-design-system.md) (the Ledger design system: tokens, tone mapping, system fonts, themes). This is the visual and interaction contract for the desktop client (`apps/desktop`). It is presentation only: the runtime decides every state, permission, reason and next step, and the client displays them. A design change may never change which control appears, when it is enabled, or what text the runtime's state produces.
 
 ## Principles
 
 1. **Green is earned.** The success tone means passed durable evidence: a passed check or baseline, a reviewed candidate or run, a `passed` review verdict, and a live authenticated connection. A completed demo session, an approval or a recorded candidate is not evidence and is never green. The UI's own copy says so: "A completed session is not a validation result."
 2. **Six tones, three channels.** Every state is carried by a colour family, a shape mark and the unchanged runtime text. Colour is never the only signal, and no tone has two meanings.
 3. **Identities are shown whole.** Hashes, commits, trees, fingerprints, sessions, worktree paths and artifact ids render in `code`: monospace, wrapping anywhere. CSS never truncates them. The only short forms are the leading-prefix slices that summary rows already make in code.
-4. **Reason, then next step.** A recorded reason carries the tone of the state it explains. The next allowed step follows it on its own line, ruled in the accent (blurple).
-5. **Interruption is not failure.** Outages, restarts, interrupted work and abandoned leases use the interrupted tone (plum, pause bars), never danger. Their work is durable.
-6. **Blurple means the developer acts; cyan means the runtime works.** The accent (blurple) marks primary actions, the next step, focus and selection. The active tone is cyan, so runtime activity is never confused with a call to action. An action group has at most one primary button.
+4. **Reason, then next step.** A recorded reason carries the tone of the state it explains. The next allowed step follows it on its own line, marked in the accent (indigo in light, Apple blue in dark).
+5. **Interruption is not failure.** Outages, restarts, interrupted work and abandoned leases use the interrupted tone, never danger. The tone shares the neutral family (Ledger adds no colour for it), so it stays distinct through its pause-bar mark and the unchanged runtime text. Their work is durable.
+6. **Accent means the developer acts; info means the runtime works.** The accent marks primary actions, the next step, focus and selection. The active tone uses Ledger `info`, told apart from the accent by its ring mark and its text, so runtime activity is never confused with a call to action. An action group has at most one primary button.
 7. **Tokens only.** Literal colours, lengths and durations live in the token sheets `design/tokens*.css` alone. Every colour exists in the dark and the light scheme, and every text pair meets WCAG 2.1 AA.
 8. **One page, one outline.** Heading levels follow the document outline in DOM order (h1 the wordmark, h2 per view, h3 per section or subpanel, h4 inside a candidate or a session). Visual order equals DOM order at every width.
 9. **One view at a time, no instructions needed.** The sidebar selects a view; a view opens with a large title and one sentence that says what it is for. Rules and explanations live in Help, not above controls.
@@ -19,10 +19,11 @@ Date: 2026-10-21, updated 2026-10-22 for the sidebar shell and Tailwind utilitie
 ```text
 apps/desktop/src/
   styles.css                 manifest: @layer tokens, base, components, screens, utilities; then @import … layer(…)
-  design/tokens.css          token sheet: colour, tone, type and layout; dark :root, light under prefers-color-scheme
-  design/tokens-depth.css    token sheet: radii, shadows, focus halo, scrim, glow, gradients (ADR 0032)
+  design/tokens.css          token sheet: Ledger colour roles, light (default) and dark (data-theme or the OS); the follow and caret tokens (ADR 0033)
+  design/tokens-depth.css    token sheet: Ledger radii, z-index, shadows (flat in dark), focus; no gradients, glow or blur
+  design/tokens-scale.css    token sheet: system fonts, Ledger type styles, spacing, control and layout sizes
   design/tokens-motion.css   token sheet: easings, durations, motion distances, component sizes, reduced motion
-  design/fonts.css           bundled Söhne off Apple platforms, token layer (item F1)
+  design/tokens-legacy.css   token sheet: old names aliased to Ledger roles until the restyle items migrate them
   design/base.css            element defaults: type, code/pre, focus, forms, buttons
   design/components.css      tone indirection and every reusable component
   design/overlays.css        palette, menus, dialogs
@@ -40,7 +41,7 @@ apps/desktop/src/
   design/StatusBadge.tsx     the one status chip
   design/Icon.tsx            the sidebar's line icons (decorative, aria-hidden)
   design/tailwind.css        Tailwind CSS v4 utilities; the theme only references the tokens (ADR 0030)
-  design/design-system.test.ts   enforcement (run by npm test)
+  design/design-system.test.ts   enforcement (run by npm test); ledger-tokens.test.ts: Ledger exactness, legacy map, contrast, decoration bans
   screens/app.css            shell: sidebar, views, connect page, Settings › Runtime, Sessions workspace, history, events
   screens/shell.css          sidebar, nav pill, page header, view transitions (item C)
   screens/home.css           Home summary: projects, validation health, blockers
@@ -53,55 +54,67 @@ apps/desktop/src/
   screens/sessions.css       Sessions refinements (item D)
 ```
 
-Vite inlines the imports into one bundled stylesheet served from `'self'`, which the Tauri CSP allows. Later layers win regardless of specificity, so a screen rule refines a component without `!important`. Fonts are bundled and served from `'self'` (ADR 0032); no font, script or stylesheet is fetched remotely.
+Vite inlines the imports into one bundled stylesheet served from `'self'`, which the Tauri CSP allows. Later layers win regardless of specificity, so a screen rule refines a component without `!important`. No font is bundled (system stack, ADR 0033); no font, script or stylesheet is fetched remotely, and the CSP keeps `font-src 'self'`.
 
-Tailwind CSS v4 (`@tailwindcss/vite`) compiles `design/tailwind.css` into the last layer, `utilities`. No preflight is imported and Tailwind's palette is never loaded: the theme is `@theme inline reference` over the tokens, so `gap-2` is `calc(var(--space-1) * 2)`, `text-sm` is `var(--text-sm)` and `bg-surface` is `var(--color-surface)`. Use utilities for layout in markup (flex, grid, gap); keep tones, components and anything a smoke reads in the layered stylesheets.
+Tailwind CSS v4 (`@tailwindcss/vite`) compiles `design/tailwind.css` into the last layer, `utilities`. No preflight is imported and Tailwind's palette is never loaded: the theme is `@theme inline reference` over the tokens, so `gap-2` is `calc(var(--space-1) * 2)`, `text-sm` is `var(--text-sm)` and `bg-surface` is `var(--color-surface)` (a legacy alias until L2 moves the keys to Ledger names). Use utilities for layout in markup (flex, grid, gap); keep tones, components and anything a smoke reads in the layered stylesheets.
 
 ## Tokens
 
-Dark is the default; the light scheme redefines every colour under `@media (prefers-color-scheme: light)`. Values are hex so the contrast test computes ratios from the file itself.
+The tokens are the Ledger design system's, exactly (ADR 0033): `design/tokens.css` holds the colour roles and `design-system.test.ts` and `ledger-tokens.test.ts` compare every value with the vendored `docs/design-reference/ledger/tokens/tokens.json`. Values are hex so the contrast test computes ratios from the file itself.
 
-| Role | Dark | Light | Use |
-| --- | --- | --- | --- |
-| `--color-bg` | `#0a1628` | `#f6f9fc` | page |
-| `--color-sidebar` | `#0c192d` | `#f0f4f8` | sidebar (window chrome) |
-| `--color-surface` | `#101c30` | `#ffffff` | card |
-| `--color-surface-raised` | `#17243a` | `#f8fafc` | record row, tray, hover |
-| `--color-surface-sunken` | `#071121` | `#eef2f7` | pre, wells, scroll regions, subtle surface |
-| `--color-field` / `-disabled` | `#071121` / `#101c30` | `#ffffff` / `#eef2f7` | text fields: enabled well, disabled |
-| `--color-control` / `-hover` | `#17243a` / `#1f2e47` | `#ffffff` / `#f3f6fa` | secondary button, sidebar hover (disabled buttons are ghosted: no fill) |
-| `--color-selected` / `-border` | `#1f2353` / `#5e58d8` | `#efeeff` / `#b7b3ff` | selected card, current view |
-| `--color-accent-tint` | `#1f2353` | `#efeeff` | pale accent fill (active nav, selected rows) |
-| `--color-border` | `#1f2c42` | `#e3e8ee` | decorative hairline |
-| `--color-border-strong` | `#2c3b55` | `#cbd5e1` | decorative stronger divider (not a control edge) |
-| `--color-border-control` | `#6f819b` | `#7d8a9c` | control edges (3:1 non-text) |
-| `--color-text` | `#e3e9f1` | `#30405a` | body text |
-| `--color-text-heading` | `#f5f8fc` | `#0a2540` | headings, titles |
-| `--color-text-muted` | `#a3b1c4` | `#55657c` | labels, terms, scope, small |
-| `--color-text-subtle` | `#97a6ba` | `#5b6b82` | meta: times, event numbers, placeholders |
-| `--color-text-disabled` | `#5f6f86` | `#a3acb9` | disabled controls (exempt from 1.4.3) |
-| `--color-accent` / `-hover` / `-active` | `#9590ff` / `#aaa6ff` / `#bdbaff` | `#5851ea` / `#4b45c6` / `#3f3aa8` | primary, next step, links, selection |
-| `--color-on-accent` | `#0a1628` | `#ffffff` | text on accent |
-| `--color-focus` | `#a29dff` | `#635bff` | focus outline (3:1); the halo is `--shadow-focus` |
-| `--color-selection` | `#353a86` | `#d6d3ff` | `::selection` |
-| `--color-scrollbar` | `#34445c` | `#c3ccd8` | scrollbar thumb (decorative) |
+**Themes.** Light is the default (`:root`). Dark applies from `:root[data-theme="dark"]`, or from `prefers-color-scheme: dark` unless `data-theme="light"` is set. Both themes define the same role names, and the dark attribute block equals the dark media block. Nothing writes `data-theme` yet, so the app follows the OS; a theme control may set it later.
 
-Shadows, scrim, glow and gradients are not hex and live in `tokens-depth.css`; easings, durations, distances and component sizes live in `tokens-motion.css`.
+**Colour roles** (Ledger names, in `tokens.css`; each has a light and a dark value): surfaces `--surface`, `--surface-raised`, `--surface-muted`, `--surface-overlay`, `--field`; fills `--fill`, `--fill-strong`, `--control-selected`; lines `--separator`, `--border` (decorative), `--border-strong` (3:1 control edges); text `--ink`, `--ink-body`, `--ink-muted`, `--ink-subdued` (surfaces only), `--ink-disabled`, `--ink-on-accent`, `--ink-on-danger`, `--ink-on-banner`, `--ink-on-toast`; accent `--accent`, `--accent-hover`, `--accent-text` (links), `--accent-soft`, `--focus-ring`; status `--success`, `--danger`, `--warning`, `--info` each with a `-soft` ground; `--scrim`, `--banner`, `--toast`, `--toast-action`, `--chart-1` to `-5`, `--chart-muted`, `--chart-grid`, and `--ai` (reserved for AI output).
 
-Each tone has `--tone-<name>-fg` (text), `-bg` (tint), `-border` and `-mark` (shape) in both schemes; see `tokens.css`.
+**Other Ledger tokens.** `tokens-depth.css`: `--radius-sm/md/lg/xl/full` (4, 6, 8, 12, 9999 px), `--z-sticky/menu/drawer/dialog/toast`, `--shadow-button/card/popover` (the first two are `none` in dark: depth comes from surface steps), and the `--shadow-focus` field ring. `tokens-scale.css`: `--font-sans` and `--font-mono` (system stacks; `--font-display` aliases sans), type styles as `--text-*`, `--leading-*` and `--weight-*` for page-title 28/36/700, metric-lg 24/32/600, section-title and metric 20/28/600, body-strong 14/20/600, body 14/20/400, label 13/18/500, caption and overline 12/16, mono 13/20; `--space-1` 4, `-2` 8, `-3` 12, `-4` 16, `-5` 20, `-6` 24, `-8` 32, `-12` 48 px (plus 2, 6 and 10 px half steps); `--control-sm/md/lg` 28, 32, 40 px; `--sidebar-width` 240, `--drawer-width` 440, `--dialog-width` 480, `--banner-height` 40, `--topbar-height` 56, `--content-max-width` 1200, `--fold-reference` 768 px. Luuna-only layout tokens (`--layout-max`, `--gutter`, `--palette-*`, `--menu-*`, `--aside-width`, the bounded-region sizes and the rest) keep their values in `tokens-scale.css`. `tokens-motion.css` is unchanged: easings `--ease-standard/-out/-in/-spring/-linear`; durations press 80, micro 140, standard 220, large 340 ms, plus count, draw, shimmer, pulse, ambient and stagger; `--lift-y`, `--press-scale`, `--enter-scale`, `--reveal-offset`, `--toast-offset`, `--pulse-scale`, all zero or neutral under reduced motion. `tokens.css` keeps `--duration-fast` 120 ms, `--duration-follow` 160 ms (the live-output glide), `--follow-threshold` 48 px and the tail caret tokens.
 
-Scales: type roles `--text-display` (fluid 36 to 48 px), `--text-h1` 28 px, `--text-h2` 20 px, `--text-h3` 16 px, `--text-body` 14 px, `--text-small` 13 px, `--text-caption` 12 px and `--text-label` 11 px, each with a unitless `--leading-<role>`; the old names `--text-2xs` to `--text-lg` and `--text-title` are aliases, and `--text-xl` (the wordmark) is unchanged; weights 300, 400, 500, 600 and 700 (`--weight-medium` is 500 and `--weight-strong` is 600; the former 550 and 650 are remapped because bundled static faces render them as 600 and 700); space on a 4 px rhythm (`--space-1` 4 px to `--space-7` 48 px, plus 2 px and 6 px half steps); radii 4 (chip, input), 6 (button), 8 (card, menu), 12 (dialog) px and pill, with `--radius-sm/md/lg/full` as aliases; layered shadows `--shadow-card`, `-popover`, `-dialog`, `-button`, `-button-hover` and the `--shadow-focus` halo (navy-tinted in light, inset highlight in dark); `--border-width` 1 px, `--rule-width` 3 px, `--focus-width` 2 px; controls and single-line fields 34 px (28 px small buttons), `--button-height` 32 px; sidebar 240 px and nav items 34 px; layout `--layout-max` 1280 px with a gutter of 40, 24 and 16 px at full width, 920 px and 680 px; textareas start at their `rows` with a 68 px floor; `--scroll-max` 28 rem and `--plan-max` 24 rem for bounded regions; motion tokens in `tokens-motion.css` (easings `--ease-standard/-out/-in/-spring/-linear`; durations press 80, micro 140, standard 220, large 340 ms, plus count, draw, shimmer, pulse, ambient and stagger; `--lift-y`, `--press-scale`, `--enter-scale`, `--reveal-offset`, `--toast-offset`, `--pulse-scale`), all durations 0 ms and distances neutral under reduced motion, plus `--duration-fast` 120 ms and `--duration-follow` 160 ms (the live-output glide); `--follow-threshold` 48 px (how near the bottom still counts as pinned); tail caret `--tail-caret-width`, `--tail-caret-height` and `--tail-caret-gap`. Fonts: Apple platforms use the system SF stack; other platforms use bundled Söhne from `'self'` (`design/fonts.css`, ADR 0032). Monospace stack `--font-mono`: Cascadia Mono, Cascadia Code, Consolas, then `ui-monospace`, SF Mono, Menlo, Liberation Mono. These are installed, hinted faces; nothing is fetched remotely (CSP `font-src 'self'`).
+**Legacy aliases** (`tokens-legacy.css`, the last token sheet) keep every old name working by pointing it at a Ledger role. A component that still reads an old name gets the Ledger value; migrate it to the Ledger name and delete the alias. The sheet is deleted when it is empty. The final old-to-new mapping:
+
+| Old name | Ledger |
+| --- | --- |
+| `--color-bg`, `--color-sidebar` | `--surface` |
+| `--color-surface`, `--color-control` | `--surface-raised` |
+| `--color-surface-raised`, `--color-control-hover`, `--color-field-disabled` | `--fill` (note: not Ledger `--surface-raised`) |
+| `--color-surface-sunken` | `--surface-muted` |
+| `--color-field` | `--field` |
+| `--color-selected`, `--color-accent-tint`, `--color-selection` | `--accent-soft` |
+| `--color-selected-border`, `--color-accent` | `--accent` |
+| `--color-accent-hover`, `--color-accent-active` | `--accent-hover` |
+| `--color-on-accent` | `--ink-on-accent` |
+| `--color-focus` | `--focus-ring` |
+| `--color-border` | `--separator` (`--border-strong` under Increase Contrast) |
+| `--color-border-strong`, `--color-scrollbar` | `--border` |
+| `--color-border-control` | `--border-strong` |
+| `--color-text` | `--ink-body` |
+| `--color-text-heading` | `--ink` |
+| `--color-text-muted`, `--color-text-subtle` | `--ink-muted` (not `ink-subdued`: subtle text sits on fills and fields) |
+| `--color-text-disabled` | `--ink-disabled` |
+| `--color-scrim` | `--scrim` |
+| `--tone-success-{fg,bg,border,mark}` | `--success`, `--success-soft`, `--success-soft`, `--success` |
+| `--tone-active-*` | `--info`, `--info-soft`, `--info-soft`, `--info` |
+| `--tone-danger-*` | `--danger`, `--danger-soft`, `--danger-soft`, `--danger` |
+| `--tone-attention-*` | `--warning`, `--warning-soft`, `--warning-soft`, `--warning` |
+| `--tone-neutral-*`, `--tone-interrupted-*` | `--ink-body`, `--fill-strong`, `--fill-strong`, `--ink-muted` |
+| `--radius-chip` / `-input`, `-button` / `-card`, `-menu` / `-dialog` / `-pill` | `--radius-sm` / `-md` / `-lg` / `-xl` / `-full` |
+| `--shadow-panel` / `-dialog`, `-overlay` / `-button-hover` / `-kbd` | `--shadow-card` / `--shadow-popover` / `--shadow-button` / `none` |
+| `--control-height`, `--control-height-sm`, `--content-max`, `--space-7` | `--control-md`, `--control-sm`, `--content-max-width`, `--space-12` |
+| `--text-display`, `-h1`, `-title` (and their leading and tracking) | `--text-page-title` |
+| `--text-h2`, `--text-h3`, `--text-xl` | `--text-section-title`, `--text-body-strong`, `--text-metric-lg` |
+| `--text-lg`, `-md` / `-small`, `-sm` / `-xs`, `-2xs` | `--text-body` / `--text-label` / `--text-caption` |
+| `--tracking-h2`, `--tracking-label`, `--weight-strong` | `--tracking-none`, `--weight-semibold` |
+
+Shadows, scrim and the focus ring are not gradients: no stylesheet may hold a gradient, and no token sheet defines a gradient, aurora, glow or blur name.
 
 ## Tones
 
 | Tone | Meaning | Mark | Runtime values |
 | --- | --- | --- | --- |
 | success (green) | passed durable evidence | filled circle | run `reviewed`; candidate `reviewed`; check and baseline `passed`; verdict `passed`; connection connected |
-| active (cyan) | the runtime is working | ring | run `running`, `exploring`, `implementing`, `validating`, `reviewing`; candidate `validating`, `reviewing`; baseline `running`; lease `active` |
-| danger (rose) | failed or blocked evidence | diamond | run `failed`, `testing_blocked`; candidate `failed`, `testing_blocked`; check and baseline `failed`, `blocked`; verdict `changes_required`, `blocked`; severity `blocking` |
-| attention (amber) | waiting on the developer | triangle | run `plan_ready`, `approved`, `paused`; candidate `paused`; severity `warning`; recipe confidence `inferred`; project `unconfirmed` |
-| neutral (slate) | recorded, not evidence | bar | run `queued`, `completed`, `cancelled`, `discovered`; candidate `pending`, `cancelled`; check `cancelled`; severity `info`; lease `released`; connection offline |
-| interrupted (plum) | stopped by an outage or restart, recoverable | pause bars | `interrupted` everywhere; lease `abandoned`; connection reconnecting |
+| active (info blue) | the runtime is working | ring | run `running`, `exploring`, `implementing`, `validating`, `reviewing`; candidate `validating`, `reviewing`; baseline `running`; lease `active` |
+| danger (red) | failed or blocked evidence | diamond | run `failed`, `testing_blocked`; candidate `failed`, `testing_blocked`; check and baseline `failed`, `blocked`; verdict `changes_required`, `blocked`; severity `blocking` |
+| attention (warning) | waiting on the developer | triangle | run `plan_ready`, `approved`, `paused`; candidate `paused`; severity `warning`; recipe confidence `inferred`; project `unconfirmed` |
+| neutral (grey) | recorded, not evidence | bar | run `queued`, `completed`, `cancelled`, `discovered`; candidate `pending`, `cancelled`; check `cancelled`; severity `info`; lease `released`; connection offline |
+| interrupted (neutral grey) | stopped by an outage or restart, recoverable | pause bars | `interrupted` everywhere; lease `abandoned`; connection reconnecting |
 
 `design/tone.ts` holds these as `Record<Union, Tone>` maps over the `@luuna/api-client` unions, so a new runtime state fails `npm run typecheck` until it is given a tone. Descriptor chips (`manifest r2`, `ticket r1 · …`, `required · observed`) take no tone and render as outlined chips.
 
@@ -141,7 +154,7 @@ Every component below is rendered by `src/ui`. A view never writes the element i
 | Key cap | `<Kbd>` renders `kbd.kbd` | Help's shortcuts topic. |
 | Check draw | `<CheckDraw size="sm"|"md"|"lg" label?>` | A check mark drawn once with `stroke-dashoffset`. Only beside a result that is already recorded (doctor ok, a passed verdict). |
 | Reveal | `<Reveal label?>` and `useReveal()` | Children rise in one after another once per mount (stagger capped at 10); `data-revealed` is set afterwards so later children never animate. |
-| Glow and aurora | `<GlowSurface>`, `<Aurora intensity="subtle"|"vivid">` | A pointer-following glow on a card (fine pointers only) and a decorative, `aria-hidden` gradient wash. Neither carries meaning, and neither is used on evidence. |
+| Glow and aurora | `<GlowSurface>`, `<Aurora intensity="subtle"|"vivid">` | Retired by ADR 0033 (no gradients): both render inert (`.aurora` is `display: none`, the glow has no background) until item L2 removes the components. |
 | Icon | `<Icon name className?>` | `className` is appended to `icon`; still decorative and `aria-hidden`. |
 
 ## Screens
@@ -178,7 +191,7 @@ ADR 0032 decisions 4 to 7 in short. Hover lifts 1 px and press scales to 0.98; e
 
 ### Fonts
 
-Apple platforms use the system stack (SF Pro). Other platforms default to the Windows system stack (Segoe UI Variable); bundled Söhne is opt-in with `data-font="soehne"` on the root element (the unhinted web-font files rendered soft on Windows) and, when on, is selected by `data-platform` and served from `'self'` (`design/fonts.css`, token-layer, linted by the tokens-only test). Nothing is fetched remotely. Söhne is a commercial face bundled at the sole user's direction; see [THIRD-PARTY-NOTICES.md](../THIRD-PARTY-NOTICES.md) before any distribution.
+System fonts only (ADR 0033). `--font-sans` is the Ledger stack (`-apple-system`, `BlinkMacSystemFont`, `SF Pro Text`, `Segoe UI`, `Helvetica Neue`, Arial) and `--font-mono` is `ui-monospace`, `SF Mono`, Menlo, Consolas. Nothing is bundled or fetched; the CSP keeps `font-src 'self'`. Söhne, `fonts.css` and the platform attributes were removed; the files remain in Git history.
 
 ## Accessibility
 
@@ -193,8 +206,9 @@ Apple platforms use the system stack (SF Pro). Other platforms default to the Wi
 `npm test` runs `design/design-system.test.ts`. It reads stylesheets with `node:fs`, because Vitest replaces `*.css?raw` imports with an empty string, and it fails on an empty sheet so no check can pass vacuously. It asserts:
 
 - Outside the token sheets: no colour literal or function, no raw length or duration, font sizes only from `--text-*`, `opacity` only inside `@keyframes` or as 0/1 on a decorative pseudo-element, durations and easings only from tokens (no `transition: all`), keyframes limited to `transform`, `translate`, `scale`, `rotate`, `opacity`, `background-position`, `clip-path` and `stroke-dashoffset`, no resting `forwards`/`both` fill, filters only from tokens, no `will-change`, no `!important`, approved media queries only, `outline: none` only on `main:focus`, scrolling only on labelled scroll regions, no truncation of `code`/`pre`, tone mapping only in `components.css`, no selector named after a runtime state, tone variables read only by a rule whose selector carries `[data-tone]`, and screen selectors scoped by a unique class with at most three child steps.
-- The token sheets hold only `:root` custom properties, every `--duration-*` is zeroed under reduced motion (derived from the sheets), and the depth sheet's light names are a subset of its dark names.
-- Every `var()` resolves; both schemes define the same colour roles; every semantic pair meets its WCAG ratio in both schemes.
+- The token sheets hold only the theme selectors (`:root`, `:root[data-theme="light"]`, `:root[data-theme="dark"]` and, inside `prefers-color-scheme: dark`, `:root:not([data-theme="light"])`) with custom properties, every `--duration-*` is zeroed under reduced motion (derived from the sheets), light and dark define the same names, and the dark attribute and dark media blocks are identical.
+- Every Ledger colour, shadow, space, radius, z-index, size, font and type style equals the vendored `tokens.json`; dark card and button shadows are `none`; the legacy sheet holds only aliases and its colour and tone map is pinned; no stylesheet holds a gradient; coloured left rules are limited to a pending list that item L2 empties.
+- Every `var()` resolves; both themes define the same colour roles; every Ledger text, edge and status pair, and every resolved tone, meets its WCAG ratio in both themes (links on `fill` are a documented exclusion).
 - Every component file is registered, and each screen keeps its heading levels, has no inline styles or positive `tabIndex`, renders badges through `StatusBadge`, and every alert carries Dismiss.
 - The tone taxonomy: exactly the five evidence states are success; interruption is never danger; the badge renders the runtime text unchanged.
 

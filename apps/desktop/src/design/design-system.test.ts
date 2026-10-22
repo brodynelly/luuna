@@ -1,34 +1,25 @@
-import { readdirSync, readFileSync } from "node:fs";
 import { describe, expect, test } from "vitest";
 import { createElement } from "react";
 import { renderToStaticMarkup } from "react-dom/server";
 import { StatusBadge } from "./StatusBadge";
 import { TONES, baselineTone, candidateTone, checkTone, confidenceTone, connectionTone, leaseTone, manifestTone, runTone, severityTone, verdictTone } from "./tone";
 import type { Tone } from "./tone";
-import { declarations, motionProblems, rules, splitAtRules } from "./lint";
+import { declarations, motionProblems, rules } from "./lint";
+import { ALLOWED_SELECTORS, DARK_MEDIA, DARK_MEDIA_SELECTOR, MANIFEST, TOKENS, TOKEN_SHEETS, colourThemes, depthThemes, media, read, sheets } from "./sheet-fixtures";
 
-// Stylesheets are read with node:fs: Vitest replaces `*.css?raw` imports with "", which would
-// let every check below pass without reading anything. Each file read must be non-empty.
-const root = new URL("../", import.meta.url);
-const raw = (file: string) => readFileSync(new URL(file, root), "utf8");
-const read = (file: string) => raw(file).replace(/\/\*[\s\S]*?\*\//g, "");
-const files = readdirSync(root, { recursive: true }).map((file) => file.replaceAll("\\", "/")).sort();
-const sheets = files.filter((file) => file.endsWith(".css"));
-const TOKENS = "design/tokens.css";
-const TOKEN_SHEETS = [TOKENS, "design/tokens-depth.css", "design/tokens-motion.css"];
-const MANIFEST = "styles.css";
+
 // Tailwind CSS v4 utilities (ADR 0030): last layer, its theme a reference to the tokens.
 const TAILWIND = "design/tailwind.css";
 // Every sheet is registered once (ADR 0032); later items replace a sheet's content, never this list.
-const EXPECTED_SHEETS = [MANIFEST, ...TOKEN_SHEETS, "design/fonts.css", "design/base.css", "design/components.css", "design/overlays.css", "design/controls.css", "design/motion.css", "screens/app.css", "screens/shell.css", "screens/home.css", "screens/board.css", "screens/projects.css", "screens/workflows.css", "screens/candidate-review.css", "screens/project-components.css", "screens/help.css", "screens/settings.css", "screens/sessions.css", "design/tailwind.css"];
+const EXPECTED_SHEETS = [MANIFEST, ...TOKEN_SHEETS, "design/base.css", "design/components.css", "design/overlays.css", "design/controls.css", "design/motion.css", "screens/app.css", "screens/shell.css", "screens/home.css", "screens/board.css", "screens/projects.css", "screens/workflows.css", "screens/candidate-review.css", "screens/project-components.css", "screens/help.css", "screens/settings.css", "screens/sessions.css", "design/tailwind.css"];
 function layerOf(sheet: string): string {
-  if (TOKEN_SHEETS.includes(sheet) || sheet === "design/fonts.css") return "tokens";
+  if (TOKEN_SHEETS.includes(sheet)) return "tokens";
   if (sheet === "design/base.css") return "base";
   if (sheet === TAILWIND) return "utilities";
   if (sheet.startsWith("screens/")) return "screens";
   return "components"; // components, overlays, controls, motion
 }
-const MEDIA = ["(max-width: 920px)", "(max-width: 680px)", "(prefers-reduced-motion: reduce)", "(prefers-color-scheme: light)", "(prefers-contrast: more)", "(forced-colors: active)", "(hover: hover)", "(pointer: fine)"];
+const MEDIA = ["(max-width: 920px)", "(max-width: 680px)", "(prefers-reduced-motion: reduce)", "(prefers-color-scheme: dark)", "(prefers-contrast: more)", "(forced-colors: active)", "(hover: hover)", "(pointer: fine)"];
 
 const STATES = [...new Set([runTone, candidateTone, checkTone, baselineTone, verdictTone, severityTone, leaseTone, connectionTone].flatMap((map) => Object.keys(map)))];
 const STATE_SELECTOR = new RegExp(`[.="'](?:${STATES.join("|")})(?![\\w-])`);
@@ -98,24 +89,35 @@ describe("stylesheets", () => {
   });
 });
 
+
+
+// Theme structure, Ledger exactness, legacy aliases, contrast and decoration bans are in ledger-tokens.test.ts.
 describe("token sheets", () => {
   const MOTION = "design/tokens-motion.css";
   const RM = "(prefers-reduced-motion: reduce)";
-  const media = (css: string) => splitAtRules(css, "media");
   for (const file of TOKEN_SHEETS) {
     test(`${file} holds only :root custom properties under approved media`, () => {
       const css = read(file);
       const { inside, preludes, outside } = media(css);
-      expect(rules(outside).filter(({ selector }) => selector !== ":root").map(({ selector }) => selector)).toEqual([]);
+      expect(rules(outside).filter(({ selector }) => !ALLOWED_SELECTORS.includes(selector)).map(({ selector }) => selector)).toEqual([]);
       for (const [name] of [...declarations(outside), ...inside.flatMap(declarations)]) expect(name.startsWith("--") || (file === TOKENS && name === "color-scheme"), `${file}: ${name}`).toBe(true);
       for (const prelude of preludes) for (const part of prelude.split(/\band\b|,/).map((item) => item.trim()).filter(Boolean)) expect(MEDIA, `${file}: ${part}`).toContain(part);
+      // The :not(...) selector appears only inside the dark media block.
+      preludes.forEach((prelude, index) => {
+        for (const { selector } of rules(inside[index])) expect(selector === DARK_MEDIA_SELECTOR ? prelude === DARK_MEDIA : selector === ":root", `${file}: ${selector} in ${prelude}`).toBe(true);
+      });
     });
   }
-  test("the depth sheet's light names are a subset of its dark names", () => {
-    const { inside, outside } = media(read("design/tokens-depth.css"));
-    const darkNames = new Set(declarations(outside).map(([name]) => name));
-    expect(darkNames.size).toBeGreaterThan(30);
-    expect(inside.flatMap(declarations).map(([name]) => name).filter((name) => !darkNames.has(name))).toEqual([]);
+  for (const [file, set] of [[TOKENS, colourThemes], ["design/tokens-depth.css", depthThemes]] as const) {
+    test(`${file}: light and dark define the same names, dark is one set of values, and :root redefines no themed name`, () => {
+      expect(set.light.size).toBeGreaterThan(file === TOKENS ? 40 : 2);
+      expect([...set.light.keys()].sort()).toEqual([...set.darkAttribute.keys()].sort());
+      expect([...set.darkAttribute]).toEqual([...set.darkMedia]);
+      expect([...set.plain.keys()].filter((name) => set.light.has(name))).toEqual([]);
+    });
+  }
+  test("color-scheme is light, dark and dark", () => {
+    expect([colourThemes.light.get("color-scheme"), colourThemes.darkAttribute.get("color-scheme"), colourThemes.darkMedia.get("color-scheme")]).toEqual(["light", "dark", "dark"]);
   });
   test("every duration token is zeroed under reduced motion, derived from the token sheets", () => {
     const durations = new Set<string>();
@@ -129,76 +131,10 @@ describe("token sheets", () => {
     expect([...durations].filter((name) => !/^0m?s$/.test(reduced.get(name) ?? ""))).toEqual([]);
     for (const name of ["--lift-y", "--reveal-offset", "--toast-offset"]) expect(reduced.get(name), name).toBe("0px");
     for (const name of ["--press-scale", "--enter-scale", "--pulse-scale"]) expect(reduced.get(name), name).toBe("1");
+    expect(MOTION).toBe("design/tokens-motion.css");
   });
 });
 
-// ---- WCAG 2.x contrast of every semantic pair, in both colour schemes ----
-const tokens = read(TOKENS);
-function block(start: number): string {
-  const open = tokens.indexOf("{", start);
-  return tokens.slice(open + 1, tokens.indexOf("}", open));
-}
-const darkBlock = block(tokens.indexOf(":root {"));
-const lightBlock = block(tokens.indexOf(":root {", tokens.indexOf("@media (prefers-color-scheme: light)")));
-const colours = (body: string) => new Map(declarations(body).filter(([name, value]) => /^--(color|tone)-/.test(name) && /^#[0-9a-f]{6}$/i.test(value)));
-const dark = colours(darkBlock);
-const light = colours(lightBlock);
-function luminance(colour: string): number {
-  const [r, g, b] = [1, 3, 5].map((index) => parseInt(colour.slice(index, index + 2), 16) / 255).map((c) => (c <= 0.04045 ? c / 12.92 : ((c + 0.055) / 1.055) ** 2.4));
-  return 0.2126 * r + 0.7152 * g + 0.0722 * b;
-}
-function contrast(one: string, two: string): number {
-  const [high, low] = [luminance(one), luminance(two)].sort((x, y) => y - x);
-  return (high + 0.05) / (low + 0.05);
-}
-const SURFACES = ["color-bg", "color-sidebar", "color-surface", "color-surface-raised", "color-surface-sunken", "color-field", "color-control", "color-selected", "color-accent-tint", "color-control-hover"];
-const TEXT = ["color-text", "color-text-heading", "color-text-muted", "color-text-subtle", "color-accent"];
-const PAIRS: Array<[string, string, number]> = [
-  ...TEXT.flatMap((fg) => SURFACES.map((bg): [string, string, number] => [fg, bg, 4.5])),
-  ...TONES.flatMap((tone): Array<[string, string, number]> => [
-    [`tone-${tone}-fg`, `tone-${tone}-bg`, 4.5],
-    [`tone-${tone}-fg`, "color-surface", 4.5],
-    [`tone-${tone}-fg`, "color-surface-raised", 4.5],
-    [`tone-${tone}-fg`, "color-bg", 4.5],
-    [`tone-${tone}-fg`, "color-sidebar", 4.5],
-    [`tone-${tone}-mark`, "color-sidebar", 3],
-    [`tone-${tone}-mark`, `tone-${tone}-bg`, 3],
-    [`tone-${tone}-mark`, "color-surface", 3],
-    [`tone-${tone}-mark`, "color-surface-raised", 3],
-  ]),
-  ...TONES.map((tone): [string, string, number] => [`tone-${tone}-mark`, "color-surface-sunken", 3]),
-  ["color-on-accent", "color-accent", 4.5],
-  ["color-on-accent", "color-accent-hover", 4.5],
-  ["color-on-accent", "color-accent-active", 4.5],
-  // ::selection paints --color-text-heading; body text may sit inside a selection too. Muted, subtle and accent text do not need to meet it.
-  ["color-text", "color-selection", 4.5],
-  ["color-text-heading", "color-selection", 4.5],
-  ...["color-selected", "color-accent-tint", "color-sidebar"].map((bg): [string, string, number] => ["color-focus", bg, 3]),
-  ...["color-sidebar", "color-control-hover"].map((bg): [string, string, number] => ["color-border-control", bg, 3]),
-  ["color-text", "color-control-hover", 4.5],
-  ["color-accent", "color-selected", 3],
-  ...["color-bg", "color-surface", "color-surface-raised", "color-surface-sunken"].map((bg): [string, string, number] => ["color-focus", bg, 3]),
-  ...["color-bg", "color-surface", "color-surface-raised", "color-surface-sunken", "color-field", "color-control", "color-selected"].map((bg): [string, string, number] => ["color-border-control", bg, 3]),
-];
-
-describe("colour tokens", () => {
-  test("both schemes define the same colour roles, every one a #rrggbb value", () => {
-    expect(dark.size).toBeGreaterThan(40);
-    expect([...light.keys()].sort()).toEqual([...dark.keys()].sort());
-    const lightNames = declarations(lightBlock).map(([name]) => name).filter((name) => name.startsWith("--"));
-    const darkNames = new Set(declarations(darkBlock).map(([name]) => name));
-    expect(lightNames.filter((name) => !darkNames.has(name))).toEqual([]);
-  });
-  for (const [scheme, map] of [["dark", dark], ["light", light]] as const) {
-    test.each(PAIRS)(`${scheme}: --%s on --%s meets %s:1`, (fg, bg, minimum) => {
-      const one = map.get(`--${fg}`);
-      const two = map.get(`--${bg}`);
-      expect(one, `--${fg}`).toBeDefined();
-      expect(two, `--${bg}`).toBeDefined();
-      expect(contrast(one!, two!)).toBeGreaterThanOrEqual(minimum);
-    });
-  }
-});
 
 // Screen structure (templates, components, file size) is enforced in components.test.ts.
 

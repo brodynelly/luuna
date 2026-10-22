@@ -1,0 +1,33 @@
+<!doctype html>
+<html lang="en" data-theme="light">
+<head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><title>Ledger — LibraryPage</title>
+<link rel="stylesheet" href="../tokens/tokens.css"><link rel="stylesheet" href="../components/ledger.css">
+<style>html,body{margin:0;height:100%;}body{background:var(--surface);}#root{height:100%;}.theme-toggle{position:fixed;right:12px;bottom:12px;z-index:100;}</style>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/react/18.3.1/umd/react.production.min.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/react-dom/18.3.1/umd/react-dom.production.min.js"></script>
+<script src="../components/ledger.js"></script>
+</head>
+<body>
+<div id="root"></div>
+<button class="lg-btn lg-btn-secondary theme-toggle" onclick="var r=document.documentElement;r.dataset.theme=r.dataset.theme==='dark'?'light':'dark'">Toggle theme</button>
+<script>
+  var L = window.Ledger, h = React.createElement;
+  ReactDOM.createRoot(document.getElementById('root')).render((function(){ function shell(title, main, active, o){ o = o || {};
+ return h(L.AppShell,{
+  banner:h(L.Banner,{label:'Workspace',action:'Open in browser'},'Connected to dashboard.ts.brodynelly.com over Tailscale.'),
+  brand:{name:'NAS Workspace',subtitle:'Brody Nelson'},
+  nav:[h(L.NavItem.Group,{key:'a'},h(L.NavItem,{icon:'home',label:'Home',active:active==='home'}),h(L.NavItem,{icon:'folder',label:'Library',active:active==='library'}),h(L.NavItem,{icon:'sparkle',label:'Ask AI',active:active==='ai'}),h(L.NavItem,{icon:'download',label:'Downloads',active:active==='downloads'})),
+       h(L.NavItem.Group,{key:'b',label:'Device'},h(L.NavItem,{icon:'gear',label:'Settings',active:active==='settings'}))],
+  sidebarFooter:h(L.StatusIndicator,{status:'connected',label:'Connected'}),
+  search:h(L.SearchField,{width:360,shortcut:'/',placeholder:'Search files'}),
+  actions:[h(L.IconButton,{key:1,icon:'help',label:'Help'}),h(L.IconButton,{key:2,icon:'bell',label:'Notifications',dot:true}),h(L.IconButton,{key:3,icon:'sparkle',label:'Ask AI'}),h(L.Avatar,{key:4,name:'Brody Nelson'})]
+ }, h(L.PageHeader,{title:title,description:o.description,breadcrumbs:o.breadcrumbs,actions:o.actions}), main);
+}
+ return shell('Taxes', h('div',{style:{display:'flex',flexDirection:'column',gap:12}},
+  h('div',{style:{display:'flex',gap:8,alignItems:'center'}},h(L.Chip,{icon:'plus'},'Kind'),h(L.Chip,{selected:true,label:'Modified',onRemove:function(){}},'Last 30 days'),h('span',{style:{flex:1}}),h(L.SegmentedControl,{label:'View',items:[{value:'list',label:'List'},{value:'grid',label:'Grid'}]})),
+  h(L.DataTable,{selectable:true,columns:[{key:'name',label:'Name',sortable:true,render:function(r){return h('span',{className:'lg-cell-file'},h(L.Icon,{name:r.icon,size:16}),r.name)}},{key:'modified',label:'Modified',sortable:true,muted:true},{key:'size',label:'Size',align:'right'}],rows:[{id:1,icon:'folder',name:'2025',modified:'Oct 21',size:'—'},{id:2,icon:'file',name:'w2-brody.pdf',modified:'Oct 20',size:'184 KB'},{id:3,icon:'file',name:'1099-int.pdf',modified:'Oct 18',size:'92 KB'},{id:4,icon:'image',name:'receipt-scan.png',modified:'Oct 12',size:'2.4 MB'}]}),
+  h(L.Pagination,{total:4,pageSize:25,noun:'items'})), 'library',
+  {breadcrumbs:h(L.Breadcrumbs,{items:[{label:'Library'},{label:'Documents'},{label:'Taxes'}]}),actions:[h(L.Button,{key:1,icon:'upload',size:'md'},'Upload'),h(L.Menu,{key:2,label:'New',triggerIcon:'plus',triggerVariant:'primary',items:[{label:'Folder',icon:'folder'},{label:'Text file',icon:'file'}]})]}); })());
+</script>
+</body>
+</html>
