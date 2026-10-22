@@ -64,7 +64,7 @@ Checks on the branch's final revision, all local (hosted CI could not start):
 | `node scripts/m1-smoke.mjs --mode fixture` | 19/19 |
 | `node scripts/backup-recovery-drill.mjs --skip-migration-tests` | 30/30 |
 | `node scripts/mvp-ui-smoke.mjs` (Chromium) | rerun in progress on this branch after the per-repository baseline control changed the walkthrough selector; the result is recorded in the final revision |
-| `node scripts/m6-ui-smoke.mjs` (real component CLIs) | rerun in progress (same selector change) |
+| `node scripts/m6-ui-smoke.mjs` (real component CLIs) | 23/23 (real Missions, Atlas and Beacon CLIs, Chromium) |
 | `node scripts/m3-smoke.mjs --mode fixture` (strict) | refused on an uncommitted tree as designed; rerun on the final committed revision is recorded there |
 | Genuine provider steps, real GitHub, native Windows/Mac, installer build | not run: no provider credential, no GitHub token or repository for the publisher, no Windows or Mac host |
 
