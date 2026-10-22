@@ -145,6 +145,7 @@ const REQUIRED_SURFACES = {
   'kanban projection of authoritative run state (docs/09-experience.md#views, ADR 0027 point 4)': { projects: ['projects.list', 'projects.show', 'tickets.list', 'runs.list'], desktop: 'board', tui: 'board' },
   'help: onboarding, states, evidence, documentation (docs/09-experience.md#views, ADR 0027 point 4)': { projects: ['health'], desktop: 'help', tui: null },
   'external-editor handoff: the candidate worktree path with a copy control (docs/09-experience.md#views, ADR 0027 point 4)': { projects: ['runs.worktrees', 'runs.candidate'], desktop: 'editor-handoff', tui: null },
+  'settings: the runtime environment and credential presence as shown by doctor, never values, not an editor (docs/09-experience.md#views, ADR 0027 point 4)': { projects: ['doctor'], desktop: 'settings', tui: 'doctor' },
 };
 const byId = new Map(capabilities.map((capability) => [capability.id, capability]));
 const desktopSources = readdirSync(resolve(root, 'apps/desktop/src'), { recursive: true })
@@ -171,7 +172,7 @@ for (const capability of capabilities) assert.ok(capability.required_by.length >
 checks += Object.keys(REQUIRED_ACTIONS).length;
 console.log(`Required actions: ${Object.keys(REQUIRED_ACTIONS).length} specification obligations traced to cataloged actions with desktop and TUI controls.`);
 const desktopSurfaces = new Set([...desktopSources.matchAll(/data-surface="([^"]+)"/g)].map((match) => match[1]));
-const { projectionsByName } = await import('../packages/tui/src/commands.mjs');
+const { commandsByName, projectionsByName } = await import('../packages/tui/src/commands.mjs');
 for (const [surface, trace] of Object.entries(REQUIRED_SURFACES)) {
   for (const id of trace.projects) {
     const capability = byId.get(id);
@@ -180,10 +181,13 @@ for (const [surface, trace] of Object.entries(REQUIRED_SURFACES)) {
   }
   assert.ok(desktopSurfaces.has(trace.desktop), `required surface "${surface}": no desktop panel carries data-surface="${trace.desktop}"`);
   if (trace.tui) {
-    const projection = projectionsByName.get(trace.tui);
-    assert.ok(projection, `required surface "${surface}": no TUI projection command ${trace.tui}`);
-    assert.ok(projection.projects.every((id) => trace.projects.includes(id)), `required surface "${surface}": TUI ${trace.tui} reads ${projection.projects.join(', ')}, outside the traced actions`);
-    assert.ok(projection.projects.every((id) => byId.get(id)?.method === 'GET'), `required surface "${surface}": TUI ${trace.tui} must read only`);
+    // A projection command (`PROJECTIONS`) reads the entries it names; a surface that is one
+    // cataloged read (settings: `doctor`) is the action's own command.
+    const command = projectionsByName.get(trace.tui) ?? commandsByName.get(trace.tui);
+    assert.ok(command, `required surface "${surface}": no TUI command ${trace.tui}`);
+    const reads = command.projects ?? [command.id];
+    assert.ok(reads.every((id) => trace.projects.includes(id)), `required surface "${surface}": TUI ${trace.tui} reads ${reads.join(', ')}, outside the traced actions`);
+    assert.ok(reads.every((id) => byId.get(id)?.method === 'GET'), `required surface "${surface}": TUI ${trace.tui} must read only`);
   }
 }
 checks += Object.keys(REQUIRED_SURFACES).length;

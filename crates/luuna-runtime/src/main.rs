@@ -30,10 +30,9 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                 "cannot listen on {address}: {error}; set LUUNA_PORT to a free port"
             ))
         })?;
-    eprintln!(
-        "Luuna runtime listening on http://{}",
-        listener.local_addr()?
-    );
+    let address = listener.local_addr()?;
+    eprintln!("Luuna runtime listening on http://{address}");
+    let state = state.with_listen_port(address.port());
     watch_termination_signals(state.clone());
     match serve(listener, state, DRAIN_DEADLINE).await? {
         Stopped::Drained => {
