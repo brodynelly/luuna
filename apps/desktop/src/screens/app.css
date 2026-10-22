@@ -207,6 +207,10 @@
   font-family: var(--font-sans);
   font-size: var(--text-sm);
   line-height: var(--leading-prose);
+  /* Prose in the sans stack keeps shaping; its re-layout is bounded by the region's containment. */
+  text-rendering: optimizeLegibility;
+  font-kerning: normal;
+  font-variant-ligatures: common-ligatures;
 }
 
 /* At 920 px the sidebar becomes an icon rail (names stay as accessible names and tooltips), and

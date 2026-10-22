@@ -129,6 +129,7 @@ const PAIRS: Array<[string, string, number]> = [
     [`tone-${tone}-mark`, "color-surface", 3],
     [`tone-${tone}-mark`, "color-surface-raised", 3],
   ]),
+  ["tone-active-mark", "color-surface-sunken", 3],
   ["color-on-accent", "color-accent", 4.5],
   ["color-on-accent", "color-accent-hover", 4.5],
   ["color-text", "color-control-hover", 4.5],

@@ -71,7 +71,7 @@ Dark is the default; the light scheme redefines every colour under `@media (pref
 
 Each tone has `--tone-<name>-fg` (text), `-bg` (tint), `-border` and `-mark` (shape) in both schemes; see `tokens.css`.
 
-Scales: type `--text-2xs` 11 px (badges, eyebrow, meta), `--text-xs` 12 px (evidence, labels, code), `--text-sm` 13 px (controls, card text, h4), `--text-md` 14 px (body, h3), `--text-lg` 16 px (h2), `--text-xl` fluid 26 to 34 px (h1); weights 400, 550, 650; space on a 4 px rhythm (`--space-1` 4 px to `--space-7` 48 px, plus 2 px and 6 px half steps); radii 4, 7, 11 px; `--border-width` 1 px, `--rule-width` 3 px, `--focus-width` 2 px; controls and single-line fields 34 px (28 px small buttons); layout `--layout-max` 1280 px with a gutter of 40, 24 and 16 px at full width, 920 px and 680 px; textareas start at their `rows` with a 68 px floor; `--scroll-max` 28 rem and `--plan-max` 24 rem for bounded regions; one motion duration, `--duration-fast` 120 ms, which is 0 ms under reduced motion.
+Scales: type `--text-2xs` 11 px (badges, eyebrow, meta), `--text-xs` 12 px (evidence, labels, code), `--text-sm` 13 px (controls, card text, h4), `--text-md` 14 px (body, h3), `--text-lg` 16 px (h2), `--text-xl` fluid 26 to 34 px (h1); weights 400, 550, 650; space on a 4 px rhythm (`--space-1` 4 px to `--space-7` 48 px, plus 2 px and 6 px half steps); radii 4, 7, 11 px; `--border-width` 1 px, `--rule-width` 3 px, `--focus-width` 2 px; controls and single-line fields 34 px (28 px small buttons); layout `--layout-max` 1280 px with a gutter of 40, 24 and 16 px at full width, 920 px and 680 px; textareas start at their `rows` with a 68 px floor; `--scroll-max` 28 rem and `--plan-max` 24 rem for bounded regions; motion durations `--duration-fast` 120 ms and `--duration-follow` 160 ms (the live-output glide), both 0 ms under reduced motion; `--follow-threshold` 48 px (how near the bottom still counts as pinned); tail caret `--tail-caret-width`, `--tail-caret-height` and `--tail-caret-gap`. Monospace stack `--font-mono`: Cascadia Mono, Cascadia Code, Consolas, then `ui-monospace`, SF Mono, Menlo, Liberation Mono. These are installed, hinted faces; nothing is fetched (CSP `default-src 'self'`, no `@font-face`).
 
 ## Tones
 
@@ -112,7 +112,7 @@ Every component below is rendered by `src/ui`. A view never writes the element i
 | Callout | `.callout[data-tone]` | Toned box for outages, open questions and the runtime's activity status. |
 | Alert banner | `.error[role=alert]` with a Dismiss `.text-button` | Refused actions and failed loads only; always dismissible. Outages are `role=status`, not alerts. |
 | Disclosure | `details` > `summary`; `details.section` for a section heading (diff, check evidence, event record) | CSS caret, never text, so it adds nothing to the accessible name; the caret aligns with the content edge. |
-| Scroll region | `ol.events`, `pre[aria-label][tabIndex=0]` | The only elements that scroll; bounded by `--scroll-max` (`--plan-max` for the plan). Focusable, with an inset focus ring. |
+| Scroll region | `ol.events`, `pre[aria-label][tabIndex=0]` | The only elements that scroll; bounded by `--scroll-max` (`--plan-max` for the plan). Focusable, with an inset focus ring. Has `scrollbar-gutter: stable` and `contain: content`. The Pi response (`LiveOutput`) and the session event list (`ScrollList follow`) follow new content. |
 | Empty state | `.empty` (inline text), `.empty-box` (dashed box), `.activity-empty` | Muted text; the glyph is `aria-hidden`. |
 
 ## Screens
@@ -125,13 +125,23 @@ Every component below is rendered by `src/ui`. A view never writes the element i
 - **Workflows** (`Workflows.tsx`, `screens/workflows.css`): the testing-setup offers (headed records in the attention tone, the reason ruled and the runtime's next step under it, a `Create the testing-setup ticket` control), the ticket form (each field followed by its UTF-8 byte count), the run settings (paths, writes, approver, plan budgets, provider and model, automatic repair), then ticket cards. A ticket card holds its head, intent, actions with the run badge (the first writer's `.danger` cancel sits before the badge; a held-back "Plan r{n+1}" names its reason on its own line), the confirmation checkbox when the next revision would leave a pending, approved or reviewed revision behind, the writer's activity callout, the plan review with the complete plan in a bounded region, plan meta, earlier revisions with their badges, the reason and next step, worktree lines and the candidate.
 - **Candidate review** (`CandidateReview.tsx`, `screens/candidate-review.css`): heading with badge, full identities, the action row, the publication record, a setup workflow's handoff callout (attention: the proposed checks and the runtime's next step), the editor handoff (`data-surface="editor-handoff"`: each worktree path whole in `code` with a `Copy path` text button), the runtime's activity callout, reason and next step, the diff, check evidence with logs, the independent review with findings, and usage.
 
+### Following live output
+
+Presentation only; the runtime still decides every state.
+
+- `ui/glide.ts` (spring math, token parsing), `ui/stickyScroll.ts` (controller on an injected surface) and `ui/useStickyScroll.ts` (thin wiring). Views use `LiveOutput` and `ScrollList follow`.
+- While the reader is within `--follow-threshold` of the bottom, new content glides there over about `--duration-follow` using a critically damped spring (velocity stays continuous when the target moves). Each frame reads, then writes `scrollTop` once, rounded to a device pixel. The first content after mount, reset or re-enable jumps instantly.
+- Release is by user intent (wheel up, pointer or scrollbar, touch, navigation keys), not by a falling `scrollTop`, because scroll anchoring and our own writes also move it. Returning near the bottom re-pins. An earlier event page does not follow.
+- The tail caret is `pre[data-live]::after`: steady (evidence never pulses), CSS only, so it is never selected, copied or announced. It uses the active tone and is removed when the run is terminal.
+- Monospace disables ligatures and kerning and uses `text-rendering: optimizeSpeed`; the Pi response prose keeps `optimizeLegibility`. Text ancestors never get `transform`, `will-change` or `opacity`, which would drop LCD antialiasing. `overflow-anchor` stays `auto`. No canvas or WebGL text.
+
 ## Accessibility
 
 - Every visible text run meets 4.5:1 (3:1 for large text) against its painted background in both schemes; marks, control edges and focus meet 3:1. Disabled controls are exempt and are marked with the `disabled` attribute.
 - The first Tab stop is "Skip to main content", which focuses `main#main`. Focus is always visible.
 - Every field has a label; every control has a name; scroll regions are focusable; heading levels never skip; every alert has a Dismiss button; `html[lang=en]`.
 - No horizontal page scroll at the Tauri window's 760 px minimum width. Containers that can hold code use `min-width: 0` and `minmax(0, 1fr)`.
-- Reduced motion turns the one transition off. Forced colours keep marks and selection visible.
+- Reduced motion turns transitions and the follow glide off. Forced colours keep marks and selection visible.
 
 ## Enforcement
 
