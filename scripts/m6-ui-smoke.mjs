@@ -296,7 +296,7 @@ try {
   record("a changed Beacon prompt clears UI selection and rejects an old prompt pin", stalePromptPlan.status === 409 && (await page.locator(".component-context").innerText()).includes("no prompt selected"));
   await page.getByRole("button", { name: "Use this prompt in next plan", exact: true }).click();
 
-  await page.getByRole("button", { name: "Run baseline", exact: true }).click();
+  await page.getByRole("button", { name: /^Run baseline\b/ }).click();
   await waitFor("genuine unittest baseline", async () => (await successful("GET", "/projects/m6-primary/baselines")).some((baseline) => baseline.status === "passed"), 120_000);
   const auxiliaryTicket = async (title) => successful("POST", "/projects/m6-primary/tickets", { idempotency_key: randomBytes(16).toString("hex"), title, intent: "Check source invalidation without starting a writer.", acceptance_criteria: ["Keep existing behavior"], repository_ids: ["app"] });
   const approvalPrompt = await successful("POST", "/projects/m6-primary/prompts", { idempotency_key: randomBytes(16).toString("hex"), name: "approval-fence", body: "Initial explicit guidance.", expected_version: 0 });

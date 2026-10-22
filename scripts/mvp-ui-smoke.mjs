@@ -292,7 +292,7 @@ async function confirmManifest(id, name, withHold, { unreadableFirst = false } =
 }
 
 async function runBaseline() {
-  await page.getByRole("button", { name: "Run baseline" }).click();
+  await page.getByRole("button", { name: /^Run baseline\b/ }).click();
   return waitFor(async () => {
     const item = page.locator('ul[aria-label="Recorded baselines"] li').first();
     if (!(await item.count())) return null;
@@ -484,10 +484,10 @@ async function walkthrough() {
   await screenshot("02-baseline");
   // A baseline rejected before its evidence record exists must release the UI.
   git(fixtures.walkthrough.dir, "remote", "set-url", "origin", "https://example.invalid/changed.git");
-  await page.getByRole("button", { name: "Run baseline", exact: true }).click();
+  await page.getByRole("button", { name: /^Run baseline\b/ }).click();
   const earlyFailure = await waitFor(async () => {
     const text = await alertText();
-    return text && /identity changed/.test(text) && await page.getByRole("button", { name: "Run baseline", exact: true }).isEnabled() ? text : null;
+    return text && /identity changed/.test(text) && await page.getByRole("button", { name: /^Run baseline\b/ }).isEnabled() ? text : null;
   }, 20_000);
   record("baseline failure before its record releases polling and shows a concrete rebind route", Boolean(earlyFailure) && earlyFailure.includes("/projects/walkthrough/repositories/app/rebind") && !earlyFailure.includes("{id}"), earlyFailure ?? "polling never settled");
   git(fixtures.walkthrough.dir, "remote", "set-url", "origin", "https://example.invalid/walkthrough.git");
