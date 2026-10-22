@@ -1,6 +1,14 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import type { FormEvent } from "react";
 import type { BaselineEvidence, CheckResult, ComponentContext, ComponentStatus, Discovery, EventEnvelope, LuunaClient, ProjectExport, ProjectImportResult, ProjectRecord, ProjectView, ScaffoldProfile, ScaffoldProposal, ScaffoldResult } from "@luuna/api-client";
+
+/** What another panel (Home, Board) asks this one to show: a project, one of its tickets, or its ticket form. */
+export interface ProjectRequest { projectId: string; ticketId?: string; ticketForm?: boolean; nonce: number }
+
+/** The element a request lands on, in DOM order of the Projects panel. */
+export function requestTarget(request: Pick<ProjectRequest, "ticketId" | "ticketForm">): string {
+  return request.ticketId ? `ticket-${request.ticketId}` : request.ticketForm ? "ticket-title" : "projects-heading";
+}
 import { ApiError, isTerminal, mergeEvents, readEventPages, registerProjectRequest } from "@luuna/api-client";
 import { Workflows } from "./Workflows";
 import { ProjectComponents } from "./ProjectComponents";
@@ -83,7 +91,8 @@ export function BaselineList({ baselines, busy, onLog }: { baselines: BaselineEv
     return <li key={baseline.id} className="record record-headed baseline-record" data-tone={baselineTone[baseline.status]}>
       <StatusBadge tone={baselineTone[baseline.status]}>{baseline.status}</StatusBadge>
       <span className="baseline-summary meta">manifest r{baseline.manifest_revision} · commit <code>{baseline.identity.commit.slice(0, 12)}</code> · {baseline.results.length}/{baseline.required_checks.length} required results</span>
-      {baseline.reason && <small className="failure-note" data-tone={baselineTone[baseline.status]}>{baseline.reason}{step && <> <span className="recovery-note">{step}</span></>}</small>}
+      {baseline.reason && <small className="failure-note" data-tone={baselineTone[baseline.status]}>{baseline.reason}{step && !baseline.prerequisite && <> <span className="recovery-note">{step}</span></>}</small>}
+      {baseline.prerequisite && <p className="callout baseline-offer" data-tone="attention" role="status">Testing setup needed for <code>{baseline.prerequisite.repository_id}</code>: {baseline.prerequisite.reason} <span className="recovery-note">{baseline.prerequisite.next} The ticket is created from the offer in the workflows below.</span></p>}
       <small className="baseline-results meta">{baseline.results.map((result) => `${result.recipe_id}: ${result.status}${result.exit_code === null || result.exit_code === undefined ? "" : ` (exit ${result.exit_code})`}`).join(" · ")}</small>
       {baseline.results.length > 0 && <div className="baseline-logs actions">{baseline.results.flatMap((result) => baselineArtifacts(result).map((id) => <button type="button" key={`${result.id}-${id}`} disabled={busy} data-capability="artifacts.read" onClick={() => onLog(baseline.run_id, id)}>View {result.recipe_id} {id.endsWith(".stdout") ? "stdout" : "stderr"}</button>))}</div>}
     </li>;
@@ -95,7 +104,7 @@ export function BaselineList({ baselines, busy, onLog }: { baselines: BaselineEv
  * and confirm an exact manifest revision. The runtime inspects and validates;
  * this panel only displays authoritative state and submits the developer's confirmation.
  */
-export function Projects({ client, connectionEpoch = 0 }: { client: LuunaClient | null; connectionEpoch?: number }) {
+export function Projects({ client, connectionEpoch = 0, requested = null }: { client: LuunaClient | null; connectionEpoch?: number; requested?: ProjectRequest | null }) {
   const [projects, setProjects] = useState<ProjectRecord[]>([]);
   const [selected, setSelected] = useState<string | null>(null);
   const [view, setView] = useState<ProjectView | null>(null);
@@ -133,8 +142,35 @@ export function Projects({ client, connectionEpoch = 0 }: { client: LuunaClient 
   const currentClient = useRef(client);
   currentClient.current = client;
   const projectEvents = useRef<{ id: string; events: EventEnvelope[] } | null>(null);
+  // A request from Home or the Board: select the project, then land on its ticket or form once it renders.
+  const pendingRequest = useRef<ProjectRequest | null>(null);
 
   useEffect(() => () => operation.current?.abort(), []);
+
+  useEffect(() => {
+    if (!requested || !client) return;
+    pendingRequest.current = requested;
+    setSelected((current) => (current === requested.projectId ? current : requested.projectId));
+    setView((current) => (current?.project.id === requested.projectId ? current : null));
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [requested]);
+
+  useEffect(() => {
+    const pending = pendingRequest.current;
+    if (!pending || !view || view.project.id !== pending.projectId || typeof document === "undefined") return;
+    pendingRequest.current = null;
+    // Tickets load after the view, so the landing is retried briefly; nothing else depends on it.
+    const timers: ReturnType<typeof setTimeout>[] = [];
+    const land = (attempt: number) => {
+      const target = document.getElementById(requestTarget(pending));
+      if (target) {
+        target.scrollIntoView?.({ block: "start" });
+        if (pending.ticketForm || pending.ticketId) target.focus?.();
+      } else if (attempt < 6) timers.push(setTimeout(() => land(attempt + 1), 500));
+    };
+    land(0);
+    return () => timers.forEach(clearTimeout);
+  }, [view]);
 
   /** The project's event record, read after the last sequence this panel holds. */
   async function readProjectEvents(id: string, signal: AbortSignal): Promise<EventEnvelope[]> {
@@ -579,7 +615,7 @@ export function Projects({ client, connectionEpoch = 0 }: { client: LuunaClient 
             </form>
           </>}
           <ProjectComponents key={view.project.id} client={client} projectId={view.project.id} connectionEpoch={connectionEpoch} onContextChange={setComponentContext} onStatusChange={setComponentStatus} onChanged={() => setComponentEpoch((value) => value + 1)} />
-          <Workflows client={client} projectId={view.project.id} repositoryId={registration.repository_id} repositoryIds={repositoryIds} manifestConfirmed={view.manifest !== null && view.manifest !== undefined} connectionEpoch={connectionEpoch} componentContext={componentContext} componentsEnabled={componentStatus?.enabled ?? false} componentEpoch={componentEpoch} onChanged={() => { if (selected) void guarded("Refresh", (signal) => refresh(selected, signal)); }} />
+          <Workflows client={client} projectId={view.project.id} repositoryId={registration.repository_id} repositoryIds={repositoryIds} prerequisites={view.prerequisites ?? []} manifestConfirmed={view.manifest !== null && view.manifest !== undefined} connectionEpoch={connectionEpoch} componentContext={componentContext} componentsEnabled={componentStatus?.enabled ?? false} componentEpoch={componentEpoch} onChanged={() => { if (selected) void guarded("Refresh", (signal) => refresh(selected, signal)); }} />
           <details className="project-events section" data-capability="projects.events"><summary>Project event record ({events.length})</summary>
             <ol className="events" aria-label="Durable project events" tabIndex={0}>{events.map((event) => <li key={event.event_id}><details><summary><span className="event-number">{event.sequence}</span><span>{event.type}</span></summary><pre>{JSON.stringify(event.payload, null, 2)}</pre></details></li>)}</ol>
           </details>

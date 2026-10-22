@@ -1,0 +1,19 @@
+/* Screen: home. Layout and screen-specific presentation, tokens only (docs/DESIGN-SYSTEM.md). */
+/*
+ * The Home summary (docs/09-experience.md, ADR 0027 point 4) is a panel above Projects: one
+ * record per project with its validation health (the latest baseline per repository), then the
+ * blockers waiting on the developer, then the create-ticket shortcut. Every rule is scoped by a
+ * class unique to this screen; records, badges, meta lines and callouts come from components.css.
+ */
+
+/* Project records: name and chips on the first line, repositories and counts below. */
+.home-projects { gap: var(--space-3); }
+.home-project > .home-project-head { display: flex; flex-wrap: wrap; align-items: baseline; gap: var(--space-1-5) var(--space-3); min-width: 0; }
+.home-project > .home-project-head > strong { min-width: 0; font-size: var(--text-sm); overflow-wrap: anywhere; }
+.home-project > .home-repositories { display: grid; gap: var(--space-1-5); margin: 0; padding: 0; list-style: none; }
+.home-project > .home-repositories > li { display: flex; flex-wrap: wrap; align-items: baseline; gap: var(--space-1-5) var(--space-2); min-width: 0; }
+.home-project > .home-project-actions { padding-top: var(--space-1); }
+
+/* Blockers: a leaf record per blocker, ruled in the tone of the state it reports. */
+.home-blockers > .home-blocker { grid-template-columns: auto minmax(0, 1fr); align-items: baseline; gap: var(--space-1-5) var(--space-2); }
+.home-blockers > .home-blocker > :nth-child(n + 3) { grid-column: 1 / -1; }

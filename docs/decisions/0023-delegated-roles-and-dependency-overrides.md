@@ -136,8 +136,14 @@ Storage migration 12 adds the trace columns to `run_tasks`; earlier rows read
 as `implementer` with no trace. Single-task implementer plans keep the M2c
 writer path unchanged and record no `run_tasks` row, so their trace remains
 the plan, its approval and the attempt. Desktop and TUI display of roles,
-traces and overrides is client work; the typed client only gained the
-optional fields.
+traces and overrides landed the same day as client work: the shared builder
+takes per-task `role` and `derived_from_task` and plan-level overrides, the
+desktop has a role select per task row, an overrides editor opened by the
+relationship refusal (pre-filled from the quoted override) and a task graph
+showing the trace, the derivation, the overrides and the advisory result with
+`Derive plan from this proposal`; the TUI has `--task …;role=…;derived_from=…`,
+`--override` and `tasks` printing the trace (see docs/CURRENT-ARCHITECTURE.md,
+client parity).
 
 ## What remains
 

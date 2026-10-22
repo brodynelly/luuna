@@ -56,12 +56,50 @@ export function formatCandidate(view) {
   }
   lines.push(...decisions(view));
   if (view.usage) lines.push(`usage: ${view.usage.attempts} of ${view.usage.max_attempts} writer attempt(s) · ${view.usage.elapsed_seconds}s of ${view.usage.timeout_seconds}s · ${dollars(view.usage.cost_usd_micros)} of ${dollars(view.usage.cost_budget_usd_micros)} · ${view.usage.repairs} repair(s)${view.usage.cost_unreported ? " · some model spend was reported without a cost" : ""}`);
+  if (view.dependency_overrides?.length) lines.push(`dependency overrides: ${view.dependency_overrides.map(overrideLine).join("; ")}`);
+  if (view.tasks?.length) lines.push("tasks:", ...view.tasks.flatMap(taskLines));
+  // A testing-setup workflow (ADR 0022): the recipes the candidate must pass and the developer's handoff.
+  if (view.prerequisite) lines.push(...handoffLines(view.prerequisite));
   return lines.join("\n");
+}
+
+/** The testing-setup handoff of a setup workflow's candidate view, with `next` in the runtime's words. */
+export function handoffLines(handoff) {
+  return [
+    `testing setup for ${handoff.repository_id}: ${handoff.reviewed ? "reviewed with a passed verdict" : "not yet reviewed with a passed verdict"}${handoff.candidate_commit ? ` · candidate commit ${handoff.candidate_commit}` : ""}`,
+    "proposed required checks (confirm these in the next manifest revision after merging):",
+    ...(handoff.checks ?? []).map((check) => `  ${check.id}: ${[check.executable, ...(check.args ?? [])].join(" ")}${check.cwd && check.cwd !== "." ? ` (in ${check.cwd})` : ""} · ${check.timeout_seconds}s${check.capabilities?.length ? ` · ${check.capabilities.join(", ")}` : ""}`),
+    `next: ${handoff.next}`,
+  ];
+}
+
+/** The runtime's testing-setup offer (ADR 0022): its reason and its next step, unchanged. */
+export function offerLines(prerequisite, indent = "  ") {
+  return [`${indent}testing setup needed for ${prerequisite.repository_id}: ${prerequisite.reason}`, `${indent}next: ${prerequisite.next}`];
+}
+
+const overrideLine = (override) => `${override.action} ${override.consumer} <- ${override.producer} (${override.justification})`;
+
+/** One task record with its assignment trace and, for an advisory task, its structured result (ADR 0023). */
+export function taskLines(task) {
+  const lines = [`  ${task.task_id}  ${task.state}  ${task.repository_id} · role ${task.role ?? "implementer"}${task.depends_on?.length ? ` · after ${task.depends_on.join(", ")}` : ""}${task.candidate_commit ? ` · commit ${task.candidate_commit}` : ""}${task.attempt_id ? ` · attempt ${task.attempt_id}` : ""}${task.reason ? ` · ${task.reason}` : ""}`];
+  if (task.assigned_by) lines.push(`    assigned by ${task.assigned_by.approved_by} · approval ${task.assigned_by.approval_id} at ${when(task.assigned_by.approved_at)} · plan ${task.assigned_by.plan_id} r${task.assigned_by.plan_revision} · ${task.assigned_by.plan_hash}`);
+  if (task.derived_from_task) lines.push(`    derived from task ${task.derived_from_task}`);
+  if (task.dependency_overrides?.length) lines.push(`    dependency overrides: ${task.dependency_overrides.map(overrideLine).join("; ")}`);
+  const result = task.advisory_result;
+  if (result) {
+    lines.push(`    advisory result: ${result.findings?.length ?? 0} finding(s), ${result.proposed_tasks?.length ?? 0} proposed task(s), ${result.risks?.length ?? 0} risk(s)`);
+    for (const finding of result.findings ?? []) lines.push(`      finding: ${finding}`);
+    for (const proposed of result.proposed_tasks ?? []) lines.push(`      proposed task ${proposed.id} (${proposed.repository_id}, ${proposed.role ?? "implementer"})${proposed.depends_on?.length ? ` after ${proposed.depends_on.join(", ")}` : ""}${proposed.paths?.length ? ` · paths ${proposed.paths.join(", ")}` : ""}${proposed.rationale ? ` · ${proposed.rationale}` : ""}`);
+    for (const risk of result.risks ?? []) lines.push(`      risk: ${risk}`);
+    lines.push(`      a proposed task becomes real only through a plan revision you create (plan --task …;derived_from=${task.task_id}) and approve`);
+  }
+  return lines;
 }
 
 function formatBaseline(baseline) {
   const step = baseline.reason ? baselineStep(baseline.status, baseline.reason) : "";
-  return [`${baseline.run_id}  ${baseline.status}  manifest r${baseline.manifest_revision} · commit ${short(baseline.identity?.commit)} · ${baseline.results?.length ?? 0}/${baseline.required_checks?.length ?? 0} required results`, ...(baseline.reason ? [`  reason: ${baseline.reason}${step ? `  next: ${step}` : ""}`] : []), ...(baseline.results ?? []).map(checkLine)].join("\n");
+  return [`${baseline.run_id}  ${baseline.status}  manifest r${baseline.manifest_revision} · commit ${short(baseline.identity?.commit)} · ${baseline.results?.length ?? 0}/${baseline.required_checks?.length ?? 0} required results`, ...(baseline.reason ? [`  reason: ${baseline.reason}${step && !baseline.prerequisite ? `  next: ${step}` : ""}`] : []), ...(baseline.prerequisite ? offerLines(baseline.prerequisite) : []), ...(baseline.results ?? []).map(checkLine)].join("\n");
 }
 
 function formatProject(view) {
@@ -73,7 +111,36 @@ function formatProject(view) {
     ...(observation ? [`remote: ${observation.identity?.remote ?? "no portable origin"} · HEAD ${short(observation.head_commit)} on ${observation.branch ?? "detached HEAD"} · dirty ${observation.dirty?.staged ?? 0} staged, ${observation.dirty?.unstaged ?? 0} unstaged, ${observation.dirty?.untracked ?? 0} untracked`] : []),
     view.manifest ? `confirmed manifest: revision ${view.manifest.revision} · ${view.manifest.hash} · base ${Object.values(view.manifest.base_commits ?? {})[0] ?? ""}` : "confirmed manifest: none",
     view.discovery ? `discovery: proposal for revision ${view.discovery.proposed_manifest?.revision} (${view.discovery.manifest_problems?.length ?? 0} problem(s), ${view.discovery.questions?.length ?? 0} question(s))` : "discovery: none stored",
+    ...(view.prerequisites?.length ? ["prerequisites (a feature plan is refused until each is established):", ...view.prerequisites.flatMap((prerequisite) => offerLines(prerequisite))] : []),
   ].join("\n");
+}
+
+/** The Home summary: projects, validation health per repository, blockers and the create-ticket shortcut. */
+export function formatHome(summary) {
+  const lines = [];
+  if (!summary.projects.length) return "No projects registered. Register a repository (register <name> <repository-id> <path>) to start.";
+  for (const project of summary.projects) {
+    lines.push(`${project.name} (${project.id})  ${project.revision > 0 ? `manifest r${project.revision}` : "unconfirmed"} · ${project.tickets} ticket(s) · ${project.active_workflows} active workflow(s)`);
+    for (const repository of project.repositories) {
+      const baseline = repository.baseline;
+      lines.push(`  ${repository.repository_id}: ${baseline ? `baseline ${baseline.status} · manifest r${baseline.manifest_revision} · commit ${short(baseline.commit)}${baseline.reason ? ` · ${baseline.reason}` : ""}` : "no baseline"}${repository.prerequisite ? " · testing setup needed" : ""}`);
+    }
+  }
+  lines.push(summary.blockers.length ? `blockers (${summary.blockers.length}):` : "blockers: none");
+  for (const blocker of summary.blockers) lines.push(`  ${blocker.project_id} · ${blocker.title}: ${blocker.detail}${blocker.run_id ? ` (run ${blocker.run_id})` : ""}`);
+  lines.push("create a ticket: create-ticket <project> --title … --intent … --criterion … [--purpose testing_setup]");
+  return lines.join("\n");
+}
+
+/** The Kanban projection: every column with its read-only cards, then the note that nothing is dragged. */
+export function formatBoard(board) {
+  const lines = [];
+  for (const { column, cards } of board.columns) {
+    lines.push(`${column.title} (${cards.length})  ${column.description}`);
+    for (const card of cards) lines.push(`  ${card.kind === "prerequisite" ? `[prerequisite] ${card.title} · ${card.project_id} · ${card.reason ?? ""}` : `[ticket] ${card.title} · ${card.project_id} · ${card.ticket_id} r${card.ticket_revision}${card.purpose ? ` · ${card.purpose.replace(/_/g, " ")}` : ""}${card.run_id ? ` · run ${card.run_id} ${card.state} (plan r${card.plan_revision})` : " · no plan yet"}`}`);
+  }
+  lines.push(board.note);
+  return lines.join("\n");
 }
 
 function formatDiscovery(discovery) {
@@ -131,6 +198,9 @@ export function format(id, value) {
     case "runs.diff": return [`Diff for ${value.candidate_hash}  ${value.repository_id} · base ${value.base_commit} · candidate commit ${value.commit}`, value.diff || (value.truncated ? "Diff omitted because it exceeds the display limit." : "No changes."), ...(value.truncated ? ["This diff is truncated. It does not show all candidate changes."] : []), ...(value.worktree_drift ? [value.worktree_drift] : []), ...(value.files ? value.files.map((file) => `  ${file.path} · ${file.status} · ${file.shown}`) : [])].join("\n");
     case "runs.worktrees": return value.length ? value.map((lease) => `${lease.id}  ${lease.state}  ${lease.repository_id}  ${lease.path}${lease.candidate_commit ? ` · candidate ${lease.candidate_commit}` : ""}${lease.reason ? ` · ${lease.reason}` : ""}`).join("\n") : "No worktree leases.";
     case "runs.attempts": return value.length ? value.map((attempt) => `attempt ${attempt.number}  ${attempt.state}  task ${attempt.task_id}  ${when(attempt.started_at)}${attempt.finished_at ? ` → ${when(attempt.finished_at)}` : ""}`).join("\n") : "No writer attempts recorded.";
+    case "runs.tasks": return value.length ? value.flatMap(taskLines).join("\n") : "No task records: a single-task implementer plan runs the M2c writer path and records no task graph.";
+    case "projection.home": return formatHome(value);
+    case "projection.board": return formatBoard(value);
     case "artifacts.read": return value || "Empty log.";
     case "shutdown": return `Runtime ${value.status}. Runs, candidates and worktrees stay durable; start it again with the same data directory and token.`;
     default: return typeof value === "string" ? value : JSON.stringify(value, null, 2);

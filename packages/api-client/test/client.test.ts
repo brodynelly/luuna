@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from "vitest";
-import { ApiError, EventReplay, EventWindow, LuunaClient, assistantText, awaitsValidation, checkResults, confirmedManifest, isTerminal, loopbackUrl, mergeEvents, planRequestForTasks, registerProjectRequest } from "../src/index";
+import { ApiError, EventReplay, EventWindow, LuunaClient, MAX_REASON_LENGTH, advisoryRole, assistantText, awaitsValidation, checkResults, confirmedManifest, isTerminal, loopbackUrl, mergeEvents, nextStep, overrideFromRefusal, planRequestForTasks, registerProjectRequest } from "../src/index";
 import type { EventEnvelope, ProjectManifest, ProjectExport } from "../src/index";
 
 it("retains bounded event payloads while replaying text and rejects a gap atomically", () => {
@@ -230,7 +230,10 @@ describe("project import and discovery", () => {
     await expect(invalid.discover("fixture")).rejects.toThrow("default branch release");
     const invalidPath = new LuunaClient("http://localhost:4242", "t", respond(400, '{"error":"repository path must be an absolute path to the repository root"}'));
     await expect(invalidPath.registerProject({ name: "x", repositories: [{ id: "app", path: "relative" }] })).rejects.toThrow("absolute path");
-    const long = new LuunaClient("http://localhost:4242", "t", respond(422, JSON.stringify({ error: "x".repeat(301) })));
+    // A deterministic reason may quote a testing-setup offer or a dependency override (ADR 0022, ADR 0023), so the bound is 1000; longer bodies are never surfaced.
+    const quoted = new LuunaClient("http://localhost:4242", "t", respond(422, JSON.stringify({ error: `task consumer in repository consumer must depend on task shared in repository shared: ${"x".repeat(400)}` })));
+    await expect(quoted.discover("fixture")).rejects.toThrow("task consumer in repository consumer must depend on");
+    const long = new LuunaClient("http://localhost:4242", "t", respond(422, JSON.stringify({ error: "x".repeat(MAX_REASON_LENGTH + 1) })));
     await expect(long.discover("fixture")).rejects.toThrow("Runtime request failed (HTTP 422)");
     const server = new LuunaClient("http://localhost:4242", "t", respond(500, '{"error":"secret prompt text"}'));
     await expect(server.discover("fixture")).rejects.not.toThrow("secret");
@@ -478,5 +481,88 @@ describe("shared request builders (R02, A33: the desktop and the TUI send the sa
     expect(() => planRequestForTasks([{ repository_id: "a", paths: [], operations: ["read"], depends_on: ["zzz"] }, { repository_id: "b", paths: [], operations: ["read"] }])).toThrow("not a task of this plan");
     expect(() => planRequestForTasks([{ repository_id: "a", paths: [], operations: ["read"] }, { repository_id: "b", paths: [], operations: ["read"] }], { max_workers: 3 })).toThrow("between 1 and 2");
     expect(() => planRequestForTasks([{ repository_id: "a", paths: [], operations: ["read"] }], { max_attempts: 0 })).toThrow("budgets.max_attempts");
+  });
+});
+
+// ---- ADR 0022 (testing-setup prerequisite) and ADR 0023 (roles, traces, overrides): the request
+// fields both clients send through one client, and the structured offer a refusal carries. ----
+describe("testing-setup prerequisite and delegated roles", () => {
+  const sent = () => {
+    const fetcher = vi.fn<typeof fetch>().mockImplementation(() => Promise.resolve(new Response("{}")));
+    return { fetcher, client: new LuunaClient("http://localhost:4242", "t", fetcher), body: (index: number) => JSON.parse(String(fetcher.mock.calls[index][1]?.body)) };
+  };
+
+  it("creates a testing_setup ticket and a setup plan with its check recipes", async () => {
+    const { client, body } = sent();
+    await client.createTicket("p", { idempotency_key: "k", title: "Establish tests", intent: "Add a harness", acceptance_criteria: ["python -m unittest executes one test"], repository_ids: ["app"], purpose: "testing_setup" });
+    expect(body(0)).toMatchObject({ purpose: "testing_setup", repository_ids: ["app"] });
+    const request = planRequestForTasks([{ repository_id: "app", paths: ["tests"], operations: ["read", "write"] }], { max_attempts: 2 }, { checks: [{ id: "unit", executable: "python", args: ["-m", "unittest"], timeout_seconds: 120 }, { id: "lint", executable: "ruff", args: [], cwd: ".", timeout_seconds: 60, capabilities: ["network"] }] });
+    expect(request).toEqual({ task: { repository_id: "app", paths: ["tests"], operations: ["read", "write"] }, budgets: { max_attempts: 2 }, checks: [{ id: "unit", executable: "python", args: ["-m", "unittest"], timeout_seconds: 120, capabilities: [], required: true }, { id: "lint", executable: "ruff", args: [], timeout_seconds: 60, capabilities: ["network"], required: true }] });
+    await client.createPlan("ticket-1", { ...request, idempotency_key: "k2" });
+    expect(body(1)).toEqual({ ...request, idempotency_key: "k2" });
+    // What no runtime accepts is refused before anything is sent.
+    expect(() => planRequestForTasks([{ repository_id: "app", paths: [], operations: ["read"] }], {}, { checks: [{ id: "", executable: "python", timeout_seconds: 10 }] })).toThrow("id and an executable");
+    expect(() => planRequestForTasks([{ repository_id: "app", paths: [], operations: ["read"] }], {}, { checks: [{ id: "unit", executable: "python", timeout_seconds: 0 }] })).toThrow("timeout");
+    expect(() => planRequestForTasks([{ repository_id: "app", paths: [], operations: ["read"] }], {}, { checks: [{ id: "unit", executable: "python", timeout_seconds: 10, required: false as never }] })).toThrow("required checks only");
+    expect(() => planRequestForTasks([{ repository_id: "app", paths: [], operations: ["read"] }], {}, { checks: [{ id: "unit", executable: "python", timeout_seconds: 10 }, { id: "unit", executable: "pytest", timeout_seconds: 10 }] })).toThrow("unique");
+    expect(() => planRequestForTasks([{ repository_id: "app", paths: [], operations: ["read"] }, { repository_id: "web", paths: [], operations: ["read"] }], {}, { checks: [{ id: "unit", executable: "python", timeout_seconds: 10 }] })).toThrow("exactly one task");
+    expect(planRequestForTasks([{ repository_id: "app", paths: [], operations: ["read"] }], {}, { checks: [] })).not.toHaveProperty("checks");
+  });
+
+  it("surfaces the structured testing-setup offer of a refused implementation with the shared next step", async () => {
+    const prerequisite = { kind: "testing_setup", project_id: "p", repository_id: "app", baseline_id: "b1", reason: "the manifest names no required check for repository app", next: "POST /api/v1/projects/p/tickets with purpose testing_setup and repository_ids [\"app\"], then POST /api/v1/tickets/{id}/plans with the check recipes (checks)" };
+    const error = `implementation refused: repository app has no usable testing setup (${prerequisite.reason}); a prerequisite testing-setup ticket is offered: ${prerequisite.next}`;
+    const refused = new LuunaClient("http://localhost:4242", "t", vi.fn<typeof fetch>().mockResolvedValue(new Response(JSON.stringify({ error, prerequisite }), { status: 422, headers: { "Content-Type": "application/json" } })));
+    const failure = await refused.implement("run-1").catch((caught: unknown) => caught);
+    expect(failure).toBeInstanceOf(ApiError);
+    expect((failure as ApiError).message).toBe(error);
+    expect((failure as ApiError).fromRuntime).toBe(true);
+    expect((failure as ApiError).prerequisite).toEqual(prerequisite);
+    expect(nextStep(error)).toContain("Create the testing-setup ticket the runtime offers");
+    // A detail of another shape is not an offer; a plain refusal carries none.
+    const odd = new LuunaClient("http://localhost:4242", "t", vi.fn<typeof fetch>().mockResolvedValue(new Response(JSON.stringify({ error: "refused", prerequisite: { kind: "other", next: "x" } }), { status: 422, headers: { "Content-Type": "application/json" } })));
+    expect(((await odd.implement("run-1").catch((caught: unknown) => caught)) as ApiError).prerequisite).toBeUndefined();
+  });
+
+  it("sends roles, derivation and dependency overrides only when given, and refuses what the domain refuses", () => {
+    const drafts = [
+      { id: "lead", repository_id: "shared", paths: ["lib"], operations: ["read" as const], role: "repository_lead" as const },
+      { id: "api", repository_id: "api", paths: ["src"], operations: ["read" as const, "write" as const], depends_on: ["lead"], derived_from_task: "orchestrate" },
+      { id: "consumer", repository_id: "consumer", paths: ["src"], operations: ["read" as const, "write" as const], role: "implementer" as const },
+    ];
+    const request = planRequestForTasks(drafts, { max_workers: 2 }, { dependencyOverrides: [{ consumer: "consumer", producer: "api", action: "waive", justification: " the consumer pins the published package " }] });
+    expect(request).toEqual({
+      tasks: [
+        { id: "lead", repository_id: "shared", paths: ["lib"], operations: ["read"], role: "repository_lead" },
+        { id: "api", repository_id: "api", paths: ["src"], operations: ["read", "write"], depends_on: ["lead"], derived_from_task: "orchestrate" },
+        { id: "consumer", repository_id: "consumer", paths: ["src"], operations: ["read", "write"] },
+      ],
+      dependency_overrides: [{ consumer: "consumer", producer: "api", action: "waive", justification: "the consumer pins the published package" }],
+      budgets: { max_workers: 2 },
+    });
+    // A single advisory task keeps the single-task shape with its role; a single implementer stays pre-M4.
+    expect(planRequestForTasks([{ repository_id: "app", paths: [], operations: ["read"], role: "project_orchestrator" }])).toEqual({ task: { repository_id: "app", paths: ["src"], operations: ["read"], role: "project_orchestrator" } });
+    expect(planRequestForTasks([{ repository_id: "app", paths: [], operations: ["read", "write"], role: "implementer" }])).toEqual({ task: { repository_id: "app", paths: ["src"], operations: ["read", "write"] } });
+    expect(() => planRequestForTasks([{ repository_id: "app", paths: [], operations: ["read", "write"], role: "repository_lead" }])).toThrow("reads only");
+    expect(() => planRequestForTasks([{ repository_id: "app", paths: [], operations: ["read"], role: "reviewer" as never }])).toThrow("unknown role");
+    expect(() => planRequestForTasks([{ id: "a", repository_id: "app", paths: [], operations: ["read"] }, { id: "b", repository_id: "web", paths: [], operations: ["read"], derived_from_task: "a" }])).toThrow("same plan");
+    expect(() => planRequestForTasks([{ repository_id: "app", paths: [], operations: ["read"], derived_from_task: "implement" }])).toThrow("derive from itself");
+    const two = [{ id: "a", repository_id: "app", paths: [], operations: ["read" as const, "write" as const] }, { id: "b", repository_id: "web", paths: [], operations: ["read" as const, "write" as const] }];
+    expect(() => planRequestForTasks(two, {}, { dependencyOverrides: [{ consumer: "a", producer: "zzz", action: "add", justification: "x" }] })).toThrow("not a task of this plan");
+    expect(() => planRequestForTasks(two, {}, { dependencyOverrides: [{ consumer: "a", producer: "a", action: "add", justification: "x" }] })).toThrow("both consumer and producer");
+    expect(() => planRequestForTasks(two, {}, { dependencyOverrides: [{ consumer: "a", producer: "b", action: "add", justification: "  " }] })).toThrow("justification");
+    expect(() => planRequestForTasks(two, {}, { dependencyOverrides: [{ consumer: "a", producer: "b", action: "add", justification: "x" }, { consumer: "a", producer: "b", action: "waive", justification: "y" }] })).toThrow("repeated");
+    expect(() => planRequestForTasks(two, {}, { dependencyOverrides: [{ consumer: "a", producer: "b", action: "skip" as never, justification: "x" }] })).toThrow("waive or add");
+    expect(() => planRequestForTasks([two[0], { ...two[1], operations: ["read"], role: "repository_lead" }], {}, { dependencyOverrides: [{ consumer: "a", producer: "b", action: "add", justification: "x" }] })).toThrow("advisory task");
+    expect(advisoryRole("repository_lead") && advisoryRole("project_orchestrator") && !advisoryRole("implementer") && !advisoryRole(undefined)).toBe(true);
+  });
+
+  it("reads the override a relationship refusal quotes, so the developer only adds the justification", () => {
+    const reason = 'task consumer in repository consumer must depend on task shared in repository shared: confirmed relationship shared -> consumer (package npm:@fixture/shared); add the dependency, or waive it with dependency_overrides [{"consumer": "consumer", "producer": "shared", "action": "waive", "justification": "..."}]';
+    expect(overrideFromRefusal(reason)).toEqual({ consumer: "consumer", producer: "shared", action: "waive", justification: "" });
+    expect(overrideFromRefusal('… record it with dependency_overrides [{"consumer": "b", "producer": "a", "action": "add", "justification": "..."}]')).toEqual({ consumer: "b", producer: "a", action: "add", justification: "" });
+    expect(overrideFromRefusal("repository app already has an active writer")).toBeNull();
+    expect(overrideFromRefusal("dependency_overrides [{broken")).toBeNull();
+    expect(nextStep(reason)).toContain("record the quoted dependency override");
   });
 });

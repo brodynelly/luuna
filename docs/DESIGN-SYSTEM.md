@@ -25,10 +25,13 @@ apps/desktop/src/
   design/StatusBadge.tsx     the one status chip
   design/design-system.test.ts   enforcement (run by npm test)
   screens/app.css            shell: topbar, intro, connection, workspace, history, events, footer
+  screens/home.css           Home summary: projects, validation health, blockers
+  screens/board.css          Kanban projection: wrapping columns of read-only cards
   screens/projects.css       Projects panel
   screens/workflows.css      tickets, plan controls, plan review
   screens/candidate-review.css   candidate evidence, checks, diff, verdict
   screens/project-components.css tickets, scoped memory and versioned prompts
+  screens/help.css           Help: onboarding, states, evidence, documents
 ```
 
 Vite inlines the imports into one bundled stylesheet served from `'self'`, which the Tauri CSP allows. Later layers win regardless of specificity, so a screen rule refines a component without `!important`. No font, script or stylesheet is fetched.
@@ -102,10 +105,13 @@ Scales: type `--text-2xs` 11 px (badges, eyebrow, meta), `--text-xs` 12 px (evid
 
 ## Screens
 
-- **App shell** (`App.tsx`, `screens/app.css`): skip link, topbar (wordmark, stage, connection status with a tone mark), intro, the runtime connection panel, Projects, then the workspace of session history and the main column (start form, session events). The workspace is two columns above 920 px and one column at 920 px and below, in DOM order, matching the Projects rail.
+- **App shell** (`App.tsx`, `screens/app.css`): skip link, topbar (wordmark, stage, connection status with a tone mark), intro, the runtime connection panel, Home, Board, Projects, then the workspace of session history and the main column (start form, session events), then Help. The workspace is two columns above 920 px and one column at 920 px and below, in DOM order, matching the Projects rail.
+- **Home** (`Home.tsx`, `screens/home.css`): one record per project (name, manifest chip, id, counts), its repositories each with the latest baseline's badge (`baselineTone`) or `no baseline`, and `testing setup needed` where the runtime offers the prerequisite; then the blockers as headed records ruled in the tone of the state they report; every control opens the Projects panel. `data-surface="home"`.
+- **Board** (`Board.tsx`, `screens/board.css`): the eight columns of docs/09-experience.md as a wrapping grid of column records (h3 with a count, the column's scope), each a list of selectable cards whose badge is the run state through `runTone` (`testing setup` for an offer, an untoned `no plan` chip for the backlog); the note says dragging is not implemented. Columns are styled by position, never by a state name. `data-surface="board"`.
+- **Help** (`Help.tsx`, `screens/help.css`): static sections (onboarding, the six tones with their run and candidate values, where evidence lives, documents) in a wrapping grid. `data-surface="help"`.
 - **Projects** (`Projects.tsx`, `screens/projects.css`): a rail with the register form and project cards, and a detail column: facts first (the first `.facts` on the page), the "Rebind repository" disclosure, the action row (a running baseline adds its `.danger` cancel), baselines (each with its reason and next step and a log button per recipe stream, then the opened log), discovery (questions callout, problems, recipes, the manifest form), the Workflows subpanel, then the project event record.
-- **Workflows** (`Workflows.tsx`, `screens/workflows.css`): the ticket form (each field followed by its UTF-8 byte count), the run settings (paths, writes, approver, plan budgets, provider and model, automatic repair), then ticket cards. A ticket card holds its head, intent, actions with the run badge (the first writer's `.danger` cancel sits before the badge; a held-back "Plan r{n+1}" names its reason on its own line), the confirmation checkbox when the next revision would leave a pending, approved or reviewed revision behind, the writer's activity callout, the plan review with the complete plan in a bounded region, plan meta, earlier revisions with their badges, the reason and next step, worktree lines and the candidate.
-- **Candidate review** (`CandidateReview.tsx`, `screens/candidate-review.css`): heading with badge, full identities, the action row, the runtime's activity callout, reason and next step, the diff, check evidence with logs, the independent review with findings, and usage.
+- **Workflows** (`Workflows.tsx`, `screens/workflows.css`): the testing-setup offers (headed records in the attention tone, the reason ruled and the runtime's next step under it, a `Create the testing-setup ticket` control), the ticket form (each field followed by its UTF-8 byte count), the run settings (paths, writes, approver, plan budgets, provider and model, automatic repair), then ticket cards. A ticket card holds its head, intent, actions with the run badge (the first writer's `.danger` cancel sits before the badge; a held-back "Plan r{n+1}" names its reason on its own line), the confirmation checkbox when the next revision would leave a pending, approved or reviewed revision behind, the writer's activity callout, the plan review with the complete plan in a bounded region, plan meta, earlier revisions with their badges, the reason and next step, worktree lines and the candidate.
+- **Candidate review** (`CandidateReview.tsx`, `screens/candidate-review.css`): heading with badge, full identities, the action row, the publication record, a setup workflow's handoff callout (attention: the proposed checks and the runtime's next step), the editor handoff (`data-surface="editor-handoff"`: each worktree path whole in `code` with a `Copy path` text button), the runtime's activity callout, reason and next step, the diff, check evidence with logs, the independent review with findings, and usage.
 
 ## Accessibility
 

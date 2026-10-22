@@ -3,7 +3,7 @@
 // workbench opens (interactive.mjs). Exit codes: 0 done, 1 refused or failed, 2 usage.
 import { readFileSync, writeFileSync } from "node:fs";
 import { LuunaClient, describeFailure, explainFailure } from "@luuna/api-client";
-import { COMMANDS, ClientRefusal, UsageError, commandsByName, usage } from "./commands.mjs";
+import { COMMANDS, ClientRefusal, PROJECTIONS, UsageError, commandsByName, usage } from "./commands.mjs";
 import { catalog } from "./catalog.mjs";
 import { format } from "./format.mjs";
 
@@ -89,6 +89,7 @@ export function help() {
   const byContext = new Map();
   for (const command of COMMANDS) byContext.set(command.context, [...(byContext.get(command.context) ?? []), command]);
   const sections = [...byContext].map(([context, commands]) => [`${context} commands:`, ...commands.map((command) => `  ${usage(command)}\n      ${catalog.capabilities.find((capability) => capability.id === command.id)?.title ?? ""}`)].join("\n"));
+  sections.push(["projections (read-only views over the cataloged actions; the desktop's Home and Kanban panels show the same):", ...PROJECTIONS.map((command) => `  ${usage(command)}\n      ${command.action}: reads ${command.projects.join(", ")}`)].join("\n"));
   return [
     "luuna-tui — terminal client for the Luuna runtime",
     "",

@@ -131,7 +131,8 @@
       ],
       "required_by": [
         "R02",
-        "A33"
+        "A33",
+        "docs/decisions/0022-testing-setup-prerequisite.md"
       ]
     },
     {
@@ -312,7 +313,9 @@
       ],
       "required_by": [
         "R08",
-        "A33"
+        "A33",
+        "A06",
+        "docs/decisions/0022-testing-setup-prerequisite.md"
       ]
     },
     {
@@ -643,7 +646,8 @@
       ],
       "required_by": [
         "R02",
-        "docs/09-experience.md#views"
+        "docs/09-experience.md#views",
+        "docs/decisions/0022-testing-setup-prerequisite.md"
       ]
     },
     {
@@ -774,7 +778,9 @@
         "R05",
         "R07",
         "A12",
-        "docs/decisions/0017-multi-repository-coordination.md#tasks"
+        "docs/decisions/0017-multi-repository-coordination.md#tasks",
+        "docs/decisions/0022-testing-setup-prerequisite.md",
+        "docs/decisions/0023-delegated-roles-and-dependency-overrides.md"
       ]
     },
     {
@@ -1010,7 +1016,9 @@
       ],
       "required_by": [
         "R09",
-        "A33"
+        "A33",
+        "docs/decisions/0022-testing-setup-prerequisite.md",
+        "docs/decisions/0023-delegated-roles-and-dependency-overrides.md"
       ]
     },
     {
@@ -1235,7 +1243,8 @@
         "R05",
         "R06",
         "A12",
-        "docs/decisions/0017-multi-repository-coordination.md#tasks"
+        "docs/decisions/0017-multi-repository-coordination.md#tasks",
+        "docs/decisions/0023-delegated-roles-and-dependency-overrides.md"
       ]
     },
     {

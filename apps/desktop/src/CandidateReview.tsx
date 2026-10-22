@@ -1,4 +1,4 @@
-import type { CandidateDiff, CandidateView, PublicationRecord, RunRecord } from "@luuna/api-client";
+import type { CandidateDiff, CandidateView, PublicationRecord, RunRecord, SetupHandoff, WorktreeLease } from "@luuna/api-client";
 import { allowedActions, canCancel, canRepair, canRevalidate, canValidate, usageSummary, validationRefusal } from "./workflow-state";
 import { nextStep } from "./failures";
 import { StatusBadge } from "./design/StatusBadge";
@@ -20,6 +20,16 @@ interface Props {
   onPublication?: () => void;
   onReconcilePublication?: () => void;
   onRepairPublication?: () => void;
+  /** The testing-setup handoff of a setup workflow (ADR 0022 point 6), as the candidate view carries it. */
+  handoff?: SetupHandoff;
+  /** This workflow's worktree leases: the candidate worktree path to open in the developer's editor. */
+  worktrees?: WorktreeLease[];
+}
+
+/** Copies a worktree path for the developer's editor; opening it transfers no permission (docs/09-experience.md). */
+export function copyPath(path: string): void {
+  const clipboard = typeof navigator !== "undefined" ? navigator.clipboard : undefined;
+  if (clipboard) void clipboard.writeText(path).catch(() => undefined);
 }
 
 /** A published candidate whose pull request failed CI on at least one repository may be sent to a bounded repair (the runtime re-observes CI and re-checks every repair gate); a superseded or still-active record never offers it. */
@@ -46,15 +56,15 @@ export function PublicationSummary({ publication }: { publication: PublicationRe
     {publication.reason && <p className="failure-note" data-tone="danger">{publication.reason}</p>}
     {publication.superseded_by_repair && <p className="recovery-note" role="status">Superseded: this publication's candidate was sent to a bounded repair after its pull request failed CI. The pull request stays yours to close; the repaired candidate publishes under a new branch whose pull request names this one.{publication.superseded_reason ? ` ${publication.superseded_reason}` : ""}</p>}
     <ul className="record-list" aria-label="Published repositories">{Object.entries(publication.repositories).map(([id, repository]) => <li key={id}>
-      <strong>{id}</strong> · branch <code>{repository.branch}</code> at <code>{repository.commit.slice(0, 12)}</code> · push {repository.push} · pull request {repository.pull_request ? <a href={repository.pull_request.url} target="_blank" rel="noreferrer">#{repository.pull_request.number}</a> : repository.pull_request_step}
-      <small> · CI {repository.ci.state}{repository.ci.reason ? ` (${repository.ci.reason})` : ""} · {repository.merge.merged ? `merged${repository.merge.merged_by ? ` by ${repository.merge.merged_by}` : ""}` : "not merged; merging stays with you on GitHub"}</small>
-      {repository.reason && <small className="failure-note" data-tone="danger"> · {repository.reason}</small>}
+      <strong>{id}</strong> Â· branch <code>{repository.branch}</code> at <code>{repository.commit.slice(0, 12)}</code> Â· push {repository.push} Â· pull request {repository.pull_request ? <a href={repository.pull_request.url} target="_blank" rel="noreferrer">#{repository.pull_request.number}</a> : repository.pull_request_step}
+      <small> Â· CI {repository.ci.state}{repository.ci.reason ? ` (${repository.ci.reason})` : ""} Â· {repository.merge.merged ? `merged${repository.merge.merged_by ? ` by ${repository.merge.merged_by}` : ""}` : "not merged; merging stays with you on GitHub"}</small>
+      {repository.reason && <small className="failure-note" data-tone="danger"> Â· {repository.reason}</small>}
     </li>)}</ul>
   </div>;
 }
 
 /** Displays durable runtime evidence; worker prose never decides these controls. */
-export function CandidateReview({ run, view, diff, log, busy, onValidate, onRepair, onCancel, onDiff, onArtifact, publication, onPublish, onPublication, onReconcilePublication, onRepairPublication }: Props) {
+export function CandidateReview({ run, view, diff, log, busy, onValidate, onRepair, onCancel, onDiff, onArtifact, publication, onPublish, onPublication, onReconcilePublication, onRepairPublication, handoff, worktrees = [] }: Props) {
   const evidence = view.evidence;
   if (!evidence) return null;
   const candidate = evidence.candidate;
@@ -84,12 +94,22 @@ export function CandidateReview({ run, view, diff, log, busy, onValidate, onRepa
       {onRepairPublication && canRepairPublication(run, view, publication) && <button type="button" disabled={busy} data-capability="runs.publication.repair" onClick={onRepairPublication}>Repair after CI failure</button>}
     </div>
     {publication && publication.candidate_hash === candidate.hash && <PublicationSummary publication={publication} />}
+    {handoff && <div className="setup-handoff callout" data-tone="attention" role="status" aria-label="Testing-setup handoff">
+      <p><strong>Testing setup for <code>{handoff.repository_id}</code></strong>: {handoff.reviewed ? "the setup candidate is reviewed with a passed verdict." : "the setup candidate is not yet reviewed with a passed verdict."}{handoff.candidate_commit && <> Candidate commit <code>{handoff.candidate_commit}</code>.</>}</p>
+      <p>Proposed required checks to confirm in the next manifest revision after merging:</p>
+      <ul className="handoff-checks" aria-label="Proposed required checks">{handoff.checks.map((check) => <li key={check.id}><code>{check.id}</code>: <code>{[check.executable, ...check.args].join(" ")}</code>{check.cwd && check.cwd !== "." ? <> in <code>{check.cwd}</code></> : null} Â· {check.timeout_seconds}s{check.capabilities.length ? ` Â· ${check.capabilities.join(", ")}` : ""}</li>)}</ul>
+      <p className="recovery-note">{handoff.next}</p>
+    </div>}
+    {worktrees.length > 0 && <div className="editor-handoff" data-surface="editor-handoff" role="group" aria-label="Open in your editor">
+      <small className="meta">Open the candidate worktree in your editor: the path is Luuna-owned and bound to this run; a manual edit invalidates the affected checks, and opening it grants no permission to run agents outside the approved scope.</small>
+      <ul className="worktree-paths" aria-label="Candidate worktree paths">{worktrees.map((lease) => <li key={lease.id}><code>{lease.repository_id}</code> <code className="worktree-path">{lease.path}</code> ({lease.state}) <button type="button" className="text-button" disabled={busy} onClick={() => copyPath(lease.path)}>Copy path for {lease.repository_id}</button></li>)}</ul>
+    </div>}
     {view.active && <p className="callout" data-tone="active" role="status">The runtime is {run.state === "implementing" ? "running the scoped writer repair" : evidence.status === "reviewing" ? "running the independent reviewer" : "executing the approved checks"}. Closing this view does not cancel the workflow.</p>}
     {evidence.reason && <p className="failure-note" data-tone={candidateTone[evidence.status]}>{evidence.reason}</p>}
     {evidence.reason && !canRevalidate(run, view) && !view.active && step && <p className="recovery-note">{step}</p>}
     {refusal && <p className="recovery-note">{refusal}</p>}
     {canRevalidate(run, view) && <p className="recovery-note">Required checks passed in validation generation {evidence.validation_generation} but no review verdict was recorded. Re-validation starts a fresh generation for this same candidate revision under the existing approval and budgets: the checks run again and a fresh reviewer session is started. No writer attempt is spent.</p>}
-    {boundDiff && <details open className="candidate-diff section"><summary>Diff for <code>{boundDiff.candidate_hash}</code></summary><p className="diff-meta meta">{boundDiff.repository_id} Â· base <code>{boundDiff.base_commit}</code> Â· candidate commit <code>{boundDiff.commit}</code></p><pre aria-label="Candidate diff" tabIndex={0}>{boundDiff.diff || (boundDiff.truncated ? "Diff omitted because it exceeds the display limit. Inspect the changed files listed below." : "No changes.")}</pre>{boundDiff.truncated && <p role="status">This diff is truncated. It does not show all candidate changes.</p>}{boundDiff.worktree_drift && <p role="status">{boundDiff.worktree_drift}</p>}{boundDiff.files && <ul aria-label="Changed candidate files">{boundDiff.files.map((file) => <li key={file.path}><code>{file.path}</code> · {file.status} · {file.shown}</li>)}</ul>}</details>}
+    {boundDiff && <details open className="candidate-diff section"><summary>Diff for <code>{boundDiff.candidate_hash}</code></summary><p className="diff-meta meta">{boundDiff.repository_id} Â· base <code>{boundDiff.base_commit}</code> Â· candidate commit <code>{boundDiff.commit}</code></p><pre aria-label="Candidate diff" tabIndex={0}>{boundDiff.diff || (boundDiff.truncated ? "Diff omitted because it exceeds the display limit. Inspect the changed files listed below." : "No changes.")}</pre>{boundDiff.truncated && <p role="status">This diff is truncated. It does not show all candidate changes.</p>}{boundDiff.worktree_drift && <p role="status">{boundDiff.worktree_drift}</p>}{boundDiff.files && <ul aria-label="Changed candidate files">{boundDiff.files.map((file) => <li key={file.path}><code>{file.path}</code> Â· {file.status} Â· {file.shown}</li>)}</ul>}</details>}
     <details className="candidate-checks section" open={evidence.results.length > 0}>
       <summary>Check evidence Â· {evidence.results.length} recorded result(s)</summary>
       {evidence.results.length === 0 && <p className="empty">No check results recorded for this candidate.</p>}

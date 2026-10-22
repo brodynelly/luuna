@@ -8,7 +8,10 @@
 @import "./design/base.css" layer(base);
 @import "./design/components.css" layer(components);
 @import "./screens/app.css" layer(screens);
+@import "./screens/home.css" layer(screens);
+@import "./screens/board.css" layer(screens);
 @import "./screens/projects.css" layer(screens);
 @import "./screens/workflows.css" layer(screens);
 @import "./screens/candidate-review.css" layer(screens);
 @import "./screens/project-components.css" layer(screens);
+@import "./screens/help.css" layer(screens);
