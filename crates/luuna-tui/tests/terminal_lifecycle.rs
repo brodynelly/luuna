@@ -25,7 +25,27 @@ fn nonterminal_and_help_need_no_token() {
 
 #[test]
 fn real_pty_keyboard_resize_and_terminal_cleanup() {
-    for (cols, rows, quit) in [(80, 24, b"q".as_slice()), (40, 12, b"\x03".as_slice())] {
+    for (cols, rows, quit, token_present) in [
+        (80, 24, b"q".as_slice(), true),
+        (40, 12, b"\x03".as_slice(), true),
+        (80, 24, b"".as_slice(), true),
+        (80, 24, b"".as_slice(), false),
+    ] {
+        let control = tempfile::tempdir().unwrap();
+        let marker = control.path().join("shutdown");
+        let stopped = control.path().join("bridge-stopped");
+        let wrapper = control.path().join("bridge.mjs");
+        std::fs::write(
+            &wrapper,
+            r#"
+            import { writeFileSync } from 'node:fs';
+            import { pathToFileURL } from 'node:url';
+            const { serveBridge } = await import(pathToFileURL(process.env.LUUNA_TEST_BRIDGE).href);
+            await serveBridge();
+            writeFileSync(process.env.LUUNA_TEST_BRIDGE_STOPPED, 'stopped');
+        "#,
+        )
+        .unwrap();
         let pair = native_pty_system()
             .openpty(PtySize {
                 rows,
@@ -36,13 +56,23 @@ fn real_pty_keyboard_resize_and_terminal_cleanup() {
             .expect("Real PTY required for terminal audit");
         let mut command = CommandBuilder::new(env!("CARGO_BIN_EXE_luuna-tui"));
         command.arg("--bridge");
-        command.arg(luuna_tui::bridge::default_bridge());
+        command.arg(&wrapper);
         if let Some(node) = std::env::var_os("LUUNA_TEST_NODE") {
             command.arg("--node");
             command.arg(node);
         }
-        command.env("LUUNA_API_TOKEN", "terminal-fixture-private-token");
+        command.env(
+            "LUUNA_API_TOKEN",
+            if token_present {
+                "terminal-fixture-private-token"
+            } else {
+                ""
+            },
+        );
         command.env("LUUNA_URL", "http://127.0.0.1:1");
+        command.env("LUUNA_TUI_SHUTDOWN_FILE", &marker);
+        command.env("LUUNA_TEST_BRIDGE", luuna_tui::bridge::default_bridge());
+        command.env("LUUNA_TEST_BRIDGE_STOPPED", &stopped);
         let mut child = pair.slave.spawn_command(command).unwrap();
         drop(pair.slave);
         let captured = Arc::new(Mutex::new(Vec::new()));
@@ -74,7 +104,9 @@ fn real_pty_keyboard_resize_and_terminal_cleanup() {
             let text = String::from_utf8_lossy(&captured.lock().unwrap()).into_owned();
             // Ratatui updates only changed cells: the title's initial 0 is replaced by
             // a cursor-addressed 61, so raw output need not contain one contiguous title.
-            if text.contains("start-session") && text.contains("doctor") {
+            if token_present && text.contains("start-session") && text.contains("doctor")
+                || !token_present && text.contains("Service token (hidden)")
+            {
                 break;
             }
             // The workbench now lands on Home. The unreachable fixture service settles
@@ -105,8 +137,12 @@ fn real_pty_keyboard_resize_and_terminal_cleanup() {
                 pixel_height: 0,
             })
             .unwrap();
-        writer.write_all(quit).unwrap();
-        writer.flush().unwrap();
+        if quit.is_empty() {
+            std::fs::write(&marker, "").unwrap();
+        } else {
+            writer.write_all(quit).unwrap();
+            writer.flush().unwrap();
+        }
         let start = Instant::now();
         loop {
             if let Some(status) = child.try_wait().unwrap() {
@@ -127,5 +163,10 @@ fn real_pty_keyboard_resize_and_terminal_cleanup() {
         assert!(text.contains("\x1b[?1049h"), "alternate screen entered");
         assert!(text.contains("\x1b[?1049l"), "alternate screen left");
         assert!(text.contains("\x1b[?25h"), "cursor restored");
+        assert_eq!(
+            stopped.exists(),
+            token_present,
+            "the owned bridge completes shutdown; hidden-token cancellation never starts it"
+        );
     }
 }

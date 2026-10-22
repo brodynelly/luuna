@@ -1,20 +1,20 @@
 import assert from "node:assert/strict";
 import { EventEmitter } from "node:events";
-import { mkdtempSync, mkdirSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdtempSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { test } from "node:test";
 import { main } from "../src/cli.mjs";
 import { launchNative, nativePaths } from "../src/native.mjs";
 
-function fixture(t, development = true) {
+function fixture(t, development = true, platform = "win32") {
   const root = mkdtempSync(path.join(tmpdir(), "luuna terminal "));
   t.after(() => rmSync(root, { recursive: true, force: true }));
   if (development) writeFileSync(path.join(root, "Cargo.toml"), "[workspace]\n");
-  const paths = nativePaths({ root, env: {}, platform: "win32" });
+  const paths = nativePaths({ root, env: {}, platform });
   for (const file of [paths.binary, paths.bridge]) { mkdirSync(path.dirname(file), { recursive: true }); writeFileSync(file, "fixture"); }
   let err = "";
-  return { root, paths, env: { LUUNA_API_TOKEN: "fixture-secret" }, stdin: "inherit", stdout: "inherit", stderr: { write: (text) => { err += text; } }, err: () => err, platform: "win32", signals: new EventEmitter() };
+  return { root, paths, env: { LUUNA_API_TOKEN: "fixture-secret" }, stdin: "inherit", stdout: "inherit", stderr: { write: (text) => { err += text; } }, err: () => err, platform, signals: new EventEmitter() };
 }
 
 test("checkout artifact is explicit, while installed resolution ignores target override and cwd", (t) => {
@@ -55,6 +55,45 @@ test("spawn failure is bounded, sanitized and removes signal listeners", async (
   assert.equal(await launchNative({ ...f, spawnProcess() { queueMicrotask(() => child.emit("error", new Error(f.env.LUUNA_API_TOKEN))); return child; } }), 1);
   assert.ok(!f.err().includes(f.env.LUUNA_API_TOKEN));
   assert.equal(f.signals.listenerCount("SIGINT"), 0);
+});
+
+test("Windows and Unix termination request graceful native cleanup without kill or credential files", async (t) => {
+  for (const platform of ["win32", "linux"]) {
+    for (const signal of ["SIGINT", "SIGTERM", "SIGHUP", ...(platform === "win32" ? ["SIGBREAK"] : [])]) {
+      const f = fixture(t, true, platform);
+      const child = new EventEmitter(); child.kill = () => assert.fail("graceful termination must not kill");
+      let marker;
+      const completed = launchNative({ ...f, spawnProcess(_binary, args, options) {
+        marker = options.env.LUUNA_TUI_SHUTDOWN_FILE;
+        assert.ok(path.isAbsolute(marker));
+        assert.ok(!args.includes(marker));
+        assert.ok(!existsSync(marker));
+        return child;
+      } });
+      f.signals.emit(signal);
+      assert.equal(readFileSync(marker, "utf8"), "");
+      f.signals.emit(signal); // Coalesced requests do not restart the deadline.
+      child.emit("close", 0, null);
+      assert.equal(await completed, 0);
+      assert.ok(!existsSync(path.dirname(marker)));
+      assert.equal(f.signals.eventNames().length, 0);
+      assert.ok(!f.err().includes(f.env.LUUNA_API_TOKEN));
+    }
+  }
+});
+
+test("a stuck native shutdown has a bounded owned-process fallback and restores the previous raw mode", async (t) => {
+  const f = fixture(t);
+  const child = new EventEmitter(); const killed = []; const restored = []; let marker; let terminalOutput = "";
+  child.kill = (signal) => { killed.push(signal); setImmediate(() => child.emit("close", null, "SIGKILL")); };
+  const completed = launchNative({ ...f, shutdownMs: 10, stdin: { isTTY: true, isRaw: true, setRawMode(value) { restored.push(value); } }, stdout: { isTTY: true, write(text) { terminalOutput += text; } }, spawnProcess(_binary, _args, options) { marker = options.env.LUUNA_TUI_SHUTDOWN_FILE; return child; } });
+  f.signals.emit("SIGTERM");
+  assert.equal(await completed, 137);
+  assert.deepEqual(killed, ["SIGKILL"]);
+  assert.deepEqual(restored, [true]);
+  assert.ok(terminalOutput.includes("\x1b[?1049l"));
+  assert.ok(!existsSync(path.dirname(marker)));
+  assert.equal(f.signals.eventNames().length, 0);
 });
 
 test("dispatch opens native only with no command and two terminal streams; help/catalog need no binary or token", async () => {

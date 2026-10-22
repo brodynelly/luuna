@@ -3,7 +3,7 @@ use luuna_tui::{
     app::AppState,
     bridge::{default_bridge, Bridge},
     protocol::safe_text,
-    terminal::{install_panic_restore, TerminalGuard},
+    terminal::{install_panic_restore, Shutdown, TerminalGuard},
     theme::Theme,
     ui,
 };
@@ -71,12 +71,13 @@ async fn run() -> io::Result<u8> {
         ));
     }
     install_panic_restore();
+    let shutdown = Shutdown::install()?;
     let guard = TerminalGuard::enter()?;
     let mut terminal = guard.screen()?;
     let theme = Theme::from_env();
     let mut token = std::env::var("LUUNA_API_TOKEN").unwrap_or_default();
     if token.trim().is_empty() {
-        match secret(&mut terminal, theme)? {
+        match secret(&mut terminal, theme, &shutdown)? {
             Some(value) => token = value,
             None => return Ok(0),
         }
@@ -88,6 +89,9 @@ async fn run() -> io::Result<u8> {
     app.start();
     let mut transport_stopped = false;
     let result = loop {
+        if shutdown.requested() {
+            break Ok(0);
+        }
         while let Some(request) = app.queue.pop_front() {
             if let Err(error) = bridge.send(&request) {
                 app.transport_failed(&error);
@@ -133,13 +137,23 @@ async fn run() -> io::Result<u8> {
     result
 }
 
-fn secret(terminal: &mut luuna_tui::terminal::Screen, theme: Theme) -> io::Result<Option<String>> {
+fn secret(
+    terminal: &mut luuna_tui::terminal::Screen,
+    theme: Theme,
+    shutdown: &Shutdown,
+) -> io::Result<Option<String>> {
     let mut value = String::new();
     loop {
+        if shutdown.requested() {
+            return Ok(None);
+        }
         terminal.draw(|frame|{
             let text=format!("LUUNA / LOCAL RUNTIME\n\nService token (hidden): {}\n\nEnter connects · Esc quits\nThe token remains in process memory and the owned bridge environment.","•".repeat(value.chars().count().min(32)));
             frame.render_widget(Paragraph::new(text).block(Block::default().borders(Borders::ALL).title(" Connection ")).style(theme.panel().add_modifier(Modifier::BOLD)).wrap(Wrap{trim:false}),frame.area());
         })?;
+        if !event::poll(Duration::from_millis(35))? {
+            continue;
+        }
         match event::read()? {
             Event::Key(key) if key.kind != KeyEventKind::Release => match key.code {
                 KeyCode::Esc => return Ok(None),
