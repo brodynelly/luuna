@@ -475,6 +475,27 @@ impl Components {
         let arguments = ["--no-env-file", "--no-install", "--eval", CLI_BRIDGE].map(Into::into);
         let result = output(&self.bun, &arguments, workspace, workspace, Some(&input)).await?;
         if !result.status.success() {
+            // Diagnostic data for the operator's log only: the component's
+            // structured `error` field when its JSON answer carries one,
+            // bounded; the typed error stays opaque and carries no output.
+            let detail: String = serde_json::from_slice::<Value>(&result.stdout)
+                .ok()
+                .and_then(|value| value["error"].as_str().map(ToOwned::to_owned))
+                .unwrap_or_else(|| String::from_utf8_lossy(&result.stdout).into_owned())
+                .chars()
+                .take(300)
+                .collect();
+            let stderr_line: String = String::from_utf8_lossy(&result.stderr)
+                .split_whitespace()
+                .collect::<Vec<_>>()
+                .join(" ")
+                .chars()
+                .take(400)
+                .collect();
+            eprintln!(
+                "luuna-components: {} refused the operation ({:?}): {detail} {stderr_line}",
+                pin.cli.primary, result.status
+            );
             return Err(ComponentError::Refused);
         }
         serde_json::from_slice(&result.stdout).map_err(|_| ComponentError::Protocol)
@@ -878,6 +899,7 @@ async fn git(cwd: &Path, args: &[&str], workspace: &Path) -> Result<String> {
 struct Captured {
     status: ExitStatus,
     stdout: Vec<u8>,
+    stderr: Vec<u8>,
 }
 async fn bounded(mut stream: impl tokio::io::AsyncRead + Unpin, limit: usize) -> Result<Vec<u8>> {
     let mut bytes = Vec::new();
@@ -983,7 +1005,7 @@ async fn output_with_deadline(
     let stdout = child.stdout.take().ok_or(ComponentError::Unavailable)?;
     let stderr = child.stderr.take().ok_or(ComponentError::Unavailable)?;
     let capture = async {
-        let (status, stdout, _, _) = tokio::try_join!(
+        let (status, stdout, stderr, _) = tokio::try_join!(
             async { child.wait().await.map_err(|_| ComponentError::Unavailable) },
             bounded(stdout, MAX_STDOUT),
             bounded(stderr, MAX_STDERR),
@@ -1001,7 +1023,11 @@ async fn output_with_deadline(
                 Ok::<(), ComponentError>(())
             }
         )?;
-        Ok(Captured { status, stdout })
+        Ok(Captured {
+            status,
+            stdout,
+            stderr,
+        })
     };
     let result = tokio::time::timeout(deadline, capture).await;
     drop(owner); // Ends all owned descendants before any error/result is returned.

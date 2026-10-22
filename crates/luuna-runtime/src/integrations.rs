@@ -129,8 +129,13 @@ async fn call(
     directory: &FsPath,
     args: Vec<String>,
 ) -> Result<Value, ApiError> {
-    available(state)?.call(component,directory,&args).await.map_err(|_| ApiError(StatusCode::SERVICE_UNAVAILABLE,
-        format!("{component} refused or unavailable; verify the pinned toolchain and managed store")))
+    available(state)?.call(component,directory,&args).await.map_err(|error| {
+        // Diagnostic data for the operator's log only; the API answer stays
+        // generic so component output never reaches a client.
+        eprintln!("luuna-runtime: {component} call failed: {error}");
+        ApiError(StatusCode::SERVICE_UNAVAILABLE,
+        format!("{component} refused or unavailable; verify the pinned toolchain and managed store"))
+    })
 }
 pub async fn status(
     State(state): State<AppState>,
@@ -457,6 +462,11 @@ pub(crate) async fn create_memory_locked(
                 "convention".into(),
                 "--tags".into(),
                 operation.record_id.clone(),
+                // Luuna records carry their own identity inside the
+                // envelope; Atlas's content-similarity guard compares the
+                // envelopes and would refuse any two short memories. Explicit
+                // developer records are never duplicates by Luuna's policy.
+                "--force".into(),
             ],
         )
         .await?;
