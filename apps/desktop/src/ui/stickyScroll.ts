@@ -61,7 +61,14 @@ export function createStickyScroll(surface: ScrollSurface, deps: StickyDeps): St
     const top = surface.scrollTop;
     const height = surface.scrollHeight;
     const client = surface.clientHeight;
-    if (Math.abs(top - lastWritten) > 1) { cancel(); return; }
+    if (Math.abs(top - lastWritten) > 1) {
+      // User intent cancels the glide before a frame runs, so an unexplained change while pinned
+      // is scroll anchoring (rows trimmed from the top): re-seed from the read position and go on.
+      if (!pinned || !enabled) { cancel(); return; }
+      position = top;
+      lastWritten = top;
+      spring = { x: 0, v: 0 };
+    }
     const target = Math.max(0, height - client);
     const at = deps.now();
     spring = springStep({ x: position - target, v: spring.v }, at - lastFrame, durationMs);

@@ -137,17 +137,33 @@ describe("createStickyScroll", () => {
     expect(r.sticky.isPinned()).toBe(true);
   });
 
-  it("stops without fighting when scrollTop changed externally by more than 1 px", () => {
+  it("re-seeds from the read position when scrollTop changed externally by more than 1 px while pinned", () => {
     const r = filled();
     r.state.top = r.bottom();
     r.state.height += 300;
     r.sticky.contentChanged();
     r.frame();
     r.state.top -= 40;
-    r.log.length = 0;
     r.frame();
-    expect(r.log).not.toContain("write");
-    expect(r.queue.size).toBe(0);
+    expect(r.queue.size).toBe(1);
+    r.frames();
+    expect(r.state.top).toBe(r.bottom());
+  });
+
+  it("keeps gliding to the new target when anchoring trims rows and growth continues", () => {
+    const r = filled();
+    r.state.top = r.bottom();
+    r.state.height += 300;
+    r.sticky.contentChanged();
+    r.frame();
+    // The bounded window trims 150px from the top (anchoring lowers scrollTop and height)
+    // while new rows keep arriving.
+    r.state.top -= 150;
+    r.state.height += 200 - 150;
+    r.sticky.contentChanged();
+    r.frames();
+    expect(r.state.top).toBe(r.bottom());
+    expect(r.sticky.isPinned()).toBe(true);
   });
 
   it("stops writing when disabled, and re-enabling re-pins and jumps", () => {

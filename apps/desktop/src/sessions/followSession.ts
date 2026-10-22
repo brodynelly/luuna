@@ -40,7 +40,10 @@ export async function followSession(client: FollowClient, runId: string, options
   let sseRetryAt = 0;
   let announced = false;
 
-  const reconnecting = (failure: unknown) => sink.live(`Reconnecting · replay will resume from sequence ${replay.cursor} · ${describeFailure(failure)}`);
+  const reconnecting = (failure: unknown) => {
+    announced = false;
+    sink.live(`Reconnecting · replay will resume from sequence ${replay.cursor} · ${describeFailure(failure)}`);
+  };
 
   const candidateTicker = async (legSignal: AbortSignal): Promise<void> => {
     while (!legSignal.aborted) {
