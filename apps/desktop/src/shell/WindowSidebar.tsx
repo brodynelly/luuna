@@ -3,12 +3,12 @@ import type { View } from "../content/views";
 import { connectionTone } from "../design/tone";
 import { ConnectionStatus, NavItem, NavSection, Sidebar } from "../ui";
 
-/** The window's sidebar: the wordmark, the palette trigger, the views in sections and the connection status. */
-export function WindowSidebar({ view, onSelect, connection, address, activeRuns, collapsed, onToggle, onSearch }: {
-  view: View; onSelect: (view: View) => void; connection: keyof typeof CONNECTION_LABEL; address?: string; activeRuns: number; collapsed: boolean; onToggle: () => void; onSearch: () => void;
+/** The window's sidebar: the wordmark, the views in sections and the connection status. */
+export function WindowSidebar({ view, onSelect, connection, address, activeRuns, collapsed, onToggle }: {
+  view: View; onSelect: (view: View) => void; connection: keyof typeof CONNECTION_LABEL; address?: string; activeRuns: number; collapsed: boolean; onToggle: () => void;
 }) {
-  const status = <ConnectionStatus tone={connectionTone[connection]} label={CONNECTION_LABEL[connection]} title={address} live={connection === "connected"} />;
-  return <Sidebar status={status} current={view} collapsed={collapsed} onToggle={onToggle} onSearch={onSearch}>
+  const status = <ConnectionStatus tone={connectionTone[connection]} label={CONNECTION_LABEL[connection]} title={address} />;
+  return <Sidebar status={status} collapsed={collapsed} onToggle={onToggle}>
     {NAV_SECTIONS.map((section) => <NavSection key={section.id} id={section.id} label={section.label}>
       {section.views.map((id) => <NavItem key={id} icon={id} label={viewInfo(id).label} current={view === id}
         shortcut={viewShortcut(id)} count={id === "sessions" ? activeRuns : undefined} onSelect={() => onSelect(id)} />)}

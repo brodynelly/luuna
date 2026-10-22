@@ -6,12 +6,13 @@
 .app .view .panel .panel { background: var(--color-surface); }
 
 /* Connect page: shown in place of a view until the runtime answers. Centred, one task. */
-.app > main > .connect-page {
+.content > .connect-page {
   justify-items: center;
   max-width: var(--connect-width);
   margin: var(--space-7) auto 0;
   padding: var(--space-6);
   text-align: center;
+  background: var(--surface-raised);
   box-shadow: var(--shadow-card);
 }
 .connect-mark { flex: none; overflow: visible; }
@@ -91,7 +92,7 @@
 }
 
 @media (max-width: 680px) {
-  .app > main > .connect-page { margin-top: var(--space-5); padding: var(--space-5); }
+  .content > .connect-page { margin-top: var(--space-5); padding: var(--space-5); }
 }
 
 @media (forced-colors: active) {

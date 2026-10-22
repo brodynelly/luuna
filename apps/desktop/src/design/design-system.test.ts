@@ -19,7 +19,7 @@ function layerOf(sheet: string): string {
   if (sheet.startsWith("screens/")) return "screens";
   return "components"; // components, overlays, controls, motion
 }
-const MEDIA = ["(max-width: 920px)", "(max-width: 680px)", "(prefers-reduced-motion: reduce)", "(prefers-color-scheme: dark)", "(prefers-contrast: more)", "(forced-colors: active)", "(hover: hover)", "(pointer: fine)"];
+const MEDIA = ["(max-width: 920px)", "(max-width: 768px)", "(max-width: 680px)", "(prefers-reduced-motion: reduce)", "(prefers-color-scheme: dark)", "(prefers-contrast: more)", "(forced-colors: active)", "(hover: hover)", "(pointer: fine)"];
 
 const STATES = [...new Set([runTone, candidateTone, checkTone, baselineTone, verdictTone, severityTone, leaseTone, connectionTone].flatMap((map) => Object.keys(map)))];
 const STATE_SELECTOR = new RegExp(`[.="'](?:${STATES.join("|")})(?![\\w-])`);
