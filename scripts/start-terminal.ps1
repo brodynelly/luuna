@@ -1,4 +1,4 @@
-# Opens the Luuna terminal client (packages/tui) against the local development
+# Opens the Rust terminal workbench through packages/tui against the local development
 # runtime. The fixed startup helper starts or reuses the runtime and hands the
 # connection back through memory only (ADR 0011); the token reaches the client
 # as an environment variable of this process and is never written or echoed.
@@ -14,6 +14,11 @@ $root = Split-Path -Parent $PSScriptRoot
 $client = Join-Path $root 'packages\tui\bin\luuna-tui.mjs'
 if (!(Test-Path -LiteralPath $client)) { throw 'The terminal client is not present beside this script.' }
 $node = (Get-Command node.exe -ErrorAction Stop).Source
+# Help and catalog are local, credential-free operations and must not start a service.
+if ($Arguments.Count -gt 0 -and $Arguments[0] -in @('help', '--help', '-h', 'catalog')) {
+    & $node $client @Arguments
+    exit $LASTEXITCODE
+}
 $connection = if ($DataDirectory) { & (Join-Path $PSScriptRoot 'ensure-windows-runtime.ps1') -DataDirectory $DataDirectory } else { & (Join-Path $PSScriptRoot 'ensure-windows-runtime.ps1') }
 $saved = @{}
 foreach ($name in @('LUUNA_URL', 'LUUNA_API_TOKEN')) { $saved[$name] = [Environment]::GetEnvironmentVariable($name, 'Process') }
