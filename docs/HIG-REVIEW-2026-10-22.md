@@ -92,7 +92,6 @@ Apple uses title-style capitalization for buttons. Windows, the client's first p
 ## Open (Medium or lower)
 
 - **macOS.** Nothing has run on a Mac yet. That includes the native menu bar, and the standard Edit menu that copy and paste in the web view depend on.
-- **Windows stop-and-restart lifecycle smoke.** `scripts/windows-native-startup-smoke.mjs` stops and restarts the shared development runtime on port 4242, so it has not been run against this tree.
 
 ## Native verification (Windows, 2026-10-22)
 
@@ -109,3 +108,17 @@ Posting each item's `WM_COMMAND` drove the page:
 - Help › Luuna Help opened Help.
 
 In the same window, the sidebar listed the six views and Ctrl+K opened the palette. Automatic startup refused, correctly, to attach to a runtime started from another checkout's executable ("Port 4242 belongs to another executable").
+
+`node scripts/windows-native-startup-smoke.mjs` then passed **17/17** against the shared development runtime on port 4242, with the owner's permission to stop and restart it. The run covered:
+- warm reuse, and a normal window close that leaves the runtime answering;
+- a foreign listener refused before any request;
+- cold-start retry, and two windows sharing one runtime;
+- data directory, history and provider credential bytes preserved;
+- no browser storage, reload without a duplicate runtime;
+- explicit disconnect, and closing every window.
+
+Two runs failed before that, both for reasons outside the client:
+- **Another desktop window was open.** It kept sending preflight requests to the stand-in listener on 4242; once that window was closed, the check passed.
+- **The history check counted every `.run-card`.** Every view now stays mounted and loads at its own pace, so that count depended on timing; the smoke now counts `.history-list .run-card`, the session history it means.
+
+The runtime was put back on its original executable and data directory afterwards. Evidence: `~/.luuna/verification/native-startup-42c8eb75`.

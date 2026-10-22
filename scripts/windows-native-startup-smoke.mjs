@@ -78,7 +78,8 @@ try {
   await connected(warm);
   timings.warm_launch_to_connected_ms = performance.now() - warmStarted;
   check("warm launch reuses the authenticated runtime PID", metadata().runtime_pid === saved.runtime_pid);
-  const history = await warm.page.locator(".run-card").count();
+  // Session history only: every view stays mounted (ADR 0030), so other cards load at their own pace.
+  const history = await warm.page.locator(".history-list .run-card").count();
   await close(warm);
   check("normal window close leaves runtime answering", await healthy());
   await ps(["-File", path.join(root, "scripts/stop-windows.ps1")]);
@@ -99,7 +100,7 @@ try {
   timings.cold_retry_and_concurrent_launch_to_connected_ms = performance.now() - coldStarted;
   const restarted = metadata();
   check("retry starts a new independent runtime after cold stop", restarted.runtime_pid !== saved.runtime_pid && await healthy());
-  check("cold startup preserves the existing data directory and visible history", restarted.data_directory === saved.data_directory && await cold.page.locator(".run-card").count() === history);
+  check("cold startup preserves the existing data directory and visible history", restarted.data_directory === saved.data_directory && await cold.page.locator(".history-list .run-card").count() === history);
   check("provider credential bytes are unchanged", providerHash() === keyHash);
   const storage = await cold.page.evaluate(() => ({ local: Object.keys(localStorage), session: Object.keys(sessionStorage) }));
   check("automatic connection writes no browser storage", storage.local.length === 0 && storage.session.length === 0);
