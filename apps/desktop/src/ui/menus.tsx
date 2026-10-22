@@ -50,9 +50,9 @@ function ContextMenu({ label, commands, x, y, onClose }: { label: string; comman
   useLayoutEffect(() => {
     const element = menu.current;
     if (!element) return;
-    const box = element.getBoundingClientRect();
-    element.style.setProperty("--menu-x", `${Math.max(0, Math.min(x, window.innerWidth - box.width))}px`);
-    element.style.setProperty("--menu-y", `${Math.max(0, Math.min(y, window.innerHeight - box.height))}px`);
+    // offsetWidth/offsetHeight, not getBoundingClientRect: the entrance scales the menu, and the rect would include that.
+    element.style.setProperty("--menu-x", `${Math.max(0, Math.min(x, window.innerWidth - element.offsetWidth))}px`);
+    element.style.setProperty("--menu-y", `${Math.max(0, Math.min(y, window.innerHeight - element.offsetHeight))}px`);
     items()[0]?.focus();
   }, [x, y]);
 

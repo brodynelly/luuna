@@ -7,9 +7,9 @@ import type { ButtonHTMLAttributes, FormEvent, InputHTMLAttributes, ReactNode, S
  * button. A control that starts a cataloged action carries its catalog id in a data-capability attribute, written
  * literally where it is used, because the parity contracts read the markers from source.
  */
-export type ButtonVariant = "secondary" | "primary" | "danger" | "text";
+export type ButtonVariant = "secondary" | "primary" | "quiet" | "danger" | "text";
 
-const BUTTON_CLASS: Record<ButtonVariant, string | undefined> = { secondary: undefined, primary: "primary", danger: "danger", text: "text-button" };
+const BUTTON_CLASS: Record<ButtonVariant, string | undefined> = { secondary: undefined, primary: "primary", quiet: "quiet", danger: "danger", text: "text-button" };
 
 export interface ButtonProps extends Omit<ButtonHTMLAttributes<HTMLButtonElement>, "type"> {
   variant?: ButtonVariant;
@@ -62,6 +62,13 @@ export type CheckboxProps = { label: ReactNode; className?: string } & Omit<Inpu
 /** A checkbox on one row with its label. */
 export function Checkbox({ label, className, ...input }: CheckboxProps) {
   return <label className={className}><input type="checkbox" {...input} /> {label}</label>;
+}
+
+export type SwitchProps = { label: ReactNode; className?: string } & Omit<InputHTMLAttributes<HTMLInputElement>, "type" | "role" | "className">;
+
+/** An on/off setting that applies at once: a checkbox with the switch role. Use a Checkbox for a choice submitted with a form. */
+export function Switch({ label, className, ...input }: SwitchProps) {
+  return <label className={["switch", className].filter(Boolean).join(" ")}><input type="checkbox" role="switch" {...input} /> {label}</label>;
 }
 
 export interface FormProps {

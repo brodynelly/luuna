@@ -85,5 +85,9 @@
 }
 
 /* item B: append-only. Component-dimension tokens added by item B. Each new --duration-* must also be zeroed in the reduced-motion block below. */
-:root {}
+:root {
+  --check-size-sm: 16px;
+  --check-size-md: 24px;
+  --check-size-lg: 48px;
+}
 @media (prefers-reduced-motion: reduce) { :root {} }
