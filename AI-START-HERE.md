@@ -37,8 +37,9 @@ until [RELEASE-EVIDENCE.md](docs/RELEASE-EVIDENCE.md) has no blocking row.
 
 The audit branch includes fixes for all 14 confirmed review issues and Windows
 acceptance-harness corrections. Existing main history, component pins, installed
-executables, credentials and live database contents were preserved. This branch
-has not been merged or installed. Native/browser and fixture checks passed;
+executables, credentials and live database contents were preserved. PR 11 was
+merged into `main` (merge commit `bf538cc`, October 21, 2026); no installation of
+this revision is recorded. Native/browser and fixture checks passed;
 strict genuine-provider M3 remains open (final run 59/61 because the blocking
 probe's writer produced no candidate). One existing Windows-disabled stress test
 was not run. Read [the exact revisions, coverage and failures](docs/PR-11-WINDOWS-VERIFICATION.md)
@@ -55,7 +56,7 @@ dispatch, paged session history, bounded desktop replay, workflow snapshot reuse
 and Windows check-process ownership. See [PERFORMANCE-REVIEW.md](docs/PERFORMANCE-REVIEW.md)
 for current-tree tests, optimized Windows installation verification and explicit
 scaling limits. Performance commit `839e46a` and harness fix `974ff0e` are
-committed locally. Strict Windows M3 acceptance passed on clean `974ff0e`:
+in `main` through PR 11. Strict Windows M3 acceptance passed on clean `974ff0e`:
 68/68 fixture and 61/61 genuine-provider checks. See the exact commands,
 scope and retained failure evidence in [Windows verification](docs/WINDOWS-VERIFICATION.md#strict-m3-acceptance-result).
 The installed Windows development paths now contain verified optimized release

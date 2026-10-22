@@ -1,7 +1,7 @@
 # PR 11 Windows review fixes and preservation evidence
 
 Date: October 21, 2026 (America/Chicago). PR: [#11](https://github.com/brodynelly/luuna/pull/11).
-The PR remains open and unmerged. **The confirmed review fixes are complete, but strict genuine-provider M3 acceptance remains open: the final run passed 59/61 checks.** The local Rust/frontend, native/browser lifecycle, component and fixture suites passed, with one existing Windows-disabled stress fixture.
+The PR was merged into `main` afterwards as `bf538cc` (October 21, 2026); the verification below ran before the merge. **The confirmed review fixes are complete, but strict genuine-provider M3 acceptance remains open: the final run passed 59/61 checks.** The local Rust/frontend, native/browser lifecycle, component and fixture suites passed, with one existing Windows-disabled stress fixture.
 
 This record is Windows product evidence,
 separate from the original documentation validation report and historical Linux results.
@@ -26,7 +26,8 @@ from the existing audit branch and retain all of main at `24a7e4a`.
   not claimed byte-identical.
 - Missions, Atlas and Beacon gitlinks and manifest pins are unchanged. Historical
   logs, plans, approval/evidence records, worktrees, requirements and ADRs remain.
-  No installation, merge, automatic publication or component-internal change was made.
+  The verification made no installation, merge, automatic publication or
+  component-internal change; the PR was merged into `main` afterwards.
 
 ## Review issues fixed
 
@@ -130,4 +131,6 @@ Two earlier genuine M3 attempts also recorded model-generated Python syntax erro
 This establishes the listed Windows scenarios, not universal failure-freedom,
 signed installation, newly tested cold bootstrap, Mac/Linux acceptance on these
 commits, or full-v1 completion. The native bootstrap code was unchanged and its
-prior platform evidence remains historical. No merge was performed.
+prior platform evidence remains historical. No merge was performed during the
+verification. PR 11 was merged into `main` afterwards (`bf538cc`), and this
+report records no testing after the merge.
