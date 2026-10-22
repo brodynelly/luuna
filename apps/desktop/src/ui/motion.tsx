@@ -45,6 +45,8 @@ export function CountUp({ value, format = plain, className }: { value: number; f
   const formatRef = useRef(format);
   formatRef.current = format;
   const mounted = useRef(value);
+  const latest = useRef(value);
+  latest.current = value;
   useLayoutEffect(() => {
     const element = ref.current;
     const node = element?.firstChild;
@@ -58,8 +60,9 @@ export function CountUp({ value, format = plain, className }: { value: number; f
     });
     return () => {
       run.dispose();
-      // A cancelled tween must not leave a partial number behind.
-      node.nodeValue = formatRef.current(value);
+      // A cancelled tween must not leave a partial number behind. React has already committed the new
+      // text on an update, so restore the latest value, never the closed-over one.
+      node.nodeValue = formatRef.current(latest.current);
     };
   }, [value]);
   return <span ref={ref} className={["count-up", className].filter(Boolean).join(" ")}>{format(value)}</span>;
