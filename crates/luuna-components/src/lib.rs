@@ -6,7 +6,7 @@ use serde::Deserialize;
 use serde_json::Value;
 use std::{
     collections::BTreeMap,
-    ffi::OsString,
+    ffi::{OsStr, OsString},
     path::{Component, Path, PathBuf},
     process::{ExitStatus, Stdio},
     time::Duration,
@@ -352,8 +352,20 @@ fn nonempty_hooks(value: &Value) -> bool {
     }
 }
 fn find_on_path(name: &str) -> Option<PathBuf> {
-    std::env::split_paths(&std::env::var_os("PATH")?)
-        .map(|path| path.join(name))
+    find_in(&std::env::var_os("PATH")?, name)
+}
+/// On Windows a bare name is looked up only as `name.exe`, as process
+/// creation does: extensionless POSIX shims (npm installs one beside
+/// `bun.cmd`) cannot start, and batch launchers would re-parse the bridge
+/// script argument. A name that carries an extension is used as written.
+fn find_in(search: &OsStr, name: &str) -> Option<PathBuf> {
+    let name = if cfg!(windows) && Path::new(name).extension().is_none() {
+        format!("{name}.exe")
+    } else {
+        name.to_owned()
+    };
+    std::env::split_paths(search)
+        .map(|path| path.join(&name))
         .find(|path| path.is_file())
 }
 fn linked(metadata: &std::fs::Metadata) -> bool {
@@ -734,6 +746,26 @@ mod tests {
     fn node() -> PathBuf {
         find_on_path(if cfg!(windows) { "node.exe" } else { "node" })
             .expect("Node is a repository prerequisite")
+    }
+
+    #[test]
+    fn bare_launcher_names_resolve_like_process_creation() {
+        let dir = tempfile::tempdir().unwrap();
+        let (shims, binaries) = (dir.path().join("shims"), dir.path().join("bin"));
+        std::fs::create_dir(&shims).unwrap();
+        std::fs::create_dir(&binaries).unwrap();
+        // npm's extensionless POSIX shim is earlier on PATH than the binary.
+        std::fs::write(shims.join("bun"), "#!/bin/sh\n").unwrap();
+        std::fs::write(binaries.join("bun.exe"), "").unwrap();
+        let search = std::env::join_paths([&shims, &binaries]).unwrap();
+        let expected = if cfg!(windows) {
+            binaries.join("bun.exe")
+        } else {
+            shims.join("bun")
+        };
+        assert_eq!(find_in(&search, "bun"), Some(expected));
+        assert_eq!(find_in(&search, "bun.exe"), Some(binaries.join("bun.exe")));
+        assert_eq!(find_in(&search, "missing"), None);
     }
 
     #[tokio::test]
