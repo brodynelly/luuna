@@ -15,13 +15,13 @@ use axum::{
     Json,
 };
 use luuna_domain::{
-    remotes_equivalent, CandidateEvidence, CandidateStatus, PublicationState, ReviewVerdict,
-    SCHEMA_VERSION,
+    remotes_equivalent, CandidateEvidence, CandidateStatus, DomainError, PlanRevision,
+    PublicationState, ReviewVerdict, SCHEMA_VERSION,
 };
 use luuna_git::{redact_remote, GitHubRepository, PushCredential, RemoteOperations, RemoteRef};
 use luuna_storage::{
     intent_key, CiCheck, CiObservation, CiState, IntentState, MergeObservation, PublicationIntent,
-    PublicationRecord, PullRequestRef, RepositoryPublication, StepState,
+    PublicationRecord, PullRequestRef, RepositoryPublication, StepState, StorageError,
 };
 use serde::Deserialize;
 use serde_json::{json, Value};
@@ -149,6 +149,8 @@ pub fn branch_name(ticket_id: &str, candidate_hash: &str) -> String {
 struct Prepared {
     evidence: CandidateEvidence,
     ticket: luuna_domain::Ticket,
+    /// The plan revision the workflow's approval still authorizes.
+    plan: PlanRevision,
     project_id: String,
     repositories: BTreeMap<String, RepositoryPublication>,
     /// The registered developer checkout and, when it still exists, the
@@ -247,6 +249,24 @@ fn prepare(state: &AppState, id: &str, expected_hash: &str) -> Result<Prepared, 
             "the confirmed manifest changed since the plan; create the next plan revision before publishing",
         ));
     }
+    // The same authorization gate validation and repair apply: the stored
+    // approval must authorize the latest revision of the plan (a newer
+    // revision supersedes it), and the ticket and manifest bindings must
+    // still hold. A reviewed candidate is evidence for one exact plan
+    // revision; it never carries over to a later one.
+    let plan = store.authorize_workflow(id).map_err(|error| match error {
+        StorageError::Domain(DomainError::StaleApproval) => conflict(format!(
+            "the approval this candidate was implemented under no longer authorizes the latest revision of plan {}; a newer plan revision supersedes it, so this candidate cannot be published: implement, validate and review the latest revision's workflow, or re-plan",
+            plan.id
+        )),
+        StorageError::Domain(error) => conflict(format!(
+            "the plan's bindings no longer hold ({error}); create the next plan revision before publishing"
+        )),
+        StorageError::Invalid(detail) => conflict(format!(
+            "publication is not authorized: {detail}; create the next plan revision before publishing"
+        )),
+        other => internal(other),
+    })?;
     let active_leases = store.active_worktree_leases().map_err(internal)?;
     let leases = store.worktree_leases(id).map_err(internal)?;
     let registrations = store.repositories(&run.project_id).map_err(internal)?;
@@ -321,10 +341,139 @@ fn prepare(state: &AppState, id: &str, expected_hash: &str) -> Result<Prepared, 
     Ok(Prepared {
         evidence,
         ticket,
+        plan,
         project_id: run.project_id,
         repositories,
         checkouts,
     })
+}
+
+/// The scan budget for the pre-push policy check: a candidate whose patch
+/// does not fit is refused as unscanned rather than pushed unchecked.
+const POLICY_DIFF_BYTES: usize = 16 * 1024 * 1024;
+
+fn refused(state: &AppState, id: &str, kind: &str, payload: Value) -> Result<(), ApiError> {
+    let mut payload = payload;
+    payload["kind"] = json!(kind);
+    state.event(id, "publication.refused", payload)
+}
+
+/// Revalidate, after the transactional gate and before any external side
+/// effect, every authoritative input a publication consumes that only the
+/// repository, the host or the components can answer: the ticket's source and
+/// the approved component context are re-resolved (`verify_plan_sources`),
+/// every repository's Luuna-owned worktree must still hold exactly the frozen
+/// candidate (manual drift after the review invalidates the candidate; the
+/// evidence is marked and the run leaves `reviewed`), and the exact patch
+/// that will be pushed passes the deterministic secrets/path policy. Applies
+/// to the initial publication and to every reconciliation alike. Refusals are
+/// durable `publication.refused` events naming the kind and the next step.
+async fn admit(state: &AppState, id: &str, prepared: &mut Prepared) -> Result<(), ApiError> {
+    crate::integrations::verify_plan_sources(state, &prepared.plan)
+        .await
+        .inspect_err(|error| {
+            let _ = refused(
+                state,
+                id,
+                "source_changed",
+                json!({"candidate_hash": prepared.evidence.candidate.hash, "reason": error.1}),
+            );
+        })?;
+    let evidence = prepared.evidence.clone();
+    let worktrees = match crate::candidates::worktrees_for(state, id, &evidence) {
+        Ok(worktrees) => worktrees,
+        Err(error) => {
+            let reason = format!(
+                "the candidate's Luuna-owned worktree cannot be verified against the frozen candidate ({}); publication needs the reviewed worktree: repair the candidate (POST /repair) or create the next plan revision",
+                error.1
+            );
+            refused(
+                state,
+                id,
+                "worktree_unverifiable",
+                json!({"candidate_hash": evidence.candidate.hash, "reason": reason}),
+            )?;
+            return Err(conflict(reason));
+        }
+    };
+    for (repository_id, worktree) in &worktrees {
+        let drift = crate::candidates::content_drift(state, &evidence, repository_id, worktree)
+            .await
+            .map_err(|detail| {
+                ApiError(
+                    StatusCode::INTERNAL_SERVER_ERROR,
+                    format!("repository {repository_id}: {detail}"),
+                )
+            })?;
+        if let Some(drift) = drift {
+            let drift = if evidence.candidate.repository_commits.len() > 1 {
+                format!("repository {repository_id}: {drift}")
+            } else {
+                drift
+            };
+            let reason = format!(
+                "candidate content drift: the Luuna-owned worktree was changed outside Luuna after the review and no longer holds the frozen candidate ({drift}); the reviewed evidence is invalidated and nothing was pushed; the worktree is kept for inspection; repair the candidate (POST /repair, a new revision in a fresh worktree) or create the next plan revision"
+            );
+            let invalidated = state
+                .store
+                .lock()
+                .map_err(internal)?
+                .invalidate_reviewed_candidate(id, &evidence.candidate.hash, &reason, true)
+                .map_err(storage_error)?;
+            refused(
+                state,
+                id,
+                "candidate_drift",
+                json!({"candidate_hash": evidence.candidate.hash, "repository_id": repository_id, "reason": reason, "candidate_status": invalidated.status}),
+            )?;
+            return Err(conflict(reason));
+        }
+    }
+    let known = crate::writer::known_secrets(state);
+    let mut findings = Vec::new();
+    for (repository_id, worktree) in &worktrees {
+        let commit = &evidence.candidate.repository_commits[repository_id];
+        let Some(base) = prepared.plan.base_commits.get(repository_id) else {
+            return Err(conflict(format!(
+                "the plan has no base commit for repository {repository_id}; create the next plan revision before publishing"
+            )));
+        };
+        let diff = state
+            .git
+            .review_diff(worktree, base, commit, POLICY_DIFF_BYTES)
+            .await
+            .map_err(|error| {
+                ApiError(
+                    StatusCode::INTERNAL_SERVER_ERROR,
+                    format!("repository {repository_id}: cannot read the candidate patch for the pre-push policy check: {error}"),
+                )
+            })?;
+        findings.extend(crate::policy::scan_repository(
+            repository_id,
+            &prepared.plan,
+            &diff,
+            &known,
+        ));
+    }
+    if !findings.is_empty() {
+        let reason = format!(
+            "pre-push policy refused the candidate ({}); nothing was pushed; repair the candidate (POST /repair) or create the next plan revision; the reviewed evidence is kept",
+            crate::policy::describe(&findings)
+        );
+        refused(
+            state,
+            id,
+            "policy",
+            json!({"candidate_hash": evidence.candidate.hash, "findings": findings, "reason": reason}),
+        )?;
+        return Err(unprocessable(reason));
+    }
+    for (repository_id, worktree) in worktrees {
+        if let Some(checkout) = prepared.checkouts.get_mut(&repository_id) {
+            checkout.worktree = Some(worktree);
+        }
+    }
+    Ok(())
 }
 
 fn status_name(status: &CandidateStatus) -> String {
@@ -386,9 +535,9 @@ pub async fn publish(
             ));
         }
     }
-    let prepared = prepare(&state, &id, &request.expected_hash)?;
+    let mut prepared = prepare(&state, &id, &request.expected_hash)?;
     let credential = require_token(&state)?;
-    crate::missions::ensure_current(&state, &prepared.ticket).await?;
+    admit(&state, &id, &mut prepared).await?;
     let (tx, rx) = watch::channel(false);
     let record = {
         let mut active = state.active.lock().map_err(internal)?;
@@ -483,9 +632,9 @@ pub async fn reconcile(
     {
         return Ok((StatusCode::OK, Json(view(&state, &record)?)));
     }
-    let prepared = prepare(&state, &id, &record.candidate_hash)?;
+    let mut prepared = prepare(&state, &id, &record.candidate_hash)?;
     let credential = require_token(&state)?;
-    crate::missions::ensure_current(&state, &prepared.ticket).await?;
+    admit(&state, &id, &mut prepared).await?;
     let (tx, rx) = watch::channel(false);
     {
         let mut active = state.active.lock().map_err(internal)?;

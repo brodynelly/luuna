@@ -141,3 +141,79 @@ hold or pass to Git without exposing it in arguments, logs or events.
 - **Repair after CI failure** (A24's bounded repair that invalidates affected
   evidence) is reported by `ci.state: failure` but not yet driven into the
   repair workflow; the developer chooses to repair or re-plan.
+
+## Amendment (2026-10-22): publication revalidates every authoritative input
+
+The October 22 specification audit reproduced two publication-policy
+failures against this decision as first implemented: a candidate whose
+Luuna-owned worktree had been edited by hand after the review was still
+published (its frozen commit was pushed, A14/A26), and a candidate was
+published after a newer plan revision had superseded the approval it was
+implemented under (A09/E02). Source inspection also showed that publication
+checked ticket freshness only through the Missions source check, not the
+plan's ticket revision or the approved component context, and that no
+deterministic secrets/path policy ran before the push
+(docs/08-validation.md "Publication rules"). The decision is amended:
+
+1. **Authorization is the validation/repair gate, reused.** `prepare` calls
+   `Store::authorize_workflow`, the read-only form of the transactional
+   `current_plan` gate: the durably stored approval must authorize the
+   *latest* revision of its plan, and the plan's ticket and manifest
+   bindings must hold. A newer plan revision therefore refuses publication
+   and reconciliation of the earlier revision's candidate (`409`, naming the
+   superseding revision and the next step); the candidate evidence stays as
+   it is, valid for the revision it was made for.
+2. **Admission after the gate, before any side effect.** `admit` runs for the
+   initial publication and for every reconciliation, after the
+   transactional gate and before the supervised job is spawned:
+   `integrations::verify_plan_sources` (the ticket revision the plan was made
+   for and the exact approved memory/prompt snapshots re-resolved from the
+   components); every repository's Luuna-owned worktree resolved from its
+   lease and verified to hold exactly the frozen candidate HEAD, tree and
+   tracked content (`candidates::content_drift`); and the pre-push policy of
+   point 3. A missing or unverifiable worktree refuses publication: the
+   frozen commit alone is not evidence that nothing changed.
+3. **Deterministic pre-push policy (`crates/luuna-runtime/src/policy.rs`).**
+   The exact patch between the planned base and the candidate commit of each
+   repository (`review_diff`, 16 MiB budget) is scanned without any model or
+   network: changed paths are re-checked against the approved task scope with
+   the writer's own `check_scope`; credential stores by name (`.env` and
+   `.env.*` except documented placeholders, key material extensions, SSH and
+   cloud credential files and directories) are refused; added lines are
+   refused when they carry a private key block, a known credential prefix
+   (GitHub, GitLab, Slack, Anthropic, Stripe, npm, Google, AWS), a signed
+   JSON web token, a password inside a URL, a credential-shaped literal
+   assigned to a secret-named key, or a credential value this runtime was
+   configured with. A file whose patch exceeds the scan budget is refused as
+   unscanned. Findings name the repository, path, rule and line, never the
+   matched text; the refusal is `422` and the reviewed evidence is kept.
+4. **Drift after review invalidates the candidate.** When the worktree no
+   longer holds the frozen candidate, `Store::invalidate_reviewed_candidate`
+   marks the candidate failed with content drift (never re-validated in
+   place), moves the run from `reviewed` to `failed` (a structural transition
+   the domain now admits solely for post-review invalidation) and records
+   `candidate.invalidated`; the worktree is kept for inspection and the next
+   step is a repair revision in a fresh worktree or the next plan revision.
+   Nothing is pushed.
+5. **Durable refusals.** Every admission refusal is a `publication.refused`
+   run event with `kind` (`source_changed`, `worktree_unverifiable`,
+   `candidate_drift`, `policy`), the candidate hash and the reason (and the
+   findings for `policy`). Refusals of the synchronous gate (pending or
+   failed candidate, stale hash, superseded revision) remain responses only,
+   as before. Because a reviewed workflow can still change (publication,
+   invalidation), its event stream no longer closes at `reviewed`.
+6. **Idempotent replay is unchanged.** A repeated idempotency key returns the
+   existing record before any gate, and reconciliation of a complete record
+   returns it unchanged; only a publication that still has steps to perform
+   is re-admitted.
+
+Tests (`crates/luuna-runtime/tests/publication.rs`, eleven scenarios): a
+newer plan revision refuses publication and reconciliation of the earlier
+candidate (the pushed branch of a partial publication is left alone, no pull
+request is retried); a manual edit in the owned worktree after the review
+refuses publication and reconciliation, invalidates the candidate with the
+drift marked and pushes nothing; a candidate carrying a GitHub-shaped token
+and a `.env` file (`write_secret` synthetic writer scenario) passes its check
+and review and is refused by the policy with findings that never contain the
+values. The ticket-revision case of `verify_plan_sources` is exercised through
+the ticket editing route (ADR 0026) rather than here.

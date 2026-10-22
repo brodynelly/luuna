@@ -415,6 +415,9 @@ impl Harness {
     /// Register, confirm, baseline, ticket, plan, approve, implement: a workflow
     /// run whose candidate is recorded and still pending validation.
     async fn implemented(&self, repo: &Path) -> (String, Value) {
+        self.implemented_with(repo, "write_in_scope").await
+    }
+    async fn implemented_with(&self, repo: &Path, scenario: &str) -> (String, Value) {
         clean_repository(repo);
         let (status, view) = self
             .request(
@@ -426,7 +429,7 @@ impl Harness {
         assert_eq!(status, StatusCode::CREATED, "{view}");
         self.confirm(0, vec![passing_check()]).await;
         self.baseline().await;
-        let ticket = self.ticket("write_in_scope").await;
+        let ticket = self.ticket(scenario).await;
         let opened = self.plan(ticket["id"].as_str().unwrap()).await;
         self.approve(&opened["plan"]).await;
         let run_id = opened["run"]["id"].as_str().unwrap().to_owned();
@@ -443,7 +446,10 @@ impl Harness {
     }
     /// A reviewed candidate with a passed review: the publication precondition.
     async fn reviewed(&self, repo: &Path) -> (String, Value, Value) {
-        let (run_id, ticket) = self.implemented(repo).await;
+        self.reviewed_with(repo, "write_in_scope").await
+    }
+    async fn reviewed_with(&self, repo: &Path, scenario: &str) -> (String, Value, Value) {
+        let (run_id, ticket) = self.implemented_with(repo, scenario).await;
         let pending = self.candidate(&run_id).await;
         let hash = pending["evidence"]["candidate"]["hash"].clone();
         let (status, response) = self
@@ -489,6 +495,24 @@ impl Harness {
             "publication did not settle: {}",
             self.publication(run_id).await.1
         );
+    }
+    async fn worktree(&self, run_id: &str) -> PathBuf {
+        let (_, leases) = self
+            .request("GET", &format!("/api/v1/runs/{run_id}/worktrees"), None)
+            .await;
+        PathBuf::from(
+            leases.as_array().unwrap().last().unwrap()["path"]
+                .as_str()
+                .unwrap(),
+        )
+    }
+    async fn reconcile(&self, run_id: &str) -> (StatusCode, Value) {
+        self.request(
+            "POST",
+            &format!("/api/v1/runs/{run_id}/publication/reconcile"),
+            None,
+        )
+        .await
     }
     fn requests(&self, method: &str, path_part: &str) -> usize {
         self.fake
@@ -1013,4 +1037,247 @@ async fn there_is_no_merge_route_or_operation() {
         Path::new(env!("CARGO_MANIFEST_DIR")),
         &["--version"]
     ));
+}
+
+/// The `publication.refused` events of a run, by kind.
+fn refusals(events: &[Value]) -> Vec<String> {
+    events
+        .iter()
+        .filter(|e| e["type"] == "publication.refused")
+        .map(|e| e["payload"]["kind"].as_str().unwrap_or_default().to_owned())
+        .collect()
+}
+
+#[tokio::test]
+async fn a_newer_plan_revision_supersedes_the_reviewed_candidates_authorization() {
+    let harness = Harness::new().await;
+    let repo = Repo::new();
+    let (run_id, ticket, candidate) = harness.reviewed(repo.path()).await;
+    let hash = candidate["hash"].clone();
+    // The developer plans again: revision 2 of the same plan opens its own
+    // workflow and supersedes the approval revision 1's candidate was made under.
+    let second = harness.plan(ticket["id"].as_str().unwrap()).await;
+    assert_eq!(second["plan"]["revision"], 2, "{second}");
+
+    let (status, refused) = harness.publish(&run_id, &hash, "publish-superseded").await;
+    assert_eq!(status, StatusCode::CONFLICT, "{refused}");
+    let reason = refused["error"].as_str().unwrap();
+    assert!(
+        reason.contains("newer plan revision supersedes"),
+        "{reason}"
+    );
+    assert!(reason.contains("re-plan"), "{reason}");
+    assert_eq!(harness.requests("POST", "/pulls"), 0);
+    assert_eq!(harness.requests("GET", "/pulls"), 0);
+    assert!(remote_branch(repo.path(), "luuna").is_none());
+    let (status, body) = harness.publication(&run_id).await;
+    assert_eq!(status, StatusCode::NOT_FOUND, "{body}");
+    let events = event_types(&harness.events(&run_id).await);
+    assert!(
+        !events
+            .iter()
+            .any(|e| e == "publication.requested" || e == "publication.pushed"),
+        "{events:?}"
+    );
+    // The candidate evidence itself is untouched: it is valid for revision 1,
+    // which simply is no longer the authorized revision.
+    let view = harness.candidate(&run_id).await;
+    assert_eq!(view["evidence"]["status"], "reviewed");
+    assert_eq!(view["evidence"]["candidate"]["hash"], hash);
+    assert_eq!(harness.run(&run_id).await["state"], "reviewed");
+}
+
+#[tokio::test]
+async fn reconciliation_is_refused_once_a_newer_plan_revision_exists() {
+    let harness = Harness::new().await;
+    let repo = Repo::new();
+    let (run_id, ticket, candidate) = harness.reviewed(repo.path()).await;
+    let hash = candidate["hash"].clone();
+    let commit = candidate["repository_commits"]["app"].as_str().unwrap();
+    harness.fake.lock().unwrap().fail_create_once = true;
+    let (status, _) = harness.publish(&run_id, &hash, "publish-then-replan").await;
+    assert_eq!(status, StatusCode::ACCEPTED);
+    let failed = harness.publication_settled(&run_id).await;
+    assert_eq!(failed["publication_state"], "failed", "{failed}");
+    assert_eq!(failed["repositories"]["app"]["push"], "done");
+    let branch = failed["repositories"]["app"]["branch"]
+        .as_str()
+        .unwrap()
+        .to_owned();
+    assert_eq!(remote_branch(repo.path(), &branch).as_deref(), Some(commit));
+
+    let second = harness.plan(ticket["id"].as_str().unwrap()).await;
+    assert_eq!(second["plan"]["revision"], 2, "{second}");
+    let (status, refused) = harness.reconcile(&run_id).await;
+    assert_eq!(status, StatusCode::CONFLICT, "{refused}");
+    assert!(refused["error"]
+        .as_str()
+        .unwrap()
+        .contains("newer plan revision supersedes"));
+    // The pull request was never created: the ledger shows one failed
+    // attempt and reconciliation did not retry it under superseded authority.
+    assert_eq!(harness.requests("POST", "/pulls"), 1);
+    assert_eq!(harness.fake.lock().unwrap().pull_requests.len(), 0);
+    let (status, record) = harness.publication(&run_id).await;
+    assert_eq!(status, StatusCode::OK, "{record}");
+    assert_eq!(record["publication_state"], "failed");
+    assert_eq!(record["repositories"]["app"]["pull_request_step"], "failed");
+    // The branch that was pushed before the re-plan is left as it was.
+    assert_eq!(remote_branch(repo.path(), &branch).as_deref(), Some(commit));
+}
+
+#[tokio::test]
+async fn manual_worktree_changes_after_the_review_invalidate_the_candidate_instead_of_publishing() {
+    let harness = Harness::new().await;
+    let repo = Repo::new();
+    let (run_id, _ticket, candidate) = harness.reviewed(repo.path()).await;
+    let hash = candidate["hash"].clone();
+    let worktree = harness.worktree(&run_id).await;
+    assert!(
+        worktree.join("src/main.py").is_file(),
+        "{}",
+        worktree.display()
+    );
+    fs::write(
+        worktree.join("src/main.py"),
+        "print('edited by hand after the review')\n",
+    )
+    .unwrap();
+
+    let (status, refused) = harness.publish(&run_id, &hash, "publish-drift").await;
+    assert_eq!(status, StatusCode::CONFLICT, "{refused}");
+    let reason = refused["error"].as_str().unwrap();
+    assert!(reason.starts_with("candidate content drift:"), "{reason}");
+    assert!(reason.contains("src/main.py"), "{reason}");
+    assert!(reason.contains("nothing was pushed"), "{reason}");
+    assert!(reason.contains("POST /repair"), "{reason}");
+    assert_eq!(harness.requests("POST", "/pulls"), 0);
+    assert_eq!(harness.requests("GET", "/pulls"), 0);
+    assert!(remote_branch(repo.path(), "luuna").is_none());
+    let (status, body) = harness.publication(&run_id).await;
+    assert_eq!(status, StatusCode::NOT_FOUND, "{body}");
+
+    // The reviewed evidence is invalidated: the candidate is failed with the
+    // drift marked, the run left `reviewed`, and the review is history only.
+    let view = harness.candidate(&run_id).await;
+    assert_eq!(view["evidence"]["status"], "failed", "{view}");
+    assert_eq!(view["evidence"]["content_drift"], true);
+    assert_eq!(view["evidence"]["candidate"]["hash"], hash);
+    assert!(view["evidence"]["reason"]
+        .as_str()
+        .unwrap()
+        .starts_with("candidate content drift:"));
+    assert_eq!(view["revalidate_allowed"], false, "{view}");
+    assert_eq!(harness.run(&run_id).await["state"], "failed");
+    let events = harness.events(&run_id).await;
+    assert!(events.iter().any(|e| e["type"] == "candidate.invalidated"
+        && e["payload"]["content_drift"] == true
+        && e["payload"]["candidate_hash"] == hash));
+    assert_eq!(refusals(&events), vec!["candidate_drift"]);
+    assert!(!event_types(&events).contains(&"publication.requested".to_owned()));
+    // The edit is preserved for inspection; the developer checkout is untouched.
+    assert_eq!(
+        fs::read_to_string(worktree.join("src/main.py")).unwrap(),
+        "print('edited by hand after the review')\n"
+    );
+    assert_eq!(
+        fs::read_to_string(repo.path().join("src/main.py")).unwrap(),
+        "print('fixture')\n"
+    );
+    // A second attempt meets the invalidated candidate, not the drift check again.
+    let (status, again) = harness.publish(&run_id, &hash, "publish-drift-2").await;
+    assert_eq!(status, StatusCode::CONFLICT, "{again}");
+    assert!(again["error"]
+        .as_str()
+        .unwrap()
+        .contains("candidate is failed"));
+    assert_eq!(refusals(&harness.events(&run_id).await).len(), 1);
+}
+
+#[tokio::test]
+async fn reconciliation_revalidates_the_worktree_before_retrying_a_step() {
+    let harness = Harness::new().await;
+    let repo = Repo::new();
+    let (run_id, _ticket, candidate) = harness.reviewed(repo.path()).await;
+    let hash = candidate["hash"].clone();
+    harness.fake.lock().unwrap().fail_create_once = true;
+    let (status, _) = harness.publish(&run_id, &hash, "publish-then-drift").await;
+    assert_eq!(status, StatusCode::ACCEPTED);
+    let failed = harness.publication_settled(&run_id).await;
+    assert_eq!(failed["publication_state"], "failed", "{failed}");
+    let worktree = harness.worktree(&run_id).await;
+    fs::write(worktree.join("src/main.py"), "print('drifted')\n").unwrap();
+
+    let (status, refused) = harness.reconcile(&run_id).await;
+    assert_eq!(status, StatusCode::CONFLICT, "{refused}");
+    assert!(refused["error"]
+        .as_str()
+        .unwrap()
+        .starts_with("candidate content drift:"));
+    assert_eq!(harness.requests("POST", "/pulls"), 1, "no retry");
+    assert_eq!(harness.fake.lock().unwrap().pull_requests.len(), 0);
+    let view = harness.candidate(&run_id).await;
+    assert_eq!(view["evidence"]["status"], "failed", "{view}");
+    assert_eq!(view["evidence"]["content_drift"], true);
+    assert_eq!(harness.run(&run_id).await["state"], "failed");
+    let (status, record) = harness.publication(&run_id).await;
+    assert_eq!(status, StatusCode::OK, "{record}");
+    assert_eq!(record["publication_state"], "failed");
+    assert_eq!(
+        refusals(&harness.events(&run_id).await),
+        vec!["candidate_drift"]
+    );
+}
+
+#[tokio::test]
+async fn the_pre_push_policy_refuses_credentials_without_naming_their_values() {
+    let harness = Harness::new().await;
+    let repo = Repo::new();
+    let (run_id, _ticket, candidate) = harness.reviewed_with(repo.path(), "write_secret").await;
+    let hash = candidate["hash"].clone();
+    let (status, refused) = harness.publish(&run_id, &hash, "publish-secret").await;
+    assert_eq!(status, StatusCode::UNPROCESSABLE_ENTITY, "{refused}");
+    let reason = refused["error"].as_str().unwrap();
+    assert!(reason.starts_with("pre-push policy refused"), "{reason}");
+    assert!(
+        reason.contains("src/config.py [credential-token]"),
+        "{reason}"
+    );
+    assert!(reason.contains("GitHub personal access token"), "{reason}");
+    assert!(reason.contains("src/.env [credential-path]"), "{reason}");
+    assert!(reason.contains("src/.env [secret-assignment]"), "{reason}");
+    assert!(reason.contains("nothing was pushed"), "{reason}");
+    assert!(
+        !reason.contains("ghp_a1b2"),
+        "the value must never be reported: {reason}"
+    );
+    assert!(
+        !reason.contains("Xk9f2mQ8"),
+        "the value must never be reported: {reason}"
+    );
+    assert_eq!(harness.requests("POST", "/pulls"), 0);
+    assert_eq!(harness.requests("GET", "/pulls"), 0);
+    assert!(remote_branch(repo.path(), "luuna").is_none());
+    let (status, body) = harness.publication(&run_id).await;
+    assert_eq!(status, StatusCode::NOT_FOUND, "{body}");
+    let events = harness.events(&run_id).await;
+    assert_eq!(refusals(&events), vec!["policy"]);
+    let refusal = events
+        .iter()
+        .find(|e| e["type"] == "publication.refused")
+        .unwrap();
+    let findings = refusal["payload"]["findings"].as_array().unwrap();
+    assert!(findings.len() >= 3, "{findings:?}");
+    assert!(findings
+        .iter()
+        .any(|f| f["path"] == "src/config.py" && f["rule"] == "credential-token"));
+    assert!(findings
+        .iter()
+        .any(|f| f["path"] == "src/.env" && f["rule"] == "credential-path"));
+    let serialized = refusal.to_string();
+    assert!(!serialized.contains("ghp_a1b2") && !serialized.contains("Xk9f2mQ8"));
+    // The reviewed evidence is kept: the policy refusal is not drift.
+    let view = harness.candidate(&run_id).await;
+    assert_eq!(view["evidence"]["status"], "reviewed", "{view}");
+    assert_eq!(harness.run(&run_id).await["state"], "reviewed");
 }

@@ -223,6 +223,7 @@ mod dispatch;
 mod graph;
 mod integrations;
 mod missions;
+mod policy;
 mod projects;
 mod publication;
 mod scaffold;
@@ -1148,15 +1149,14 @@ async fn events(
 /// the run can never change state again and no owned worker can append to
 /// it. A failed or interrupted workflow is settled but resumable (repair,
 /// re-validation and cancellation continue on the same run id, including an
-/// automatic repair inside an active validation), so its followers stay
-/// attached; demo and baseline runs never leave a terminal state.
+/// automatic repair inside an active validation), and a reviewed workflow
+/// still publishes, reconciles and can have its candidate invalidated after
+/// the review (drift found at publication, a CI failure sent to repair), so
+/// their followers stay attached; demo and baseline runs never leave a
+/// terminal state.
 fn stream_complete(run: &RunRecord, owned: bool) -> bool {
     if run.metadata.get("kind").and_then(Value::as_str) == Some("workflow") {
-        !owned
-            && matches!(
-                run.state,
-                RunState::Completed | RunState::Cancelled | RunState::Reviewed
-            )
+        !owned && matches!(run.state, RunState::Completed | RunState::Cancelled)
     } else {
         run.state.is_terminal()
     }

@@ -113,6 +113,12 @@ impl RunState {
                 | (Interrupted, Implementing)
                 | (Failed | TestingBlocked, Paused)
                 | (Failed, Cancelled)
+                // Structural only: storage admits `Reviewed -> Failed` solely to
+                // invalidate a reviewed candidate whose inputs changed after the
+                // review (worktree drift found at publication, a CI failure the
+                // developer sends to repair); the evidence is marked, never
+                // reused, and repair or re-planning follows as for any failure.
+                | (Reviewed, Failed)
                 // Structural only: storage admits `Failed -> Validating` solely for a
                 // candidate whose required checks passed and whose reviewer left no
                 // verdict (a fresh generation, never a new revision or budget).

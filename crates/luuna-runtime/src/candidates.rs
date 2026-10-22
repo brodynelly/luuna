@@ -173,7 +173,7 @@ fn writer_slot_free(store: &luuna_storage::Store, run: &RunRecord) -> Result<(),
 /// The Luuna-owned worktree holding each repository's frozen candidate
 /// commit (one per repository of the set), each verified to lie under the
 /// run's private worktree directory.
-fn worktrees_for(
+pub(crate) fn worktrees_for(
     state: &AppState,
     run_id: &str,
     evidence: &CandidateEvidence,
@@ -267,7 +267,7 @@ pub(crate) fn index_inspector(state: &AppState) -> luuna_git::GitInspector {
 /// HEAD, tree and tracked content. A mismatch is content drift (`Ok(Some)`,
 /// naming what changed); a Git failure that says nothing about the content is
 /// an ordinary error.
-async fn content_drift(
+pub(crate) async fn content_drift(
     state: &AppState,
     evidence: &CandidateEvidence,
     repo: &str,

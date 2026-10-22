@@ -480,6 +480,62 @@ impl Store {
         self.settle_candidate_stage(run_id, expected_revision, hash, next, reason, false)
     }
 
+    /// The plan a workflow is authorized to act on right now: its durably
+    /// stored approval must still authorize the *latest* revision of its plan
+    /// (a newer revision supersedes the approval), and the plan's ticket and
+    /// manifest bindings must still hold. This is the gate validation and
+    /// repair apply in their transactions, evaluated read-only for
+    /// publication admission so a reviewed candidate cannot be published
+    /// under superseded authorization.
+    pub fn authorize_workflow(&self, run_id: &str) -> Result<PlanRevision> {
+        let tx = self.connection.unchecked_transaction()?;
+        current_plan(&tx, run_id)
+    }
+
+    /// Invalidate a reviewed candidate whose inputs changed after the review:
+    /// the owned worktree drifted from the frozen candidate when publication
+    /// was requested, or the developer sends a CI failure to repair. The
+    /// candidate is marked failed with the reason (content drift marked so it
+    /// is never re-validated in place), the run leaves `reviewed` for
+    /// `failed`, and `candidate.invalidated` records it; repair or the next
+    /// plan revision follow as for any failed candidate.
+    pub fn invalidate_reviewed_candidate(
+        &mut self,
+        run_id: &str,
+        hash: &str,
+        reason: &str,
+        content_drift: bool,
+    ) -> Result<CandidateEvidence> {
+        if reason.trim().is_empty() {
+            return invalid("candidate invalidation needs a reason");
+        }
+        let tx = self
+            .connection
+            .transaction_with_behavior(TransactionBehavior::Immediate)?;
+        let run = get_run(&tx, run_id)?.ok_or_else(|| StorageError::NotFound(run_id.into()))?;
+        let mut evidence = require_candidate(&tx, run_id, hash)?;
+        if run.state != RunState::Reviewed || evidence.status != CandidateStatus::Reviewed {
+            return invalid("only a reviewed candidate can be invalidated after review");
+        }
+        evidence.status = CandidateStatus::Failed;
+        evidence.reason = Some(reason.into());
+        evidence.finished_at = Some(now());
+        evidence.stage_started_at = None;
+        evidence.stage_checkpoint_at = None;
+        evidence.content_drift |= content_drift;
+        save_candidate(&tx, &evidence)?;
+        transition(
+            &tx,
+            run_id,
+            run.revision,
+            RunState::Failed,
+            "candidate.invalidated",
+            json!({"candidate_hash":hash,"reason":reason,"content_drift":content_drift,"review_retained_as_history":true}),
+        )?;
+        tx.commit()?;
+        Ok(evidence)
+    }
+
     /// Fail a generation whose owned worktree no longer holds the frozen
     /// candidate (a tracked edit, a moved HEAD, a missing or rebound worktree).
     /// The candidate is marked so it is never re-validated in place: nothing

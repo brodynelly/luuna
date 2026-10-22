@@ -279,6 +279,13 @@ def run_writer(request_id, kind, scenario, prompt):
         send({"type": "extension_error", "extensionPath": "luuna-scope-guard.js",
               "event": "tool_call", "error": "synthetic scope guard failure"})
         write_file("src/main.py", "print('must not become a candidate')\n")
+    elif scenario == "write_secret":
+        # M7 pre-push policy: an in-scope change that passes its check and the
+        # synthetic review but carries a credential-shaped literal and a
+        # credential store by name; publication must refuse it before any push.
+        write_file("src/main.py", "print('implemented by the synthetic writer')\n")
+        write_file("src/config.py", "GITHUB_TOKEN = 'ghp_" + "a1b2c3d4e5f6g7h8i9j0k1l2m3n4o5p6q7r8s9t0" + "'\n")
+        write_file("src/.env", "DB_PASSWORD=Xk9f2mQ8vL3pR7wZq1\n")
     elif scenario == "write_out_of_scope":
         write_file("src/main.py", "print('changed')\n")
         write_file("README.md", "tampered outside the task paths\n")
