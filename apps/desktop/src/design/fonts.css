@@ -1,5 +1,27 @@
 /*
- * Platform fonts. Owned by item F1 (run stripe-ui-20261022-0905); filled in wave 1.
- * Placeholder: the manifest test requires one rule. Item F1 replaces this file's content.
+ * Platform fonts. Söhne is a commercial typeface (Klim Type Foundry), bundled at the sole user's
+ * direction for non-Apple platforms; see THIRD-PARTY-NOTICES.md and ADR 0032. Apple platforms keep
+ * the system SF stack from tokens.css; SF Pro is never bundled. This sheet is the last import of
+ * the tokens layer: its :root[data-platform="other"] selector (0,2,0) beats :root (0,1,0) there.
+ * GSUB features in the bundled faces, available for scoped use by later items: case, tnum, zero,
+ * frac, ss01, ss02 (also calt, ccmp, dnom, liga, locl, numr, ordn, sinf, sups). No global
+ * font-feature-settings: it would override the mono stack's font-variant-ligatures: none.
  */
-:root {}
+@font-face { font-family: "Söhne"; src: url("../assets/fonts/soehne/soehne-leicht.woff2") format("woff2"); font-weight: 300; font-style: normal; font-display: swap; }
+@font-face { font-family: "Söhne"; src: url("../assets/fonts/soehne/soehne-leicht-kursiv.woff2") format("woff2"); font-weight: 300; font-style: italic; font-display: swap; }
+@font-face { font-family: "Söhne"; src: url("../assets/fonts/soehne/soehne-buch.woff2") format("woff2"); font-weight: 400; font-style: normal; font-display: swap; }
+@font-face { font-family: "Söhne"; src: url("../assets/fonts/soehne/soehne-buch-kursiv.woff2") format("woff2"); font-weight: 400; font-style: italic; font-display: swap; }
+@font-face { font-family: "Söhne"; src: url("../assets/fonts/soehne/soehne-kraftig.woff2") format("woff2"); font-weight: 500; font-style: normal; font-display: swap; }
+@font-face { font-family: "Söhne"; src: url("../assets/fonts/soehne/soehne-kraftig-kursiv.woff2") format("woff2"); font-weight: 500; font-style: italic; font-display: swap; }
+@font-face { font-family: "Söhne"; src: url("../assets/fonts/soehne/soehne-halbfett.woff2") format("woff2"); font-weight: 600; font-style: normal; font-display: swap; }
+@font-face { font-family: "Söhne"; src: url("../assets/fonts/soehne/soehne-halbfett-kursiv.woff2") format("woff2"); font-weight: 600; font-style: italic; font-display: swap; }
+@font-face { font-family: "Söhne"; src: url("../assets/fonts/soehne/soehne-dreiviertelfett.woff2") format("woff2"); font-weight: 700; font-style: normal; font-display: swap; }
+@font-face { font-family: "Söhne"; src: url("../assets/fonts/soehne/soehne-dreiviertelfett-kursiv.woff2") format("woff2"); font-weight: 700; font-style: italic; font-display: swap; }
+
+/* Metric-matched fallback (Söhne ascent 1171, descent 423, lineGap 0 on 1000 upem) to limit layout shift. */
+@font-face { font-family: "Söhne Fallback"; src: local("Segoe UI"), local("Arial"), local("Liberation Sans"); ascent-override: 117.1%; descent-override: 42.3%; line-gap-override: 0%; }
+
+:root[data-platform="other"] {
+  --font-sans: "Söhne", "Söhne Fallback", "Segoe UI Variable Text", "Segoe UI", system-ui, Roboto, "Helvetica Neue", Arial, sans-serif;
+  --font-display: "Söhne", "Söhne Fallback", "Segoe UI Variable Display", "Segoe UI", system-ui, Roboto, "Helvetica Neue", Arial, sans-serif;
+}

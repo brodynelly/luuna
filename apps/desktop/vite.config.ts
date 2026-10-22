@@ -7,5 +7,5 @@ export default defineConfig({
   clearScreen: false,
   envPrefix: ["VITE_", "TAURI_ENV_*"],
   server: { strictPort: true, watch: { ignored: ["**/src-tauri/**"] } },
-  build: { target: "es2022" },
+  build: { target: "es2022", assetsInlineLimit: (file) => (file.endsWith(".woff2") ? false : undefined) },
 });
