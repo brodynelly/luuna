@@ -73,6 +73,8 @@ resolves `target/debug/luuna-tui.exe` on Windows, or `luuna-tui` on Unix, and ho
 an explicit `CARGO_TARGET_DIR`. Installed Windows distributions carry their own
 native executable. See [the terminal package](packages/tui/README.md) and
 [ADR 0029](docs/decisions/0029-rust-terminal-workbench.md).
+The [native terminal verification guide](docs/TERMINAL-VERIFICATION.md) describes
+the pinned build, real terminal audit and the limits of fixture evidence.
 
 ## Design references and licensing
 

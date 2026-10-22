@@ -37,6 +37,12 @@ terminal payload. Packaging records the native executable hash. The fixed
 Windows startup helper and memory-only credential transfer remain ADR 0011's;
 closing the terminal does not stop the independent runtime.
 
+Launcher shutdown signals write an empty marker in a private temporary directory.
+Rust observes that marker during both connection entry and normal interaction,
+restores the terminal and reaps its bridge. Direct native signals use the same
+cleanup path. The launcher bounds the wait before terminating an unresponsive
+owned child; it does not immediately kill Windows children on SIGTERM.
+
 ## Validation and limits
 
 Launcher tests cover selection, errors, exit status, command dispatch and private
@@ -50,3 +56,11 @@ Native UI coverage must identify views, forms, colors, narrow layouts, outage
 recovery, cleanup, executable identity and staged launch. Missing or unexecuted
 cases remain visible. Fixture evidence does not establish provider success,
 clean-machine installation, signing, or another platform's compatibility.
+
+`npm run test:tui-interactive-audit -- --runtime <native-runtime> --components-root
+<checkout> --out <new-directory>` runs the public entry and staged payload. Windows
+uses ConPTY; native Unix uses an isolated tmux server. Reports include required
+coverage, executable hashes, owned-process cleanup and reconstructed terminal
+cells. Wrapper console changes are independently measured with no-op npm and
+PowerShell sessions. The native CI jobs use Node 24.19.0, Rust 1.90.0, Python 3.12
+and Bun 1.4.3; actual host execution is required for a platform acceptance claim.

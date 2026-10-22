@@ -27,6 +27,13 @@ WriteFile=bind('WriteFile',[HANDLE,C.c_void_p,W.DWORD,C.POINTER(W.DWORD),C.c_voi
 WaitForSingleObject=bind('WaitForSingleObject',[HANDLE,W.DWORD],W.DWORD)
 GetExitCodeProcess=bind('GetExitCodeProcess',[HANDLE,C.POINTER(W.DWORD)])
 TerminateProcess=bind('TerminateProcess',[HANDLE,W.UINT])
+class PROCESSENTRY(C.Structure):
+    _fields_=[('size',W.DWORD),('usage',W.DWORD),('pid',W.DWORD),('heap',SIZE),('module',W.DWORD),('threads',W.DWORD),('parent',W.DWORD),('priority',W.LONG),('flags',W.DWORD),('name',W.WCHAR*260)]
+Snapshot=bind('CreateToolhelp32Snapshot',[W.DWORD,W.DWORD],HANDLE)
+ProcessFirst=bind('Process32FirstW',[HANDLE,C.POINTER(PROCESSENTRY)])
+ProcessNext=bind('Process32NextW',[HANDLE,C.POINTER(PROCESSENTRY)])
+OpenProcess=bind('OpenProcess',[W.DWORD,W.BOOL,W.DWORD],HANDLE)
+ImageName=bind('QueryFullProcessImageNameW',[HANDLE,W.DWORD,W.LPWSTR,C.POINTER(W.DWORD)])
 def ok(v):
     if not v: raise C.WinError(C.get_last_error())
 
@@ -47,13 +54,18 @@ class Console:
             si=SIX();si.StartupInfo.cb=C.sizeof(si);si.StartupInfo.dwFlags=0x100
             si.lpAttributeList=C.cast(self.attributes,C.c_void_p)
             argv=request['argv']
+            command_text=subprocess.list2cmdline(argv)
             # A console-attached supervisor measures console modes around the real
             # public entry; it neither mocks the client nor takes its terminal input.
             if request.get('result'):
                 os.environ['LUUNA_AUDIT_ARGV']=json.dumps(argv)
                 os.environ['LUUNA_AUDIT_RESULT']=request['result']
-                argv=[sys.executable,str(pathlib.Path(__file__).resolve()),'--supervise']
-            command=C.create_unicode_buffer(subprocess.list2cmdline(argv))
+                # Keep an ordinary console shell as the session root until the
+                # supervisor has measured restoration. The client argv remains
+                # JSON in the environment, never interpolated into this shell.
+                inner=subprocess.list2cmdline([sys.executable,str(pathlib.Path(__file__).resolve()),'--supervise'])
+                command_text=subprocess.list2cmdline([os.environ.get('COMSPEC','cmd.exe')])+' /d /s /c "'+inner+'"'
+            command=C.create_unicode_buffer(command_text)
             ok(CreateProcess(None,command,None,None,False,0x00080000,None,request.get('cwd'),C.byref(si),C.byref(self.pi)))
             CloseHandle(self.hin);self.hin=HANDLE();CloseHandle(self.hout);self.hout=HANDLE()
         except BaseException:
@@ -92,9 +104,41 @@ class Console:
         if not (1<=columns<=500 and 1<=rows<=200):raise ValueError('Invalid terminal dimensions')
         if ResizePseudoConsole(self.hpc,COORD(columns,rows))!=0:raise OSError('ConPTY resize failed')
 
+    def processes(self):
+        snapshot=Snapshot(2,0)
+        if snapshot==HANDLE(-1).value:raise C.WinError(C.get_last_error())
+        rows=[];entry=PROCESSENTRY();entry.size=C.sizeof(entry)
+        try:
+            found=ProcessFirst(snapshot,C.byref(entry))
+            while found:
+                rows.append({'pid':entry.pid,'parent':entry.parent,'name':entry.name})
+                found=ProcessNext(snapshot,C.byref(entry))
+        finally:CloseHandle(snapshot)
+        owned={self.pi.dwProcessId}
+        for _ in range(8):
+            previous=len(owned);owned.update(row['pid'] for row in rows if row['parent'] in owned)
+            if previous==len(owned):break
+        result=[row for row in rows if row['pid'] in owned]
+        for row in result:
+            handle=OpenProcess(0x1000,False,row['pid'])
+            if handle:
+                try:
+                    buffer=C.create_unicode_buffer(32768);size=W.DWORD(len(buffer))
+                    if ImageName(handle,0,buffer,C.byref(size)):row['executable']=buffer.value
+                finally:CloseHandle(handle)
+        return result
+
     def close(self):
         if self.closed:return
         self.closed=True
+        # Hold handles to the currently owned descendants before teardown, so a
+        # detached bridge is reaped without targeting a later recycled PID.
+        descendants=[]
+        if self.pi.hProcess and WaitForSingleObject(self.pi.hProcess,0)!=0:
+            for row in self.processes():
+                if row['pid']!=self.pi.dwProcessId:
+                    handle=OpenProcess(0x00100001,False,row['pid'])
+                    if handle:descendants.append(handle)
         if self.pi.hProcess and WaitForSingleObject(self.pi.hProcess,0)!=0:
             TerminateProcess(self.pi.hProcess,99);WaitForSingleObject(self.pi.hProcess,5000)
         failure=None
@@ -107,25 +151,39 @@ class Console:
         if self.attributes:DeleteProcThreadAttributeList(self.attributes)
         for handle in [self.hin,self.win,self.rout,self.hout,self.pi.hThread,self.pi.hProcess]:
             if handle:CloseHandle(handle)
+        for handle in descendants:
+            if WaitForSingleObject(handle,100)!=0:TerminateProcess(handle,99);WaitForSingleObject(handle,1000)
+            CloseHandle(handle)
         if failure:raise failure
 
 def supervise():
-    get_handle=bind('GetStdHandle',[W.DWORD],HANDLE)
     get_mode=bind('GetConsoleMode',[HANDLE,C.POINTER(W.DWORD)])
+    open_console=bind('CreateFileW',[W.LPCWSTR,W.DWORD,W.DWORD,C.c_void_p,W.DWORD,W.DWORD,HANDLE],HANDLE)
+    # Retain independent handles for before/after measurements of the same console.
+    handles=[open_console(name,0xc0000000,3,None,3,0,None) for name in ['CONIN$','CONOUT$']]
+    for handle in handles:
+        if handle==HANDLE(-1).value:raise C.WinError(C.get_last_error())
     def modes():
         result=[]
-        for number in [-10,-11]:
-            mode=W.DWORD();ok(get_mode(get_handle(number & 0xffffffff),C.byref(mode)));result.append(mode.value)
+        for handle in handles:
+            mode=W.DWORD();ok(get_mode(handle,C.byref(mode)));result.append(mode.value)
         return result
     report={'before':modes()}
-    child=subprocess.Popen(json.loads(os.environ.pop('LUUNA_AUDIT_ARGV')))
-    report['child_pid']=child.pid
+    # Use normal console inheritance. Python Popen's redirected console handles
+    # caused intermittent session disconnects at child exit on this Windows host.
+    child=PI();startup=SIX();startup.StartupInfo.cb=C.sizeof(SI)
+    command=C.create_unicode_buffer(subprocess.list2cmdline(json.loads(os.environ.pop('LUUNA_AUDIT_ARGV'))))
+    ok(CreateProcess(None,command,None,None,False,0,None,None,C.byref(startup),C.byref(child)))
+    report['child_pid']=child.dwProcessId
     result=pathlib.Path(os.environ.pop('LUUNA_AUDIT_RESULT'))
     result.write_text(json.dumps(report))
-    report['exit']=child.wait()
+    WaitForSingleObject(child.hProcess,0xffffffff)
+    exit_code=W.DWORD();ok(GetExitCodeProcess(child.hProcess,C.byref(exit_code)));report['exit']=exit_code.value
     try:report['after']=modes()
     except Exception as error:report['mode_error']=str(error)
     result.write_text(json.dumps(report))
+    for handle in handles:CloseHandle(handle)
+    CloseHandle(child.hThread);CloseHandle(child.hProcess)
     # The supervisor does not write terminal output. Python's shutdown flush can
     # race ConPTY detach and replace the child's status with 120 (flush failure).
     # The result file is already closed; preserve the observed child exit exactly.
@@ -145,6 +203,7 @@ def serve():
                 elif operation=='send':console.send(base64.b64decode(request['data']));result={}
                 elif operation=='poll':result=console.poll()
                 elif operation=='resize':console.resize(request['columns'],request['rows']);result={}
+                elif operation=='processes':result=console.processes()
                 elif operation=='close':console.close();result={}
                 else:raise ValueError('Unknown terminal operation')
                 print(json.dumps({'id':request.get('id'),'result':result}),flush=True)

@@ -44,26 +44,22 @@ Development launches select `target/debug/luuna-tui[.exe]` (or the explicit
 `CARGO_TARGET_DIR`); installed launches select the binary in the installed root.
 Node 24.19.0 and Rust 1.90.0 are the tested repository toolchain pins.
 
-The legacy interaction description below records the earlier renderer; native
-view-specific controls and its full UI evidence are updated with the component
-view integration. `npm run test:tui-terminal` currently verifies the real ConPTY
-driver, VT screen model and console restoration, separately from native UI proof.
+Luuna opens on Home. F3 selects Projects, F4 Missions, F6 Atlas, F7 Beacon,
+F8 Runs, F2 the complete command catalog, and F1 Help. F10 opens navigation;
+Tab changes focus. Arrows select records; Enter inspects them; Esc returns.
+F5 refreshes reads. At narrow widths the navigation becomes a separate panel.
 
-`luuna-tui` alone opens the workbench on the terminal's alternate screen: menus generated from the
-command table (every cataloged action is reachable), each item showing the action, the command name
-and the catalog title. Keys: `↑`/`↓` (or `j`/`k`) move, `PgUp`/`PgDn`/`Home`/`End` jump, `Enter`
-(or `→`/`l`) selects, `Esc` (or `←`/`h`/`Backspace`) goes back, `r` reloads the list from the
-runtime, `q` or `Ctrl-C` quits from anywhere (also while an action runs; `Esc` then aborts the action
-instead). An action's inputs are asked one per line (an empty line ends a list; `Ctrl-C` quits); its
-result opens as a text screen that scrolls with `↑`/`↓`, `PgUp`/`PgDn`, `Home`/`End` and shows
-`lines x–y of n`. The header shows the connection, `RUNTIME OUTAGE · …` while `/health` does not
-answer, and every list reloads when it answers again.
+Missions shows the eight recorded workflow columns. Atlas exposes scoped memory
+and exact-hash correction, promotion and deletion. Beacon previews exact prompt
+versions and edits multiline bodies. Runs separates run, candidate, diff, tasks,
+worktrees, attempts, events and publication evidence. Select memory or a prompt
+with s to include it in an unsent plan; user memory requires an explicit u choice.
+Creating a plan and approving its full immutable hash remain separate actions.
 
-Rendering is sized to the terminal (`src/text.mjs`): exactly `rows` rows are drawn, menu rows are
-truncated to the width with `…`, text screens wrap at the last space that fits, long menus scroll
-behind a viewport that keeps the cursor visible and names its position in the footer, and the help
-footer shortens its wording down to `↑↓ Enter r Esc q` so it stays on the last row at 40 columns.
-Raw mode, the cursor and the main screen are restored on exit.
+Forms use Tab or Up/Down to move fields, Ctrl-U to clear, Alt-Enter for a newline,
+and Ctrl-S to submit. Printable q is text inside forms. Esc cancels an unsent form.
+The terminal restores raw mode, cursor and main screen on exit. A disconnected
+runtime is visible and reconnect refreshes the current view.
 
 ## Tones
 
@@ -82,7 +78,17 @@ Adding an action: one catalog entry, one `LuunaClient` method, one object in `sr
 (with its `example`); `npm test` then checks the parity (`test/commands.test.mjs`) and the rendering
 helpers and tone tables (`test/text.test.mjs`, `test/format.test.mjs`). The end-to-end evidence is
 `node scripts/tui-smoke.mjs` (the command mode through the documented walkthrough) and
-`node scripts/tui-interactive-audit.mjs` (the interactive mode in real pseudo-terminals through
-tmux: menus, keys, prompts, scrolling, the outage header, the tones and their plain-text degradation,
-and 40/60/80-column and 12-row rendering), both against a built runtime and the synthetic Pi fixture
-(`--runtime <binary> --out <dir>`; each writes `report.md` and `report.json` to `--out`).
+`node scripts/tui-interactive-audit.mjs` (native terminal UI against a disposable
+synthetic runtime). Pass `--runtime <binary> --components-root <checkout> --out <new-directory>`.
+The Windows harness uses real ConPTY input, resize, terminal cells and SGR colors;
+HTML captures reconstruct those cells and are not operating-system screenshots.
+Native Unix runs use an isolated tmux server (`--tmux <executable>`); a Windows
+ConPTY result does not verify that Unix adapter. CI runs each native host separately.
+Reports distinguish passed, failed and not-run requirements. No provider is called.
+`npm run test:tui-terminal` verifies the driver, screen parser and console restoration.
+
+The npm wrapper's console-mode changes are measured with a separate no-op script
+before comparing npm launches. Direct launches must restore their exact initial
+input/output modes; both routes must restore the main screen and cursor and reap
+their native process and bridge. Launcher shutdown signals request native cleanup
+through a private empty marker, with bounded termination only as a last resort.
