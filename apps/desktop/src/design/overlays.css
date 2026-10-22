@@ -53,7 +53,8 @@ dialog.palette[open] { transform-origin: top center; animation: dialog-in var(--
 dialog.palette::backdrop { background: var(--color-scrim); }
 dialog.palette[open]::backdrop { animation: scrim-in var(--duration-standard) var(--ease-out) backwards; }
 .palette-field { display: block; padding: var(--space-3); border-bottom: var(--border-width) solid var(--color-border); }
-.palette-field > input { margin: 0; font-size: var(--text-md); }
+/* The search is prose, not an identifier: it keeps the sans face the spellCheck-off rule would swap for mono. */
+.palette-field > input { margin: 0; font-family: var(--font-sans); font-size: var(--text-md); }
 ul.palette-list[role="listbox"] { max-height: var(--palette-list-max); margin: 0; padding: var(--space-1); overflow: auto; list-style: none; }
 .palette-option { display: flex; align-items: baseline; gap: var(--space-3); padding: var(--space-2) var(--space-3); border-radius: var(--radius-menu); cursor: pointer; }
 .palette-option[aria-selected="true"] { background: var(--color-accent-tint); box-shadow: inset var(--rule-width) 0 0 var(--color-accent); }

@@ -15,9 +15,9 @@
 .board-column > .board-cards { display: grid; gap: var(--space-1); min-width: 0; margin: 0; padding: 0; list-style: none; }
 .board-column > .board-cards > li { min-width: 0; }
 /* A card is a selectable card on the column's raised surface, so its own surface is the panel's. */
-.board-column > .board-cards > li > button.run-card { padding: var(--space-2); border-color: var(--color-border); background: var(--color-surface); }
-.board-column > .board-cards > li > button.run-card { border-radius: var(--radius-button); box-shadow: var(--shadow-button); transition: box-shadow var(--duration-micro) var(--ease-out), transform var(--duration-micro) var(--ease-out), background-color var(--duration-micro) var(--ease-out); }
-.board-column > .board-cards > li > button.run-card:hover:not(:disabled), .board-column > .board-cards > li > button.run-card:focus-visible { background: var(--color-control-hover); box-shadow: var(--shadow-button-hover); transform: translateY(var(--lift-y)); }
+.board-column > .board-cards > li button.run-card { padding: var(--space-2); border-color: var(--color-border); background: var(--color-surface); }
+.board-column > .board-cards > li button.run-card { border-radius: var(--radius-button); box-shadow: var(--shadow-button); transition: box-shadow var(--duration-micro) var(--ease-out), transform var(--duration-micro) var(--ease-out), background-color var(--duration-micro) var(--ease-out); }
+.board-column > .board-cards > li button.run-card:hover:not(:disabled), .board-column > .board-cards > li button.run-card:focus-visible { background: var(--color-control-hover); box-shadow: var(--shadow-button-hover); transform: translateY(var(--lift-y)); }
 
 @media (max-width: 680px) {
   .board-columns { grid-template-columns: minmax(0, 1fr); }

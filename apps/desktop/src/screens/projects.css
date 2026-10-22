@@ -17,7 +17,7 @@
 /* Project cards: name first, then the manifest chip and the exact project id. */
 .project-list { display: grid; grid-template-columns: minmax(0, 1fr); gap: var(--space-1); min-width: 0; margin: 0; padding: 0; list-style: none; }
 .project-list > li { min-width: 0; }
-.project-list > li > .run-card { padding: var(--space-2) var(--space-3); }
+.project-list > li .run-card { padding: var(--space-2) var(--space-3); }
 .project-list .run-prompt { font-size: var(--text-sm); font-weight: var(--weight-medium); }
 
 /* Detail column: the library's card (.card) holding the header, facts, actions, baselines,
@@ -58,9 +58,9 @@
 }
 
 /* Rail: table-like project rows with a selected pill; actions are always visible. */
-.project-list > li > .run-card { min-height: var(--row-height); border-radius: var(--radius-pill); transition: box-shadow var(--duration-micro) var(--ease-out), background-color var(--duration-micro) var(--ease-out); }
-.project-list > li > .run-card:hover:not(:disabled), .project-list > li > .run-card:focus-visible { box-shadow: var(--shadow-card); }
-.project-list > li > .run-card[aria-pressed="true"] { box-shadow: var(--shadow-card); }
+.project-list > li .run-card { min-height: var(--row-height); border-radius: var(--radius-pill); transition: box-shadow var(--duration-micro) var(--ease-out), background-color var(--duration-micro) var(--ease-out); }
+.project-list > li .run-card:hover:not(:disabled), .project-list > li .run-card:focus-visible { box-shadow: var(--shadow-card); }
+.project-list > li .run-card[aria-pressed="true"] { box-shadow: var(--shadow-card); }
 
 /* Detail: the elevated panel. Its header stays in view while a long ticket scrolls (stacked layouts do not stick). */
 .projects-layout > .project-detail { border-radius: var(--radius-card); box-shadow: var(--shadow-popover); }
