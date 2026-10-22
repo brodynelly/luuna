@@ -137,7 +137,8 @@ fn snapshots_pin_actual_terminal_cells_for_component_layouts() {
         }
         assert_eq!(
             actual,
-            std::fs::read_to_string(path).unwrap(),
+            // Git may check text fixtures out with native Windows newlines.
+            std::fs::read_to_string(path).unwrap().replace("\r\n", "\n"),
             "{name} snapshot"
         );
     }
