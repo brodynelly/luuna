@@ -6,6 +6,31 @@ import { fileURLToPath } from "node:url";
 const blank = () => ({ text: " ", sgr: "0" });
 const width = (char) => /\p{Mark}/u.test(char) ? 0 : /[\u1100-\u115f\u2e80-\ua4cf\uac00-\ud7a3\uf900-\ufaff\ufe10-\ufe6f\uff00-\uff60\u{1f300}-\u{1faff}]/u.test(char) ? 2 : 1;
 
+// Consume extended colors as atomic groups: a zero RGB channel is not SGR reset.
+function rendition(previous, parameters) {
+  const state = new Map();
+  const apply = (values) => {
+    for (let i = 0; i < values.length; i++) {
+      const value = values[i];
+      if (value === 0) { state.clear(); continue; }
+      if ([38, 48, 58].includes(value)) {
+        const length = values[i + 1] === 2 ? 5 : values[i + 1] === 5 ? 3 : 1;
+        state.set(value === 38 ? "fg" : value === 48 ? "bg" : "underline-color", values.slice(i, i + length)); i += length - 1; continue;
+      }
+      if (value >= 30 && value <= 37 || value >= 90 && value <= 97) state.set("fg", [value]);
+      else if (value >= 40 && value <= 47 || value >= 100 && value <= 107) state.set("bg", [value]);
+      else if (value === 39) state.delete("fg");
+      else if (value === 49) state.delete("bg");
+      else if (value === 59) state.delete("underline-color");
+      else if (value === 22) { state.delete(1); state.delete(2); }
+      else if ([23, 24, 25, 27, 28, 29].includes(value)) state.delete(value - 20);
+      else state.set(value, [value]);
+    }
+  };
+  apply(previous.split(";").map(Number)); apply(parameters);
+  return [0, ...[...state.values()].flat()].join(";");
+}
+
 /** A bounded VT screen, not stripped output: cursor edits replace existing cells.
  * Captures text, SGR, cursor/alternate state, scrolling and common ECMA-48 edits.
  * Unknown controls are recorded so an audit can refuse unsupported rendering.
@@ -87,7 +112,7 @@ export class TerminalScreen {
     else if (final === "d") { this.y = n - 1; clamp(); }
     else if (final === "s") this.saved = [this.x, this.y];
     else if (final === "u") { [this.x, this.y] = this.saved; clamp(); }
-    else if (final === "m") { this.sgr = args.includes(0) ? args.join(";") : `${this.sgr};${args.join(";")}`; if (this.sgr.length > 512) this.sgr = this.sgr.slice(-512); }
+    else if (final === "m") this.sgr = rendition(this.sgr, args);
     else if (final === "J") {
       if (args[0] === 2 || args[0] === 3) this.grid = this.empty();
       else for (let y = 0; y < this.rows; y++) for (let x = 0; x < this.columns; x++) if (args[0] === 1 ? y < this.y || y === this.y && x <= this.x : y > this.y || y === this.y && x >= this.x) this.grid[y][x] = blank();
@@ -111,6 +136,42 @@ export class TerminalScreen {
     } else if (!["t", "n", "c", "q", "h", "l"].includes(final)) this.unknown.add(`CSI ${raw}${final}`);
   }
   snapshot() { return { columns: this.columns, rows: this.rows, lines: this.grid.map((row) => row.map((cell) => cell.text).join("")), colors: this.grid.map((row) => row.map((cell) => cell.sgr)), cursor: [this.x, this.y], cursorVisible: this.cursorVisible, alternate: this.alternate, unknown: [...this.unknown], events: [...this.events] }; }
+}
+
+/** Standalone HTML for a reconstructed terminal capture, suitable for a PNG export.
+ * The source is the real terminal cell grid, not a product mockup or OS screenshot.
+ */
+export function terminalSnapshotHtml(snapshot, title = "Luuna reconstructed terminal capture") {
+  const escape = (value) => String(value).replace(/[&<>"']/g, (char) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" })[char]);
+  const palette = ["#000000", "#800000", "#008000", "#808000", "#000080", "#800080", "#008080", "#c0c0c0", "#808080", "#ff0000", "#00ff00", "#ffff00", "#0000ff", "#ff00ff", "#00ffff", "#ffffff"];
+  const indexed = (index) => index < 16 ? palette[index] : index < 232 ? `rgb(${[Math.floor((index - 16) / 36), Math.floor((index - 16) / 6) % 6, (index - 16) % 6].map((value) => value ? 55 + 40 * value : 0).join(",")})` : `rgb(${Array(3).fill(8 + 10 * (index - 232)).join(",")})`;
+  const css = (sgr) => {
+    const values = sgr.split(";").map(Number); let fg = "#c0c0c0", bg = "#000000", bold = false, dim = false, inverse = false, underline = false;
+    for (let i = 0; i < values.length; i++) {
+      const code = values[i];
+      if (code === 0) { fg = "#c0c0c0"; bg = "#000000"; bold = dim = inverse = underline = false; }
+      else if (code === 1) bold = true;
+      else if (code === 2) dim = true;
+      else if (code === 4) underline = true;
+      else if (code === 7) inverse = true;
+      else if (code === 38 || code === 48) {
+        let color;
+        if (values[i + 1] === 2) { color = `rgb(${values.slice(i + 2, i + 5).join(",")})`; i += 4; }
+        else if (values[i + 1] === 5) { color = indexed(values[i + 2]); i += 2; }
+        if (color) { if (code === 38) fg = color; else bg = color; }
+      } else if (code >= 30 && code <= 37) fg = palette[code - 30];
+      else if (code >= 90 && code <= 97) fg = palette[code - 90 + 8];
+      else if (code >= 40 && code <= 47) bg = palette[code - 40];
+      else if (code >= 100 && code <= 107) bg = palette[code - 100 + 8];
+    }
+    if (inverse) [fg, bg] = [bg, fg];
+    return `color:${fg};background:${bg};${bold ? "font-weight:bold;" : ""}${dim ? "opacity:.65;" : ""}${underline ? "text-decoration:underline;" : ""}`;
+  };
+  const rows = snapshot.lines.map((line, y) => {
+    let column = 0;
+    return `<div class="row">${[...line].map((char) => { const cells = width(char); const style = css(snapshot.colors[y]?.[column] ?? "0"); column += cells; return `<span style="${style}display:inline-block;width:${cells}ch">${escape(char)}</span>`; }).join("")}</div>`;
+  }).join("");
+  return `<!doctype html><meta charset="utf-8"><title>${escape(title)}</title><style>body{margin:0;background:#181818;color:#eee}header{font:12px system-ui;padding:8px}main{font:16px/20px Consolas,"Courier New",monospace;width:${snapshot.columns}ch;background:#000}.row{height:20px;white-space:pre}</style><header>${escape(title)} · ${snapshot.columns}×${snapshot.rows} · reconstructed from real ConPTY cells</header><main>${rows}</main>`;
 }
 
 export class ConptyTerminal {
