@@ -181,10 +181,12 @@ pub(crate) async fn enable_project(state: &AppState, id: &str) -> Result<(), Api
         .begin_component_enable(id)
         .map_err(internal)?;
     private_directory(&directory, &state.config.data_dir)?;
+    // Stores created before ADR 0028 move to `.luuna/<component>` first.
+    luuna_components::adopt_legacy_layout(&directory).map_err(internal)?;
     for (component, marker) in [
-        ("missions", ".seeds/config.yaml"),
-        ("atlas", ".mulch/mulch.config.yaml"),
-        ("beacon", ".canopy/config.yaml"),
+        ("missions", ".luuna/missions/config.yaml"),
+        ("atlas", ".luuna/atlas/config.yaml"),
+        ("beacon", ".luuna/beacon/config.yaml"),
     ] {
         if !directory.join(marker).exists() {
             call(state, component, &directory, vec!["init".into()]).await?;
@@ -410,7 +412,8 @@ pub(crate) async fn create_memory_locked(
         workspace(state, id)?
     };
     private_directory(&directory, &state.config.data_dir)?;
-    if !directory.join(".mulch/mulch.config.yaml").exists() {
+    luuna_components::adopt_legacy_layout(&directory).map_err(internal)?;
+    if !directory.join(".luuna/atlas/config.yaml").exists() {
         call(state, "atlas", &directory, vec!["init".into()]).await?;
     }
     let domain = format!("luuna-{scope}");

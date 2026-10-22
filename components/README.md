@@ -1,12 +1,12 @@
 # Luuna components
 
-Luuna maintains three MIT-licensed distributions with space-themed identities. Each retains its upstream implementation and data contracts behind a separate integration boundary.
+Luuna maintains three MIT-licensed distributions with space-themed identities. Each retains its upstream implementation and record formats behind a separate integration boundary.
 
 | Component | Responsibility | Primary CLI | Short alias | Origin | Data format |
 | --- | --- | --- | --- | --- | --- |
-| [Luuna Missions](https://github.com/brodynelly/luuna-missions/blob/e1b5db171892de653e7462e630d64d4964d01422/README.md) | Tickets and structured plans | luuna-missions | lm | Seeds 0.6.0 | .seeds/ |
-| [Luuna Atlas](https://github.com/brodynelly/luuna-atlas/blob/76ad209daf404dd9a12aeaf46293e05e9f41e517/README.md) | Expertise and project memory | luuna-atlas | la | Mulch 0.11.0 | .mulch/ |
-| [Luuna Beacon](https://github.com/brodynelly/luuna-beacon/blob/072e482169e0d469c3744ec712222f8b310fa7da/README.md) | Composable prompts and instructions | luuna-beacon | lb | Canopy 0.2.6 | .canopy/ |
+| [Luuna Missions](https://github.com/brodynelly/luuna-missions/blob/e1b5db171892de653e7462e630d64d4964d01422/README.md) | Tickets and structured plans | luuna-missions | lm | Seeds 0.6.0 | .luuna/missions/ |
+| [Luuna Atlas](https://github.com/brodynelly/luuna-atlas/blob/76ad209daf404dd9a12aeaf46293e05e9f41e517/README.md) | Expertise and project memory | luuna-atlas | la | Mulch 0.11.0 | .luuna/atlas/ |
+| [Luuna Beacon](https://github.com/brodynelly/luuna-beacon/blob/072e482169e0d469c3744ec712222f8b310fa7da/README.md) | Composable prompts and instructions | luuna-beacon | lb | Canopy 0.2.6 | .luuna/beacon/ |
 
 [manifest.json](manifest.json) records package names, versions, entrypoints, and compatible data paths for tooling. Packages are private and unpublished. Source now lives in the public repositories [Luuna Missions](https://github.com/brodynelly/luuna-missions), [Luuna Atlas](https://github.com/brodynelly/luuna-atlas), and [Luuna Beacon](https://github.com/brodynelly/luuna-beacon). These directories are exact-commit Git submodules. The manifest commit and Git gitlink must agree; see [ADR 0012](../docs/decisions/0012-independent-component-repositories.md).
 
@@ -18,7 +18,7 @@ Run `npm run components:setup` after cloning Luuna (or use `git clone --recurse-
 
 `npm run components:stage -- --out <dir> --bun <bun executable>` writes the portable layout the Windows installer ships (the installed trees without Git metadata, `components/dist-manifest.json` with each pin's commit and tree digest, and the pinned Bun); the runtime verifies that layout by content instead of by gitlinks, see [ADR 0024](../docs/decisions/0024-portable-component-distribution.md) and [docs/PACKAGING.md](../docs/PACKAGING.md).
 
-Each component has its own frozen Bun lockfile and can be installed and tested from its directory. Install with `bun install --frozen-lockfile --ignore-scripts`, then run `bun run verify`. The root frontend npm workspace does not resolve or publish these Bun distributions. Primary and legacy executable names are package bin mappings; run the documented Bun source entrypoint when working directly from a checkout. Existing legacy integration snippets remain usable through compatibility aliases.
+Each component has its own frozen Bun lockfile and can be installed and tested from its directory. Install with `bun install --frozen-lockfile --ignore-scripts`, then run `bun run verify`. The root frontend npm workspace does not resolve or publish these Bun distributions. Executable names (`luuna-missions`/`lm`, `luuna-atlas`/`la`, `luuna-beacon`/`lb`) are package bin mappings; run the documented Bun source entrypoint when working directly from a checkout. The upstream aliases (`sd`, `seeds`, `ml`, `mulch`, `cn`) and `SEEDS_*`/`MULCH_*`/`CANOPY_*` variables are removed in favour of `LUUNA_MISSIONS_*`, `LUUNA_ATLAS_*` and `LUUNA_BEACON_*`. Project data lives under `.luuna/` (`.luuna/missions/`, `.luuna/atlas/` with `config.yaml`, `.luuna/beacon/`); the CLIs and the runtime migrate legacy `.seeds/`, `.mulch/` and `.canopy/` stores automatically. See [ADR 0028](../docs/decisions/0028-luuna-project-component-layout.md).
 
 Upstream LICENSE files, authorship, versions, and provenance are retained in every component. Original source and imported authoring records were preserved outside this checkout before removal. Session histories, authoring stores, and upstream automation instructions are not Luuna project state.
 

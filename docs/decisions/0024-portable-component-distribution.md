@@ -4,7 +4,8 @@ Date: 2026-10-22. Status: accepted for the Windows development installer;
 extends ADR 0011 (native bootstrap), ADR 0012 (pinned component
 consumption) and ADR 0018 (`doctor`). Addresses audit finding 8 (R01, M7:
 the installer did not deliver the integrated product) without changing any
-component's source, licence or data contract.
+component's source, licence or data contract. (Amended by ADR 0028 for the
+data paths and aliases of the staged components.)
 
 ## Context
 

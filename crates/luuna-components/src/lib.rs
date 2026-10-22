@@ -319,18 +319,15 @@ impl Components {
         }
         let workspace = prepare_workspace(workspace)?;
         self.validate(pin, &workspace).await?;
-        let data_dir = match name {
-            "missions" => ".seeds",
-            "atlas" => ".mulch",
-            _ => ".canopy",
-        };
+        adopt_legacy_layout(&workspace)?;
+        let data_dir = data_dir(name);
         if args[0] != "init" && !workspace.join(data_dir).is_dir() {
             return Err(ComponentError::Workspace);
         }
-        check_data_links(&workspace.join(data_dir), 0, &mut 0)?;
+        check_project_data_links(&workspace, data_dir)?;
         if name == "missions"
             && args[0] != "init"
-            && !workspace.join(".seeds/config.yaml").is_file()
+            && !workspace.join(data_dir).join("config.yaml").is_file()
         {
             return Err(ComponentError::Workspace);
         }
@@ -807,6 +804,87 @@ fn prepare_workspace(path: &Path) -> Result<PathBuf> {
     check_data_links(&home, 0, &mut 0)?;
     Ok(path)
 }
+/// Project data root shared by the three component stores (ADR 0028).
+const DATA_ROOT: &str = ".luuna";
+
+/// Relative store directory for a component name (`missions`, `atlas`; any
+/// other name is `beacon`), below the workspace.
+fn data_dir(name: &str) -> &'static str {
+    match name {
+        "missions" => ".luuna/missions",
+        "atlas" => ".luuna/atlas",
+        _ => ".luuna/beacon",
+    }
+}
+
+type LegacyStore = (
+    &'static str,
+    &'static str,
+    Option<(&'static str, &'static str)>,
+);
+/// Layout written by runtime versions before ADR 0028: (legacy directory,
+/// new directory, optional (legacy config file, new config file) rename).
+/// Kept in one place so it can be deleted once no managed store predates it.
+const LEGACY_LAYOUT: [LegacyStore; 3] = [
+    (".seeds", ".luuna/missions", None),
+    (
+        ".mulch",
+        ".luuna/atlas",
+        Some(("mulch.config.yaml", "config.yaml")),
+    ),
+    (".canopy", ".luuna/beacon", None),
+];
+
+/// Move a managed workspace created by an earlier runtime version to the
+/// `.luuna/<component>` layout. Idempotent: a store already at the new
+/// location is untouched (a store present at both locations is left for the
+/// component CLI to refuse), and an interrupted Atlas config rename resumes.
+/// Links are refused rather than followed.
+pub fn adopt_legacy_layout(workspace: &Path) -> Result<()> {
+    let root = workspace.join(DATA_ROOT);
+    for (legacy, current, config) in LEGACY_LAYOUT {
+        let (legacy, current) = (workspace.join(legacy), workspace.join(current));
+        let legacy_is_dir = match std::fs::symlink_metadata(&legacy) {
+            Ok(metadata) if linked(&metadata) => return Err(ComponentError::Workspace),
+            Ok(metadata) => metadata.is_dir(),
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => false,
+            Err(_) => return Err(ComponentError::Workspace),
+        };
+        if legacy_is_dir && std::fs::symlink_metadata(&current).is_err() {
+            match std::fs::symlink_metadata(&root) {
+                Ok(metadata) if linked(&metadata) || !metadata.is_dir() => {
+                    return Err(ComponentError::Workspace);
+                }
+                Ok(_) => {}
+                Err(_) => private_dir(&root)?,
+            }
+            std::fs::rename(&legacy, &current).map_err(|_| ComponentError::Workspace)?;
+        }
+        if let Some((old, new)) = config {
+            let (old, new) = (current.join(old), current.join(new));
+            if std::fs::symlink_metadata(&old).is_ok_and(|metadata| metadata.is_file())
+                && std::fs::symlink_metadata(&new).is_err()
+            {
+                std::fs::rename(&old, &new).map_err(|_| ComponentError::Workspace)?;
+            }
+        }
+    }
+    Ok(())
+}
+
+/// `.luuna` itself must be a real directory (when present) and the component
+/// store below it must contain no links.
+fn check_project_data_links(workspace: &Path, data_dir: &str) -> Result<()> {
+    match std::fs::symlink_metadata(workspace.join(DATA_ROOT)) {
+        Ok(metadata) if linked(&metadata) || !metadata.is_dir() => {
+            return Err(ComponentError::Workspace);
+        }
+        Ok(_) => {}
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
+        Err(_) => return Err(ComponentError::Workspace),
+    }
+    check_data_links(&workspace.join(data_dir), 0, &mut 0)
+}
 fn check_data_links(path: &Path, depth: usize, count: &mut usize) -> Result<()> {
     let metadata = match std::fs::symlink_metadata(path) {
         Ok(metadata) => metadata,
@@ -1115,6 +1193,70 @@ mod tests {
     use super::*;
 
     #[test]
+    fn legacy_stores_move_to_the_luuna_layout_idempotently() {
+        let dir = tempfile::tempdir().unwrap();
+        let ws = dir.path();
+        for (legacy, _, _) in LEGACY_LAYOUT {
+            std::fs::create_dir_all(ws.join(legacy)).unwrap();
+            std::fs::write(ws.join(legacy).join("data.jsonl"), "{}\n").unwrap();
+        }
+        std::fs::write(ws.join(".mulch/mulch.config.yaml"), "version: 1\n").unwrap();
+        for _ in 0..2 {
+            adopt_legacy_layout(ws).unwrap();
+            for (legacy, current, _) in LEGACY_LAYOUT {
+                assert!(!ws.join(legacy).exists(), "{legacy}");
+                assert_eq!(
+                    std::fs::read_to_string(ws.join(current).join("data.jsonl")).unwrap(),
+                    "{}\n"
+                );
+            }
+            assert!(ws.join(".luuna/atlas/config.yaml").is_file());
+            assert!(!ws.join(".luuna/atlas/mulch.config.yaml").exists());
+        }
+    }
+
+    #[test]
+    fn interrupted_config_rename_resumes_and_existing_new_store_wins() {
+        let dir = tempfile::tempdir().unwrap();
+        let ws = dir.path();
+        std::fs::create_dir_all(ws.join(".luuna/atlas")).unwrap();
+        std::fs::write(ws.join(".luuna/atlas/mulch.config.yaml"), "a\n").unwrap();
+        std::fs::create_dir_all(ws.join(".luuna/missions")).unwrap();
+        std::fs::create_dir_all(ws.join(".seeds")).unwrap();
+        adopt_legacy_layout(ws).unwrap();
+        assert!(ws.join(".luuna/atlas/config.yaml").is_file());
+        // Both locations present: nothing is merged or overwritten.
+        assert!(ws.join(".seeds").is_dir() && ws.join(".luuna/missions").is_dir());
+        // Nothing to do on an untouched workspace.
+        let empty = tempfile::tempdir().unwrap();
+        adopt_legacy_layout(empty.path()).unwrap();
+        assert!(!empty.path().join(".luuna").exists());
+    }
+
+    #[test]
+    fn luuna_root_must_be_a_real_directory() {
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::write(dir.path().join(".luuna"), "file").unwrap();
+        assert!(check_project_data_links(dir.path(), data_dir("atlas")).is_err());
+        std::fs::create_dir_all(dir.path().join(".seeds")).unwrap();
+        assert!(adopt_legacy_layout(dir.path()).is_err());
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn linked_luuna_root_and_legacy_stores_are_refused() {
+        let dir = tempfile::tempdir().unwrap();
+        let (ws, elsewhere) = (dir.path().join("ws"), dir.path().join("elsewhere"));
+        std::fs::create_dir_all(&ws).unwrap();
+        std::fs::create_dir_all(elsewhere.join("missions")).unwrap();
+        std::os::unix::fs::symlink(&elsewhere, ws.join(".luuna")).unwrap();
+        assert!(check_project_data_links(&ws, data_dir("missions")).is_err());
+        std::fs::remove_file(ws.join(".luuna")).unwrap();
+        std::os::unix::fs::symlink(&elsewhere, ws.join(".seeds")).unwrap();
+        assert!(adopt_legacy_layout(&ws).is_err());
+    }
+
+    #[test]
     fn component_futures_fit_small_native_thread_stacks() {
         let runner = Components {
             root: PathBuf::new(),
@@ -1355,10 +1497,10 @@ mod tests {
                     "0.6.0",
                     "src/index.ts",
                     "lm",
-                    vec!["sd", "seeds"],
+                    Vec::<&str>::new(),
                 ),
-                ("atlas", "0.11.0", "src/cli.ts", "la", vec!["ml", "mulch"]),
-                ("beacon", "0.2.6", "src/index.ts", "lb", vec!["cn"]),
+                ("atlas", "0.11.0", "src/cli.ts", "la", Vec::new()),
+                ("beacon", "0.2.6", "src/index.ts", "lb", Vec::new()),
             ];
             let mut components = Vec::new();
             let mut staged = Vec::new();
