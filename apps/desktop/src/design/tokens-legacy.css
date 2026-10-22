@@ -1,7 +1,7 @@
 /*
  * Design tokens, legacy aliases (ADR 0033). Every name the earlier sheets defined that components and
  * screens still read is an alias of a Ledger role, defined once; it resolves per theme through the role it
- * points to. This sheet holds only aliases (var(--ledger-name), or none for the old kbd shadow) and the
+ * points to. This sheet holds only aliases (var(--ledger-name)) and the
  * contrast-more override. Migrate a user to the Ledger name, then delete its alias; delete this sheet when
  * it is empty. The old-to-new table is in docs/DESIGN-SYSTEM.md; the pinned colour map is in design-system.test.ts.
  * Note: the legacy --color-surface-raised means Ledger fill, not Ledger surface-raised.
@@ -20,17 +20,12 @@
   --color-selected: var(--accent-soft);
   --color-accent-tint: var(--accent-soft);
   --color-selection: var(--accent-soft);
-  --color-selected-border: var(--accent);
   --color-accent: var(--accent);
-  --color-accent-hover: var(--accent-hover);
-  --color-accent-active: var(--accent-hover);
-  --color-on-accent: var(--ink-on-accent);
   --color-focus: var(--focus-ring);
   --color-border: var(--separator);
   --color-border-strong: var(--border);
   --color-scrollbar: var(--border);
   --color-border-control: var(--border-strong);
-  --color-scrim: var(--scrim);
 
   /* Text. Subtle text sits on fills and fields, where ink-subdued fails 4.5:1, so it takes ink-muted. */
   --color-text: var(--ink-body);
@@ -70,14 +65,8 @@
   --radius-input: var(--radius-md);
   --radius-button: var(--radius-md);
   --radius-card: var(--radius-lg);
-  --radius-menu: var(--radius-lg);
-  --radius-dialog: var(--radius-xl);
   --radius-pill: var(--radius-full);
-  --shadow-panel: var(--shadow-card);
-  --shadow-dialog: var(--shadow-popover);
-  --shadow-overlay: var(--shadow-popover);
   --shadow-button-hover: var(--shadow-button);
-  --shadow-kbd: none;
 
   /* Size, space and layout. */
   --control-height: var(--control-md);
@@ -91,7 +80,6 @@
   --text-title: var(--text-page-title);
   --leading-display: var(--leading-page-title);
   --leading-h1: var(--leading-page-title);
-  --tracking-display: var(--tracking-page-title);
   --tracking-h1: var(--tracking-page-title);
   --text-h2: var(--text-section-title);
   --leading-h2: var(--leading-section-title);

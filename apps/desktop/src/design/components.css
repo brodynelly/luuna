@@ -133,9 +133,8 @@ button.run-card.selected, button.run-card[aria-pressed="true"] { border-color: v
 .callout { margin: 0; padding: var(--space-4); border: var(--border-width) solid transparent; border-radius: var(--radius-lg); background: var(--surface-muted); color: var(--ink-muted); font-size: var(--text-label); overflow-wrap: anywhere; }
 .callout[data-tone] { position: relative; padding: var(--space-3) var(--space-4) var(--space-3) calc(var(--space-4) + var(--mark-size) + var(--space-2)); background: var(--tone-bg); color: var(--ink-body); }
 .callout[data-tone]::before { position: absolute; inset-inline-start: var(--space-4); top: calc(var(--space-3) + (1lh - var(--mark-size)) / 2); }
-/* A toned list (open questions) keeps its bullets; the list's label names it, so it carries no mark. */
-ul.callout[data-tone] { padding-inline-start: var(--space-8); }
-ul.callout[data-tone]::before { content: none; }
+/* A toned list (open questions) keeps its bullets, set clear of the tone's shape mark at the lead, so its status is never colour alone. */
+ul.callout[data-tone] { padding-inline-start: calc(var(--space-4) + var(--mark-size) + var(--space-2) + var(--space-5)); }
 
 /* Alert banner (Ledger Alert, danger): a refused action or failed load; always dismissible. */
 .error { display: flex; align-items: flex-start; gap: var(--space-3); margin: 0; padding: var(--space-3) var(--space-4); border: var(--border-width) solid transparent; border-radius: var(--radius-lg); background: var(--tone-danger-bg); color: var(--ink-body); font-size: var(--text-body); overflow-wrap: anywhere; }

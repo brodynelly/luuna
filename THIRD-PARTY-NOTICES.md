@@ -28,5 +28,5 @@ lockfiles. This file records source provenance, not a complete legal dependency 
 - **Söhne** is a commercial typeface by Klim Type Foundry (https://klim.co.nz). Ten hinted TrueType files taken from the sole user's installed copy are bundled in `apps/desktop/src/assets/fonts/soehne/` at the sole user's direction (ADR 0033 font amendment), for personal, non-distributed use on non-Apple platforms. The user accepted the licensing risk.
 - Söhne is **not** covered by Luuna's MIT license or any Luuna license grant.
 - The `Test Söhne Mono` trial files must never be included.
-- The fonts must be removed or properly licensed before any distribution, publication or packaging of the desktop app.
+- The fonts must be removed or properly licensed before any distribution, publication or packaging of the desktop app. Pushing this repository to a shared or public remote counts as publication, and the font files would then stay in Git history: removing them later needs a history purge.
 - Apple platforms and fallbacks use the system font stack; SF Pro is not bundled.

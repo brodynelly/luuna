@@ -131,7 +131,8 @@ export function gradientProblems(css: string): string[] {
 }
 
 const LEFT_EDGE = /^(?:border-left|border-left-color|border-inline-start|border-inline-start-color)$/;
-const LEFT_RULE_VALUE = /var\(--(?:tone-|color-accent|accent|rule-width)/;
+// Any colour token: structural neutrals (--separator, --border*) stay allowed; status, brand, ink and legacy colours are not.
+const LEFT_RULE_VALUE = /var\(--(?:tone-|color-|accent|danger|info|success|warning|ink|ai\b|banner|rule-width)/;
 
 /** ADR 0033: no coloured left-border cards. Returns the offending selectors, one per rule, in source order. */
 export function leftRuleSelectors(css: string): string[] {

@@ -80,6 +80,9 @@ describe("ADR 0033 rules", () => {
     expect(leftRuleProblems(".a { border-left-color: var(--color-accent) }")).toHaveLength(1);
     expect(leftRuleProblems(".a { border-inline-start: var(--border-width) solid var(--accent) }")).toHaveLength(1);
     expect(leftRuleProblems(".a { border-inline-start-color: var(--tone-fg) }")).toHaveLength(1);
+    for (const token of ["danger", "info", "success", "warning", "ink", "ink-muted", "accent-soft", "color-danger", "ai"]) expect(leftRuleProblems(`.a { border-left: var(--border-width) solid var(--${token}) }`), token).toHaveLength(1);
+    expect(leftRuleProblems(".a { border-left: var(--border-width) solid var(--border-strong) }")).toEqual([]);
+    expect(leftRuleProblems(".a { border-left-color: transparent }")).toEqual([]);
     expect(leftRuleProblems(".a { box-shadow: inset var(--rule-width) 0 0 var(--tone-mark) }")).toHaveLength(1);
     expect(leftRuleSelectors(".a,\n .b > .c { border-left: var(--rule-width) solid var(--tone-mark) } .d { color: var(--ink) }")).toEqual([".a, .b > .c"]);
   });

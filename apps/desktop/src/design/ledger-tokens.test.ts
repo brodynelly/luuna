@@ -78,9 +78,7 @@ const COLOUR_ROWS: Array<[string[], string]> = [
   [["color-surface-sunken"], "surface-muted"],
   [["color-field"], "field"],
   [["color-selected", "color-accent-tint", "color-selection"], "accent-soft"],
-  [["color-selected-border", "color-accent"], "accent"],
-  [["color-accent-hover", "color-accent-active"], "accent-hover"],
-  [["color-on-accent"], "ink-on-accent"],
+  [["color-accent"], "accent"],
   [["color-focus"], "focus-ring"],
   [["color-border"], "separator"],
   [["color-border-strong", "color-scrollbar"], "border"],
@@ -89,7 +87,6 @@ const COLOUR_ROWS: Array<[string[], string]> = [
   [["color-text-heading"], "ink"],
   [["color-text-muted", "color-text-subtle"], "ink-muted"],
   [["color-text-disabled"], "ink-disabled"],
-  [["color-scrim"], "scrim"],
 ];
 const TONE_ROWS: Record<string, [string, string, string]> = {
   success: ["success", "success-soft", "success"],
@@ -109,14 +106,12 @@ const legacyOuter = media(read(legacySheet)).outside;
 const legacy = toMap(rules(legacyOuter).find(({ selector }) => selector === ":root")!.body);
 
 describe("legacy aliases", () => {
-  test("every alias is var(--defined-in-another-token-sheet), except the one flat kbd shadow", () => {
+  test("every alias is var(--defined-in-another-token-sheet)", () => {
     const defined = new Set(TOKEN_SHEETS.filter((file) => file !== legacySheet).flatMap((file) => [...read(file).matchAll(/(--[\w-]+)\s*:/g)].map((match) => match[1])));
     const bad: string[] = [];
     for (const [name, value] of legacy) {
       const target = value.match(/^var\((--[\w-]+)\)$/)?.[1];
-      if (value === "none") {
-        if (name !== "--shadow-kbd") bad.push(`${name}: none`);
-      } else if (!target || !defined.has(target)) bad.push(`${name}: ${value}`);
+      if (!target || !defined.has(target)) bad.push(`${name}: ${value}`);
       if (defined.has(name)) bad.push(`${name} is also defined outside the legacy sheet`);
     }
     expect(bad).toEqual([]);
@@ -128,8 +123,8 @@ describe("legacy aliases", () => {
   });
   test("the type, shape and size aliases follow the table", () => {
     expect(Object.fromEntries([...legacy].filter(([name]) => !/^--(?:color|tone)-/.test(name)))).toMatchObject({
-      "--radius-chip": "var(--radius-sm)", "--radius-input": "var(--radius-md)", "--radius-button": "var(--radius-md)", "--radius-card": "var(--radius-lg)", "--radius-menu": "var(--radius-lg)", "--radius-dialog": "var(--radius-xl)", "--radius-pill": "var(--radius-full)",
-      "--shadow-panel": "var(--shadow-card)", "--shadow-dialog": "var(--shadow-popover)", "--shadow-overlay": "var(--shadow-popover)", "--shadow-button-hover": "var(--shadow-button)", "--shadow-kbd": "none",
+      "--radius-chip": "var(--radius-sm)", "--radius-input": "var(--radius-md)", "--radius-button": "var(--radius-md)", "--radius-card": "var(--radius-lg)", "--radius-pill": "var(--radius-full)",
+      "--shadow-button-hover": "var(--shadow-button)",
       "--control-height": "var(--control-md)", "--control-height-sm": "var(--control-sm)", "--content-max": "var(--content-max-width)",
       "--text-display": "var(--text-page-title)", "--text-h1": "var(--text-page-title)", "--text-title": "var(--text-page-title)", "--text-h2": "var(--text-section-title)", "--text-h3": "var(--text-body-strong)", "--text-xl": "var(--text-metric-lg)",
       "--text-lg": "var(--text-body)", "--text-md": "var(--text-body)", "--text-small": "var(--text-label)", "--text-sm": "var(--text-label)", "--text-xs": "var(--text-caption)", "--text-2xs": "var(--text-caption)",

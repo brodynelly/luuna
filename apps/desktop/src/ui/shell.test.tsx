@@ -100,6 +100,7 @@ describe("ViewSlot and AppShell", () => {
     const markup = html(createElement(AppShell, { collapsed: false, sidebar: null, navOpen: true, onDismissNav: noop, rail: "r", children: "x" }));
     expect(markup).toContain('data-nav="open"');
     expect(markup).toContain('class="sidebar-scrim" aria-label="Close navigation"');
+    expect(markup).toMatch(/<a class="skip-link" href="#main" inert="">/);
     expect(markup).toMatch(/<div class="shell-main" inert=""/);
     expect(markup).toMatch(/<aside class="shell-rail" aria-label="Details" inert=""/);
   });
@@ -131,7 +132,7 @@ describe("Breadcrumbs and crumbTrail", () => {
 describe("source contracts", () => {
   test("App passes the outage to a Banner and keeps no Callout or pill", () => {
     const app = source("../App.tsx");
-    expect(app).toMatch(/<Banner label=\{OUTAGE_LABEL\} className="outage">/);
+    expect(app).toMatch(/<Banner label=\{OUTAGE_LABEL\} className="outage" title=\{`[^`]*`\}>/);
     expect(app).not.toMatch(/<Callout[^>]*outage/);
     expect(app).not.toContain("nav-pill");
   });
