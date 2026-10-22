@@ -197,6 +197,24 @@
       ]
     },
     {
+      "id": "projects.import",
+      "title": "Import a project export from another machine with local checkouts",
+      "method": "POST",
+      "route": "/api/v1/projects/import",
+      "client_method": "importProject",
+      "desktop": "projects.import",
+      "tui": "import",
+      "failure_modes": [
+        "unreachable",
+        "aborted",
+        "rejected_token",
+        "refused",
+        "shutting_down",
+        "internal",
+        "client"
+      ]
+    },
+    {
       "id": "baselines.start",
       "title": "Run the confirmed required checks as a baseline",
       "method": "POST",

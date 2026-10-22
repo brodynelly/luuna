@@ -1,6 +1,6 @@
 import { describe, expect, it, vi } from "vitest";
 import { ApiError, EventReplay, EventWindow, LuunaClient, assistantText, awaitsValidation, checkResults, confirmedManifest, isTerminal, loopbackUrl, mergeEvents } from "../src/index";
-import type { EventEnvelope, ProjectManifest } from "../src/index";
+import type { EventEnvelope, ProjectManifest, ProjectExport } from "../src/index";
 
 it("retains bounded event payloads while replaying text and rejects a gap atomically", () => {
   const window = new EventWindow();
@@ -206,6 +206,20 @@ describe("project import and discovery", () => {
     expect(calls[2]).toEqual(["http://127.0.0.1:4242/api/v1/projects/fixture/manifest", "PUT", JSON.stringify({ expected_revision: 0, manifest })]);
     expect(calls[3]).toEqual(["http://127.0.0.1:4242/api/v1/projects/fixture/events?after=2", "GET", undefined]);
     expect(() => client.confirmManifest("fixture", -1, manifest)).toThrow("Invalid manifest revision");
+  });
+
+  it("imports an export with local checkouts through POST and refuses a non-export document locally", async () => {
+    const fetcher = vi.fn<typeof fetch>().mockImplementation(() => Promise.resolve(new Response("{}")));
+    const client = new LuunaClient("http://127.0.0.1:4242", "test-token", fetcher);
+    const exported = { kind: "luuna-project-export", schema_version: "0.1", export_hash: `sha256:${"a".repeat(64)}` } as unknown as ProjectExport;
+    await client.importProject({ export: exported, repositories: [{ id: "app", path: "/srv/clone" }], idempotency_key: "import-1" });
+    const [url, init] = fetcher.mock.calls[0];
+    expect(String(url)).toBe("http://127.0.0.1:4242/api/v1/projects/import");
+    expect(init?.method).toBe("POST");
+    expect(JSON.parse(String(init?.body))).toEqual({ export: exported, repositories: [{ id: "app", path: "/srv/clone" }], idempotency_key: "import-1" });
+    expect(() => client.importProject({ export: { kind: "other" } as unknown as ProjectExport, repositories: [{ id: "app", path: "/srv/clone" }], idempotency_key: "k" })).toThrow("not a Luuna project export");
+    expect(() => client.importProject({ export: exported, repositories: [], idempotency_key: "k" })).toThrow("local checkout path");
+    expect(fetcher).toHaveBeenCalledTimes(1);
   });
 
   it("surfaces short deterministic runtime reasons for conflicts and validation failures only", async () => {

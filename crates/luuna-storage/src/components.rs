@@ -175,6 +175,34 @@ impl Store {
         Ok(rows.collect::<std::result::Result<Vec<_>, _>>()?)
     }
 
+    /// The recorded intent under `key`, if one was begun, without creating one.
+    /// A multi-step operation that died between steps resumes from it; a key
+    /// the ledger has never seen is `None`.
+    pub fn component_operation(
+        &self,
+        project_id: &str,
+        key: &str,
+    ) -> Result<Option<ComponentOperation>> {
+        let row: Option<(String, Option<String>, bool)> = self
+            .connection
+            .query_row(
+                "SELECT record_id,response,attempted FROM component_operations WHERE project_id=?1 AND operation_key=?2",
+                params![project_id, key],
+                |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
+            )
+            .optional()?;
+        row.map(|(record_id, response, attempted)| {
+            Ok(ComponentOperation {
+                record_id,
+                response: response
+                    .map(|text| serde_json::from_str(&text))
+                    .transpose()?,
+                attempted,
+            })
+        })
+        .transpose()
+    }
+
     /// The recorded response of a finished component operation, if any; used to
     /// resume a multi-step operation whose later step died before completion.
     pub fn component_operation_response(

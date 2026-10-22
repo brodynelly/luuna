@@ -960,3 +960,322 @@ async fn components_real_promotion_widens_scope_and_export_keeps_private_memory_
     assert_eq!(refused.0, StatusCode::CONFLICT);
     assert!(refused.1.contains("Export refused"), "{}", refused.1);
 }
+
+fn git(dir: &std::path::Path, args: &[&str]) {
+    let output = std::process::Command::new("git")
+        .arg("-C")
+        .arg(dir)
+        .args(args)
+        .env("GIT_AUTHOR_NAME", "Fixture")
+        .env("GIT_AUTHOR_EMAIL", "fixture@example.invalid")
+        .env("GIT_COMMITTER_NAME", "Fixture")
+        .env("GIT_COMMITTER_EMAIL", "fixture@example.invalid")
+        .output()
+        .unwrap();
+    assert!(
+        output.status.success(),
+        "git {args:?}: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+}
+
+/// A runtime with the real component toolchain and its own data directory,
+/// registering nothing: the import registers from the export.
+fn real_runtime(data_dir: &std::path::Path) -> AppState {
+    let config = RuntimeConfig {
+        data_dir: data_dir.to_path_buf(),
+        pi_program: "node".into(),
+        git_program: "git".into(),
+        pi_launcher_args: vec![],
+        provider: None,
+        model: None,
+        token: "synthetic-components-token-at-least-32-bytes".into(),
+        max_run_seconds: 10,
+    };
+    AppState::open(config)
+        .unwrap()
+        .with_components(luuna_components::Components::discover().unwrap())
+}
+
+/// ADR 0021 amendment: an export of tickets, project/process memory and a
+/// prompt round-trips through the real CLIs into a second runtime whose
+/// checkout is a fresh clone with the same remote and root commits.
+#[tokio::test]
+#[ignore = "requires pinned Bun and real component checkouts; run with --ignored"]
+async fn components_real_import_round_trips_tickets_memory_and_prompts_from_an_export() {
+    use crate::projects::{
+        confirm_manifest, discover, import_project, register_project, ConfirmManifest,
+        ImportProject, RegisterProject, RegisterRepository,
+    };
+    use crate::writer::{create_ticket, list_tickets, CreateTicket};
+    let root = tempfile::tempdir().unwrap();
+    let fixture = root.path().join("fixture");
+    std::fs::create_dir_all(&fixture).unwrap();
+    git(&fixture, &["init", "-q", "-b", "main"]);
+    git(&fixture, &["config", "commit.gpgsign", "false"]);
+    std::fs::write(fixture.join("README.md"), "fixture\n").unwrap();
+    std::fs::write(
+        fixture.join("Cargo.toml"),
+        "[package]\nname = \"fixture\"\nversion = \"0.1.0\"\n",
+    )
+    .unwrap();
+    std::fs::write(fixture.join("Cargo.lock"), "# synthetic\n").unwrap();
+    git(&fixture, &["add", "."]);
+    git(&fixture, &["commit", "-q", "-m", "initial"]);
+    git(
+        &fixture,
+        &[
+            "remote",
+            "add",
+            "origin",
+            "https://example.invalid/roundtrip.git",
+        ],
+    );
+    let clone = root.path().join("clone");
+    let output = std::process::Command::new("git")
+        .args(["clone", "-q"])
+        .arg(&fixture)
+        .arg(&clone)
+        .output()
+        .unwrap();
+    assert!(output.status.success());
+    git(
+        &clone,
+        &[
+            "remote",
+            "set-url",
+            "origin",
+            "https://example.invalid/roundtrip.git",
+        ],
+    );
+
+    // Source machine: register, confirm, activate, write through every adapter.
+    let source = real_runtime(&root.path().join("source-private"));
+    let registered = register_project(
+        State(source.clone()),
+        Json(RegisterProject {
+            id: Some("roundtrip".into()),
+            name: "Round trip".into(),
+            repositories: vec![RegisterRepository {
+                id: "app".into(),
+                path: fixture.to_string_lossy().into_owned(),
+            }],
+        }),
+    )
+    .await
+    .unwrap();
+    assert_eq!(registered.0, StatusCode::CREATED);
+    let discovery = discover(State(source.clone()), Path("roundtrip".into()))
+        .await
+        .unwrap()
+        .1
+         .0;
+    let _ = confirm_manifest(
+        State(source.clone()),
+        Path("roundtrip".into()),
+        Json(ConfirmManifest {
+            expected_revision: 0,
+            manifest: discovery.proposed_manifest.clone(),
+        }),
+    )
+    .await
+    .map_err(|e| e.1)
+    .unwrap();
+    let _ = enable(State(source.clone()), Path("roundtrip".into()))
+        .await
+        .map_err(|e| e.1)
+        .unwrap();
+    let ticket = create_ticket(
+        State(source.clone()),
+        Path("roundtrip".into()),
+        Json(CreateTicket {
+            idempotency_key: "t1".into(),
+            title: "Exported ticket".into(),
+            intent: "Keep src/lib.rs tidy".into(),
+            acceptance_criteria: vec!["cargo test passes".into()],
+            repository_ids: vec!["app".into()],
+            purpose: luuna_domain::TicketPurpose::Feature,
+        }),
+    )
+    .await
+    .unwrap()
+    .1
+     .0;
+    assert_eq!(ticket.source, luuna_domain::TicketSource::Missions);
+    let project_memory = memory(
+        &source,
+        "roundtrip",
+        "m1",
+        "project",
+        "exported project convention",
+    )
+    .await;
+    let process_memory = memory(
+        &source,
+        "roundtrip",
+        "m2",
+        "process",
+        "exported process lesson",
+    )
+    .await;
+    let _private = memory(&source, "roundtrip", "u1", "user", "PRIVATE_USER_ONLY").await;
+    let prompt = create_prompt(
+        State(source.clone()),
+        Path("roundtrip".into()),
+        Json(CreatePrompt {
+            idempotency_key: "pr1".into(),
+            name: "guidance".into(),
+            body: "Review every diff twice.".into(),
+            expected_version: None,
+        }),
+    )
+    .await
+    .unwrap()
+    .0;
+    assert_eq!(prompt.version, 1);
+    let export = export_project(State(source.clone()), Path("roundtrip".into()))
+        .await
+        .unwrap()
+        .0;
+    assert_eq!(export["tickets"].as_array().unwrap().len(), 1);
+    assert_eq!(export["memory"].as_array().unwrap().len(), 2);
+    assert_eq!(export["prompts"].as_array().unwrap().len(), 1);
+    assert!(!export.to_string().contains("PRIVATE_USER_ONLY"));
+
+    // Target machine: a fresh runtime and a fresh clone.
+    let target = real_runtime(&root.path().join("target-private"));
+    let import = |key: &str| {
+        let target = target.clone();
+        let export = export.clone();
+        let key = key.to_owned();
+        let path = clone.to_string_lossy().into_owned();
+        async move {
+            import_project(
+                State(target),
+                Json(ImportProject {
+                    export,
+                    repositories: vec![RegisterRepository {
+                        id: "app".into(),
+                        path,
+                    }],
+                    idempotency_key: key,
+                }),
+            )
+            .await
+        }
+    };
+    let (status, imported) = import("imp").await.unwrap();
+    let imported = imported.0;
+    assert_eq!(status, StatusCode::CREATED, "{imported}");
+    assert_eq!(imported["components_enabled"], true);
+    assert_eq!(
+        imported["counts"],
+        json!({"tickets": 1, "memory": 2, "prompts": 1})
+    );
+    assert_eq!(
+        imported["project"]["project"]["manifest_hash"],
+        export["project"]["manifest_hash"]
+    );
+    let memory_mapping = imported["mapping"]["memory"].as_array().unwrap();
+    assert_eq!(memory_mapping.len(), 2);
+    assert!(memory_mapping
+        .iter()
+        .any(|m| m["exported_id"] == project_memory.id && m["imported_id"] != project_memory.id));
+    assert!(memory_mapping
+        .iter()
+        .any(|m| m["exported_id"] == process_memory.id && m["scope"] == "process"));
+    assert_eq!(imported["mapping"]["prompts"][0]["name"], "guidance");
+    assert_eq!(imported["mapping"]["prompts"][0]["imported_version"], 1);
+    assert_eq!(
+        imported["mapping"]["prompts"][0]["sections_flattened"],
+        false
+    );
+
+    // Missions owns the imported ticket under its exported identity.
+    let tickets = list_tickets(State(target.clone()), Path("roundtrip".into()))
+        .await
+        .unwrap()
+        .0;
+    assert_eq!(tickets.len(), 1);
+    assert_eq!(tickets[0].id, ticket.id);
+    assert_eq!(tickets[0].revision, 1);
+    assert_eq!(tickets[0].source, luuna_domain::TicketSource::Missions);
+    assert_eq!(tickets[0].intent, ticket.intent);
+    assert_eq!(tickets[0].created_at, ticket.created_at);
+    let status = crate::missions::source(&target, &tickets[0]).await.unwrap();
+    assert_eq!(status["reconciliation_required"], false);
+    // Atlas holds project and process memory with the exported text; no user memory arrived.
+    let listed = list_memory(
+        State(target.clone()),
+        Path("roundtrip".into()),
+        Query(MemoryQuery {
+            include_user: true,
+            q: None,
+        }),
+    )
+    .await
+    .unwrap()
+    .0;
+    assert_eq!(listed.len(), 2);
+    for exported in [&project_memory, &process_memory] {
+        let record = listed
+            .iter()
+            .find(|record| record.content == exported.content)
+            .unwrap();
+        assert_eq!(record.scope, exported.scope);
+        assert_eq!(record.provenance, exported.provenance);
+        assert_ne!(record.id, exported.id);
+    }
+    // Beacon renders the imported prompt with the exported body.
+    let rendered = render_prompt(
+        State(target.clone()),
+        Path(("roundtrip".into(), "guidance".into())),
+        Query(PromptQuery { version: None }),
+    )
+    .await
+    .unwrap()
+    .0;
+    assert_eq!(rendered.body, prompt.body);
+    assert_eq!(rendered.version, 1);
+
+    // The same key replays without a second record anywhere.
+    let (status, replay) = import("imp").await.unwrap();
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(replay.0["replayed"], true);
+    assert_eq!(
+        list_tickets(State(target.clone()), Path("roundtrip".into()))
+            .await
+            .unwrap()
+            .0
+            .len(),
+        1
+    );
+    assert_eq!(
+        list_memory(
+            State(target.clone()),
+            Path("roundtrip".into()),
+            Query(MemoryQuery {
+                include_user: true,
+                q: None
+            }),
+        )
+        .await
+        .unwrap()
+        .0
+        .len(),
+        2
+    );
+    assert_eq!(import("imp-2").await.err().unwrap().0, StatusCode::CONFLICT);
+    // The target exports the same project again.
+    let again = export_project(State(target.clone()), Path("roundtrip".into()))
+        .await
+        .unwrap()
+        .0;
+    assert_eq!(
+        again["project"]["manifest_hash"],
+        export["project"]["manifest_hash"]
+    );
+    assert_eq!(again["tickets"][0]["id"], export["tickets"][0]["id"]);
+    assert_eq!(again["memory"].as_array().unwrap().len(), 2);
+    assert_eq!(again["prompts"][0]["body"], export["prompts"][0]["body"]);
+}

@@ -315,10 +315,37 @@ export interface ProjectExport {
   exported_at: string;
   project: { id: string; name: string; manifest_revision: number; manifest_hash: string | null };
   manifest: ProjectManifest | null;
+  /** Machine-independent identity of each registered repository, keyed by repository id. */
+  repository_identities: Record<string, { remote: string | null; push_remote?: string | null; root_commits: string[]; shallow: boolean }>;
   tickets: Ticket[];
   memory: MemoryRecord[];
   prompts: RenderedPrompt[];
   omitted: string[];
+  /** luuna-json-v1 hash of every other field; an import recomputes and refuses a mismatch. */
+  export_hash: string;
+}
+
+/** An export plus this machine's checkout of each exported repository. */
+export interface ProjectImportRequest {
+  export: ProjectExport;
+  repositories: { id: string; path: string }[];
+  idempotency_key: string;
+}
+
+export interface ProjectImportResult {
+  project: ProjectView;
+  export_hash: string;
+  exported_at: string;
+  manifest_hash: string;
+  components_enabled: boolean;
+  counts: { tickets: number; memory: number; prompts: number };
+  mapping: {
+    manifest: { exported_revision: number; imported_revision: number };
+    tickets: { id: string; exported_revision: number; imported_revision: number }[];
+    memory: { exported_id: string; imported_id: string; scope: MemoryScope; exported_hash: string; imported_hash: string }[];
+    prompts: { name: string; exported_version: number; imported_version: number; exported_hash: string; imported_hash: string; sections_flattened: boolean }[];
+  };
+  replayed: boolean;
 }
 
 export type ScaffoldProfile = "node" | "node-typescript" | "react" | "nextjs" | "python" | "go" | "rust" | "flutter" | "android" | "ios";
@@ -1189,6 +1216,14 @@ export class LuunaClient {
   /** The scope-safe export: manifest, tickets, project/process memory and prompts; the runtime refuses one that would carry user memory, credentials or host paths. */
   exportProject(projectId: string, signal?: AbortSignal): Promise<ProjectExport> {
     return this.request(`/projects/${encodeURIComponent(projectId)}/export`, { signal });
+  }
+
+  /** Registers the exported project from local checkouts of its repositories, confirms its manifest and brings tickets, memory and prompts in; the same key replays. */
+  importProject(request: ProjectImportRequest, signal?: AbortSignal): Promise<ProjectImportResult> {
+    if (!request.export || typeof request.export !== "object" || request.export.kind !== "luuna-project-export") throw new Error("The document is not a Luuna project export.");
+    if (!request.idempotency_key.trim()) throw new Error("An idempotency key is required.");
+    if (request.repositories.length === 0) throw new Error("Give the local checkout path of each exported repository.");
+    return this.request("/projects/import", { method: "POST", body: JSON.stringify(request), signal });
   }
 
   /** A deterministic scaffold proposal; nothing is written until it is confirmed by exact hash. */
