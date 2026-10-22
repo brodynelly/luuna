@@ -943,6 +943,7 @@ async fn components_real_promotion_widens_scope_and_export_keeps_private_memory_
         intent: format!("Look in {}", root.path().join("context-a").display()),
         acceptance_criteria: vec!["none".into()],
         repository_ids: vec!["app".into()],
+        purpose: luuna_domain::TicketPurpose::Feature,
         created_at: "2026-10-21T00:00:00.000Z".into(),
         updated_at: "2026-10-21T00:00:00.000Z".into(),
     };

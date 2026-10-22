@@ -207,6 +207,12 @@ pub struct PlanRevision {
     /// Explicit, hash-bound component references. Absence preserves old plan hashes.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub component_context: Option<ComponentContext>,
+    /// Copied from the ticket when the plan is made and part of the hash; the
+    /// default (feature) is omitted so earlier plans keep their hashes. A
+    /// `testing_setup` plan carries the testing-setup role and the recipes that
+    /// will become the repository's baseline (ADR 0022).
+    #[serde(default, skip_serializing_if = "TicketPurpose::is_feature")]
+    pub purpose: TicketPurpose,
     pub hash: String,
 }
 
@@ -414,6 +420,7 @@ impl PlanRevision {
         if self.required_checks.is_empty() || !self.required_checks.iter().any(|c| c.required) {
             return invalid("at least one required check is necessary");
         }
+        self.validate_purpose()?;
         // Recipe IDs are unique within their repository (results bind to the
         // pair), so every repository of a multi-repository plan may carry its
         // manifest's `unit` recipe.
@@ -428,6 +435,44 @@ impl PlanRevision {
                 || check.execution_profile.is_empty()
             {
                 return invalid("invalid check recipe or repository");
+            }
+        }
+        Ok(())
+    }
+
+    /// A testing-setup plan establishes one repository's baseline: one task,
+    /// carrying the testing-setup role, and at least one required recipe for
+    /// that repository, since a candidate with nothing to execute could never
+    /// become a baseline. Feature plans never carry the testing-setup role,
+    /// because only the purpose, not a role name, admits a plan without a
+    /// baseline.
+    fn validate_purpose(&self) -> Result<(), DomainError> {
+        let setup_role = TicketPurpose::TestingSetup.role();
+        match self.purpose {
+            TicketPurpose::Feature => {
+                if self.tasks.iter().any(|task| task.role == setup_role) {
+                    return invalid("only a testing_setup plan may carry the testing-setup role");
+                }
+            }
+            TicketPurpose::TestingSetup => {
+                let [task] = self.tasks.as_slice() else {
+                    return invalid("a testing_setup plan has exactly one task");
+                };
+                if task.role != setup_role {
+                    return invalid("a testing_setup plan's task carries the testing-setup role");
+                }
+                if self.candidate_hash.is_some() {
+                    return invalid("a testing_setup plan does not repair a candidate");
+                }
+                if !self
+                    .required_checks
+                    .iter()
+                    .any(|check| check.required && check.repository_id == task.repository_id)
+                {
+                    return invalid(
+                        "a testing_setup plan needs at least one required check recipe for its repository",
+                    );
+                }
             }
         }
         Ok(())
@@ -891,6 +936,97 @@ mod tests {
     fn plan() -> PlanRevision {
         serde_json::from_str(include_str!("../../../fixtures/domain/plan.valid.json")).unwrap()
     }
+    #[test]
+    fn plan_purpose_is_hashed_only_when_it_is_not_the_feature_default() {
+        // The fixture predates the purpose: its bytes and hash are unchanged.
+        let plan = plan();
+        assert_eq!(plan.purpose, TicketPurpose::Feature);
+        plan.validate().unwrap();
+        let bytes = serde_json::to_string(&plan).unwrap();
+        assert!(!bytes.contains("purpose"), "{bytes}");
+        let mut setup = plan.clone();
+        setup.purpose = TicketPurpose::TestingSetup;
+        setup.tasks[0].role = TicketPurpose::TestingSetup.role().into();
+        let setup = setup.seal().unwrap();
+        assert_ne!(setup.hash, plan.hash);
+        assert!(serde_json::to_string(&setup)
+            .unwrap()
+            .contains("\"purpose\":\"testing_setup\""));
+        let reread: PlanRevision =
+            serde_json::from_str(&serde_json::to_string(&setup).unwrap()).unwrap();
+        assert_eq!(reread.purpose, TicketPurpose::TestingSetup);
+        reread.validate().unwrap();
+    }
+
+    #[test]
+    fn testing_setup_plans_carry_one_setup_task_and_its_recipes() {
+        let feature = plan();
+        // A feature plan cannot borrow the role that the setup admission names.
+        let mut disguised = feature.clone();
+        disguised.tasks[0].role = "testing-setup".into();
+        assert!(disguised
+            .seal()
+            .unwrap_err()
+            .to_string()
+            .contains("only a testing_setup plan"));
+        let mut setup = feature.clone();
+        setup.purpose = TicketPurpose::TestingSetup;
+        assert!(setup
+            .clone()
+            .seal()
+            .unwrap_err()
+            .to_string()
+            .contains("testing-setup role"));
+        setup.tasks[0].role = "testing-setup".into();
+        setup.clone().seal().unwrap();
+        let mut repairing = setup.clone();
+        repairing.candidate_hash = Some(format!("sha256:{}", "c".repeat(64)));
+        assert!(repairing
+            .seal()
+            .unwrap_err()
+            .to_string()
+            .contains("does not repair"));
+        let mut two_tasks = setup.clone();
+        let mut second = two_tasks.tasks[0].clone();
+        second.id = "second".into();
+        two_tasks.tasks.push(second);
+        two_tasks.budgets.max_workers = 1;
+        assert!(two_tasks
+            .seal()
+            .unwrap_err()
+            .to_string()
+            .contains("exactly one task"));
+        let mut elsewhere = setup;
+        for check in &mut elsewhere.required_checks {
+            check.required = false;
+        }
+        elsewhere.required_checks[0].required = true;
+        elsewhere.required_checks[0].repository_id = "app".into();
+        elsewhere.clone().seal().unwrap();
+        elsewhere.required_checks[0].required = false;
+        elsewhere.required_checks.push(CheckRecipe {
+            id: "other".into(),
+            repository_id: "lib".into(),
+            executable: "cargo".into(),
+            args: vec!["test".into()],
+            cwd: ".".into(),
+            timeout_seconds: 60,
+            required: true,
+            capabilities: vec![],
+            execution_profile: "native".into(),
+        });
+        elsewhere.base_commits.insert("lib".into(), "b".repeat(40));
+        elsewhere
+            .permissions
+            .repositories
+            .insert("lib".into(), vec!["src".into()]);
+        assert!(elsewhere
+            .seal()
+            .unwrap_err()
+            .to_string()
+            .contains("required check recipe for its repository"));
+    }
+
     #[test]
     fn approved_component_bytes_are_part_of_the_plan_hash() {
         let mut plan = plan();

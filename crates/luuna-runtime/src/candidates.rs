@@ -124,6 +124,7 @@ pub async fn candidate(
     // Aggregate workflow usage (writer attempts included) against the
     // approved budgets and the project's repair limit.
     let usage = store.workflow_usage_view(&id).map_err(internal)?;
+    let prerequisite = testing_setup_handoff(&store, &run, evidence.as_ref())?;
     Ok(Json(json!({
         "evidence": evidence,
         "active": active,
@@ -136,6 +137,68 @@ pub async fn candidate(
             "revalidate": revalidate.err(),
         },
         "usage": usage,
+        "prerequisite": prerequisite,
+    })))
+}
+
+/// For a testing-setup workflow (ADR 0022): the recipes its candidate must
+/// pass and the explicit handoff that turns a reviewed setup candidate into
+/// the repository's baseline. The runtime never confirms a manifest or merges
+/// on the developer's behalf.
+fn testing_setup_handoff(
+    store: &luuna_storage::Store,
+    run: &RunRecord,
+    evidence: Option<&CandidateEvidence>,
+) -> Result<Option<Value>, ApiError> {
+    if run.metadata["kind"] != "workflow" {
+        return Ok(None);
+    }
+    let plan = plan_for(store, run)?;
+    if plan.purpose != luuna_domain::TicketPurpose::TestingSetup {
+        return Ok(None);
+    }
+    let repository_id = plan
+        .tasks
+        .first()
+        .map(|task| task.repository_id.clone())
+        .unwrap_or_default();
+    let checks: Vec<luuna_domain::ManifestCheck> = plan
+        .required_checks
+        .iter()
+        .filter(|check| check.required && check.repository_id == repository_id)
+        .map(luuna_domain::CheckRecipe::to_manifest_check)
+        .collect();
+    let reviewed = evidence.is_some_and(|evidence| {
+        evidence.status == luuna_domain::CandidateStatus::Reviewed
+            && evidence
+                .review
+                .as_ref()
+                .is_some_and(|review| review.verdict == luuna_domain::ReviewVerdict::Passed)
+    });
+    let commit = evidence.and_then(|evidence| {
+        evidence
+            .candidate
+            .repository_commits
+            .get(&repository_id)
+            .cloned()
+    });
+    let next = if reviewed {
+        format!(
+            "the setup candidate {} passed its checks and review: merge it into the developer checkout of repository {repository_id} (or publish it and merge the pull request), then PUT /api/v1/projects/{}/manifest with the next revision listing these checks as the repository's required checks, then POST /api/v1/projects/{}/baselines for the repository; feature plans are admitted once that baseline passes",
+            commit.as_deref().unwrap_or("commit"),
+            plan.project_id,
+            plan.project_id
+        )
+    } else {
+        "the setup candidate must pass these checks in its worktree (at least one executing a counted test) and the independent review before it can become the baseline".to_owned()
+    };
+    Ok(Some(json!({
+        "kind": luuna_domain::TESTING_SETUP_PREREQUISITE,
+        "repository_id": repository_id,
+        "checks": checks,
+        "candidate_commit": commit,
+        "reviewed": reviewed,
+        "next": next,
     })))
 }
 

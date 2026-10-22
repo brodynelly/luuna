@@ -179,7 +179,79 @@ pub struct BaselineEvidence {
     pub reason: Option<String>,
 }
 
+/// The prerequisite a repository without a usable testing setup is offered
+/// (docs/08-validation.md "Testing prerequisite", acceptance A06): a
+/// `testing_setup` ticket whose plan carries the check recipes that will become
+/// the baseline, with its own approval (ADR 0022).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct TestingPrerequisite {
+    /// Always `testing_setup`.
+    pub kind: String,
+    pub project_id: String,
+    pub repository_id: String,
+    pub baseline_id: String,
+    /// Why the baseline shows no usable testing setup.
+    pub reason: String,
+    /// The route and request that starts the prerequisite workflow.
+    pub next: String,
+}
+
+pub const TESTING_SETUP_PREREQUISITE: &str = "testing_setup";
+
+impl TestingPrerequisite {
+    pub fn next_step(project_id: &str, repository_id: &str) -> String {
+        format!(
+            "POST /api/v1/projects/{project_id}/tickets with purpose testing_setup and repository_ids [{repository_id:?}], then POST /api/v1/tickets/{{id}}/plans with the check recipes (checks) that will become the baseline, approve the exact plan hash and POST /api/v1/runs/{{id}}/implement; the setup candidate is validated with those recipes and reviewed, and a feature plan stays refused until the recipes are confirmed in the manifest and a baseline passes"
+        )
+    }
+}
+
 impl BaselineEvidence {
+    /// Whether this settled baseline shows a repository with no usable testing
+    /// setup, as opposed to a failing or host-blocked one: the manifest names
+    /// no required check, or every required check ran to exit 0 while its
+    /// recognised runner reported that nothing executed (empty or skip-only
+    /// suite). A missing tool or dependency, a dirty checkout, a failed check
+    /// or a mixed outcome is not this case and keeps its own next step.
+    pub fn testing_prerequisite(&self) -> Option<TestingPrerequisite> {
+        if self.status != BaselineStatus::Blocked {
+            return None;
+        }
+        let reason = if self.required_checks.is_empty() {
+            "the confirmed manifest names no required check for this repository".to_owned()
+        } else {
+            let empty: Vec<&str> = self
+                .required_checks
+                .iter()
+                .filter(|required| {
+                    self.results.iter().any(|result| {
+                        result.recipe_id == **required
+                            && result.status == CheckStatus::Blocked
+                            && result.exit_code == Some(0)
+                            && result.tests_detected == Some(0)
+                    })
+                })
+                .map(String::as_str)
+                .collect();
+            if empty.len() != self.required_checks.len() {
+                return None;
+            }
+            format!(
+                "every required check succeeded without executing a test (empty or skip-only suite): {}",
+                empty.join(", ")
+            )
+        };
+        Some(TestingPrerequisite {
+            kind: TESTING_SETUP_PREREQUISITE.into(),
+            project_id: self.project_id.clone(),
+            repository_id: self.identity.repository_id.clone(),
+            baseline_id: self.id.clone(),
+            reason,
+            next: TestingPrerequisite::next_step(&self.project_id, &self.identity.repository_id),
+        })
+    }
+
     /// Deterministic gate for entering implementation on one repository: the
     /// baseline passed, binds to the plan's manifest and base commit, and was
     /// produced on the host that will now execute.
@@ -335,6 +407,62 @@ mod tests {
         let mut unbound = result(&id, CheckStatus::Passed, Some(0));
         unbound.candidate_hash = "not-a-hash".into();
         assert!(unbound.validate().is_err());
+    }
+
+    #[test]
+    fn a_prerequisite_is_offered_only_for_a_missing_testing_setup() {
+        let plan = plan();
+        let id = identity(&plan);
+        let empty = || {
+            let mut result = result(&id, CheckStatus::Blocked, Some(0));
+            result.tests_detected = Some(0);
+            result.reason = Some("empty suite".into());
+            result
+        };
+        let offered = evidence(&plan, vec![empty()], BaselineStatus::Blocked);
+        let prerequisite = offered.testing_prerequisite().unwrap();
+        assert_eq!(prerequisite.kind, TESTING_SETUP_PREREQUISITE);
+        assert_eq!(prerequisite.repository_id, "app");
+        assert_eq!(prerequisite.baseline_id, "baseline-1");
+        assert!(
+            prerequisite.reason.contains("empty or skip-only suite"),
+            "{}",
+            prerequisite.reason
+        );
+        assert!(prerequisite.next.contains("purpose testing_setup"));
+        // No required check at all is the other missing-setup shape.
+        let mut none = evidence(&plan, vec![], BaselineStatus::Blocked);
+        none.required_checks.clear();
+        assert!(none
+            .testing_prerequisite()
+            .unwrap()
+            .reason
+            .contains("no required check"));
+        // A missing tool, a failure, a pass or a mixed outcome is not offered.
+        let mut tool = result(&id, CheckStatus::Blocked, None);
+        tool.reason = Some("missing dependency".into());
+        tool.tests_detected = None;
+        assert!(evidence(&plan, vec![tool.clone()], BaselineStatus::Blocked)
+            .testing_prerequisite()
+            .is_none());
+        assert!(evidence(
+            &plan,
+            vec![result(&id, CheckStatus::Failed, Some(1))],
+            BaselineStatus::Failed
+        )
+        .testing_prerequisite()
+        .is_none());
+        assert!(evidence(
+            &plan,
+            vec![result(&id, CheckStatus::Passed, Some(0))],
+            BaselineStatus::Passed
+        )
+        .testing_prerequisite()
+        .is_none());
+        let mut mixed = evidence(&plan, vec![empty(), tool], BaselineStatus::Blocked);
+        mixed.required_checks.push("lint".into());
+        mixed.results[1].recipe_id = "lint".into();
+        assert!(mixed.testing_prerequisite().is_none());
     }
 
     #[test]

@@ -8,6 +8,7 @@
 use crate::{append_project_event, authorize_run, now, transition, Result, StorageError, Store};
 use luuna_domain::{
     BaselineEvidence, BaselineStatus, CheckResult, DomainError, PlanRevision, RunState,
+    TicketPurpose,
 };
 use rusqlite::{params, Connection, OptionalExtension};
 use serde_json::json;
@@ -229,6 +230,12 @@ impl Store {
     /// Enter `Implementing` only with a durable approval for the bound plan, the
     /// project's current manifest, and a passed baseline per repository that
     /// binds to the plan's manifest hash, base commit and this environment.
+    ///
+    /// A `testing_setup` plan is the prerequisite that creates that baseline
+    /// (ADR 0022): it is admitted without one, under every other gate, and
+    /// the transition records `prerequisite: testing_setup` instead of
+    /// baseline identities. The purpose is part of the approved plan hash, so
+    /// no feature plan can claim it.
     pub fn begin_implementation(
         &mut self,
         run_id: &str,
@@ -272,7 +279,11 @@ impl Store {
         crate::writer::check_ticket_binding(&tx, &plan)?;
         crate::writer::check_manifest_binding(&tx, &plan)?;
         let mut baselines = BTreeMap::new();
+        let without_baseline = plan.purpose == TicketPurpose::TestingSetup;
         for repository_id in plan.base_commits.keys() {
+            if without_baseline {
+                break;
+            }
             let evidence =
                 latest_baseline(&tx, &plan.project_id, repository_id)?.ok_or_else(|| {
                     StorageError::Domain(DomainError::BaselineRequired(format!(
@@ -308,6 +319,7 @@ impl Store {
                 "plan_hash": plan.hash,
                 "manifest_hash": plan.manifest_hash,
                 "baselines": baselines,
+                "prerequisite": without_baseline.then_some(luuna_domain::TESTING_SETUP_PREREQUISITE),
                 "environment_fingerprint": environment_fingerprint,
             }),
         )?;

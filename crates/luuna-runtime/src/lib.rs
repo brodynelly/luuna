@@ -901,6 +901,48 @@ impl IntoResponse for ApiError {
         (self.0, Json(json!({"error":self.1}))).into_response()
     }
 }
+
+impl ApiError {
+    /// A refusal whose body carries a structured field beside `error`, such
+    /// as the prerequisite offer of a baseline gate refusal (ADR 0022).
+    pub fn with_detail(self, field: &'static str, value: Value) -> ApiDetailError {
+        ApiDetailError {
+            status: self.0,
+            error: self.1,
+            field,
+            value,
+        }
+    }
+}
+
+/// `{"error": ..., "<field>": ...}` with the refusal's status.
+pub struct ApiDetailError {
+    status: StatusCode,
+    error: String,
+    field: &'static str,
+    value: Value,
+}
+
+impl From<ApiError> for ApiDetailError {
+    fn from(error: ApiError) -> Self {
+        ApiDetailError {
+            status: error.0,
+            error: error.1,
+            field: "detail",
+            value: Value::Null,
+        }
+    }
+}
+
+impl IntoResponse for ApiDetailError {
+    fn into_response(self) -> Response {
+        let mut body = json!({"error": self.error});
+        if !self.value.is_null() {
+            body[self.field] = self.value;
+        }
+        (self.status, Json(body)).into_response()
+    }
+}
 /// A storage or process failure. The cause goes to the runtime log with the
 /// request it failed (or "background work" for a worker); the HTTP body stays
 /// generic. Causes are storage and process errors, never request payloads,
