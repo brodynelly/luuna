@@ -131,7 +131,12 @@ nothing could run it.
   differently. The handoff is explicit in the candidate view instead.
 - **Baselines in leased worktrees.** The established baseline still runs in the
   developer checkout after the merge, with ADR 0007's dirty-checkout rules.
-- **Client parity.** Desktop and TUI do not yet show the offer or create a
-  `testing_setup` ticket with recipes (R02/ADR 0020).
+- **Client parity.** Done the same day: `@luuna/api-client` types the offer,
+  the purpose, the `checks` and the handoff and surfaces the refusal's offer as
+  `ApiError.prerequisite`; the desktop shows each offer with a
+  `Create the testing-setup ticket` control, a setup-plan form of recipes and
+  the candidate's handoff; the TUI has `create-ticket --purpose testing_setup`,
+  `plan --check`/`--checks` and prints the handoff (see
+  docs/CURRENT-ARCHITECTURE.md, client parity).
 - **Policy.** `policy.testing_prerequisite` remains required `true`; the
   prerequisite cannot be waived.

@@ -171,3 +171,43 @@ test("a CI repair is offered only for an open publication of this candidate with
   expect(superseded).not.toContain("Repair after CI failure");
   expect(superseded).toContain("Superseded");
 });
+
+// ---- ADR 0022 handoff and the editor handoff of ADR 0027 point 4. ----
+import { copyPath } from "./CandidateReview";
+
+test("a setup workflow's candidate shows the proposed checks and the runtime's handoff text", () => {
+  const handoff = { kind: "testing_setup" as const, repository_id: "app", checks: [{ id: "unit", executable: "python", args: ["-m", "unittest"], required: true, timeout_seconds: 120, capabilities: [], cwd: "." }, { id: "lint", executable: "ruff", args: [], required: true, timeout_seconds: 60, capabilities: ["shell"], cwd: "src" }], candidate_commit: commit, reviewed: true, next: "the setup candidate passed its checks and review: merge it into the developer checkout of repository app, then PUT /api/v1/projects/project-1/manifest with the next revision listing these checks" };
+  const html = renderToStaticMarkup(<CandidateReview run={{ ...run, state: "reviewed" }} view={{ ...view, evidence: { ...evidence, status: "reviewed" } }} busy={false} {...actions} handoff={handoff} />);
+  expect(html).toContain('aria-label="Testing-setup handoff"');
+  expect(html).toContain("reviewed with a passed verdict");
+  expect(html).toContain(`Candidate commit <code>${commit}</code>`);
+  expect(html).toContain("<code>unit</code>: <code>python -m unittest</code> · 120s");
+  expect(html).toContain("<code>lint</code>: <code>ruff</code> in <code>src</code> · 60s · shell");
+  expect(html).toContain(handoff.next);
+  expect(html).toMatch(/class="setup-handoff callout" data-tone="attention"/);
+  expect(render(view)).not.toContain("Testing-setup handoff");
+  const pending = renderToStaticMarkup(<CandidateReview run={run} view={view} busy={false} {...actions} handoff={{ ...handoff, reviewed: false, candidate_commit: null, next: "the setup candidate must pass these checks" }} />);
+  expect(pending).toContain("not yet reviewed with a passed verdict");
+  expect(pending).not.toContain("Candidate commit");
+});
+
+test("the editor handoff shows each worktree path whole with a copy control, and nothing else", () => {
+  const lease = { id: "lease-1", run_id: "run-1", project_id: "project-1", repository_id: "app", path: "/home/dev/.luuna/worktrees/run-1/app", base_commit: commit, state: "active" as const, created_at: "" };
+  const html = renderToStaticMarkup(<CandidateReview run={run} view={view} busy={false} {...actions} worktrees={[lease]} />);
+  expect(html).toContain('data-surface="editor-handoff"');
+  expect(html).toContain(`<code class="worktree-path">${lease.path}</code>`);
+  expect(html).toContain("Copy path for app");
+  expect(html).toContain("grants no permission");
+  expect(html).not.toMatch(/href="(?:vscode|idea|editor):/);
+  expect(render(view)).not.toContain("editor-handoff");
+  const written: string[] = [];
+  const navigatorRef = globalThis as unknown as { navigator?: { clipboard?: { writeText: (text: string) => Promise<void> } } };
+  const previous = navigatorRef.navigator;
+  Object.defineProperty(globalThis, "navigator", { value: { clipboard: { writeText: async (text: string) => { written.push(text); } } }, configurable: true, writable: true });
+  try {
+    copyPath(lease.path);
+    expect(written).toEqual([lease.path]);
+  } finally {
+    Object.defineProperty(globalThis, "navigator", { value: previous, configurable: true, writable: true });
+  }
+});

@@ -316,3 +316,108 @@ test("a ticket edit sends only the changed fields at the displayed revision, and
   const card = renderToStaticMarkup(<TicketCard ticket={ticket} revisions={[]} snapshots={new Map()} diffs={{}} logs={{}} busy={false} connected actions={noActions} />);
   expect(card).toContain('data-capability="tickets.update"');
 });
+
+// ---- ADR 0022: the testing-setup prerequisite in the desktop. ----
+import { EMPTY_CHECK_ROW, SetupChecksEditor, rowsFromProposal, setupChecksFromRows, setupTicketDraft } from "./Workflows";
+import type { TaskRecord as TaskRecordType, TestingPrerequisite } from "@luuna/api-client";
+
+const offer: TestingPrerequisite = { kind: "testing_setup", project_id: "p", repository_id: "app", baseline_id: "b1", reason: "the manifest names no required check for repository app", next: "POST /api/v1/projects/p/tickets with purpose testing_setup and repository_ids [\"app\"], then POST /api/v1/tickets/{id}/plans with the check recipes (checks)" };
+
+test("the runtime's testing-setup offer is rendered from the project view with a create control that pre-fills a testing_setup ticket", () => {
+  const html = renderToStaticMarkup(<Workflows client={null} projectId="p" repositoryId="app" prerequisites={[offer]} manifestConfirmed onChanged={() => {}} />);
+  expect(html).toContain('aria-label="Testing-setup prerequisites"');
+  expect(html).toContain("Create the testing-setup ticket for app");
+  expect(html).toContain(offer.reason);
+  expect(html).toContain("POST /api/v1/projects/p/tickets with purpose testing_setup");
+  // The offer's control is a state-specific variant of ticket creation: the form's primary and the offer both carry tickets.create.
+  expect(html.match(/data-capability="tickets.create"/g)).toHaveLength(2);
+  expect(html).toMatch(/<span class="state" data-tone="attention">testing setup needed<\/span>/);
+  expect(html).toContain('aria-label="Ticket purpose"');
+  expect(html).toMatch(/<option value="testing_setup"[^>]*>testing setup/);
+  expect(renderToStaticMarkup(<Workflows client={null} projectId="p" repositoryId="app" manifestConfirmed onChanged={() => {}} />)).not.toContain("Testing-setup prerequisites");
+  const draft = setupTicketDraft(offer);
+  expect(draft.purpose).toBe("testing_setup");
+  expect(draft.repositoryIds).toEqual(["app"]);
+  expect(draft.title).toBe("Establish the testing setup for app");
+  expect(draft.intent).toContain(offer.reason);
+  expect(draft.intent).toContain(offer.next);
+});
+
+test("a setup plan sends the typed check recipes in the manifest-check shape, the body the TUI sends for --check", () => {
+  const rows = [{ id: "unit", executable: "python", args: "-m unittest", cwd: "", timeout: "120" }, { id: " ", executable: "ignored", args: "", cwd: "", timeout: "1" }, { id: "lint", executable: "ruff", args: "", cwd: "src", timeout: "60" }];
+  expect(setupChecksFromRows(rows)).toEqual([{ id: "unit", executable: "python", args: ["-m", "unittest"], timeout_seconds: 120 }, { id: "lint", executable: "ruff", args: [], cwd: "src", timeout_seconds: 60 }]);
+  const budgets = parseBudgets("2", "600", "1.00");
+  const request = planRequestFromRows([{ repository_id: "app", paths: "tests", write: true, depends_on: [] }], { ...budgets, max_workers: 1 }, undefined, [], setupChecksFromRows(rows));
+  expect(request).toEqual({ task: { repository_id: "app", paths: ["tests"], operations: ["read", "write"] }, budgets: { max_attempts: 2, timeout_seconds: 600, cost_usd_micros: 1_000_000 }, checks: [{ id: "unit", executable: "python", args: ["-m", "unittest"], timeout_seconds: 120, capabilities: [], required: true }, { id: "lint", executable: "ruff", args: [], cwd: "src", timeout_seconds: 60, capabilities: [], required: true }] });
+  expect(request).toEqual(planRequestForTasks([{ repository_id: "app", paths: ["tests"], operations: ["read", "write"], depends_on: [] }], { ...budgets, max_workers: 1 }, { checks: setupChecksFromRows(rows) }));
+  // A feature plan carries no checks key.
+  expect(planRequestFromRows([{ repository_id: "app", paths: "src", write: true, depends_on: [] }], budgets)).not.toHaveProperty("checks");
+  const setupTicket: Ticket = { ...ticket, purpose: "testing_setup", title: "Establish tests" };
+  const planned: unknown[] = [];
+  const html = renderToStaticMarkup(<TicketCard ticket={setupTicket} revisions={[]} snapshots={new Map()} diffs={{}} logs={{}} busy={false} connected actions={{ ...noActions, plan: (...args) => planned.push(args) }} />);
+  expect(html).toContain("testing setup</span>");
+  expect(html).toContain('aria-label="Setup check recipes for ticket-1"');
+  expect(html).toContain("Plan setup</button>");
+  expect(renderToStaticMarkup(<SetupChecksEditor ticket={setupTicket} rows={[EMPTY_CHECK_ROW]} busy={false} onChange={() => {}} />)).toContain('value="600"');
+  expect(renderToStaticMarkup(<TicketCard ticket={ticket} revisions={[]} snapshots={new Map()} diffs={{}} logs={{}} busy={false} connected actions={noActions} />)).not.toContain("Setup check recipes");
+});
+
+// ---- ADR 0023: roles, traces, overrides and advisory results in the desktop. ----
+test("task rows send their role and derivation, overrides travel with the plan, and an advisory row reads only", () => {
+  const budgets = parseBudgets("2", "600", "1.00");
+  const rows = [
+    { repository_id: "shared", paths: "lib", write: true, depends_on: [], role: "repository_lead" as const },
+    { repository_id: "api", paths: "src", write: true, depends_on: ["shared"], derived_from_task: "orchestrate" },
+    { repository_id: "consumer", paths: "src", write: true, depends_on: [], role: "implementer" as const },
+  ];
+  const overrides = [{ consumer: "consumer", producer: "api", action: "waive" as const, justification: "the consumer pins the published package" }];
+  const request = planRequestFromRows(rows, { ...budgets, max_workers: 2 }, undefined, overrides);
+  expect(request).toEqual({
+    tasks: [
+      { id: "shared", repository_id: "shared", paths: ["lib"], operations: ["read"], role: "repository_lead" },
+      { id: "api", repository_id: "api", paths: ["src"], operations: ["read", "write"], depends_on: ["shared"], derived_from_task: "orchestrate" },
+      { id: "consumer", repository_id: "consumer", paths: ["src"], operations: ["read", "write"] },
+    ],
+    dependency_overrides: overrides,
+    budgets: { max_attempts: 2, timeout_seconds: 600, cost_usd_micros: 1_000_000, max_workers: 2 },
+  });
+  // The TUI's `plan --task "shared=lib;role=repository_lead" --task "api=src>shared;derived_from=orchestrate" --task consumer=src --override consumer:api:waive:…` sends the same body.
+  expect(request).toEqual(planRequestForTasks([
+    { id: "shared", repository_id: "shared", paths: ["lib"], operations: ["read"], depends_on: [], role: "repository_lead" },
+    { id: "api", repository_id: "api", paths: ["src"], operations: ["read", "write"], depends_on: ["shared"], derived_from_task: "orchestrate" },
+    { id: "consumer", repository_id: "consumer", paths: ["src"], operations: ["read", "write"], depends_on: [] },
+  ], { ...budgets, max_workers: 2 }, { dependencyOverrides: overrides }));
+  const multi = renderToStaticMarkup(<Workflows client={null} projectId="p" repositoryId="app" repositoryIds={["app", "web"]} manifestConfirmed onChanged={() => {}} />);
+  expect(multi).not.toContain('aria-label="Task 1 role"');
+  expect(() => planRequestFromRows([rows[0], { ...rows[2], repository_id: "shared" }], budgets)).toThrow("distinct repository");
+});
+
+test("the task graph shows each task's trace and advisory result, and derives the next plan's rows from a proposal", () => {
+  const trace = { approved_by: "developer", approval_id: "approval-1", approved_at: "2026-10-22T10:00:00Z", plan_id: "plan-1", plan_revision: 1, plan_hash: `sha256:${"e".repeat(64)}` };
+  const orchestrate: TaskRecordType = { run_id: "run-1", task_id: "orchestrate", repository_id: "app", role: "project_orchestrator", state: "completed", depends_on: [], assigned_by: trace, dependency_overrides: [], advisory_result: { findings: ["the API lacks a contract test"], proposed_tasks: [{ id: "lead", repository_id: "web", role: "repository_lead", depends_on: [], paths: ["src"] }, { id: "api-task", repository_id: "app", role: "implementer", depends_on: ["lead"], paths: ["src", "tests"], rationale: "contract first" }], risks: ["the shared package is unpinned"] }, updated_at: "" };
+  const consumer: TaskRecordType = { run_id: "run-1", task_id: "consumer", repository_id: "web", role: "implementer", state: "failed", depends_on: ["orchestrate"], assigned_by: trace, derived_from_task: "orchestrate", dependency_overrides: [{ consumer: "consumer", producer: "shared", action: "waive", justification: "pinned package" }], reason: "scope violation", updated_at: "" };
+  const derived: TaskRecordType[] = [];
+  const html = renderToStaticMarkup(<TaskGraph run={runOf("run-1", "completed")} tasks={[orchestrate, consumer]} busy={false} onResume={() => {}} onDerive={(task) => derived.push(task)} />);
+  expect(html).toContain("role project orchestrator");
+  expect(html).toContain("assigned by developer · approval <code>approval-1</code> at 2026-10-22T10:00:00Z · plan <code>plan-1</code> r1");
+  expect(html).toContain(trace.plan_hash);
+  expect(html).toContain("derived from advisory task <code>orchestrate</code>");
+  expect(html).toContain("waive <code>consumer</code> ← <code>shared</code> (pinned package)");
+  expect(html).toContain("Advisory result: 1 finding(s), 2 proposed task(s), 1 risk(s)");
+  expect(html).toContain("the API lacks a contract test");
+  expect(html).toContain("the shared package is unpinned");
+  expect(html).toContain("contract first");
+  expect(html).toContain("Derive plan from this proposal");
+  expect(html).not.toContain("Resume task");
+  expect(renderToStaticMarkup(<TaskGraph run={runOf("run-1", "completed")} tasks={[orchestrate]} busy={false} onResume={() => {}} />)).not.toContain("Derive plan from this proposal");
+  // The derived rows: the proposal's tasks on their repositories, dependencies mapped to repository ids, every row deriving from the advisory task.
+  expect(rowsFromProposal(orchestrate)).toEqual([
+    { repository_id: "web", paths: "src", write: false, depends_on: [], role: "repository_lead", derived_from_task: "orchestrate" },
+    { repository_id: "app", paths: "src,tests", write: true, depends_on: ["web"], role: "implementer", derived_from_task: "orchestrate" },
+  ]);
+  expect(planRequestFromRows(rowsFromProposal(orchestrate), parseBudgets("2", "600", "1.00"))).toMatchObject({ tasks: [{ id: "web", role: "repository_lead", operations: ["read"], derived_from_task: "orchestrate" }, { id: "app", depends_on: ["web"], derived_from_task: "orchestrate" }] });
+  expect(rowsFromProposal(consumer)).toEqual([]);
+  // A single advisory task's graph is inspectable although the plan has one task.
+  const advisoryPlan = { ...planOf(1), tasks: [{ paths: ["src"], role: "project_orchestrator" }] } as unknown as PlanRevision;
+  expect(renderToStaticMarkup(<TicketCard ticket={ticket} revisions={[{ plan: advisoryPlan, run: runOf("run-1", "completed") }]} snapshots={new Map()} diffs={{}} logs={{}} busy={false} connected actions={noActions} />)).toContain("Show task graph");
+});

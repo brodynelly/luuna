@@ -12,10 +12,18 @@ npm run tui -- help                              # every command with its usage
 npm run tui -- projects --json                   # one cataloged action for scripts; --json prints the runtime's record unchanged
 npm run tui -- approve <plan> --acknowledge-hash sha256:<complete plan hash>
 npm run tui -- follow <run>                      # live events over SSE, resumed after an outage from the last sequence
+npm run tui -- home                              # Home summary: projects, validation health, blockers (a projection, not an action)
+npm run tui -- board --project <id>              # Kanban projection of the recorded run states; nothing is dragged
+npm run tui -- create-ticket <project> --purpose testing_setup --title … --intent … --criterion …   # the testing-setup prerequisite (ADR 0022)
+npm run tui -- plan <ticket> --check unit=python,-m,unittest@120                                  # a setup plan's recipes (or --checks file.json)
+npm run tui -- plan <ticket> --task "shared=lib;role=repository_lead" --task "api=src>shared" --override api:shared:waive:"pinned"   # roles and overrides (ADR 0023)
 ```
 
 Exit codes: 0 done, 1 refused or failed (`<Action> refused: <reason> <next step>` on stderr), 2 usage.
 Transport failures and 5xx responses are plain sentences; a server body is never shown.
+
+`home` and `board` are projections of cataloged read actions (`PROJECTIONS` in `src/commands.mjs`), the same
+the desktop's Home and Board panels render from `@luuna/api-client` projections; they carry no catalog entry.
 
 Adding an action: one catalog entry, one `LuunaClient` method, one object in `src/commands.mjs`
 (with its `example`); `npm test` then checks the parity (`test/commands.test.mjs`). The end-to-end

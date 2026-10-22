@@ -4,6 +4,11 @@ import { ApiError, EventWindow, LuunaClient, isTerminal } from "@luuna/api-clien
 import type { EventEnvelope, Health, RunRecord, RunState } from "@luuna/api-client";
 import { canCancel, sameRuns } from "./workflow-state";
 import { Projects } from "./Projects";
+import type { ProjectRequest } from "./Projects";
+import { Home } from "./Home";
+import type { OpenRequest } from "./Home";
+import { Board } from "./Board";
+import { Help } from "./Help";
 import { actionFailure, describeFailure } from "./failures";
 import { ensureLocalRuntime, nativeDesktop } from "./native-runtime";
 import { StatusBadge } from "./design/StatusBadge";
@@ -132,6 +137,9 @@ export function App() {
   const [outage, setOutage] = useState("");
   const [connectionEpoch, setConnectionEpoch] = useState(0);
   const [nativeStartup, setNativeStartup] = useState(0);
+  // A Home or Board control opens a project (and a ticket, or the ticket form) in the Projects panel.
+  const [requested, setRequested] = useState<ProjectRequest | null>(null);
+  const open = (request: OpenRequest) => setRequested({ ...request, nonce: Date.now() });
   const native = nativeDesktop();
   const outageRef = useRef(false);
   const operation = useRef<AbortController | null>(null);
@@ -375,7 +383,10 @@ export function App() {
         {client && outage && <p className="outage callout" data-tone="interrupted" role="status">{outage} Runs, candidates and worktrees are durable in the runtime; nothing is lost while this panel waits.</p>}
       </section>
 
-      <ProjectPanel client={client} connectionEpoch={connectionEpoch} />
+      <Home client={client} connectionEpoch={connectionEpoch} refreshEpoch={refresh} onOpen={open} />
+      <Board client={client} connectionEpoch={connectionEpoch} refreshEpoch={refresh} onOpen={open} />
+
+      <ProjectPanel client={client} connectionEpoch={connectionEpoch} requested={requested} />
 
       <div className="workspace">
         <aside className="panel history" aria-labelledby="history-heading">
@@ -413,6 +424,8 @@ export function App() {
           </section>
         </div>
       </div>
+
+      <Help />
     </main>
     <footer>Luuna · Local-first engineering workbench<span>Import · baseline · approved writer · candidate checks and review</span></footer>
   </div>;

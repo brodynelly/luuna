@@ -50,3 +50,10 @@
 @media (max-width: 920px) {
   .candidate-review .facts > div { display: grid; }
 }
+
+/* The testing-setup handoff (ADR 0022) and the editor handoff: the worktree path whole, with its copy control. */
+.candidate-review > .setup-handoff { display: grid; grid-template-columns: minmax(0, 1fr); gap: var(--space-1-5); }
+.candidate-review > .setup-handoff > p { margin: 0; }
+.candidate-review > .setup-handoff > .handoff-checks { display: grid; gap: var(--space-0-5); margin: 0; padding-left: var(--space-4); overflow-wrap: anywhere; }
+.candidate-review > .editor-handoff { display: grid; grid-template-columns: minmax(0, 1fr); gap: var(--space-1-5); min-width: 0; }
+.candidate-review > .editor-handoff > .worktree-paths { display: grid; gap: var(--space-1); margin: 0; padding: 0; list-style: none; font-size: var(--text-xs); overflow-wrap: anywhere; }

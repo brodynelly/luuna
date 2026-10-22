@@ -69,3 +69,30 @@ test("the catalog traces every action to what requires it, and the required acti
   for (const capability of required.capabilities) expect(capability.required_by.length, capability.id).toBeGreaterThan(0);
   for (const id of ["tickets.update", "memory.update", "memory.user.export", "memory.retention.set", "memory.retention.apply", "baselines.start", "projects.register", "plans.create", "runs.implement", "runs.cancel", "runs.publication.reconcile", "runs.stream"]) expect(exposed.has(id), id).toBe(true);
 });
+
+// ---- ADR 0022 and ADR 0023: state-specific variants and the fields the desktop sends; ADR 0027 point 4: the experience surfaces. ----
+test("the testing-setup offer's create control is a variant of ticket creation, and the setup plan, roles and overrides go through the shared builder", () => {
+  const workflows = sources.find(([file]) => file === "Workflows.tsx")![1];
+  expect(workflows.match(/data-capability="tickets.create"/g)?.length).toBeGreaterThanOrEqual(2);
+  expect(workflows).toMatch(/prefillSetupTicket\(offer\)\}>Create the testing-setup ticket for/);
+  expect(workflows).toMatch(/\.\.\.\(purpose !== "feature" && \{ purpose \}\)/);
+  expect(workflows).toMatch(/planRequestFromRows\(rows, \{ \.\.\.budgets, max_workers: workers \}, [^\n]*overrideRows, setup \? checks : \[\]\)/);
+  expect(workflows).toMatch(/failure instanceof ApiError && failure\.prerequisite\) setRefusedOffer/);
+  expect(workflows).toMatch(/overrideFromRefusal\(failure\.message\)/);
+  expect(workflows).toMatch(/aria-label=\{`Task \$\{index \+ 1\} role`\}/);
+  expect(workflows).toContain("Derive plan from this proposal");
+});
+
+test("the experience surfaces of ADR 0027 point 4 exist as marked desktop panels projecting cataloged actions", () => {
+  const surfaces = new Map<string, string[]>();
+  for (const [file, source] of sources) for (const match of source.matchAll(/data-surface="([^"]+)"/g)) surfaces.set(match[1], [...(surfaces.get(match[1]) ?? []), file]);
+  expect([...surfaces.keys()].sort()).toEqual(["board", "editor-handoff", "help", "home"]);
+  expect(surfaces.get("home")).toEqual(["Home.tsx"]);
+  expect(surfaces.get("board")).toEqual(["Board.tsx"]);
+  expect(surfaces.get("help")).toEqual(["Help.tsx"]);
+  expect(surfaces.get("editor-handoff")).toEqual(["CandidateReview.tsx"]);
+  const board = sources.find(([file]) => file === "Board.tsx")![1];
+  expect(board).not.toMatch(/draggable|onDragStart|onDrop/);
+  expect(board).toContain("boardProjection(");
+  expect(sources.find(([file]) => file === "Home.tsx")![1]).toContain("homeSummary(");
+});

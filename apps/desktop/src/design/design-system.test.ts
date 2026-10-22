@@ -15,7 +15,7 @@ const files = readdirSync(root, { recursive: true }).map((file) => file.replaceA
 const sheets = files.filter((file) => file.endsWith(".css"));
 const TOKENS = "design/tokens.css";
 const MANIFEST = "styles.css";
-const EXPECTED_SHEETS = [MANIFEST, TOKENS, "design/base.css", "design/components.css", "screens/app.css", "screens/projects.css", "screens/workflows.css", "screens/candidate-review.css", "screens/project-components.css"];
+const EXPECTED_SHEETS = [MANIFEST, TOKENS, "design/base.css", "design/components.css", "screens/app.css", "screens/home.css", "screens/board.css", "screens/projects.css", "screens/workflows.css", "screens/candidate-review.css", "screens/project-components.css", "screens/help.css"];
 const MEDIA = ["(max-width: 920px)", "(max-width: 680px)", "(prefers-reduced-motion: reduce)", "(prefers-color-scheme: light)", "(forced-colors: active)"];
 
 const STATES = [...new Set([runTone, candidateTone, checkTone, baselineTone, verdictTone, severityTone, leaseTone, connectionTone].flatMap((map) => Object.keys(map)))];
@@ -142,7 +142,7 @@ describe("colour tokens", () => {
 });
 
 // ---- Screens: structure the smoke and the accessibility audit depend on ----
-const SCREENS: Record<string, string[]> = { "App.tsx": ["h1", "h2", "h3"], "Projects.tsx": ["h2"], "ProjectComponents.tsx": ["h3", "h4"], "Workflows.tsx": ["h3"], "CandidateReview.tsx": ["h4"], "main.tsx": [], "design/StatusBadge.tsx": [] };
+const SCREENS: Record<string, string[]> = { "App.tsx": ["h1", "h2", "h3"], "Home.tsx": ["h2"], "Board.tsx": ["h2", "h3"], "Help.tsx": ["h2", "h3"], "Projects.tsx": ["h2"], "ProjectComponents.tsx": ["h3", "h4"], "Workflows.tsx": ["h3"], "CandidateReview.tsx": ["h4"], "main.tsx": [], "design/StatusBadge.tsx": [] };
 describe("screens", () => {
   test("every component file is registered here, so a new screen inherits these checks", () => {
     const components = files.filter((file) => file.endsWith(".tsx") && !file.includes(".test."));

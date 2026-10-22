@@ -74,6 +74,10 @@ const STEPS: Step[] = [
   { match: /hash changed|is stale|reload|manifest changed|state changed/, step: "The runtime state moved on; this panel has refreshed. Review the current candidate or plan before acting again." },
   { match: /already has active work|already active|another session is active|no active local process/, step: "Wait for the active work to finish, or cancel it, then act on the settled state." },
   { match: /executor infrastructure failure/, step: "The check runner failed on this host, not the candidate. Check the runtime log and the host, run a new baseline, then validate again or create the next plan revision." },
+  // The testing-setup prerequisite (ADR 0022): the offer names the loop; a feature plan stays refused until it is complete.
+  { match: /no usable testing setup|testing-setup ticket is offered|prerequisite testing-setup/, step: "Create the testing-setup ticket the runtime offers for that repository, plan it with the check recipes that will become its baseline, approve the exact plan hash and implement it; once its candidate is reviewed, merge it, confirm those recipes in the next manifest revision and run a passing baseline, then plan the feature again." },
+  // A plan that departs from the confirmed relationships (ADR 0023): the refusal quotes the override that would allow it.
+  { match: /dependency_overrides/, step: "Add the dependency the confirmed relationship implies, or record the quoted dependency override with a real justification in the plan's overrides, then plan again." },
   { match: /baseline/, step: "Run a passing baseline for the current manifest on this host, then try again." },
   { match: /approved_by/, step: "Enter the approver's name (at most 200 UTF-8 bytes) in the run settings, then approve again." },
   { match: /create (?:and approve )?a new plan/, step: "Create the next plan revision from the current ticket and selected resources, then approve it." },

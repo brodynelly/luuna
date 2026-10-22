@@ -65,3 +65,20 @@ test("every registered repository gets its own baseline control and shows its ow
   expect(html).toMatch(/<button type="button" disabled="" data-capability="baselines.start">Run baseline for web/);
   expect(html).toMatch(/<button type="button" data-capability="baselines.start">Run baseline for app/);
 });
+
+test("a blocked baseline with the runtime's testing-setup offer shows the offer instead of the generic host step", () => {
+  const offer = { kind: "testing_setup" as const, project_id: "p", repository_id: "app", baseline_id: "b-blocked", reason: "the manifest names no required check for repository app", next: "POST /api/v1/projects/p/tickets with purpose testing_setup" };
+  const html = renderToStaticMarkup(<BaselineList baselines={[{ ...baseline("blocked", [], "no required check"), prerequisite: offer }]} busy={false} onLog={() => {}} />);
+  expect(html).toContain("Testing setup needed for <code>app</code>: the manifest names no required check for repository app");
+  expect(html).toContain("POST /api/v1/projects/p/tickets with purpose testing_setup");
+  expect(html).not.toContain("could not run meaningfully on this host");
+  expect(html).toMatch(/<p class="callout baseline-offer" data-tone="attention" role="status">/);
+  expect(renderToStaticMarkup(<BaselineList baselines={[baseline("blocked", [], "no required check")]} busy={false} onLog={() => {}} />)).toContain("could not run meaningfully on this host");
+});
+
+import { requestTarget } from "./Projects";
+test("a request from Home or the Board lands on the project heading, the ticket form or the ticket", () => {
+  expect(requestTarget({})).toBe("projects-heading");
+  expect(requestTarget({ ticketForm: true })).toBe("ticket-title");
+  expect(requestTarget({ ticketId: "ticket-1", ticketForm: true })).toBe("ticket-ticket-1");
+});

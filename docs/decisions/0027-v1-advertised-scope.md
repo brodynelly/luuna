@@ -76,6 +76,10 @@ runtime guard; it only states what the release report may count as complete.
 - The client backlog gains Home, Kanban, Help, editor handoff and the
   interactive terminal audit as named v1 items.
 
+## Note, 2026-10-22: point 4 surfaces that now exist
+
+The items of point 4 were implemented as client work the same day, as projections of existing routes (no catalog entry was added): the desktop **Home** summary (`apps/desktop/src/Home.tsx`: projects, validation health as the latest baseline per repository, blockers as testing-setup prerequisites and failed, paused, interrupted or testing-blocked workflows, a create-ticket shortcut into the Projects panel), the **Kanban** projection (`Board.tsx`: the chapter's columns backlog, testing prerequisite, discovery/plan, approval, implementation, checks, review and PRs over the recorded run states through `RUN_COLUMN`; cards are read-only and open the ticket's own panel, and the view says that dragging is not implemented), the **Help** panel (`Help.tsx`: onboarding steps, what each state means through the six tones, where evidence lives, links to the documents) and the **external-editor handoff** on the candidate view (`CandidateReview.tsx`: each worktree path of the run with a copy control, no editor integration). The projections live in `packages/api-client/src/projections.ts` and the TUI prints the same ones through `luuna-tui home` and `luuna-tui board`; `scripts/check-contracts.mjs` traces each surface (`REQUIRED_SURFACES`) to the catalog entries it projects, a `data-surface` desktop panel and the TUI projection. **Settings** stay as decided: the runtime's `doctor` output, not an in-app editor. The interactive terminal audit of point 5 remains open.
+
 ## What remains
 
 - The owner's acceptance of each proposed decision; any item rejected returns

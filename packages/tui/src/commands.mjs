@@ -5,7 +5,7 @@
 // id and whose `name` is the catalog's `tui` command. `example` is the input the parity test runs
 // against a mocked fetch to prove the command issues the cataloged method and route.
 import { randomUUID } from "node:crypto";
-import { planRequestForTasks, readEventPages, registerProjectRequest } from "@luuna/api-client";
+import { boardProjection, homeSummary, planRequestForTasks, readEventPages, registerProjectRequest } from "@luuna/api-client";
 
 const HASH = `sha256:${"a".repeat(64)}`;
 
@@ -229,13 +229,15 @@ export const COMMANDS = [
 
   // ---- tickets ----
   { id: "tickets.create", name: "create-ticket", action: "Ticket creation", context: "project", args: [{ name: "project", context: true }],
-    flags: { title: { description: "ticket title", prompt: "Ticket title" }, intent: { description: "what should change and why", prompt: "Intent" }, criterion: { repeat: true, description: "an acceptance criterion (repeatable)", prompt: "Acceptance criteria (one per line; empty line ends)", multiline: true }, repository: { description: "repository id (the project's first registration when omitted)" }, key: { description: "idempotency key (generated when omitted)" } },
+    flags: { title: { description: "ticket title", prompt: "Ticket title" }, intent: { description: "what should change and why", prompt: "Intent" }, criterion: { repeat: true, description: "an acceptance criterion (repeatable)", prompt: "Acceptance criteria (one per line; empty line ends)", multiline: true }, repository: { description: "repository id (the project's first registration when omitted)" }, purpose: { description: "feature (default) or testing_setup: the prerequisite ticket a repository without a usable testing setup is offered (ADR 0022)", prompt: "Purpose (feature or testing_setup; empty is feature)" }, key: { description: "idempotency key (generated when omitted)" } },
     example: { args: ["walkthrough"], flags: { title: "Implement the greeting", intent: "Print the greeting", criterion: ["fixture:write_in_scope"], repository: "app", key: "k3" } },
     run: async (client, { args, flags }, io) => {
       const title = String(flags.title ?? "").trim();
       const intent = String(flags.intent ?? "").trim();
       const criteria = list(flags.criterion).map((line) => String(line).trim()).filter(Boolean);
       if (!title || !intent || !criteria.length) throw new UsageError("A ticket needs --title, --intent and at least one --criterion.");
+      const purpose = flags.purpose === undefined || String(flags.purpose).trim() === "" ? "feature" : String(flags.purpose).trim();
+      if (!["feature", "testing_setup"].includes(purpose)) throw new UsageError("--purpose is feature or testing_setup.");
       const bytes = (text) => Buffer.byteLength(text, "utf8");
       if (bytes(title) > TEXT_LIMITS.title) throw new ClientRefusal(`The title is ${bytes(title)} bytes; the runtime accepts at most ${TEXT_LIMITS.title} (UTF-8).`);
       if (bytes(intent) > TEXT_LIMITS.intent) throw new ClientRefusal(`The intent is ${bytes(intent)} bytes; the runtime accepts at most ${TEXT_LIMITS.intent} (UTF-8).`);
@@ -243,7 +245,7 @@ export const COMMANDS = [
       if (longest > TEXT_LIMITS.criterion) throw new ClientRefusal(`The longest criterion is ${longest} bytes; the runtime accepts at most ${TEXT_LIMITS.criterion} (UTF-8).`);
       const repository = flags.repository ? String(flags.repository) : (await client.project(args[0], io.signal)).repositories[0]?.repository_id;
       if (!repository) throw new ClientRefusal("The project has no registered repository to scope the ticket to.");
-      return client.createTicket(args[0], { idempotency_key: flags.key ? String(flags.key) : randomUUID(), title, intent, acceptance_criteria: criteria, repository_ids: [repository] }, io.signal);
+      return client.createTicket(args[0], { idempotency_key: flags.key ? String(flags.key) : randomUUID(), title, intent, acceptance_criteria: criteria, repository_ids: [repository], ...(purpose !== "feature" && { purpose }) }, io.signal);
     } },
   { id: "tickets.list", name: "tickets", action: "Ticket listing", context: "project", args: [{ name: "project", context: true }], flags: {}, example: { args: ["walkthrough"], flags: {} },
     run: (client, { args }, io) => client.listTickets(args[0], io.signal) },
@@ -275,10 +277,35 @@ export const COMMANDS = [
 
   // ---- plans ----
   { id: "plans.create", name: "plan", action: "Planning", context: "ticket", args: [{ name: "ticket", context: true }],
-    flags: { repository: { description: "repository id (the ticket's first repository when omitted)" }, path: { repeat: true, description: "a writer path (repeatable; default src)", prompt: "Writer paths (comma separated; default src)" }, "read-only": { boolean: true, description: "allow reads only" }, criterion: { repeat: true, description: "a task acceptance criterion (repeatable)" }, task: { repeat: true, description: "a task for a multi-repository plan as <repository>=<path,...>[>dependency-task,...] (repeatable; task ids are the repository ids)" }, workers: { description: "concurrent writers for a multi-task plan (1 to the number of tasks, at most 4)" }, attempts: { description: "writer attempts (1 to 10)" }, timeout: { description: "time budget in seconds (1 to 86400)" }, "cost-usd": { description: "cost budget in dollars (at most 1000)" }, memory: { repeat: true, description: "a selected memory id (repeatable; components only)" }, prompt: { description: "a selected prompt as name@version#hash (components only)" }, key: { description: "idempotency key (generated when omitted)" } },
+    flags: { repository: { description: "repository id (the ticket's first repository when omitted)" }, path: { repeat: true, description: "a writer path (repeatable; default src)", prompt: "Writer paths (comma separated; default src)" }, "read-only": { boolean: true, description: "allow reads only" }, role: { description: "the single task's role: implementer (default), repository_lead or project_orchestrator (an advisory role reads only)" }, "derived-from": { description: "the advisory task of an earlier revision whose proposal the single task copies" }, criterion: { repeat: true, description: "a task acceptance criterion (repeatable)" }, task: { repeat: true, description: "a task for a multi-repository plan as <repository>=<path,...>[>dependency-task,...][;role=<role>][;derived_from=<task>] (repeatable; task ids are the repository ids)" }, override: { repeat: true, description: "a dependency override as <consumer>:<producer>:<waive|add>:<justification> (repeatable; the refusal that needs one quotes it)" }, workers: { description: "concurrent writers for a multi-task plan (1 to the number of tasks, at most 4)" }, attempts: { description: "writer attempts (1 to 10)" }, timeout: { description: "time budget in seconds (1 to 86400)" }, "cost-usd": { description: "cost budget in dollars (at most 1000)" }, check: { repeat: true, description: "a testing-setup check recipe as <id>=<executable>[,<arg>,...][@<timeout seconds>] (repeatable; testing_setup tickets only; default timeout 600)" }, checks: { description: "a JSON file (or - for standard input) listing testing-setup check recipes in the manifest-check shape (id, executable, args, cwd, timeout_seconds, capabilities)" }, memory: { repeat: true, description: "a selected memory id (repeatable; components only)" }, prompt: { description: "a selected prompt as name@version#hash (components only)" }, key: { description: "idempotency key (generated when omitted)" } },
     example: { args: ["ticket-1"], flags: { repository: "app", path: ["src"], attempts: "2", key: "k4" } },
     run: async (client, { args, flags }, io) => {
       const repository = flags.repository ? String(flags.repository) : (await client.ticket(args[0], io.signal)).repository_ids[0];
+      const taskOptions = (suffix) => {
+        const options = {};
+        for (const part of (suffix ?? "").split(";").filter(Boolean)) {
+          const match = /^(role|derived_from)=(.+)$/.exec(part);
+          if (!match) throw new UsageError("--task options are ;role=<role> and ;derived_from=<task>");
+          options[match[1] === "role" ? "role" : "derived_from_task"] = match[2];
+        }
+        return options;
+      };
+      const overrides = list(flags.override).map((spec) => {
+        const match = /^([^:]+):([^:]+):(waive|add):(.+)$/s.exec(String(spec));
+        if (!match) throw new UsageError("--override takes <consumer>:<producer>:<waive|add>:<justification>");
+        return { consumer: match[1], producer: match[2], action: match[3], justification: match[4] };
+      });
+      let checks = list(flags.check).map((spec) => {
+        const match = /^([A-Za-z0-9._-]+)=([^,@]+)((?:,[^,@]*)*)(?:@(\d+))?$/.exec(String(spec));
+        if (!match) throw new UsageError("--check takes <id>=<executable>[,<arg>,...][@<timeout seconds>]");
+        return { id: match[1], executable: match[2], args: match[3].split(",").filter(Boolean), timeout_seconds: match[4] === undefined ? 600 : Number(match[4]) };
+      });
+      if (flags.checks !== undefined) {
+        let listed;
+        try { listed = JSON.parse(await document(io, flags.checks)); } catch { throw new ClientRefusal("The --checks document is not valid JSON."); }
+        if (!Array.isArray(listed) || listed.some((check) => !check || typeof check !== "object")) throw new ClientRefusal("The --checks document must be a JSON array of check recipes (id, executable, args, cwd, timeout_seconds, capabilities).");
+        checks = [...checks, ...listed.map((check) => ({ ...check, id: String(check.id ?? ""), executable: String(check.executable ?? ""), timeout_seconds: check.timeout_seconds === undefined ? 600 : Number(check.timeout_seconds) }))];
+      }
       const paths = list(flags.path).flatMap((value) => String(value).split(",")).map((path) => path.trim()).filter(Boolean);
       const budgets = { ...(flags.attempts !== undefined && { max_attempts: Number(flags.attempts) }), ...(flags.timeout !== undefined && { timeout_seconds: Number(flags.timeout) }), ...(flags["cost-usd"] !== undefined && { cost_usd_micros: Math.round(Number(flags["cost-usd"]) * 1_000_000) }), ...(flags.workers !== undefined && { max_workers: integer(flags.workers, "workers", { min: 1 }) }) };
       let componentContext;
@@ -291,12 +318,14 @@ export const COMMANDS = [
       const criteria = list(flags.criterion).map(String);
       // The same builder the desktop uses, so both clients send one body for the same tasks (R02).
       const drafts = list(flags.task).length ? list(flags.task).map((spec) => {
-        const match = /^([a-z][a-z0-9-]*)=([^>]*)(?:>(.*))?$/.exec(String(spec));
-        if (!match) throw new UsageError("--task takes <repository>=<path,...>[>dependency-task,...]");
-        return { id: match[1], repository_id: match[1], paths: match[2].split(","), operations, acceptance_criteria: criteria, depends_on: (match[3] ?? "").split(",") };
-      }) : [{ repository_id: repository, paths, operations, acceptance_criteria: criteria }];
+        const match = /^([a-z][a-z0-9-]*)=([^>;]*)(?:>([^;]*))?((?:;.*)?)$/.exec(String(spec));
+        if (!match) throw new UsageError("--task takes <repository>=<path,...>[>dependency-task,...][;role=<role>][;derived_from=<task>]");
+        const options = taskOptions(match[4]);
+        // An advisory role reads only, whatever --read-only says; the builder refuses anything else.
+        return { id: match[1], repository_id: match[1], paths: match[2].split(","), operations: options.role && options.role !== "implementer" ? ["read"] : operations, acceptance_criteria: criteria, depends_on: (match[3] ?? "").split(","), ...options };
+      }) : [{ repository_id: repository, paths, operations: flags.role && String(flags.role) !== "implementer" ? ["read"] : operations, acceptance_criteria: criteria, ...(flags.role && { role: String(flags.role) }), ...(flags["derived-from"] && { derived_from_task: String(flags["derived-from"]) }) }];
       let request;
-      try { request = planRequestForTasks(drafts, budgets, { componentContext }); } catch (failure) { throw new ClientRefusal(failure.message); }
+      try { request = planRequestForTasks(drafts, budgets, { componentContext, dependencyOverrides: overrides, checks }); } catch (failure) { throw new ClientRefusal(failure.message); }
       return client.createPlan(args[0], { ...request, idempotency_key: flags.key ? String(flags.key) : randomUUID() }, io.signal);
     } },
   { id: "plans.list", name: "plans", action: "Plan listing", context: "ticket", args: [{ name: "ticket", context: true }], flags: {}, example: { args: ["ticket-1"], flags: {} },
@@ -380,8 +409,53 @@ export const COMMANDS = [
     run: (client, { args }, io) => client.artifact(args[0], args[1], io.signal) },
 ];
 
-export const commandsByName = new Map(COMMANDS.map((command) => [command.name, command]));
+/** Every project with its view, baselines and tickets, read with at most four requests in flight. */
+async function readProjects(client, io, only) {
+  const projects = (await client.listProjects(io.signal)).filter((project) => !only || project.id === only);
+  if (only && !projects.length) throw new ClientRefusal(`The runtime has no project ${only}.`);
+  const views = [];
+  const baselines = {};
+  const tickets = {};
+  let next = 0;
+  await Promise.all(Array.from({ length: Math.min(4, projects.length) }, async () => {
+    while (next < projects.length) {
+      const project = projects[next++];
+      const [view, recorded, listed] = await Promise.all([client.project(project.id, io.signal), client.listBaselines(project.id, io.signal), client.listTickets(project.id, io.signal)]);
+      views[projects.indexOf(project)] = view;
+      baselines[project.id] = recorded;
+      tickets[project.id] = listed;
+    }
+  }));
+  return { views, baselines, tickets };
+}
+
+/**
+ * Read-only projections of the experience chapter (docs/09-experience.md, ADR 0027 point 4). They
+ * are not product actions: each one reads the cataloged actions it `projects` and prints the same
+ * projection the desktop's Home and Kanban panels render (`@luuna/api-client` projections.ts), so
+ * they carry no catalog entry of their own and `scripts/check-contracts.mjs` traces them by name.
+ */
+export const PROJECTIONS = [
+  { id: "projection.home", name: "home", action: "Home summary", context: "runtime", projects: ["projects.list", "projects.show", "baselines.list", "tickets.list", "runs.list"], args: [],
+    flags: { project: { description: "only this project" } },
+    example: { args: [], flags: {} },
+    run: async (client, { flags }, io) => {
+      const [{ views, baselines, tickets }, runs] = await Promise.all([readProjects(client, io, flags.project && String(flags.project)), client.listRuns(io.signal)]);
+      return homeSummary({ projects: views, baselines, tickets, runs });
+    } },
+  { id: "projection.board", name: "board", action: "Kanban projection", context: "runtime", projects: ["projects.list", "projects.show", "tickets.list", "runs.list"], args: [],
+    flags: { project: { description: "only this project" } },
+    example: { args: [], flags: {} },
+    run: async (client, { flags }, io) => {
+      const [{ views, tickets }, runs] = await Promise.all([readProjects(client, io, flags.project && String(flags.project)), client.listRuns(io.signal)]);
+      return boardProjection({ projects: views, tickets: Object.values(tickets).flat(), runs });
+    } },
+];
+
+/** Every command the command line and the interactive menus reach: the cataloged actions and the projections. */
+export const commandsByName = new Map([...COMMANDS, ...PROJECTIONS].map((command) => [command.name, command]));
 export const commandsById = new Map(COMMANDS.map((command) => [command.id, command]));
+export const projectionsByName = new Map(PROJECTIONS.map((command) => [command.name, command]));
 
 /** The positional usage line of a command. */
 export function usage(command) {

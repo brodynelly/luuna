@@ -4,7 +4,7 @@
 // client polls /health, and every list reloads when the runtime answers again.
 import { createInterface, emitKeypressEvents } from "node:readline";
 import { describeFailure, explainFailure } from "@luuna/api-client";
-import { COMMANDS } from "./commands.mjs";
+import { COMMANDS, PROJECTIONS } from "./commands.mjs";
 import { catalog } from "./catalog.mjs";
 import { makeIo, runCommand } from "./cli.mjs";
 import { runLine } from "./format.mjs";
@@ -147,6 +147,8 @@ export async function interactive(client, { stdin, stdout, stderr }) {
   const mainScreen = () => ({
     title: "Workbench",
     load: async () => [
+      // The experience projections (docs/09-experience.md): read-only views the desktop shows as Home and Kanban.
+      ...PROJECTIONS.map((command) => ({ label: command.action, detail: command.name, select: () => perform(command, {}) })),
       { label: "Projects ›", select: () => push(projectsScreen()) },
       { label: "Runs ›", select: () => push(runsScreen()) },
       ...commandItems("runtime", {}),
