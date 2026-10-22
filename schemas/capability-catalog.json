@@ -16,6 +16,31 @@
         "aborted",
         "rejected_token",
         "internal"
+      ],
+      "required_by": [
+        "R15",
+        "A33",
+        "docs/09-experience.md#lifecycle-and-portability"
+      ]
+    },
+    {
+      "id": "doctor",
+      "title": "Read the runtime's environment and credential presence (its doctor report)",
+      "method": "GET",
+      "route": "/api/v1/doctor",
+      "client_method": "doctor",
+      "desktop": "doctor",
+      "tui": "doctor",
+      "failure_modes": [
+        "unreachable",
+        "aborted",
+        "rejected_token",
+        "internal"
+      ],
+      "required_by": [
+        "A18",
+        "docs/decisions/0027-v1-advertised-scope.md#decisions-proposed",
+        "docs/09-experience.md#views"
       ]
     },
     {
@@ -31,6 +56,10 @@
         "aborted",
         "rejected_token",
         "internal"
+      ],
+      "required_by": [
+        "R02",
+        "A33"
       ]
     },
     {
@@ -48,6 +77,12 @@
         "refused",
         "shutting_down",
         "internal"
+      ],
+      "required_by": [
+        "R04",
+        "R05",
+        "A33",
+        "docs/09-experience.md#existing-project"
       ]
     },
     {
@@ -67,6 +102,11 @@
         "shutting_down",
         "internal",
         "client"
+      ],
+      "required_by": [
+        "R04",
+        "A33",
+        "docs/09-experience.md#new-project"
       ]
     },
     {
@@ -87,6 +127,11 @@
         "internal",
         "client"
       ],
+      "required_by": [
+        "R04",
+        "A33",
+        "docs/09-experience.md#new-project"
+      ],
       "acknowledgment": "the proposal hash"
     },
     {
@@ -103,6 +148,11 @@
         "rejected_token",
         "not_found",
         "internal"
+      ],
+      "required_by": [
+        "R02",
+        "A33",
+        "docs/decisions/0022-testing-setup-prerequisite.md"
       ]
     },
     {
@@ -121,6 +171,11 @@
         "refused",
         "shutting_down",
         "internal"
+      ],
+      "required_by": [
+        "R04",
+        "R05",
+        "docs/09-experience.md#existing-project"
       ]
     },
     {
@@ -140,6 +195,10 @@
         "shutting_down",
         "internal",
         "client"
+      ],
+      "required_by": [
+        "R05",
+        "docs/09-experience.md#views"
       ]
     },
     {
@@ -158,6 +217,10 @@
         "refused",
         "shutting_down",
         "internal"
+      ],
+      "required_by": [
+        "docs/09-experience.md#views",
+        "docs/09-experience.md#lifecycle-and-portability"
       ]
     },
     {
@@ -175,6 +238,10 @@
         "not_found",
         "internal",
         "client"
+      ],
+      "required_by": [
+        "R02",
+        "A33"
       ]
     },
     {
@@ -194,6 +261,35 @@
         "shutting_down",
         "internal",
         "client"
+      ],
+      "required_by": [
+        "A29",
+        "docs/09-experience.md#lifecycle-and-portability",
+        "docs/decisions/0021-memory-promotion-and-project-export.md#export"
+      ]
+    },
+    {
+      "id": "projects.import",
+      "title": "Import a project export from another machine with local checkouts",
+      "method": "POST",
+      "route": "/api/v1/projects/import",
+      "client_method": "importProject",
+      "desktop": "projects.import",
+      "tui": "import",
+      "failure_modes": [
+        "unreachable",
+        "aborted",
+        "rejected_token",
+        "refused",
+        "shutting_down",
+        "internal",
+        "client"
+      ],
+      "required_by": [
+        "A29",
+        "R14",
+        "docs/06-memory.md#portability",
+        "docs/decisions/0021-memory-promotion-and-project-export.md#import"
       ]
     },
     {
@@ -213,6 +309,11 @@
         "shutting_down",
         "internal",
         "capacity"
+      ],
+      "required_by": [
+        "R08",
+        "A33",
+        "docs/decisions/0017-multi-repository-coordination.md#gates"
       ]
     },
     {
@@ -229,6 +330,12 @@
         "rejected_token",
         "not_found",
         "internal"
+      ],
+      "required_by": [
+        "R08",
+        "A33",
+        "A06",
+        "docs/decisions/0022-testing-setup-prerequisite.md"
       ]
     },
     {
@@ -245,6 +352,9 @@
         "rejected_token",
         "not_found",
         "internal"
+      ],
+      "required_by": [
+        "docs/decisions/0014-runtime-component-workflows.md#activate"
       ]
     },
     {
@@ -263,6 +373,9 @@
         "refused",
         "shutting_down",
         "internal"
+      ],
+      "required_by": [
+        "docs/decisions/0014-runtime-component-workflows.md#activate"
       ]
     },
     {
@@ -279,6 +392,11 @@
         "rejected_token",
         "not_found",
         "internal"
+      ],
+      "required_by": [
+        "R14",
+        "docs/06-memory.md#personal-memory",
+        "docs/06-memory.md#boundaries"
       ]
     },
     {
@@ -298,6 +416,10 @@
         "shutting_down",
         "internal",
         "client"
+      ],
+      "required_by": [
+        "R14",
+        "docs/06-memory.md#personal-memory"
       ]
     },
     {
@@ -317,7 +439,37 @@
         "shutting_down",
         "internal",
         "client"
+      ],
+      "required_by": [
+        "R14",
+        "docs/06-memory.md#personal-memory",
+        "docs/06-memory.md#boundaries"
       ]
+    },
+    {
+      "id": "memory.update",
+      "title": "Correct a memory record in place at its displayed hash; it keeps its scope and gains provenance naming the correction",
+      "method": "PUT",
+      "route": "/api/v1/projects/{id}/memory/{memory_id}",
+      "client_method": "updateMemory",
+      "desktop": "memory.update",
+      "tui": "correct-memory",
+      "failure_modes": [
+        "unreachable",
+        "aborted",
+        "rejected_token",
+        "not_found",
+        "refused",
+        "shutting_down",
+        "internal",
+        "client"
+      ],
+      "required_by": [
+        "R14",
+        "docs/06-memory.md#personal-memory",
+        "docs/decisions/0026-ticket-and-memory-controls-and-client-parity.md#memory-edit"
+      ],
+      "acknowledgment": "the displayed content hash"
     },
     {
       "id": "memory.promote",
@@ -336,6 +488,101 @@
         "shutting_down",
         "internal",
         "client"
+      ],
+      "required_by": [
+        "R14",
+        "docs/06-memory.md#project-knowledge-and-process-lessons",
+        "docs/decisions/0021-memory-promotion-and-project-export.md#promotion"
+      ]
+    },
+    {
+      "id": "memory.user.export",
+      "title": "Export the private user memory with provenance (the personal export the project export refuses to carry)",
+      "method": "GET",
+      "route": "/api/v1/memory/user/export",
+      "client_method": "exportUserMemory",
+      "desktop": "memory.user.export",
+      "tui": "export-user-memory",
+      "failure_modes": [
+        "unreachable",
+        "aborted",
+        "rejected_token",
+        "refused",
+        "internal"
+      ],
+      "required_by": [
+        "R14",
+        "A29",
+        "docs/06-memory.md#personal-memory",
+        "docs/decisions/0026-ticket-and-memory-controls-and-client-parity.md#user-export"
+      ]
+    },
+    {
+      "id": "memory.retention.show",
+      "title": "Show the project memory retention policy",
+      "method": "GET",
+      "route": "/api/v1/projects/{id}/memory/retention",
+      "client_method": "memoryRetention",
+      "desktop": "memory.retention.show",
+      "tui": "retention",
+      "failure_modes": [
+        "unreachable",
+        "aborted",
+        "rejected_token",
+        "not_found",
+        "internal"
+      ],
+      "required_by": [
+        "R14",
+        "docs/06-memory.md#boundaries",
+        "docs/decisions/0026-ticket-and-memory-controls-and-client-parity.md#retention"
+      ]
+    },
+    {
+      "id": "memory.retention.set",
+      "title": "Set the project memory retention policy (max age per scope; deletes nothing by itself)",
+      "method": "PUT",
+      "route": "/api/v1/projects/{id}/memory/retention",
+      "client_method": "setMemoryRetention",
+      "desktop": "memory.retention.set",
+      "tui": "set-retention",
+      "failure_modes": [
+        "unreachable",
+        "aborted",
+        "rejected_token",
+        "not_found",
+        "refused",
+        "internal",
+        "client"
+      ],
+      "required_by": [
+        "R14",
+        "docs/06-memory.md#boundaries",
+        "docs/decisions/0026-ticket-and-memory-controls-and-client-parity.md#retention"
+      ]
+    },
+    {
+      "id": "memory.retention.apply",
+      "title": "Apply the retention policy: delete expired project and process memory through the adapter under the intent ledger",
+      "method": "POST",
+      "route": "/api/v1/projects/{id}/memory/retention/apply",
+      "client_method": "applyMemoryRetention",
+      "desktop": "memory.retention.apply",
+      "tui": "apply-retention",
+      "failure_modes": [
+        "unreachable",
+        "aborted",
+        "rejected_token",
+        "not_found",
+        "refused",
+        "shutting_down",
+        "internal",
+        "client"
+      ],
+      "required_by": [
+        "R14",
+        "docs/06-memory.md#boundaries",
+        "docs/decisions/0026-ticket-and-memory-controls-and-client-parity.md#retention"
       ]
     },
     {
@@ -352,6 +599,9 @@
         "rejected_token",
         "not_found",
         "internal"
+      ],
+      "required_by": [
+        "docs/decisions/0014-runtime-component-workflows.md#select"
       ]
     },
     {
@@ -371,6 +621,9 @@
         "shutting_down",
         "internal",
         "client"
+      ],
+      "required_by": [
+        "docs/decisions/0014-runtime-component-workflows.md#select"
       ]
     },
     {
@@ -388,6 +641,9 @@
         "not_found",
         "internal",
         "client"
+      ],
+      "required_by": [
+        "docs/decisions/0014-runtime-component-workflows.md#select"
       ]
     },
     {
@@ -407,6 +663,11 @@
         "shutting_down",
         "internal",
         "client"
+      ],
+      "required_by": [
+        "R02",
+        "docs/09-experience.md#views",
+        "docs/decisions/0022-testing-setup-prerequisite.md"
       ]
     },
     {
@@ -423,6 +684,10 @@
         "rejected_token",
         "not_found",
         "internal"
+      ],
+      "required_by": [
+        "R02",
+        "A33"
       ]
     },
     {
@@ -439,6 +704,10 @@
         "rejected_token",
         "not_found",
         "internal"
+      ],
+      "required_by": [
+        "R02",
+        "A33"
       ]
     },
     {
@@ -455,6 +724,9 @@
         "rejected_token",
         "not_found",
         "internal"
+      ],
+      "required_by": [
+        "docs/decisions/0014-runtime-component-workflows.md#reconcile"
       ]
     },
     {
@@ -474,6 +746,34 @@
         "shutting_down",
         "internal",
         "client"
+      ],
+      "required_by": [
+        "docs/decisions/0014-runtime-component-workflows.md#reconcile"
+      ]
+    },
+    {
+      "id": "tickets.update",
+      "title": "Edit a ticket at its expected revision; plans made for the earlier revision become stale",
+      "method": "PUT",
+      "route": "/api/v1/tickets/{id}",
+      "client_method": "updateTicket",
+      "desktop": "tickets.update",
+      "tui": "edit-ticket",
+      "failure_modes": [
+        "unreachable",
+        "aborted",
+        "rejected_token",
+        "not_found",
+        "refused",
+        "shutting_down",
+        "internal",
+        "client"
+      ],
+      "required_by": [
+        "R02",
+        "docs/09-experience.md#browser-and-tui-parity",
+        "docs/decisions/0014-runtime-component-workflows.md#edit",
+        "docs/decisions/0026-ticket-and-memory-controls-and-client-parity.md#ticket-edit"
       ]
     },
     {
@@ -493,6 +793,14 @@
         "shutting_down",
         "internal",
         "client"
+      ],
+      "required_by": [
+        "R05",
+        "R07",
+        "A12",
+        "docs/decisions/0017-multi-repository-coordination.md#tasks",
+        "docs/decisions/0022-testing-setup-prerequisite.md",
+        "docs/decisions/0023-delegated-roles-and-dependency-overrides.md"
       ]
     },
     {
@@ -509,6 +817,10 @@
         "rejected_token",
         "not_found",
         "internal"
+      ],
+      "required_by": [
+        "R07",
+        "A33"
       ]
     },
     {
@@ -525,6 +837,10 @@
         "rejected_token",
         "not_found",
         "internal"
+      ],
+      "required_by": [
+        "R07",
+        "A33"
       ],
       "desktop_note": "The desktop shows every revision from the ticket's plan list (plans.list); the plan route itself is read on demand by the TUI."
     },
@@ -546,6 +862,10 @@
         "internal",
         "client"
       ],
+      "required_by": [
+        "R07",
+        "A33"
+      ],
       "acknowledgment": "The developer acknowledges the complete plan hash: the desktop checkbox stands for the hash shown beside it; the TUI's typed or --acknowledge-hash value must equal the plan's hash exactly."
     },
     {
@@ -562,6 +882,10 @@
         "rejected_token",
         "internal",
         "client"
+      ],
+      "required_by": [
+        "R15",
+        "A33"
       ]
     },
     {
@@ -580,6 +904,9 @@
         "shutting_down",
         "internal",
         "capacity"
+      ],
+      "required_by": [
+        "R03"
       ]
     },
     {
@@ -596,6 +923,10 @@
         "rejected_token",
         "not_found",
         "internal"
+      ],
+      "required_by": [
+        "R15",
+        "A33"
       ]
     },
     {
@@ -613,6 +944,11 @@
         "not_found",
         "internal",
         "client"
+      ],
+      "required_by": [
+        "R15",
+        "A20",
+        "A33"
       ]
     },
     {
@@ -630,6 +966,11 @@
         "not_found",
         "internal",
         "capacity"
+      ],
+      "required_by": [
+        "R15",
+        "A20",
+        "docs/09-experience.md#accessibility-and-responsiveness"
       ],
       "desktop_note": "The desktop follows the same durable record by authenticated cursor replay of runs.events; the TUI follows the SSE stream with Last-Event-ID resumption. Both resume from the last received sequence after an outage."
     },
@@ -649,6 +990,10 @@
         "refused",
         "shutting_down",
         "internal"
+      ],
+      "required_by": [
+        "A33",
+        "docs/09-experience.md#views"
       ]
     },
     {
@@ -667,6 +1012,11 @@
         "refused",
         "shutting_down",
         "internal"
+      ],
+      "required_by": [
+        "R07",
+        "A20",
+        "docs/decisions/0017-multi-repository-coordination.md#resume"
       ]
     },
     {
@@ -683,6 +1033,12 @@
         "rejected_token",
         "not_found",
         "internal"
+      ],
+      "required_by": [
+        "R09",
+        "A33",
+        "docs/decisions/0022-testing-setup-prerequisite.md",
+        "docs/decisions/0023-delegated-roles-and-dependency-overrides.md"
       ]
     },
     {
@@ -699,6 +1055,10 @@
         "rejected_token",
         "not_found",
         "internal"
+      ],
+      "required_by": [
+        "R09",
+        "docs/09-experience.md#views"
       ]
     },
     {
@@ -718,6 +1078,10 @@
         "shutting_down",
         "internal",
         "client"
+      ],
+      "required_by": [
+        "R09",
+        "R10"
       ]
     },
     {
@@ -737,6 +1101,9 @@
         "shutting_down",
         "internal",
         "client"
+      ],
+      "required_by": [
+        "R10"
       ]
     },
     {
@@ -757,6 +1124,10 @@
         "internal",
         "client"
       ],
+      "required_by": [
+        "R11",
+        "R12"
+      ],
       "acknowledgment": "the candidate hash"
     },
     {
@@ -776,6 +1147,11 @@
         "shutting_down",
         "internal",
         "client"
+      ],
+      "required_by": [
+        "R11",
+        "R12",
+        "docs/09-experience.md#views"
       ]
     },
     {
@@ -795,6 +1171,34 @@
         "shutting_down",
         "internal",
         "client"
+      ],
+      "required_by": [
+        "R11",
+        "R12"
+      ]
+    },
+    {
+      "id": "runs.publication.repair",
+      "title": "Repair a published candidate after its pull request failed CI",
+      "method": "POST",
+      "route": "/api/v1/runs/{id}/publication/repair",
+      "client_method": "repairPublication",
+      "desktop": "runs.publication.repair",
+      "tui": "publication-repair",
+      "failure_modes": [
+        "unreachable",
+        "aborted",
+        "rejected_token",
+        "not_found",
+        "refused",
+        "shutting_down",
+        "internal",
+        "client"
+      ],
+      "required_by": [
+        "A24",
+        "R10",
+        "R11"
       ]
     },
     {
@@ -811,6 +1215,10 @@
         "rejected_token",
         "not_found",
         "internal"
+      ],
+      "required_by": [
+        "R06",
+        "A33"
       ]
     },
     {
@@ -827,6 +1235,10 @@
         "rejected_token",
         "not_found",
         "internal"
+      ],
+      "required_by": [
+        "R06",
+        "A33"
       ]
     },
     {
@@ -846,6 +1258,13 @@
         "shutting_down",
         "internal",
         "client"
+      ],
+      "required_by": [
+        "R05",
+        "R06",
+        "A12",
+        "docs/decisions/0017-multi-repository-coordination.md#tasks",
+        "docs/decisions/0023-delegated-roles-and-dependency-overrides.md"
       ]
     },
     {
@@ -863,6 +1282,10 @@
         "not_found",
         "internal",
         "client"
+      ],
+      "required_by": [
+        "R09",
+        "A33"
       ]
     },
     {
@@ -878,6 +1301,9 @@
         "aborted",
         "rejected_token",
         "internal"
+      ],
+      "required_by": [
+        "docs/decisions/0010-authenticated-service-shutdown.md"
       ]
     }
   ]

@@ -376,6 +376,24 @@ impl GitInspector {
         Ok(())
     }
 
+    /// The raw bytes of one blob of the repository (by object id), bounded by
+    /// the inspector's output cap, for content the patch could only
+    /// summarize (binary or non-UTF-8 files). No filter, driver or
+    /// conversion runs: `cat-file blob` returns the stored object.
+    pub async fn blob_bytes(&self, worktree: &Path, blob: &str) -> Result<Vec<u8>, GitError> {
+        require_object_id(blob)?;
+        let output = self
+            .bound(worktree, &["cat-file", "blob", blob], &[])
+            .await?;
+        if output.status != Some(0) {
+            return Err(GitError::Command {
+                command: "cat-file".into(),
+                detail: output.stderr,
+            });
+        }
+        Ok(output.stdout)
+    }
+
     /// A bounded patch between exact commits, never an external diff driver or
     /// textconv command selected by repository configuration/attributes. Filters
     /// are disabled as for all managed worktree operations. Oversized output is
@@ -448,6 +466,58 @@ impl GitInspector {
                 detail: format!("worktree HEAD {head} is not {commit}"),
             });
         }
+        Ok(())
+    }
+
+    /// Every commit `head` would publish beyond `base`, oldest first, each
+    /// with its first parent (`None` for a root commit). A pre-push policy
+    /// scans each of them: a secret removed by a later commit is still pushed
+    /// with the earlier one.
+    pub async fn commits_between(
+        &self,
+        worktree: &Path,
+        base: &str,
+        head: &str,
+    ) -> Result<Vec<(String, Option<String>)>, GitError> {
+        require_object_id(base)?;
+        require_object_id(head)?;
+        let range = format!("{base}..{head}");
+        let listed = self
+            .bound_expect(
+                worktree,
+                &["rev-list", "--reverse", "--parents", &range, "--"],
+                &[],
+            )
+            .await?;
+        listed
+            .lines()
+            .filter(|line| !line.trim().is_empty())
+            .map(|line| {
+                let mut ids = line.split_whitespace();
+                let commit = ids.next().unwrap_or_default();
+                let parent = ids.next();
+                if require_object_id(commit).is_err()
+                    || parent.is_some_and(|p| require_object_id(p).is_err())
+                {
+                    return Err(GitError::Command {
+                        command: "rev-list".into(),
+                        detail: "unexpected rev-list output".into(),
+                    });
+                }
+                Ok((commit.to_owned(), parent.map(str::to_owned)))
+            })
+            .collect()
+    }
+
+    /// Make a Luuna-owned worktree (fresh at its base) hold `commit`'s tree as
+    /// uncommitted content: index and files match the tree, HEAD stays where
+    /// it is. A repair of a candidate the pre-push policy refused starts this
+    /// way, so the refused commit is never an ancestor of the repaired one.
+    pub async fn restore_tree(&self, worktree: &Path, commit: &str) -> Result<(), GitError> {
+        require_object_id(commit)?;
+        let spec = format!("{commit}^{{tree}}");
+        self.bound_expect(worktree, &["read-tree", "-u", "--reset", &spec], &[])
+            .await?;
         Ok(())
     }
 

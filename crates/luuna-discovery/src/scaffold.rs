@@ -19,10 +19,11 @@ use thiserror::Error;
 pub const SCAFFOLD_SCHEMA_VERSION: &str = "luuna-scaffold-v1";
 
 /// Every profile scaffolding advertises, in the order clients list them.
-pub const PROFILES: [&str; 9] = [
+pub const PROFILES: [&str; 10] = [
     "node",
     "node-typescript",
     "react",
+    "nextjs",
     "python",
     "go",
     "rust",
@@ -104,6 +105,11 @@ pub struct ScaffoldProposal {
     /// Probe results for the tools this profile's baseline needs.
     pub required_tools: Vec<ToolProbe>,
     pub questions: Vec<DiscoveryQuestion>,
+    /// Known limits of the template the developer accepts with the hash, such
+    /// as a recipe the profile cannot establish offline. Absent when empty, so
+    /// proposals without notes keep their earlier hashes.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub notes: Vec<String>,
     /// `luuna-json-v1` hash of the proposal with this field empty.
     pub hash: String,
 }
@@ -219,12 +225,14 @@ pub fn propose(
         baseline: Vec::new(),
         required_tools: Vec::new(),
         questions: Vec::new(),
+        notes: Vec::new(),
         hash: String::new(),
     };
     match profile {
         "node" => node(&mut proposal, host, false),
         "node-typescript" => node(&mut proposal, host, true),
         "react" => react(&mut proposal, host),
+        "nextjs" => nextjs(&mut proposal, host),
         "python" => python(&mut proposal, host),
         "go" => go(&mut proposal, host),
         "rust" => rust(&mut proposal, host),
@@ -298,6 +306,11 @@ fn node(proposal: &mut ScaffoldProposal, host: &HostCapabilities, typescript: bo
             "typescript-typecheck",
             "the template relies on Node's built-in type stripping (Node 22.18+), so no compiler is installed; to add a `typecheck` recipe (`tsc --noEmit`), run `npm install --save-dev typescript` (network) and add the script to package.json, then run discovery again",
         ));
+        // ADR 0019: the TypeScript template relies on Node's built-in type
+        // stripping and needs no network; the price is that nothing checks types.
+        proposal.notes.push(
+            "typecheck gap: the TypeScript template relies on Node's built-in type stripping, so the baseline runs the tests without checking types; no `typecheck` recipe exists until `typescript` is installed and a `typecheck` script is added".into(),
+        );
     } else {
         proposal.files.push(file(
             "src/index.mjs",
@@ -408,6 +421,119 @@ fn react(proposal: &mut ScaffoldProposal, host: &HostCapabilities) {
         "react-dependencies",
         "the React template cannot run its tests without installed packages; confirm the declared `npm install` network step, or install the dependencies yourself and run a baseline afterwards",
     ));
+}
+
+/// Next.js (App Router, TypeScript) from a written-out minimal template rather
+/// than `create-next-app`, so the proposal is complete and offline. Like React
+/// it declares `npm install` as its network step: `next`, `react` and `vitest`
+/// are not installed, so the baseline is blocked until the developer confirms
+/// that step, and the scaffold says so instead of reporting a pass.
+fn nextjs(proposal: &mut ScaffoldProposal, host: &HostCapabilities) {
+    let name = proposal.name.clone();
+    let package = serde_json::json!({
+        "name": name,
+        "version": "0.1.0",
+        "private": true,
+        "scripts": {
+            "dev": "next dev",
+            "build": "next build",
+            "start": "next start",
+            "test": "vitest run",
+            "typecheck": "tsc --noEmit",
+        },
+        "dependencies": { "next": "^15.3.0", "react": "^19.1.0", "react-dom": "^19.1.0" },
+        "devDependencies": {
+            "@types/node": "^22.15.0",
+            "@types/react": "^19.1.0",
+            "@types/react-dom": "^19.1.0",
+            "typescript": "^5.8.0",
+            "vitest": "^3.1.0",
+        },
+    });
+    proposal.files.push(file(
+        "package.json",
+        format!(
+            "{}\n",
+            serde_json::to_string_pretty(&package).expect("JSON")
+        ),
+    ));
+    proposal.files.push(file(
+        ".gitignore",
+        "node_modules/\n.next/\nout/\nnext-env.d.ts\n",
+    ));
+    proposal.files.push(file(
+        "next.config.mjs",
+        "/** @type {import('next').NextConfig} */\nconst nextConfig = {};\n\nexport default nextConfig;\n",
+    ));
+    proposal.files.push(file(
+        "tsconfig.json",
+        "{\n  \"compilerOptions\": {\n    \"target\": \"es2022\",\n    \"lib\": [\"dom\", \"dom.iterable\", \"esnext\"],\n    \"module\": \"esnext\",\n    \"moduleResolution\": \"bundler\",\n    \"jsx\": \"preserve\",\n    \"strict\": true,\n    \"noEmit\": true,\n    \"esModuleInterop\": true,\n    \"isolatedModules\": true,\n    \"resolveJsonModule\": true,\n    \"allowJs\": true,\n    \"incremental\": true,\n    \"skipLibCheck\": true,\n    \"plugins\": [{ \"name\": \"next\" }]\n  },\n  \"include\": [\"next-env.d.ts\", \"**/*.ts\", \"**/*.tsx\"],\n  \"exclude\": [\"node_modules\"]\n}\n",
+    ));
+    proposal.files.push(file(
+        "vitest.config.mts",
+        "import { defineConfig } from 'vitest/config';\n\nexport default defineConfig({\n  esbuild: { jsx: 'automatic' },\n  test: { environment: 'node', include: ['tests/**/*.test.tsx'] },\n});\n",
+    ));
+    proposal.files.push(file(
+        "app/layout.tsx",
+        "import type { ReactNode } from 'react';\n\nexport const metadata = { title: 'App' };\n\nexport default function RootLayout({ children }: { children: ReactNode }) {\n  return (\n    <html lang=\"en\">\n      <body>{children}</body>\n    </html>\n  );\n}\n",
+    ));
+    proposal.files.push(file(
+        "app/page.tsx",
+        "export function Greeting({ name = 'Luuna' }: { name?: string }) {\n  return <h1>Hello, {name}!</h1>;\n}\n\nexport default function Home() {\n  return (\n    <main>\n      <Greeting />\n    </main>\n  );\n}\n",
+    ));
+    proposal.files.push(file(
+        "tests/page.test.tsx",
+        "import { test, expect } from 'vitest';\nimport { renderToString } from 'react-dom/server';\nimport Home, { Greeting } from '../app/page';\n\ntest('the home page greets', () => {\n  expect(renderToString(<Home />)).toContain('Hello, Luuna!');\n  expect(renderToString(<Greeting name=\"Next\" />)).toContain('Hello, Next!');\n});\n",
+    ));
+    proposal.files.push(file(
+        "README.md",
+        readme(&name, "nextjs", "npm test (vitest run)"),
+    ));
+    proposal.preparation.push(ScaffoldStep {
+        id: "npm-install".into(),
+        executable: "npm".into(),
+        args: vec!["install".into(), "--no-audit".into(), "--no-fund".into()],
+        capabilities: vec!["node".into(), "npm".into(), "network".into()],
+        network: true,
+        description:
+            "install next, react, react-dom, typescript, the React type packages and vitest from the npm registry"
+                .into(),
+    });
+    proposal.network_steps.push(
+        "`npm install` downloads Next.js, React, TypeScript and Vitest from the npm registry; without it the baseline `npm test` is blocked (vitest is not installed) and `next build` and `tsc --noEmit` cannot run either".into(),
+    );
+    proposal.baseline.push(check(
+        "npm-test",
+        "npm",
+        &["test"],
+        true,
+        900,
+        &["node", "npm", "test"],
+    ));
+    proposal.baseline.push(check(
+        "npm-typecheck",
+        "npm",
+        &["run", "typecheck"],
+        false,
+        900,
+        &["node", "npm", "typecheck"],
+    ));
+    proposal.baseline.push(check(
+        "npm-build",
+        "npm",
+        &["run", "build"],
+        false,
+        900,
+        &["node", "npm", "build"],
+    ));
+    proposal.required_tools = vec![probe_of(host, "node"), probe_of(host, "npm")];
+    proposal.questions.push(question(
+        "nextjs-dependencies",
+        "the Next.js template cannot run its tests, typecheck or build without installed packages; confirm the declared `npm install` network step, or install the dependencies yourself and run a baseline afterwards",
+    ));
+    proposal.notes.push(
+        "the template is a written-out minimal App Router project, not `create-next-app`; `next build` writes `.next/` and `next-env.d.ts`, which `.gitignore` excludes so the baseline leaves the checkout clean".into(),
+    );
 }
 
 fn python(proposal: &mut ScaffoldProposal, host: &HostCapabilities) {
@@ -747,13 +873,48 @@ mod tests {
             assert!(proposal.generator.is_none());
             assert!(!proposal.files.is_empty());
         }
-        let react = propose("react", "demo", &parent(), &capable).unwrap();
-        assert_eq!(react.status, ScaffoldStatus::Ready);
-        assert!(react
-            .preparation
+        for profile in ["react", "nextjs"] {
+            let proposal = propose(profile, "demo", &parent(), &capable).unwrap();
+            assert_eq!(proposal.status, ScaffoldStatus::Ready, "{profile}");
+            assert!(proposal
+                .preparation
+                .iter()
+                .any(|s| s.network && s.id == "npm-install"));
+            assert!(!proposal.network_steps.is_empty());
+            assert!(proposal.generator.is_none());
+            assert_eq!(proposal.baseline_check().unwrap().id, "npm-test");
+        }
+        let nextjs = propose("nextjs", "demo", &parent(), &capable).unwrap();
+        for path in [
+            "package.json",
+            "next.config.mjs",
+            "tsconfig.json",
+            "app/page.tsx",
+            "app/layout.tsx",
+            "tests/page.test.tsx",
+        ] {
+            assert!(nextjs.files.iter().any(|f| f.path == path), "{path}");
+        }
+        assert!(nextjs
+            .baseline
             .iter()
-            .any(|s| s.network && s.id == "npm-install"));
-        assert!(!react.network_steps.is_empty());
+            .any(|c| c.id == "npm-typecheck" && !c.required));
+        assert!(nextjs.notes.iter().any(|n| n.contains("create-next-app")));
+        assert_eq!(
+            propose("nextjs", "demo", &parent(), &host(&[]))
+                .unwrap()
+                .status,
+            ScaffoldStatus::Blocked
+        );
+        // ADR 0019's typecheck gap is stated on the proposal the developer hashes.
+        let typescript = propose("node-typescript", "demo", &parent(), &capable).unwrap();
+        assert!(typescript
+            .notes
+            .iter()
+            .any(|n| n.contains("type stripping") && n.contains("typecheck")));
+        let plain = propose("node", "demo", &parent(), &capable).unwrap();
+        assert!(plain.notes.is_empty());
+        assert!(!serde_json::to_string(&plain).unwrap().contains("\"notes\""));
         let none = host(&[]);
         let node = propose("node", "demo", &parent(), &none).unwrap();
         assert_eq!(node.status, ScaffoldStatus::Blocked);

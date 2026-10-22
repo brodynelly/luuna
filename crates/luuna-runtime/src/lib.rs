@@ -39,6 +39,9 @@ use tower_http::cors::CorsLayer;
 /// How long shutdown waits for admitted mutation requests before closing
 /// admission anyway, and then for signalled owned work to settle.
 const ADMISSION_DRAIN: Duration = Duration::from_secs(5);
+/// An export document carries up to 1000 tickets of bounded text; the import
+/// route alone accepts it, every other route keeps the 256 KiB limit.
+const IMPORT_BODY_LIMIT: usize = 16 * 1024 * 1024;
 const SETTLE_DEADLINE: Duration = Duration::from_secs(5);
 
 #[derive(Clone)]
@@ -174,6 +177,9 @@ pub struct AppState {
     executor: Arc<Executor>,
     components: Option<Arc<luuna_components::Components>>,
     component_locks: Arc<tokio::sync::Mutex<()>>,
+    /// The port this runtime listens on, once the service binary bound it;
+    /// `GET /api/v1/doctor` reports it. `None` for an in-process router.
+    listen_port: Option<u16>,
     /// Set by explicit shutdown before owned work is signalled to stop.
     shutting_down: Arc<std::sync::atomic::AtomicBool>,
     shutdown_requested: Arc<Notify>,
@@ -220,9 +226,11 @@ fn restrict_to_owner(directory: &std::path::Path) -> Result<(), Box<dyn std::err
 mod baselines;
 mod candidates;
 mod dispatch;
+pub mod doctor;
 mod graph;
 mod integrations;
 mod missions;
+mod policy;
 mod projects;
 mod publication;
 mod scaffold;
@@ -304,6 +312,7 @@ impl AppState {
             executor: Arc::new(Executor::default()),
             components: discovered_components(),
             component_locks: Arc::new(tokio::sync::Mutex::new(())),
+            listen_port: None,
             shutting_down: Arc::new(std::sync::atomic::AtomicBool::new(false)),
             shutdown_requested: Arc::new(Notify::new()),
             admission: Arc::new(RwLock::new(())),
@@ -320,9 +329,23 @@ impl AppState {
         self
     }
 
+    /// The address the service binary bound, so the doctor route can say
+    /// that this runtime is the one listening on it.
+    pub fn with_listen_port(mut self, port: u16) -> Self {
+        self.listen_port = Some(port);
+        self
+    }
+
     /// Override the component toolchain in isolated adapter tests.
     pub fn with_components(mut self, components: luuna_components::Components) -> Self {
         self.components = Some(Arc::new(components));
+        self
+    }
+
+    /// A runtime without the component toolchain, for synthetic tests whose
+    /// outcome must not depend on whether the pinned CLIs are populated.
+    pub fn without_components(mut self) -> Self {
+        self.components = None;
         self
     }
 
@@ -623,7 +646,19 @@ pub fn router(state: AppState) -> Router {
         )
         .route(
             "/api/v1/projects/{id}/memory/{memory_id}",
-            axum::routing::delete(integrations::delete_memory),
+            axum::routing::delete(integrations::delete_memory).put(integrations::update_memory),
+        )
+        .route(
+            "/api/v1/projects/{id}/memory/retention",
+            get(integrations::memory_retention).put(integrations::set_memory_retention),
+        )
+        .route(
+            "/api/v1/projects/{id}/memory/retention/apply",
+            post(integrations::apply_memory_retention),
+        )
+        .route(
+            "/api/v1/memory/user/export",
+            get(integrations::export_user_memory),
         )
         .route(
             "/api/v1/projects/{id}/memory/{memory_id}/promote",
@@ -647,6 +682,7 @@ pub fn router(state: AppState) -> Router {
             post(writer::reconcile_ticket),
         )
         .route("/api/v1/shutdown", post(request_shutdown))
+        .route("/api/v1/doctor", get(doctor::doctor))
         .route("/api/v1/runs", get(list_runs).post(start_run))
         .route("/api/v1/runs/{id}", get(get_run))
         .route("/api/v1/runs/{id}/events", get(events))
@@ -663,6 +699,10 @@ pub fn router(state: AppState) -> Router {
             "/api/v1/runs/{id}/publication/reconcile",
             post(publication::reconcile),
         )
+        .route(
+            "/api/v1/runs/{id}/publication/repair",
+            post(publication::repair),
+        )
         .route("/api/v1/runs/{id}/worktrees", get(writer::list_worktrees))
         .route("/api/v1/runs/{id}/attempts", get(writer::list_attempts))
         .route("/api/v1/runs/{id}/tasks", get(graph::list_tasks))
@@ -670,7 +710,10 @@ pub fn router(state: AppState) -> Router {
             "/api/v1/projects/{id}/tickets",
             get(writer::list_tickets).post(writer::create_ticket),
         )
-        .route("/api/v1/tickets/{id}", get(writer::get_ticket))
+        .route(
+            "/api/v1/tickets/{id}",
+            get(writer::get_ticket).put(writer::update_ticket),
+        )
         .route(
             "/api/v1/tickets/{id}/plans",
             get(writer::list_plans).post(writer::create_plan),
@@ -682,6 +725,11 @@ pub fn router(state: AppState) -> Router {
             get(projects::list_projects).post(projects::register_project),
         )
         .route("/api/v1/projects/{id}", get(projects::get_project))
+        .route(
+            "/api/v1/projects/import",
+            post(projects::import_project)
+                .layer(axum::extract::DefaultBodyLimit::max(IMPORT_BODY_LIMIT)),
+        )
         .route(
             "/api/v1/projects/scaffold/propose",
             post(scaffold::propose_scaffold),
@@ -898,6 +946,48 @@ pub struct ApiError(pub StatusCode, pub String);
 impl IntoResponse for ApiError {
     fn into_response(self) -> Response {
         (self.0, Json(json!({"error":self.1}))).into_response()
+    }
+}
+
+impl ApiError {
+    /// A refusal whose body carries a structured field beside `error`, such
+    /// as the prerequisite offer of a baseline gate refusal (ADR 0022).
+    pub fn with_detail(self, field: &'static str, value: Value) -> ApiDetailError {
+        ApiDetailError {
+            status: self.0,
+            error: self.1,
+            field,
+            value,
+        }
+    }
+}
+
+/// `{"error": ..., "<field>": ...}` with the refusal's status.
+pub struct ApiDetailError {
+    status: StatusCode,
+    error: String,
+    field: &'static str,
+    value: Value,
+}
+
+impl From<ApiError> for ApiDetailError {
+    fn from(error: ApiError) -> Self {
+        ApiDetailError {
+            status: error.0,
+            error: error.1,
+            field: "detail",
+            value: Value::Null,
+        }
+    }
+}
+
+impl IntoResponse for ApiDetailError {
+    fn into_response(self) -> Response {
+        let mut body = json!({"error": self.error});
+        if !self.value.is_null() {
+            body[self.field] = self.value;
+        }
+        (self.status, Json(body)).into_response()
     }
 }
 /// A storage or process failure. The cause goes to the runtime log with the
@@ -1148,15 +1238,14 @@ async fn events(
 /// the run can never change state again and no owned worker can append to
 /// it. A failed or interrupted workflow is settled but resumable (repair,
 /// re-validation and cancellation continue on the same run id, including an
-/// automatic repair inside an active validation), so its followers stay
-/// attached; demo and baseline runs never leave a terminal state.
+/// automatic repair inside an active validation), and a reviewed workflow
+/// still publishes, reconciles and can have its candidate invalidated after
+/// the review (drift found at publication, a CI failure sent to repair), so
+/// their followers stay attached; demo and baseline runs never leave a
+/// terminal state.
 fn stream_complete(run: &RunRecord, owned: bool) -> bool {
     if run.metadata.get("kind").and_then(Value::as_str) == Some("workflow") {
-        !owned
-            && matches!(
-                run.state,
-                RunState::Completed | RunState::Cancelled | RunState::Reviewed
-            )
+        !owned && matches!(run.state, RunState::Completed | RunState::Cancelled)
     } else {
         run.state.is_terminal()
     }

@@ -28,6 +28,28 @@ export interface Health {
   build_flags?: string;
 }
 
+/** One item of the runtime's doctor report: `ok`, `warning`, or `missing` (which fails a required item). */
+export type DoctorStatus = "ok" | "warning" | "missing";
+
+export interface DoctorItem {
+  name: string;
+  /** Git, Pi and a writable data directory; a missing required item fails the report. */
+  required: boolean;
+  status: DoctorStatus;
+  /** One line; credential items name the variable and say whether it is set, never its value. */
+  detail: string;
+}
+
+/**
+ * The host diagnostic `luuna-runtime doctor` prints, served by the running runtime for its own
+ * configuration (`GET /api/v1/doctor`, ADR 0027 point 4): the clients' settings surface. Nothing
+ * here is editable; credentials are configured in the runtime's environment.
+ */
+export interface DoctorReport {
+  ok: boolean;
+  items: DoctorItem[];
+}
+
 export interface RunRequest {
   prompt: string;
   provider?: string;
@@ -185,6 +207,8 @@ export interface ProjectView {
   repositories: RepositoryRegistration[];
   manifest: ManifestRecord | null;
   discovery: Discovery | null;
+  /** One offer per registered repository whose latest baseline shows no usable testing setup (absent from runtimes that predate ADR 0022). */
+  prerequisites?: TestingPrerequisite[];
 }
 
 export type CheckStatus = "passed" | "failed" | "blocked" | "cancelled" | "interrupted";
@@ -228,6 +252,39 @@ export interface BaselineEvidence {
   started_at: string;
   finished_at?: string;
   reason?: string;
+  /** A blocked baseline that shows no usable testing setup carries the runtime's offer (ADR 0022). */
+  prerequisite?: TestingPrerequisite;
+}
+
+/**
+ * The runtime's deterministic offer of the testing-setup prerequisite (ADR 0022): recorded on a
+ * blocked baseline whose repository has no required check or whose checks executed no test. It is
+ * returned on the baseline list, on the project view (`prerequisites`) and on the 422 that refuses
+ * `implement` for a feature plan of that repository (`ApiError.prerequisite`).
+ */
+export interface TestingPrerequisite {
+  kind: "testing_setup";
+  project_id: string;
+  repository_id: string;
+  baseline_id: string;
+  /** Why the baseline shows no usable testing setup. */
+  reason: string;
+  /** The route and request that starts the prerequisite workflow, in the runtime's words. */
+  next: string;
+}
+
+/**
+ * The handoff `GET /runs/{id}/candidate` carries for a testing-setup workflow: the recipes the
+ * candidate must pass, whether it is reviewed with a passed verdict, and the developer's next step
+ * (merge, confirm the recipes in the manifest, run a baseline). The runtime never confirms or merges.
+ */
+export interface SetupHandoff {
+  kind: "testing_setup";
+  repository_id: string;
+  checks: ManifestCheck[];
+  candidate_commit: string | null;
+  reviewed: boolean;
+  next: string;
 }
 
 export interface StartBaselineRequest {
@@ -242,6 +299,9 @@ export interface TicketUsage {
   workflows: number; attempts: number; elapsed_seconds: number; cost_usd_micros: number; cost_unreported: boolean; repairs: number;
 }
 
+/** `feature` (the default, omitted from serialization) or the testing-setup prerequisite of ADR 0022. */
+export type TicketPurpose = "feature" | "testing_setup";
+
 export interface Ticket {
   usage?: TicketUsage;
   schema_version: string;
@@ -253,6 +313,8 @@ export interface Ticket {
   intent: string;
   acceptance_criteria: string[];
   repository_ids: string[];
+  /** Absent for a feature ticket (the runtime omits the default so earlier records hash unchanged). */
+  purpose?: TicketPurpose;
   created_at: string;
   updated_at: string;
 }
@@ -272,6 +334,17 @@ export interface CreateTicketRequest {
   intent: string;
   acceptance_criteria: string[];
   repository_ids: string[];
+  /** `testing_setup` for the prerequisite ticket the runtime offers; omitted for a feature. */
+  purpose?: TicketPurpose;
+}
+
+/** `PUT /tickets/{id}`: the named fields replace the current ones; the revision must match what the client read. */
+export interface UpdateTicketRequest {
+  expected_revision: number;
+  title?: string;
+  intent?: string;
+  acceptance_criteria?: string[];
+  repository_ids?: string[];
 }
 
 export interface ComponentStatus {
@@ -309,19 +382,79 @@ export interface PromotedMemory {
   from: { id: string; scope: MemoryScope };
 }
 
+/** Corrects a record's content at its displayed hash; the record keeps its scope and gains provenance naming the correction. */
+export interface UpdateMemoryRequest {
+  idempotency_key: string;
+  expected_hash: string;
+  content: string;
+}
+
+/** The personal export: user-scope memory with provenance, and nothing of any project. */
+export interface UserMemoryExport {
+  schema_version: string;
+  kind: "luuna-user-memory-export";
+  exported_at: string;
+  scope: "user";
+  memory: MemoryRecord[];
+  omitted: string[];
+}
+
+/** Longest age in days a record of each scope may reach before `applyMemoryRetention` deletes it; null keeps records. User memory is never subject to a project policy. */
+export interface MemoryRetentionPolicy {
+  process_max_age_days: number | null;
+  project_max_age_days: number | null;
+}
+
+export interface ApplyMemoryRetentionRequest {
+  idempotency_key: string;
+}
+
+export interface MemoryRetentionResult {
+  applied_at: string;
+  policy: MemoryRetentionPolicy;
+  deleted: { id: string; scope: MemoryScope; created_at: string; hash: string }[];
+}
+
 export interface ProjectExport {
   schema_version: string;
   kind: "luuna-project-export";
   exported_at: string;
   project: { id: string; name: string; manifest_revision: number; manifest_hash: string | null };
   manifest: ProjectManifest | null;
+  /** Machine-independent identity of each registered repository, keyed by repository id. */
+  repository_identities: Record<string, { remote: string | null; push_remote?: string | null; root_commits: string[]; shallow: boolean }>;
   tickets: Ticket[];
   memory: MemoryRecord[];
   prompts: RenderedPrompt[];
   omitted: string[];
+  /** luuna-json-v1 hash of every other field; an import recomputes and refuses a mismatch. */
+  export_hash: string;
 }
 
-export type ScaffoldProfile = "node" | "node-typescript" | "react" | "python" | "go" | "rust" | "flutter" | "android" | "ios";
+/** An export plus this machine's checkout of each exported repository. */
+export interface ProjectImportRequest {
+  export: ProjectExport;
+  repositories: { id: string; path: string }[];
+  idempotency_key: string;
+}
+
+export interface ProjectImportResult {
+  project: ProjectView;
+  export_hash: string;
+  exported_at: string;
+  manifest_hash: string;
+  components_enabled: boolean;
+  counts: { tickets: number; memory: number; prompts: number };
+  mapping: {
+    manifest: { exported_revision: number; imported_revision: number };
+    tickets: { id: string; exported_revision: number; imported_revision: number }[];
+    memory: { exported_id: string; imported_id: string; scope: MemoryScope; exported_hash: string; imported_hash: string }[];
+    prompts: { name: string; exported_version: number; imported_version: number; exported_hash: string; imported_hash: string; sections_flattened: boolean }[];
+  };
+  replayed: boolean;
+}
+
+export type ScaffoldProfile = "node" | "node-typescript" | "react" | "nextjs" | "python" | "go" | "rust" | "flutter" | "android" | "ios";
 
 export interface ScaffoldProposalRequest {
   profile: ScaffoldProfile;
@@ -431,15 +564,27 @@ export interface ComponentContextSnapshot {
 
 export type Operation = "read" | "write" | "shell" | "network" | "publish";
 
+export type TaskRole = "implementer" | "repository_lead" | "project_orchestrator";
+
+/** A justified departure from the confirmed repository relationships (ADR 0023). */
+export interface DependencyOverride {
+  consumer: string;
+  producer: string;
+  action: "waive" | "add";
+  justification: string;
+}
+
 export interface PlanTask {
   id: string;
   repository_id: string;
-  role: string;
+  role: TaskRole | string;
   depends_on: string[];
   paths: string[];
   operations: Operation[];
   acceptance_criteria: string[];
   execution_profile: string;
+  /** The advisory task of an earlier plan revision this task was copied from. */
+  derived_from_task?: string;
 }
 
 export interface CheckRecipe {
@@ -478,6 +623,54 @@ export interface PlanRevision {
   budgets: Budgets;
   hash: string;
   component_context?: ComponentContextSnapshot;
+  /** Copied from the ticket when the plan is made; part of the sealed hash (ADR 0022). Absent means `feature`. */
+  purpose?: TicketPurpose;
+  /** Justified departures from the confirmed relationships, hashed with the plan (ADR 0023). */
+  dependency_overrides?: DependencyOverride[];
+}
+
+/**
+ * A check recipe a testing-setup plan proposes as the repository's baseline (ADR 0022): the
+ * manifest-check shape, always required. `cwd` defaults to the repository root, `args` and
+ * `capabilities` to none; `timeout_seconds` must be given.
+ */
+export interface SetupCheckRequest {
+  id: string;
+  executable: string;
+  args?: string[];
+  cwd?: string;
+  timeout_seconds: number;
+  capabilities?: string[];
+  /** Accepted for symmetry with the manifest check it becomes; `false` is refused by the runtime. */
+  required?: true;
+}
+
+/** The structured result of an advisory task (repository lead or project orchestrator), never a commit (ADR 0023). */
+export interface AdvisoryResult {
+  findings: string[];
+  proposed_tasks: ProposedTask[];
+  risks: string[];
+}
+
+/** A task an advisory result proposes; it becomes real only through a plan revision the developer creates and approves. */
+export interface ProposedTask {
+  id: string;
+  repository_id: string;
+  role?: TaskRole | string;
+  depends_on?: string[];
+  paths?: string[];
+  acceptance_criteria?: string[];
+  rationale?: string;
+}
+
+/** Who assigned a task: the developer's approval of the exact plan revision (R06, ADR 0023). */
+export interface AssignmentTrace {
+  approved_by: string;
+  approval_id: string;
+  approved_at: string;
+  plan_id: string;
+  plan_revision: number;
+  plan_hash: string;
 }
 
 export interface PlanBudgetRequest {
@@ -497,6 +690,10 @@ export interface PlanTaskRequest {
   acceptance_criteria?: string[];
   /** Task ids this task waits for; its writer and checks receive the producers' candidate worktrees and commits. */
   depends_on?: string[];
+  /** Defaults to `implementer`; an advisory role reads only and records an advisory result. */
+  role?: TaskRole;
+  /** The advisory task of an earlier plan revision whose proposal this task copies. */
+  derived_from_task?: string;
 }
 
 export interface CreatePlanRequest {
@@ -504,10 +701,18 @@ export interface CreatePlanRequest {
   task?: PlanTaskRequest;
   tasks?: PlanTaskRequest[];
   permissions?: Record<string, string[]>;
+  /** Justified departures from the confirmed repository relationships (ADR 0023). */
+  dependency_overrides?: DependencyOverride[];
   budgets?: PlanBudgetRequest;
   component_context?: ComponentContext;
   /** Repeating a delivery with the same key and request returns the plan it created. */
   idempotency_key?: string;
+  /**
+   * Testing-setup plans only (ADR 0022): the recipes the setup candidate must pass and that the
+   * developer then confirms as the repository's required checks. Absent, the confirmed manifest's
+   * required recipes are used; refused on a feature plan.
+   */
+  checks?: SetupCheckRequest[];
 }
 
 /** The runtime's defaults when a plan names no budgets. */
@@ -533,6 +738,141 @@ export function planBudgetProblem(budgets: PlanBudgetRequest): string | null {
 /** Idempotency keys are 1 to 128 visible ASCII characters. */
 export function validIdempotencyKey(key: string): boolean {
   return /^[\x21-\x7e]{1,128}$/.test(key);
+}
+
+/** One task of a multi-repository plan as a client collects it: `id` defaults to the repository id. */
+export interface PlanTaskDraft {
+  id?: string;
+  repository_id: string;
+  paths: string[];
+  operations: Operation[];
+  acceptance_criteria?: string[];
+  depends_on?: string[];
+  /** `implementer` (the default, omitted so single-task requests keep their pre-M4 identity) or an advisory role (ADR 0023). */
+  role?: TaskRole;
+  /** The advisory task of an earlier plan revision whose proposal this task copies (R06). */
+  derived_from_task?: string;
+}
+
+export const TASK_ROLES: readonly TaskRole[] = ["implementer", "repository_lead", "project_orchestrator"];
+
+/** An advisory role reads only: its session has read-only tools and records an advisory result, never a commit. */
+export function advisoryRole(role: TaskRole | string | undefined): boolean {
+  return role === "repository_lead" || role === "project_orchestrator";
+}
+
+/** Everything a plan request may carry beside its tasks and budgets. */
+export interface PlanRequestOptions {
+  componentContext?: ComponentContext;
+  permissions?: Record<string, string[]>;
+  /** Justified departures from the confirmed relationships; each names two tasks of this plan (ADR 0023). */
+  dependencyOverrides?: DependencyOverride[];
+  /** A testing-setup plan's proposed baseline recipes (ADR 0022); never sent empty. */
+  checks?: SetupCheckRequest[];
+}
+
+/**
+ * The plan request both clients send for the same tasks (ADR 0017): one `task` for a single-task
+ * plan (its pre-M4 shape, so the plan hashes exactly as before), `tasks` with `depends_on` for a
+ * task graph, and `budgets.max_workers` only when it is not the default. Empty paths default to
+ * `src`; every task must name a distinct repository; `depends_on` must name other tasks of this
+ * plan. A task's `role` is sent only when it is not `implementer` and `derived_from_task` only when
+ * given (ADR 0023), so earlier requests keep their idempotency identity; an advisory task may only
+ * read. Dependency overrides must name two distinct tasks of the plan with a justification;
+ * testing-setup `checks` need an id, an executable and a timeout and are always required. The
+ * runtime validates everything again; this only refuses what no runtime would accept.
+ */
+export function planRequestForTasks(drafts: PlanTaskDraft[], budgets: PlanBudgetRequest = {}, options: PlanRequestOptions = {}): Omit<CreatePlanRequest, "idempotency_key"> {
+  if (drafts.length === 0) throw new Error("A plan needs at least one task.");
+  const tasks: PlanTaskRequest[] = drafts.map((draft) => {
+    const id = (draft.id ?? draft.repository_id).trim();
+    const repository = draft.repository_id.trim();
+    if (!repository) throw new Error("Every task names a registered repository.");
+    const paths = draft.paths.map((path) => path.trim()).filter(Boolean);
+    const depends = (draft.depends_on ?? []).map((task) => task.trim()).filter(Boolean);
+    const criteria = (draft.acceptance_criteria ?? []).map((line) => line.trim()).filter(Boolean);
+    const role = draft.role ?? "implementer";
+    if (!TASK_ROLES.includes(role)) throw new Error(`Task ${id} has an unknown role ${role}; a role is implementer, repository_lead or project_orchestrator.`);
+    if (advisoryRole(role) && (draft.operations.length !== 1 || draft.operations[0] !== "read")) throw new Error(`Task ${id} has the advisory role ${role}, which reads only: its operations must be exactly read.`);
+    // A single task carries no id and the runtime names it `implement`.
+    const effective = drafts.length > 1 ? id : "implement";
+    const derived = draft.derived_from_task?.trim();
+    if (derived !== undefined && derived === effective) throw new Error(`Task ${effective} cannot derive from itself.`);
+    return {
+      ...(drafts.length > 1 && { id }),
+      repository_id: repository,
+      paths: paths.length ? paths : ["src"],
+      operations: draft.operations,
+      ...(criteria.length && { acceptance_criteria: criteria }),
+      ...(depends.length && { depends_on: depends }),
+      ...(role !== "implementer" && { role }),
+      ...(derived && { derived_from_task: derived }),
+    };
+  });
+  const ids = tasks.map((task) => task.id ?? "implement");
+  const repositories = tasks.map((task) => task.repository_id);
+  if (new Set(repositories).size !== repositories.length) throw new Error("Each task of a plan targets a distinct repository; a dependent change inside one repository is one task.");
+  if (new Set(ids).size !== ids.length) throw new Error("Task ids must be unique.");
+  for (const task of tasks) for (const dependency of task.depends_on ?? []) {
+    if (dependency === task.id) throw new Error(`Task ${task.id} cannot depend on itself.`);
+    if (!ids.includes(dependency)) throw new Error(`Task ${task.id} depends on ${dependency}, which is not a task of this plan.`);
+  }
+  for (const task of tasks) if (task.derived_from_task && ids.includes(task.derived_from_task)) throw new Error(`Task ${task.id ?? ids[0]} derives from ${task.derived_from_task}, a task of this same plan; it must name an advisory task of an earlier revision.`);
+  const overrides = (options.dependencyOverrides ?? []).map((override) => ({ consumer: override.consumer.trim(), producer: override.producer.trim(), action: override.action, justification: override.justification.trim() }));
+  const pairs = new Set<string>();
+  for (const override of overrides) {
+    if (override.action !== "waive" && override.action !== "add") throw new Error(`A dependency override's action is waive or add, not ${String(override.action)}.`);
+    for (const name of [override.consumer, override.producer]) if (!ids.includes(name)) throw new Error(`Dependency override names ${name || "an empty task id"}, which is not a task of this plan.`);
+    if (override.consumer === override.producer) throw new Error(`Dependency override names ${override.consumer} as both consumer and producer.`);
+    if (advisoryRole(tasks[ids.indexOf(override.consumer)].role) || advisoryRole(tasks[ids.indexOf(override.producer)].role)) throw new Error(`Dependency override ${override.consumer}/${override.producer} names an advisory task; a dependency on an advisory task needs no override.`);
+    if (!override.justification) throw new Error(`Dependency override ${override.consumer}/${override.producer} needs a justification.`);
+    const pair = `${override.consumer}\u0000${override.producer}`;
+    if (pairs.has(pair)) throw new Error(`Dependency override ${override.consumer}/${override.producer} is repeated.`);
+    pairs.add(pair);
+  }
+  const checks = (options.checks ?? []).map((check) => {
+    const id = check.id.trim();
+    const executable = check.executable.trim();
+    if (!id || !executable) throw new Error("Every testing-setup check needs an id and an executable.");
+    if ((check.required as boolean | undefined) === false) throw new Error(`Check ${id} is optional; a testing-setup plan proposes required checks only.`);
+    if (!Number.isSafeInteger(check.timeout_seconds) || check.timeout_seconds < 1) throw new Error(`Check ${id} needs a timeout in seconds of at least 1.`);
+    const args = (check.args ?? []).map((arg) => arg.trim()).filter(Boolean);
+    const capabilities = (check.capabilities ?? []).map((capability) => capability.trim()).filter(Boolean);
+    const cwd = check.cwd?.trim();
+    return { id, executable, args, ...(cwd && cwd !== "." && { cwd }), timeout_seconds: check.timeout_seconds, capabilities, required: true as const };
+  });
+  if (new Set(checks.map((check) => check.id)).size !== checks.length) throw new Error("Testing-setup check ids must be unique.");
+  if (checks.length && tasks.length !== 1) throw new Error("A testing-setup plan is exactly one task on the repository whose baseline it establishes.");
+  const { max_workers, ...rest } = budgets;
+  const named: PlanBudgetRequest = { ...rest, ...(max_workers !== undefined && max_workers !== DEFAULT_PLAN_BUDGETS.max_workers && { max_workers }) };
+  if (named.max_workers !== undefined && named.max_workers > tasks.length) throw new Error(`budgets.max_workers must be between 1 and ${tasks.length} for ${tasks.length} task(s).`);
+  const problem = planBudgetProblem(named);
+  if (problem) throw new Error(problem);
+  return {
+    ...(tasks.length === 1 ? { task: tasks[0] } : { tasks }),
+    ...(overrides.length && { dependency_overrides: overrides }),
+    ...(Object.keys(named).length && { budgets: named }),
+    ...(options.permissions && { permissions: options.permissions }),
+    ...(options.componentContext && (options.componentContext.memory_ids.length > 0 || options.componentContext.prompt) ? { component_context: options.componentContext } : {}),
+    ...(checks.length && { checks }),
+  };
+}
+
+/**
+ * The override the runtime's relationship refusal quotes (ADR 0023 point 5), or null when the
+ * reason is not that refusal: the developer then records it with a real justification.
+ */
+export function overrideFromRefusal(reason: string): DependencyOverride | null {
+  const match = /dependency_overrides\s*(\[\{.*?\}\])/.exec(reason);
+  if (!match) return null;
+  try {
+    const parsed: unknown = JSON.parse(match[1]);
+    const first = Array.isArray(parsed) ? parsed[0] as Record<string, unknown> : null;
+    if (!first || typeof first.consumer !== "string" || typeof first.producer !== "string" || (first.action !== "waive" && first.action !== "add")) return null;
+    return { consumer: first.consumer, producer: first.producer, action: first.action, justification: "" };
+  } catch {
+    return null;
+  }
 }
 
 export interface PlanOpened {
@@ -577,12 +917,20 @@ export interface TaskRecord {
   run_id: string;
   task_id: string;
   repository_id: string;
+  role?: TaskRole | string;
   state: TaskState;
   attempt_id?: string;
   candidate_commit?: string;
   candidate_tree?: string;
   depends_on: string[];
   reason?: string;
+  /** Who assigned the task: the approval of the exact plan revision (ADR 0023). */
+  assigned_by?: AssignmentTrace | null;
+  derived_from_task?: string | null;
+  /** The plan's overrides that name this task as consumer or producer. */
+  dependency_overrides?: DependencyOverride[];
+  /** An advisory task's structured result once it completed. */
+  advisory_result?: AdvisoryResult | null;
   updated_at: string;
 }
 
@@ -672,6 +1020,12 @@ export interface CandidateView {
   decision_reasons?: CandidateDecisionReasons;
   /** Absent from runtimes that predate workflow usage reporting. */
   usage?: WorkflowUsage;
+  /** The testing-setup handoff of a setup workflow; null for a feature workflow (ADR 0022). */
+  prerequisite?: SetupHandoff | null;
+  /** The plan's departures from the confirmed relationships (ADR 0023). */
+  dependency_overrides?: DependencyOverride[];
+  /** The task records with their assignment traces and advisory results (ADR 0023). */
+  tasks?: TaskRecord[];
 }
 
 export type PublicationState = "pending" | "pushing" | "pr_open" | "failed" | "integrated";
@@ -735,8 +1089,17 @@ export interface PublicationRecord {
   created_at: string;
   updated_at: string;
   observed_at?: string;
+  /** The developer sent this published candidate to a bounded repair after its pull request failed CI; a later revision publishes under its own record whose pull request body names this one. */
+  superseded_by_repair?: boolean;
+  superseded_reason?: string;
+  superseded_at?: string;
   contract: Publication;
   active: boolean;
+}
+
+/** The response of a CI-failure repair: the superseded publication record plus the workflow run now implementing the next candidate revision. */
+export interface PublicationRepair extends PublicationRecord {
+  run: RunRecord;
 }
 
 export interface CandidateDiff {
@@ -797,6 +1160,20 @@ export interface RegisterProjectRequest {
   repositories: { id: string; path: string }[];
 }
 
+/**
+ * The registration both clients send for the same repositories: every row with a repository id and
+ * an absolute root path, none repeated. Paths stay in the machine registry; the manifest never
+ * carries them.
+ */
+export function registerProjectRequest(name: string, repositories: { id: string; path: string }[], id?: string): RegisterProjectRequest {
+  const rows = repositories.map((row) => ({ id: row.id.trim(), path: row.path.trim() })).filter((row) => row.id || row.path);
+  if (!name.trim()) throw new Error("A project needs a name.");
+  if (rows.length === 0) throw new Error("Register at least one repository: an id and its absolute root path.");
+  for (const row of rows) if (!row.id || !row.path) throw new Error("Every repository row needs an id and an absolute root path.");
+  if (new Set(rows.map((row) => row.id)).size !== rows.length) throw new Error("Repository ids must be unique within a project.");
+  return { name: name.trim(), ...(id?.trim() && { id: id.trim() }), repositories: rows };
+}
+
 /** Sending it is the developer's confirmation; the registered path is re-inspected when omitted. */
 export interface RebindRepositoryRequest {
   local_path?: string;
@@ -817,13 +1194,19 @@ export class ApiError extends Error {
    * `{error}` body, false when the client substituted a generic sentence.
    */
   readonly fromRuntime: boolean;
+  /**
+   * The testing-setup offer a 422 refusal of `implement` carries beside its reason (ADR 0022):
+   * the one structured detail a refusal body may add, so a client can act on it.
+   */
+  readonly prerequisite?: TestingPrerequisite;
 
   // No parameter properties: Node loads this source directly (type stripping) for the TUI.
-  constructor(status: number, message: string, fromRuntime = false) {
+  constructor(status: number, message: string, fromRuntime = false, prerequisite?: TestingPrerequisite) {
     super(message);
     this.name = "ApiError";
     this.status = status;
     this.fromRuntime = fromRuntime;
+    if (prerequisite) this.prerequisite = prerequisite;
   }
 }
 
@@ -955,6 +1338,11 @@ export class LuunaClient {
 
   health(signal?: AbortSignal): Promise<Health> {
     return this.request("/health", { signal });
+  }
+
+  /** The running runtime's doctor report: environment and credential presence by name, never values. */
+  doctor(signal?: AbortSignal): Promise<DoctorReport> {
+    return this.request("/doctor", { signal });
   }
 
   /** Asks the runtime to stop in an orderly way (ADR 0010); it answers 202 and drains. */
@@ -1127,6 +1515,13 @@ export class LuunaClient {
     });
   }
 
+  /** Edits a ticket at the revision the client read; the runtime advances the revision and stales earlier plans. */
+  updateTicket(id: string, request: UpdateTicketRequest, signal?: AbortSignal): Promise<Ticket> {
+    if (!Number.isSafeInteger(request.expected_revision) || request.expected_revision < 1) throw new Error("Invalid ticket revision.");
+    if (request.title === undefined && request.intent === undefined && request.acceptance_criteria === undefined && request.repository_ids === undefined) throw new Error("Name at least one ticket field to change.");
+    return this.request(`/tickets/${encodeURIComponent(id)}`, { method: "PUT", body: JSON.stringify(request), signal });
+  }
+
   ticketSource(id: string, signal?: AbortSignal): Promise<TicketSourceStatus> {
     return this.request(`/tickets/${encodeURIComponent(id)}/source`, { signal });
   }
@@ -1155,6 +1550,37 @@ export class LuunaClient {
     return this.request(`/projects/${encodeURIComponent(projectId)}/memory/${encodeURIComponent(id)}?expected_hash=${encodeURIComponent(expectedHash)}`, { method: "DELETE", signal });
   }
 
+  /** Corrects a memory's content at its exact displayed hash; the record keeps its scope. */
+  updateMemory(projectId: string, id: string, request: UpdateMemoryRequest, signal?: AbortSignal): Promise<MemoryRecord> {
+    if (!request.expected_hash.startsWith("sha256:")) throw new Error("Correct memory by its exact content hash.");
+    if (!request.idempotency_key.trim()) throw new Error("An idempotency key is required.");
+    if (!request.content.trim()) throw new Error("Memory content is required.");
+    return this.request(`/projects/${encodeURIComponent(projectId)}/memory/${encodeURIComponent(id)}`, { method: "PUT", body: JSON.stringify(request), signal });
+  }
+
+  /** The personal export: user memory with provenance; the runtime refuses one carrying a credential value or a host path. */
+  exportUserMemory(signal?: AbortSignal): Promise<UserMemoryExport> {
+    return this.request("/memory/user/export", { signal });
+  }
+
+  memoryRetention(projectId: string, signal?: AbortSignal): Promise<MemoryRetentionPolicy> {
+    return this.request(`/projects/${encodeURIComponent(projectId)}/memory/retention`, { signal });
+  }
+
+  /** Replaces the policy; nothing is deleted until `applyMemoryRetention`. */
+  setMemoryRetention(projectId: string, policy: MemoryRetentionPolicy, signal?: AbortSignal): Promise<MemoryRetentionPolicy> {
+    for (const days of [policy.process_max_age_days, policy.project_max_age_days]) {
+      if (days !== null && (!Number.isSafeInteger(days) || days < 1 || days > 3650)) throw new Error("A retention limit is between 1 and 3650 days, or null to keep records.");
+    }
+    return this.request(`/projects/${encodeURIComponent(projectId)}/memory/retention`, { method: "PUT", body: JSON.stringify(policy), signal });
+  }
+
+  /** Deletes expired project and process memory through the adapter; replaying the key returns the recorded result. */
+  applyMemoryRetention(projectId: string, request: ApplyMemoryRetentionRequest, signal?: AbortSignal): Promise<MemoryRetentionResult> {
+    if (!request.idempotency_key.trim()) throw new Error("An idempotency key is required.");
+    return this.request(`/projects/${encodeURIComponent(projectId)}/memory/retention/apply`, { method: "POST", body: JSON.stringify(request), signal });
+  }
+
   /** Widens a memory's scope one step (process -> project, project -> user); the narrower record is deleted after the wider one exists. */
   promoteMemory(projectId: string, id: string, request: PromoteMemoryRequest, signal?: AbortSignal): Promise<PromotedMemory> {
     if (!request.expected_hash.startsWith("sha256:")) throw new Error("Promote memory by its exact content hash.");
@@ -1164,6 +1590,14 @@ export class LuunaClient {
   /** The scope-safe export: manifest, tickets, project/process memory and prompts; the runtime refuses one that would carry user memory, credentials or host paths. */
   exportProject(projectId: string, signal?: AbortSignal): Promise<ProjectExport> {
     return this.request(`/projects/${encodeURIComponent(projectId)}/export`, { signal });
+  }
+
+  /** Registers the exported project from local checkouts of its repositories, confirms its manifest and brings tickets, memory and prompts in; the same key replays. */
+  importProject(request: ProjectImportRequest, signal?: AbortSignal): Promise<ProjectImportResult> {
+    if (!request.export || typeof request.export !== "object" || request.export.kind !== "luuna-project-export") throw new Error("The document is not a Luuna project export.");
+    if (!request.idempotency_key.trim()) throw new Error("An idempotency key is required.");
+    if (request.repositories.length === 0) throw new Error("Give the local checkout path of each exported repository.");
+    return this.request("/projects/import", { method: "POST", body: JSON.stringify(request), signal });
   }
 
   /** A deterministic scaffold proposal; nothing is written until it is confirmed by exact hash. */
@@ -1255,6 +1689,12 @@ export class LuunaClient {
     return this.request(`/runs/${encodeURIComponent(runId)}/publication/reconcile`, { method: "POST", signal });
   }
 
+  /** Sends a published candidate whose pull request failed CI to a bounded repair: the runtime re-observes CI, invalidates the reviewed evidence naming the failing checks, marks the publication superseded and starts the repair writer. */
+  repairPublication(runId: string, request: CandidateActionRequest, signal?: AbortSignal): Promise<PublicationRepair> {
+    if (!/^sha256:[a-f0-9]{64}$/.test(request.candidate_hash)) throw new Error("Use the candidate's complete hash.");
+    return this.request(`/runs/${encodeURIComponent(runId)}/publication/repair`, { method: "POST", body: JSON.stringify(request), signal });
+  }
+
   /** The task graph of a workflow: one durable record per plan task with its state, attempt and exact candidate commit. */
   tasks(runId: string, signal?: AbortSignal): Promise<TaskRecord[]> {
     return this.request(`/runs/${encodeURIComponent(runId)}/tasks`, { signal });
@@ -1314,21 +1754,39 @@ async function failureOf(response: Response): Promise<ApiError> {
     403: "The runtime denied this action.",
     409: "The run state changed or another session is active. Refresh and try again.",
   };
-  const reason = [400, 409, 413, 415, 422, 503].includes(response.status) ? await runtimeReason(response) : undefined;
-  return new ApiError(response.status, reason ?? messages[response.status] ?? `Runtime request failed (HTTP ${response.status}).`, reason !== undefined);
+  const refusal = [400, 409, 413, 415, 422, 503].includes(response.status) ? await runtimeRefusal(response) : undefined;
+  return new ApiError(response.status, refusal?.reason ?? messages[response.status] ?? `Runtime request failed (HTTP ${response.status}).`, refusal !== undefined, refusal?.prerequisite);
 }
 
-async function runtimeReason(response: Response): Promise<string | undefined> {
+/**
+ * The runtime's deterministic reason is at most this long; a reason that quotes an offer or an
+ * override (ADR 0022, ADR 0023) stays under it, while a body of any other shape is never surfaced.
+ */
+export const MAX_REASON_LENGTH = 1000;
+
+async function runtimeRefusal(response: Response): Promise<{ reason: string; prerequisite?: TestingPrerequisite } | undefined> {
   try {
     const body: unknown = await response.clone().json();
     if (body && typeof body === "object" && "error" in body && typeof body.error === "string") {
       const reason = body.error.trim();
-      if (reason.length > 0 && reason.length <= 300 && !/[\u0000-\u001f]/.test(reason)) return reason;
+      if (reason.length > 0 && reason.length <= MAX_REASON_LENGTH && !/[\u0000-\u001f]/.test(reason)) {
+        const prerequisite = "prerequisite" in body ? testingPrerequisite(body.prerequisite) : undefined;
+        return { reason, ...(prerequisite && { prerequisite }) };
+      }
     }
   } catch {
     // Non-JSON bodies are never surfaced.
   }
   return undefined;
+}
+
+/** The structured offer, only when it has the recorded shape; anything else is not surfaced. */
+function testingPrerequisite(value: unknown): TestingPrerequisite | undefined {
+  if (!value || typeof value !== "object") return undefined;
+  const record = value as Record<string, unknown>;
+  const text = (field: string) => typeof record[field] === "string" && (record[field] as string).length <= 4000 && !/[\u0000-\u001f]/.test(record[field] as string);
+  if (record.kind !== "testing_setup" || !["project_id", "repository_id", "baseline_id", "reason", "next"].every(text)) return undefined;
+  return { kind: "testing_setup", project_id: record.project_id as string, repository_id: record.repository_id as string, baseline_id: record.baseline_id as string, reason: record.reason as string, next: record.next as string };
 }
 
 /** Fold the project event stream into the last confirmed map, or null before confirmation. */
@@ -1480,3 +1938,4 @@ export function assistantText(events: EventEnvelope[]): string {
 }
 
 export * from "./failures.ts";
+export * from "./projections.ts";

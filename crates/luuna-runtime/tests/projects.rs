@@ -35,6 +35,20 @@ impl Harness {
             root,
         }
     }
+    /// A runtime with no component toolchain: tickets stay temporary SQLite
+    /// records whether or not the pinned CLIs are populated on this host.
+    fn synthetic() -> Self {
+        let root =
+            std::env::temp_dir().join(format!("luuna-projects-test-{}", uuid::Uuid::new_v4()));
+        let state = AppState::open(configuration(root.clone()))
+            .unwrap()
+            .without_components();
+        Self {
+            app: router(state.clone()),
+            state,
+            root,
+        }
+    }
     async fn request(
         &self,
         method: &str,
@@ -1052,4 +1066,402 @@ async fn a_default_branch_present_only_on_origin_can_be_confirmed() {
         body["manifest"]["manifest"]["repositories"][0]["default_branch"],
         "develop"
     );
+}
+
+// ---- Project import (ADR 0021 amendment): an export moves between machines ----
+
+/// A registered, confirmed fixture project with one temporary ticket, and its export.
+async fn exported_fixture(harness: &Harness, repo: &Path) -> Value {
+    let (status, body) = harness
+        .request(
+            "POST",
+            "/api/v1/projects",
+            Some(register_body("fixture", repo)),
+            true,
+        )
+        .await;
+    assert_eq!(status, StatusCode::CREATED, "{body}");
+    let (_, discovery) = harness
+        .request("POST", "/api/v1/projects/fixture/discover", None, true)
+        .await;
+    let (status, body) = harness
+        .request(
+            "PUT",
+            "/api/v1/projects/fixture/manifest",
+            Some(json!({"expected_revision":0,"manifest":discovery["proposed_manifest"]})),
+            true,
+        )
+        .await;
+    assert_eq!(status, StatusCode::OK, "{body}");
+    let (status, body) = harness
+        .request(
+            "POST",
+            "/api/v1/projects/fixture/tickets",
+            Some(json!({"idempotency_key":"t1","title":"Exported ticket","intent":"Keep the relative path src/lib.rs tidy","acceptance_criteria":["cargo test passes"],"repository_ids":["app"]})),
+            true,
+        )
+        .await;
+    assert_eq!(status, StatusCode::CREATED, "{body}");
+    let (status, export) = harness
+        .request("GET", "/api/v1/projects/fixture/export", None, true)
+        .await;
+    assert_eq!(status, StatusCode::OK, "{export}");
+    assert_eq!(export["project"]["manifest_revision"], 1);
+    assert_eq!(export["tickets"].as_array().unwrap().len(), 1);
+    assert_eq!(
+        export["repository_identities"]["app"]["remote"],
+        "https://example.invalid/fixture.git"
+    );
+    assert!(export["export_hash"]
+        .as_str()
+        .unwrap()
+        .starts_with("sha256:"));
+    export
+}
+
+/// A fresh clone of the fixture with the same portable remote: the checkout a
+/// developer makes on another computer.
+fn clone_fixture(source: &Path, target: &Path, remote: &str) {
+    let output = Command::new("git")
+        .args(["clone", "-q"])
+        .arg(source)
+        .arg(target)
+        .output()
+        .unwrap();
+    assert!(
+        output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    git(target, &["remote", "set-url", "origin", remote]);
+}
+
+fn rehash(mut export: Value) -> Value {
+    let mut body = export.clone();
+    body.as_object_mut().unwrap().remove("export_hash");
+    export["export_hash"] = json!(luuna_domain::hash_value(&body).unwrap());
+    export
+}
+
+fn import_body(export: &Value, path: &Path, key: &str) -> Value {
+    json!({"export":export,"repositories":[{"id":"app","path":path.to_string_lossy()}],"idempotency_key":key})
+}
+
+#[tokio::test]
+async fn an_export_imports_into_a_fresh_runtime_from_a_clone_with_the_same_identity_and_replays() {
+    let source = Harness::synthetic();
+    let repo = tempfile::tempdir().unwrap();
+    synthetic_repository(repo.path());
+    let export = exported_fixture(&source, repo.path()).await;
+
+    let target = Harness::synthetic();
+    let clone = tempfile::tempdir().unwrap();
+    let clone_root = clone.path().join("fixture");
+    clone_fixture(
+        repo.path(),
+        &clone_root,
+        "https://user:other-secret@example.invalid/fixture.git",
+    );
+    let before = snapshot(&clone_root);
+    let (status, imported) = target
+        .request(
+            "POST",
+            "/api/v1/projects/import",
+            Some(import_body(&export, &clone_root, "import-1")),
+            true,
+        )
+        .await;
+    assert_eq!(status, StatusCode::CREATED, "{imported}");
+    assert_eq!(imported["replayed"], false);
+    assert_eq!(imported["export_hash"], export["export_hash"]);
+    assert_eq!(imported["components_enabled"], false);
+    assert_eq!(
+        imported["counts"],
+        json!({"tickets":1,"memory":0,"prompts":0})
+    );
+    assert_eq!(imported["project"]["project"]["id"], "fixture");
+    assert_eq!(imported["project"]["project"]["revision"], 1);
+    assert_eq!(
+        imported["project"]["project"]["manifest_hash"], export["project"]["manifest_hash"],
+        "the imported manifest hash equals the export's"
+    );
+    assert_eq!(
+        imported["manifest_hash"],
+        export["project"]["manifest_hash"]
+    );
+    assert_eq!(
+        imported["project"]["repositories"][0]["local_path"],
+        json!(fs::canonicalize(&clone_root)
+            .unwrap()
+            .to_string_lossy()
+            .trim_start_matches(r"\\?\"))
+    );
+    assert_eq!(
+        snapshot(&clone_root),
+        before,
+        "import must not change the checkout"
+    );
+    let (_, tickets) = target
+        .request("GET", "/api/v1/projects/fixture/tickets", None, true)
+        .await;
+    assert_eq!(tickets.as_array().unwrap().len(), 1);
+    assert_eq!(tickets[0]["id"], export["tickets"][0]["id"]);
+    assert_eq!(tickets[0]["intent"], export["tickets"][0]["intent"]);
+    assert_eq!(tickets[0]["created_at"], export["tickets"][0]["created_at"]);
+    let (_, replay) = target
+        .request("GET", "/api/v1/projects/fixture/events", None, true)
+        .await;
+    let types: Vec<&str> = replay
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|event| event["type"].as_str().unwrap())
+        .collect();
+    assert_eq!(
+        types,
+        vec![
+            "project.registered",
+            "repository.registered",
+            "manifest.confirmed",
+            "ticket.created",
+            "project.imported"
+        ]
+    );
+    let recorded = replay.as_array().unwrap().last().unwrap();
+    assert_eq!(recorded["payload"]["export_hash"], export["export_hash"]);
+    assert_eq!(recorded["payload"]["counts"]["tickets"], 1);
+    assert_eq!(
+        recorded["payload"]["mapping"]["manifest"]["exported_revision"],
+        1
+    );
+
+    // The same key replays the recorded result; another key never merges.
+    let (status, again) = target
+        .request(
+            "POST",
+            "/api/v1/projects/import",
+            Some(import_body(&export, &clone_root, "import-1")),
+            true,
+        )
+        .await;
+    assert_eq!(status, StatusCode::OK, "{again}");
+    assert_eq!(again["replayed"], true);
+    assert_eq!(again["export_hash"], export["export_hash"]);
+    let (_, tickets) = target
+        .request("GET", "/api/v1/projects/fixture/tickets", None, true)
+        .await;
+    assert_eq!(tickets.as_array().unwrap().len(), 1);
+    let (status, body) = target
+        .request(
+            "POST",
+            "/api/v1/projects/import",
+            Some(import_body(&export, &clone_root, "import-2")),
+            true,
+        )
+        .await;
+    assert_eq!(status, StatusCode::CONFLICT, "{body}");
+    assert!(body["error"]
+        .as_str()
+        .unwrap()
+        .contains("already registered"));
+    // The same key with a different export is refused too.
+    let mut other = export.clone();
+    other["exported_at"] = json!("2026-01-01T00:00:00Z");
+    let (status, body) = target
+        .request(
+            "POST",
+            "/api/v1/projects/import",
+            Some(import_body(&rehash(other), &clone_root, "import-1")),
+            true,
+        )
+        .await;
+    assert_eq!(status, StatusCode::CONFLICT, "{body}");
+    assert!(body["error"].as_str().unwrap().contains("import-1"));
+    // Unauthenticated requests never reach the import.
+    let (status, _) = target
+        .request(
+            "POST",
+            "/api/v1/projects/import",
+            Some(import_body(&export, &clone_root, "import-3")),
+            false,
+        )
+        .await;
+    assert_eq!(status, StatusCode::UNAUTHORIZED);
+}
+
+#[tokio::test]
+async fn an_import_is_refused_for_a_different_remote_a_tampered_hash_a_host_path_and_user_memory() {
+    let source = Harness::synthetic();
+    let repo = tempfile::tempdir().unwrap();
+    synthetic_repository(repo.path());
+    let export = exported_fixture(&source, repo.path()).await;
+    let target = Harness::synthetic();
+    let clone = tempfile::tempdir().unwrap();
+    let clone_root = clone.path().join("fixture");
+    clone_fixture(
+        repo.path(),
+        &clone_root,
+        "https://example.invalid/another-project.git",
+    );
+
+    // A clone of another repository (different remote) is not the exported one.
+    let (status, body) = target
+        .request(
+            "POST",
+            "/api/v1/projects/import",
+            Some(import_body(&export, &clone_root, "k1")),
+            true,
+        )
+        .await;
+    assert_eq!(status, StatusCode::UNPROCESSABLE_ENTITY, "{body}");
+    assert!(
+        body["error"].as_str().unwrap().contains("origin remote"),
+        "{body}"
+    );
+    git(
+        &clone_root,
+        &[
+            "remote",
+            "set-url",
+            "origin",
+            "https://example.invalid/fixture.git",
+        ],
+    );
+
+    // A tampered document: the content no longer matches its hash.
+    let mut tampered = export.clone();
+    tampered["tickets"][0]["intent"] = json!("edited in transit");
+    let (status, body) = target
+        .request(
+            "POST",
+            "/api/v1/projects/import",
+            Some(import_body(&tampered, &clone_root, "k2")),
+            true,
+        )
+        .await;
+    assert_eq!(status, StatusCode::UNPROCESSABLE_ENTITY, "{body}");
+    assert!(
+        body["error"].as_str().unwrap().contains("export hash"),
+        "{body}"
+    );
+    let mut missing = export.clone();
+    missing.as_object_mut().unwrap().remove("export_hash");
+    let (status, body) = target
+        .request(
+            "POST",
+            "/api/v1/projects/import",
+            Some(import_body(&missing, &clone_root, "k2b")),
+            true,
+        )
+        .await;
+    assert_eq!(status, StatusCode::UNPROCESSABLE_ENTITY, "{body}");
+
+    // A host path in a ticket, correctly hashed, is still refused.
+    let mut with_path = export.clone();
+    with_path["tickets"][0]["intent"] = json!("see /home/dev/private/notes.txt");
+    let (status, body) = target
+        .request(
+            "POST",
+            "/api/v1/projects/import",
+            Some(import_body(&rehash(with_path), &clone_root, "k3")),
+            true,
+        )
+        .await;
+    assert_eq!(status, StatusCode::UNPROCESSABLE_ENTITY, "{body}");
+    assert!(
+        body["error"].as_str().unwrap().contains("an absolute path"),
+        "{body}"
+    );
+
+    // User memory never enters another machine through an import.
+    let mut with_user = export.clone();
+    with_user["memory"] = json!([{"id":"mem-1","scope":"user","content":"private","provenance":"me","hash":format!("sha256:{}", "1".repeat(64)),"created_at":"2026-10-21T00:00:00Z"}]);
+    let (status, body) = target
+        .request(
+            "POST",
+            "/api/v1/projects/import",
+            Some(import_body(&rehash(with_user), &clone_root, "k4")),
+            true,
+        )
+        .await;
+    assert_eq!(status, StatusCode::UNPROCESSABLE_ENTITY, "{body}");
+    assert!(
+        body["error"].as_str().unwrap().contains("user memory"),
+        "{body}"
+    );
+
+    // A missing checkout path, and a document that is not an export.
+    let (status, body) = target
+        .request(
+            "POST",
+            "/api/v1/projects/import",
+            Some(import_body(&export, &clone.path().join("nowhere"), "k5")),
+            true,
+        )
+        .await;
+    assert_eq!(status, StatusCode::UNPROCESSABLE_ENTITY, "{body}");
+    let (status, body) = target
+        .request(
+            "POST",
+            "/api/v1/projects/import",
+            Some(json!({"export":{"kind":"something-else"},"repositories":[{"id":"app","path":clone_root.to_string_lossy()}],"idempotency_key":"k6"})),
+            true,
+        )
+        .await;
+    assert_eq!(status, StatusCode::UNPROCESSABLE_ENTITY, "{body}");
+    // A checkout for a repository the export does not name is refused.
+    let (status, body) = target
+        .request(
+            "POST",
+            "/api/v1/projects/import",
+            Some(json!({"export":export,"repositories":[{"id":"other","path":clone_root.to_string_lossy()}],"idempotency_key":"k7"})),
+            true,
+        )
+        .await;
+    assert_eq!(status, StatusCode::UNPROCESSABLE_ENTITY, "{body}");
+    // Nothing above registered the project.
+    let (status, _) = target
+        .request("GET", "/api/v1/projects/fixture", None, true)
+        .await;
+    assert_eq!(status, StatusCode::NOT_FOUND);
+}
+
+/// A 200-byte import key (the longest the API accepts) still derives bounded
+/// per-item keys, so an import with tickets completes rather than failing
+/// after the project was registered.
+#[tokio::test]
+async fn an_import_with_the_longest_key_completes_and_replays() {
+    let source = Harness::synthetic();
+    let repo = tempfile::tempdir().unwrap();
+    synthetic_repository(repo.path());
+    let export = exported_fixture(&source, repo.path()).await;
+    let target = Harness::synthetic();
+    let clone = tempfile::tempdir().unwrap();
+    let clone_root = clone.path().join("fixture");
+    clone_fixture(
+        repo.path(),
+        &clone_root,
+        "https://user:other-secret@example.invalid/fixture.git",
+    );
+    let key = "k".repeat(200);
+    let (status, imported) = target
+        .request(
+            "POST",
+            "/api/v1/projects/import",
+            Some(import_body(&export, &clone_root, &key)),
+            true,
+        )
+        .await;
+    assert_eq!(status, StatusCode::CREATED, "{imported}");
+    assert_eq!(imported["counts"]["tickets"], 1);
+    let (status, replayed) = target
+        .request(
+            "POST",
+            "/api/v1/projects/import",
+            Some(import_body(&export, &clone_root, &key)),
+            true,
+        )
+        .await;
+    assert_eq!(status, StatusCode::OK, "{replayed}");
+    assert_eq!(replayed["replayed"], true);
 }

@@ -24,6 +24,56 @@ Evidence kinds, as used in the tables:
   and [PR-11-WINDOWS-VERIFICATION.md](PR-11-WINDOWS-VERIFICATION.md);
 - *none*: no evidence exists; the row blocks the label it belongs to.
 
+## October 22, 2026 update (Linux development container)
+
+The [October 22 specification audit](SPEC-AUDIT-2026-10-22.md) found eight
+implementation gaps beyond the blocker list below. The
+[response](SPEC-AUDIT-RESPONSE-2026-10-22.md) records what the
+`fix/vibrant-knuth-xt945c` branch implemented (ADRs 0018 amendments,
+0022–0027) and the dispositions below replace the corresponding rows of the
+October 21 tables for the audited items; every other row stands as written.
+The October 21 tables are kept unchanged as the Windows-host record.
+
+| Item | October 22 disposition | Evidence (Linux, this branch) |
+| --- | --- | --- |
+| R02 / A33 client parity | behaviour-level parity for multi-repository registration, per-repository baselines, task-graph planning with roles, derivation and dependency overrides, task resume, ticket editing, memory correction, personal export and retention, the testing-setup offer and setup plan, and the Home summary, Kanban projection, Help panel, editor handoff and the Settings panel (the runtime's doctor report, ADR 0027 point 4); 16 specification obligations and 5 required surfaces traced through the catalog | 59-action catalog against 49 routes, `check-contracts.mjs` required-action and required-surface traces, desktop/client/TUI suites below, `scripts/tui-smoke.mjs` 51/51 and the interactive audit `scripts/tui-interactive-audit.mjs` 48/48 (ADR 0020 third amendment: menus, keys, prompts, outage, the six tones, 40 to 80 columns and 12 rows, clean quit; nine interactive-mode defects fixed) |
+| R06 delegated roles (P42) | implemented for v1: advisory roles, traces, no runtime-created children (ADR 0023); only candidate repositories' checks are required of a mixed plan | `multirepo.rs` 14 scenarios, domain tests |
+| R05 dependency overrides (P44) | implemented: confirmed-relationship check with justified `waive`/`add` overrides in the hashed plan (ADR 0023) | `multirepo.rs` |
+| R07 / R09 / E02 / E05 / E06 publication guards | superseded plan revision, worktree drift, source change and the pre-push policy refuse publication and reconciliation before any side effect; the policy scans every commit the push would publish and a repair after a refusal starts history-clean (ADR 0018 amendment) | `publication.rs` 15 scenarios (including a credential in an ancestor commit), policy unit tests, four Codex review rounds fixed |
+| R08 / A06 testing prerequisite | offered prerequisite, approved `testing_setup` workflow admitted without a baseline, real-test pass rule (ADR 0022); both clients show the offer and send the setup plan | `testing_setup.rs` 3 scenarios; desktop, client and TUI tests |
+| R10 / A24 CI-failure repair | bounded repair from an observed CI failure invalidates the published candidate; the repaired revision publishes a superseding pull request (ADR 0018 second amendment) | `publication.rs` |
+| R11 / A22 / A25 linked sets | three-repository linked publication, partial-set recovery without duplicates, one-of-several merged is not integrated | `publication_multirepo.rs` 5 scenarios; real GitHub still **not established** |
+| R13 / A05 stacks | Next.js scaffold profile; Android and iOS advertised as import plus capability-gated checks, Go/Flutter/React complete only with capable-runner evidence (ADR 0027 points 2 and 3, accepted on best estimate) | `scaffold.rs`; capable runners still absent, so those profiles stay **blocked** |
+| R14 / A29 memory and portability | project import on another machine (ADR 0021 amendment), memory correction, personal export, retention policy (ADR 0026) | `projects.rs` synthetic import tests; real-CLI runtime tests 9/9, Missions 3/3, adapter 1/1, component smoke 14/14 with Bun 1.4.3 |
+| R01 / A02 packaging | portable component layout with digest verification, Bun and the terminal client with a compiled API client staged by the packager (ADR 0024) | `stage-components` tests, `luuna-components` portable-layout tests, doctor; the installer was **not built** and no clean machine ran it (no Windows host here) |
+| A14 / A26 drift after review | reproduced probe now refused; candidate invalidated, nothing pushed | `publication.rs` |
+| A09 superseded revision | reproduced probe now refused for publication and reconciliation | `publication.rs` |
+| Acceptance chapter measurements (pilot) | first pilot on a real repository (a fresh Luuna Beacon clone, 459 real tests) with the synthetic model: map, latency, large log, cancellation, overhead, memory, usage and SIGKILL recovery measured and inside the proposed targets ([PILOT-2026-10-22.md](PILOT-2026-10-22.md)) | `scripts/pilot-measurements.mjs` 8/8; genuine-provider pilot on a release host still owed |
+| A32 container profile | out of v1 scope (ADR 0027 point 1, accepted on best estimate): established for the native profile, the `container` refusal stays as a scope decision, not a gap | execution-profile tests |
+
+Checks on the branch's final revision, all local (hosted CI could not start):
+
+| Check | Result |
+| --- | --- |
+| `cargo fmt --all -- --check`, `cargo clippy --locked --workspace --all-targets -- -D warnings` | passed |
+| `cargo test --locked --workspace -- --test-threads=2` | 465 passed, 0 failed, 16 ignored (the ignored tests are the real-CLI and genuine-provider tests run separately below) |
+| `npm test` | 29 contract checks; 59-action catalog with 16 required actions and 5 required surfaces traced; 8 scope-guard, 8 component-pin, 8 harness; 291 desktop; 48 API-client; 94 TUI |
+| `npm run typecheck`, `npm run build`, `node scripts/check-hygiene.mjs`, `git diff --check` | passed |
+| `node scripts/components-smoke.mjs` (Bun 1.4.3) | 14/14 |
+| `cargo test -p luuna-runtime --lib components_real_ -- --ignored` / `missions_real_` / `luuna-components --test real` | 9 / 4 / 1 passed |
+| `node scripts/tui-smoke.mjs --runtime <release>` / `node scripts/tui-interactive-audit.mjs --runtime <release>` (tmux) | 51/51 / 48/48 |
+| `node scripts/m1-smoke.mjs --mode fixture` | 19/19 |
+| `node scripts/backup-recovery-drill.mjs --skip-migration-tests` | 30/30 |
+| `node scripts/mvp-ui-smoke.mjs` (Chromium) | 64/64 (Chromium, synthetic model, recovery and accessibility audit; rerun with the Home, Kanban and Help panels present) |
+| `node scripts/m6-ui-smoke.mjs` (real component CLIs) | 23/23 (real Missions, Atlas and Beacon CLIs, Chromium) |
+| `node scripts/m3-smoke.mjs --mode fixture` (strict) | 69/69 on committed revision `1bdaab9` (and on `55e50ba` before the client surfaces merged) (an earlier run on `bb074bd` failed only its Luuna-checkout integrity check because a concurrent worktree was committing into the same `.git`; rerun on a quiet tree) |
+| Genuine provider steps, real GitHub, native Windows/Mac, installer build | not run: no provider credential, no GitHub token or repository for the publisher, no Windows or Mac host |
+
+Blocking the v1 label after this update: items 1–6 of the October 21 list
+below still hold (the publication guard defects, client parity, P22, P42/P44,
+A24 and the memory management gaps the audit added are closed), plus the
+owner's review of the ADR 0027 estimates (every point it names, the surfaces of point 4 and the audit of point 5, now exists).
+
 ## Platform matrix
 
 | Host | OS | Architecture | Git | Rust | Node / npm | Bun | Python | Pi | Evidence |
@@ -37,7 +87,7 @@ Evidence kinds, as used in the tables:
 | Requirement | Evidence | Kind | Status |
 | --- | --- | --- | --- |
 | R01 Local Mac/Windows operation without a NAS | Windows native lifecycle smoke (62/62 bundled WebView2, PR 11), authenticated shutdown (ADR 0010), bootstrap (ADR 0011), `scripts/package-windows.ps1` NSIS development installer built on this host (unsigned; packaged layout verified: runtime, helper scripts, launchers, pinned Pi tree beside the executable), `luuna-runtime doctor` (ADR 0018), backup/restore drill 31/31 on Windows | native, harness | Windows: development distribution on the development host. Mac: **blocked** (no host). Clean-machine and signed installation: **not established** |
-| R02 Browser/TUI parity | capability catalog of 50 actions validated against the 43 served routes and the typed client (strict), 251 desktop, 39 client and 59 TUI tests, `scripts/tui-smoke.mjs` 53/53 (ADR 0020) | deterministic, harness | established for the cataloged actions; interactive-TUI keyboard audit open |
+| R02 Browser/TUI parity | capability catalog of 50 actions validated against the 43 served routes and the typed client (strict), 251 desktop, 39 client and 59 TUI tests, `scripts/tui-smoke.mjs` 53/53 (ADR 0020) | deterministic, harness | established for the cataloged actions; the interactive-mode audit exists since October 22 (`scripts/tui-interactive-audit.mjs` 48/48) |
 | R03 Pi with selected models | M1 20/20 genuine OpenRouter (Windows, PR 11); M3 genuine 61/61 at `fd42d59` on Linux and 59/61 at `631ed21` on Windows | genuine | established for the recorded revisions; a genuine run on the current tree is owed |
 | R04 Import and creation | M2a import evidence; approved scaffolding with real baselines for the profiles this host can run (ADR 0019) | deterministic | import established; scaffolding established per profile only where a capable runner ran it |
 | R05 Multiple repositories with explicit relationships | relationship proposals, acyclic confirmed graph, three-repository fixture with exact candidate commits (ADR 0017) | deterministic | established with the synthetic writer; no genuine multi-repository provider run |
@@ -87,7 +137,7 @@ Evidence kinds, as used in the tables:
 | A29 | Project export without credentials or paths | export guard refuses credentials, host paths and user memory (ADR 0021) | established (real CLIs) |
 | A30 | External Missions edit during a run | ADR 0014 source drift tests | established (real CLIs) |
 | A31 | Required iOS check on an incapable host | capability probing marks `xcode` missing and blocks with an explanation | established on Windows; a Mac has not run the positive case |
-| A32 | Native and container profiles | only `native` executes; `container` is accepted by the contract and refused at execution | partial: container execution **not implemented** |
+| A32 | Native and container profiles | only `native` executes; `container` is accepted by the contract and refused at execution | established for the native profile; container execution is out of v1 scope by ADR 0027 point 1 (October 22) |
 | A33 | Every client capability | catalog-driven parity tests | established for the cataloged actions |
 | A34 | Automatic PR completion keeps human merge | publisher without a merge path | established against a fake server |
 
@@ -115,6 +165,9 @@ Evidence kinds, as used in the tables:
 - Import of a project export on another machine is not implemented.
 - Pilot measurements (task completion, repairs, failures by cause, resource use)
   exist only for the bounded harnesses; no real-project pilot has run.
+  (October 22: a synthetic-model pilot on a real repository has since run,
+  [PILOT-2026-10-22.md](PILOT-2026-10-22.md); the genuine-provider pilot is
+  still owed.)
 
 ## Blocking the v1 label
 
@@ -124,4 +177,6 @@ Evidence kinds, as used in the tables:
 4. Capable-runner evidence for Flutter, Android and iOS profiles (R13, A31).
 5. A genuine-provider run of the M3 harness on the current tree, and a genuine
    multi-repository feature.
-6. A real-project pilot with the measurements the acceptance chapter asks for.
+6. A real-project pilot with the measurements the acceptance chapter asks for
+   (October 22: done with the synthetic model on a real repository; owed with
+   a genuine provider on a release host).

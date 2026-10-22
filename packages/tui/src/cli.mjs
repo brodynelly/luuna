@@ -3,9 +3,9 @@
 // workbench opens (interactive.mjs). Exit codes: 0 done, 1 refused or failed, 2 usage.
 import { readFileSync, writeFileSync } from "node:fs";
 import { LuunaClient, describeFailure, explainFailure } from "@luuna/api-client";
-import { COMMANDS, ClientRefusal, UsageError, commandsByName, usage } from "./commands.mjs";
+import { COMMANDS, ClientRefusal, PROJECTIONS, UsageError, commandsByName, usage } from "./commands.mjs";
 import { catalog } from "./catalog.mjs";
-import { format } from "./format.mjs";
+import { colourEnabled, format } from "./format.mjs";
 
 export const DEFAULT_URL = "http://127.0.0.1:4242";
 
@@ -89,6 +89,7 @@ export function help() {
   const byContext = new Map();
   for (const command of COMMANDS) byContext.set(command.context, [...(byContext.get(command.context) ?? []), command]);
   const sections = [...byContext].map(([context, commands]) => [`${context} commands:`, ...commands.map((command) => `  ${usage(command)}\n      ${catalog.capabilities.find((capability) => capability.id === command.id)?.title ?? ""}`)].join("\n"));
+  sections.push(["projections (read-only views over the cataloged actions; the desktop's Home and Kanban panels show the same):", ...PROJECTIONS.map((command) => `  ${usage(command)}\n      ${command.action}: reads ${command.projects.join(", ")}`)].join("\n"));
   return [
     "luuna-tui — terminal client for the Luuna runtime",
     "",
@@ -113,7 +114,7 @@ export async function runCommand(command, input, client, io) {
     if (command.confirm && io.interactive && !(await io.confirm(command.confirm))) { io.stdout.write("Cancelled.\n"); return 0; }
     const result = await command.run(client, input, io);
     if (io.json) io.stdout.write(`${JSON.stringify(result === undefined ? null : result)}\n`);
-    else { const text = format(command.id, result); if (text) io.stdout.write(`${text}\n`); }
+    else { const text = format(command.id, result, { colour: io.colour }); if (text) io.stdout.write(`${text}\n`); }
     return 0;
   } catch (failure) {
     if (failure instanceof UsageError) { io.stderr.write(`${failure.message}\n`); return 2; }
@@ -124,10 +125,10 @@ export async function runCommand(command, input, client, io) {
   }
 }
 
-/** The io a command sees: output streams, hidden prompts, document reads and the follow hooks. */
-export function makeIo({ stdin, stdout, stderr, json = false, interactive = false, signal, prompt, confirm, show }) {
+/** The io a command sees: output streams, hidden prompts, document reads, the follow hooks and whether tones are painted. */
+export function makeIo({ stdin, stdout, stderr, json = false, interactive = false, colour = false, signal, prompt, confirm, show }) {
   return {
-    stdin, stdout, stderr, json, interactive, signal,
+    stdin, stdout, stderr, json, interactive, colour, signal,
     readFile: (path) => readFileSync(path, "utf8"),
     writeFile: (path, text) => writeFileSync(path, text, "utf8"),
     readStdin: () => readAll(stdin),
@@ -136,7 +137,7 @@ export function makeIo({ stdin, stdout, stderr, json = false, interactive = fals
     show: show ?? ((text) => stdout.write(`${text}\n`)),
     note: (text) => stderr.write(`${text}\n`),
     describe: describeFailure,
-    emit: (event) => stdout.write(json ? `${JSON.stringify(event)}\n` : `${format("runs.events", [event])}\n`),
+    emit: (event) => stdout.write(json ? `${JSON.stringify(event)}\n` : `${format("runs.events", [event], { colour })}\n`),
   };
 }
 
@@ -146,7 +147,7 @@ export async function main(argv, { env, stdin, stdout, stderr, fetcher }) {
     const { interactive } = await import("./interactive.mjs");
     let client;
     try { client = await connect(env, { stdin, stdout, fetcher }); } catch (failure) { stderr.write(`${failure instanceof UsageError ? failure.message : explainFailure("Connection", failure).message}\n`); return failure instanceof UsageError ? 2 : 1; }
-    return interactive(client, { stdin, stdout, stderr });
+    return interactive(client, { stdin, stdout, stderr, colour: colourEnabled({ env, stdout }) });
   }
   if (name === undefined || name === "help" || name === "--help" || name === "-h") { stdout.write(help()); return name === undefined ? 2 : 0; }
   if (name === "catalog") { stdout.write(`${JSON.stringify(catalog, null, 2)}\n`); return 0; }
@@ -164,7 +165,7 @@ export async function main(argv, { env, stdin, stdout, stderr, fetcher }) {
   const abort = () => controller.abort();
   process.once("SIGINT", abort);
   try {
-    return await runCommand(command, input, client, makeIo({ stdin, stdout, stderr, json: Boolean(input.flags.json), signal: controller.signal }));
+    return await runCommand(command, input, client, makeIo({ stdin, stdout, stderr, json: Boolean(input.flags.json), colour: colourEnabled({ env, stdout }), signal: controller.signal }));
   } finally {
     process.off("SIGINT", abort);
   }

@@ -124,8 +124,20 @@ pub async fn candidate(
     // Aggregate workflow usage (writer attempts included) against the
     // approved budgets and the project's repair limit.
     let usage = store.workflow_usage_view(&id).map_err(internal)?;
+    let prerequisite = testing_setup_handoff(&store, &run, evidence.as_ref())?;
+    // The plan's departures from the confirmed relationships (P44) and its
+    // assignment traces (R06) are part of the candidate's record.
+    let (dependency_overrides, tasks) = match plan_for(&store, &run) {
+        Ok(plan) => (
+            json!(plan.dependency_overrides),
+            json!(store.run_tasks(&id).map_err(internal)?),
+        ),
+        Err(_) => (json!([]), json!([])),
+    };
     Ok(Json(json!({
         "evidence": evidence,
+        "dependency_overrides": dependency_overrides,
+        "tasks": tasks,
         "active": active,
         "validate_allowed": validate.is_ok(),
         "repair_allowed": repair.is_ok(),
@@ -136,6 +148,68 @@ pub async fn candidate(
             "revalidate": revalidate.err(),
         },
         "usage": usage,
+        "prerequisite": prerequisite,
+    })))
+}
+
+/// For a testing-setup workflow (ADR 0022): the recipes its candidate must
+/// pass and the explicit handoff that turns a reviewed setup candidate into
+/// the repository's baseline. The runtime never confirms a manifest or merges
+/// on the developer's behalf.
+fn testing_setup_handoff(
+    store: &luuna_storage::Store,
+    run: &RunRecord,
+    evidence: Option<&CandidateEvidence>,
+) -> Result<Option<Value>, ApiError> {
+    if run.metadata["kind"] != "workflow" {
+        return Ok(None);
+    }
+    let plan = plan_for(store, run)?;
+    if plan.purpose != luuna_domain::TicketPurpose::TestingSetup {
+        return Ok(None);
+    }
+    let repository_id = plan
+        .tasks
+        .first()
+        .map(|task| task.repository_id.clone())
+        .unwrap_or_default();
+    let checks: Vec<luuna_domain::ManifestCheck> = plan
+        .required_checks
+        .iter()
+        .filter(|check| check.required && check.repository_id == repository_id)
+        .map(luuna_domain::CheckRecipe::to_manifest_check)
+        .collect();
+    let reviewed = evidence.is_some_and(|evidence| {
+        evidence.status == luuna_domain::CandidateStatus::Reviewed
+            && evidence
+                .review
+                .as_ref()
+                .is_some_and(|review| review.verdict == luuna_domain::ReviewVerdict::Passed)
+    });
+    let commit = evidence.and_then(|evidence| {
+        evidence
+            .candidate
+            .repository_commits
+            .get(&repository_id)
+            .cloned()
+    });
+    let next = if reviewed {
+        format!(
+            "the setup candidate {} passed its checks and review: merge it into the developer checkout of repository {repository_id} (or publish it and merge the pull request), then PUT /api/v1/projects/{}/manifest with the next revision listing these checks as the repository's required checks, then POST /api/v1/projects/{}/baselines for the repository; feature plans are admitted once that baseline passes",
+            commit.as_deref().unwrap_or("commit"),
+            plan.project_id,
+            plan.project_id
+        )
+    } else {
+        "the setup candidate must pass these checks in its worktree (at least one executing a counted test) and the independent review before it can become the baseline".to_owned()
+    };
+    Ok(Some(json!({
+        "kind": luuna_domain::TESTING_SETUP_PREREQUISITE,
+        "repository_id": repository_id,
+        "checks": checks,
+        "candidate_commit": commit,
+        "reviewed": reviewed,
+        "next": next,
     })))
 }
 
@@ -173,7 +247,7 @@ fn writer_slot_free(store: &luuna_storage::Store, run: &RunRecord) -> Result<(),
 /// The Luuna-owned worktree holding each repository's frozen candidate
 /// commit (one per repository of the set), each verified to lie under the
 /// run's private worktree directory.
-fn worktrees_for(
+pub(crate) fn worktrees_for(
     state: &AppState,
     run_id: &str,
     evidence: &CandidateEvidence,
@@ -267,7 +341,7 @@ pub(crate) fn index_inspector(state: &AppState) -> luuna_git::GitInspector {
 /// HEAD, tree and tracked content. A mismatch is content drift (`Ok(Some)`,
 /// naming what changed); a Git failure that says nothing about the content is
 /// an ordinary error.
-async fn content_drift(
+pub(crate) async fn content_drift(
     state: &AppState,
     evidence: &CandidateEvidence,
     repo: &str,

@@ -34,3 +34,15 @@
   .ticket-card { padding: var(--space-3); }
   .ticket-card > .ticket-actions > .state { margin-left: 0; }
 }
+
+/* Testing-setup offers (ADR 0022): a toned record above the ticket form, the reason ruled and the create control below. */
+.prerequisite-offer > strong { font-size: var(--text-sm); overflow-wrap: anywhere; }
+
+/* Setup plan form (ADR 0022) and the task graph's trace, advisory result and overrides (ADR 0023). */
+.setup-checks { padding-top: var(--space-3); }
+.plan-overrides { display: grid; grid-template-columns: minmax(0, 1fr); gap: var(--space-2); min-width: 0; padding-top: var(--space-3); border-top: var(--border-width) solid var(--color-border); }
+.plan-overrides > button { justify-self: start; }
+.task-graph > .task-record { gap: var(--space-1); }
+.task-graph > .task-record > .task-line { display: flex; flex-wrap: wrap; align-items: center; gap: var(--space-1-5) var(--space-2); min-width: 0; overflow-wrap: anywhere; }
+.task-graph > .task-record > .advisory-result { display: grid; grid-template-columns: minmax(0, 1fr); gap: var(--space-1-5); min-width: 0; padding-left: var(--space-2); border-left: var(--rule-width) solid var(--color-border-control); }
+.task-graph > .task-record > .advisory-result > .advisory-list { display: grid; gap: var(--space-0-5); margin: 0; padding-left: var(--space-4); overflow-wrap: anywhere; }

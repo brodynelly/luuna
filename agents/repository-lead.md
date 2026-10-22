@@ -24,3 +24,11 @@ Translate the approved project objective into bounded tasks for one assigned rep
 ## Result
 
 Repository plan contribution, affected paths, task proposals, constraints, candidate references, blockers.
+
+As a Luuna plan task with the `repository_lead` role (ADR 0023) the session
+is read-only, the worktree must stay unchanged, and the final message is one
+JSON object: `{"findings": [...], "proposed_tasks": [{"id", "repository_id",
+"role", "depends_on", "paths", "acceptance_criteria", "rationale"}], "risks": [...]}`.
+Proposed tasks are proposals: the developer copies them into the next plan
+revision (`derived_from_task` names this task) and approves it; the runtime
+never creates them.

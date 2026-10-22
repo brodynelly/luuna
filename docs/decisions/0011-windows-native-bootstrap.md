@@ -58,3 +58,13 @@ The executable still depends on this checkout, its built runtime, pinned Pi
 dependencies, Node and saved provider configuration. This is not an installed
 Windows service, automatic login startup, signed installer or packaged portable
 distribution. Other platforms retain manual startup pending their own proof.
+
+Amendment 2026-10-22: the packaged `luuna` folder of ADR 0018's installer now
+also carries the pinned component trees, Bun and the terminal client
+([ADR 0024](0024-portable-component-distribution.md)). The helper recognises
+that layout (`Get-LuunaPackagedComponents` in `windows-common.ps1`) and sets
+`LUUNA_COMPONENTS_ROOT` and `LUUNA_BUN` for the runtime it starts; the Tauri
+command and its fixed-helper boundary are unchanged. `scripts/start-terminal.ps1`
+obtains the connection from the same helper, in memory, for `luuna-tui`. The
+checkout dependency is removed only once the clean-machine procedure in
+`docs/PACKAGING.md` has been executed, which it has not.

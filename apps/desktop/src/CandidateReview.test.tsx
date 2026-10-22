@@ -1,7 +1,7 @@
 import { expect, test } from "vitest";
 import { renderToStaticMarkup } from "react-dom/server";
 import type { CandidateDiff, CandidateEvidence, CandidateView, RunRecord } from "@luuna/api-client";
-import { CandidateReview } from "./CandidateReview";
+import { CandidateReview, canRepairPublication } from "./CandidateReview";
 import { canCancel, canRevalidate, canValidate, workflowNeedsRefresh } from "./workflow-state";
 
 const hash = `sha256:${"a".repeat(64)}`;
@@ -148,4 +148,66 @@ test("an oversized diff lists omissions instead of claiming there are no changes
   expect(html).toContain("This diff is truncated");
   expect(html).toContain("src/large.ts");
   expect(html).toContain("worktree differs from frozen candidate");
+});
+
+test("a CI repair is offered only for an open publication of this candidate with an observed CI failure", () => {
+  const reviewedRun = { ...run, state: "reviewed" as const };
+  const reviewed: CandidateView = { ...view, evidence: { ...evidence, status: "reviewed", review: { schema_version: "0.1", candidate_hash: hash, reviewer_session: "review-1", verdict: "passed", findings: [], evidence: [], attention_paths: [], mutation_attempts: [], tool_calls: [], exact_candidate_bound: true } as never } };
+  const repository = { branch: "luuna/t/abc", commit, remote: "https://github.com/o/r.git", owner: "o", repo: "r", base_branch: "main", push: "done" as const, pull_request_step: "done" as const, pull_request: { number: 1, url: "https://github.com/o/r/pull/1" }, ci: { state: "failure" as const, checks: [{ name: "ci-unit", status: "completed", conclusion: "failure" }] }, merge: { merged: false } };
+  const publication = { schema_version: "0.1", run_id: "run-1", project_id: "project-1", ticket_id: "t", candidate_hash: hash, idempotency_key: "k", publication_state: "pr_open" as const, repositories: { app: repository }, created_at: "", updated_at: "", contract: { schema_version: "0.1", ticket_id: "t", candidate_hash: hash, per_repository_branch: { app: "luuna/t/abc" }, pull_request_urls: { app: "https://github.com/o/r/pull/1" }, publication_state: "pr_open" as const }, active: false };
+  expect(canRepairPublication(reviewedRun, reviewed, publication)).toBe(true);
+  expect(canRepairPublication(reviewedRun, reviewed, undefined)).toBe(false);
+  expect(canRepairPublication(reviewedRun, reviewed, { ...publication, superseded_by_repair: true })).toBe(false);
+  expect(canRepairPublication(reviewedRun, reviewed, { ...publication, active: true })).toBe(false);
+  expect(canRepairPublication(reviewedRun, reviewed, { ...publication, publication_state: "failed" })).toBe(false);
+  expect(canRepairPublication(reviewedRun, reviewed, { ...publication, candidate_hash: `sha256:${"e".repeat(64)}` })).toBe(false);
+  expect(canRepairPublication(reviewedRun, reviewed, { ...publication, repositories: { app: { ...repository, ci: { state: "success", checks: [] } } } })).toBe(false);
+  expect(canRepairPublication(reviewedRun, reviewed, { ...publication, repositories: { app: { ...repository, ci: { state: "pending", checks: [] } } } })).toBe(false);
+  expect(canRepairPublication({ ...reviewedRun, state: "failed" }, { ...reviewed, evidence: { ...reviewed.evidence!, status: "failed" } }, publication)).toBe(false);
+  const markup = renderToStaticMarkup(<CandidateReview run={reviewedRun} view={reviewed} busy={false} {...actions} publication={publication} onRepairPublication={() => {}} />);
+  expect(markup).toContain("Repair after CI failure");
+  expect(markup).toContain('data-capability="runs.publication.repair"');
+  const superseded = renderToStaticMarkup(<CandidateReview run={reviewedRun} view={reviewed} busy={false} {...actions} publication={{ ...publication, superseded_by_repair: true, superseded_reason: "CI failed on the published pull request" }} onRepairPublication={() => {}} />);
+  expect(superseded).not.toContain("Repair after CI failure");
+  expect(superseded).toContain("Superseded");
+});
+
+// ---- ADR 0022 handoff and the editor handoff of ADR 0027 point 4. ----
+import { copyPath } from "./CandidateReview";
+
+test("a setup workflow's candidate shows the proposed checks and the runtime's handoff text", () => {
+  const handoff = { kind: "testing_setup" as const, repository_id: "app", checks: [{ id: "unit", executable: "python", args: ["-m", "unittest"], required: true, timeout_seconds: 120, capabilities: [], cwd: "." }, { id: "lint", executable: "ruff", args: [], required: true, timeout_seconds: 60, capabilities: ["shell"], cwd: "src" }], candidate_commit: commit, reviewed: true, next: "the setup candidate passed its checks and review: merge it into the developer checkout of repository app, then PUT /api/v1/projects/project-1/manifest with the next revision listing these checks" };
+  const html = renderToStaticMarkup(<CandidateReview run={{ ...run, state: "reviewed" }} view={{ ...view, evidence: { ...evidence, status: "reviewed" } }} busy={false} {...actions} handoff={handoff} />);
+  expect(html).toContain('aria-label="Testing-setup handoff"');
+  expect(html).toContain("reviewed with a passed verdict");
+  expect(html).toContain(`Candidate commit <code>${commit}</code>`);
+  expect(html).toContain("<code>unit</code>: <code>python -m unittest</code> · 120s");
+  expect(html).toContain("<code>lint</code>: <code>ruff</code> in <code>src</code> · 60s · shell");
+  expect(html).toContain(handoff.next);
+  expect(html).toMatch(/class="setup-handoff callout" data-tone="attention"/);
+  expect(render(view)).not.toContain("Testing-setup handoff");
+  const pending = renderToStaticMarkup(<CandidateReview run={run} view={view} busy={false} {...actions} handoff={{ ...handoff, reviewed: false, candidate_commit: null, next: "the setup candidate must pass these checks" }} />);
+  expect(pending).toContain("not yet reviewed with a passed verdict");
+  expect(pending).not.toContain("Candidate commit");
+});
+
+test("the editor handoff shows each worktree path whole with a copy control, and nothing else", () => {
+  const lease = { id: "lease-1", run_id: "run-1", project_id: "project-1", repository_id: "app", path: "/home/dev/.luuna/worktrees/run-1/app", base_commit: commit, state: "active" as const, created_at: "" };
+  const html = renderToStaticMarkup(<CandidateReview run={run} view={view} busy={false} {...actions} worktrees={[lease]} />);
+  expect(html).toContain('data-surface="editor-handoff"');
+  expect(html).toContain(`<code class="worktree-path">${lease.path}</code>`);
+  expect(html).toContain("Copy path for app");
+  expect(html).toContain("grants no permission");
+  expect(html).not.toMatch(/href="(?:vscode|idea|editor):/);
+  expect(render(view)).not.toContain("editor-handoff");
+  const written: string[] = [];
+  const navigatorRef = globalThis as unknown as { navigator?: { clipboard?: { writeText: (text: string) => Promise<void> } } };
+  const previous = navigatorRef.navigator;
+  Object.defineProperty(globalThis, "navigator", { value: { clipboard: { writeText: async (text: string) => { written.push(text); } } }, configurable: true, writable: true });
+  try {
+    copyPath(lease.path);
+    expect(written).toEqual([lease.path]);
+  } finally {
+    Object.defineProperty(globalThis, "navigator", { value: previous, configurable: true, writable: true });
+  }
 });

@@ -2313,3 +2313,197 @@ async fn explicit_shutdown_interrupts_the_writer_and_preserves_its_worktree() {
     assert!(store.active_worktree_leases().unwrap().is_empty());
     assert_eq!(snapshot(repo.path()), before);
 }
+
+#[tokio::test]
+async fn editing_a_legacy_ticket_advances_its_revision_and_stales_the_earlier_plan() {
+    let harness = Harness::new();
+    let repo = tempfile::tempdir().unwrap();
+    ready(&harness, repo.path()).await;
+    let before = snapshot(repo.path());
+    let (run_id, plan) = harness
+        .approved(repo.path(), "write_in_scope", json!({}))
+        .await;
+    let ticket_id = plan["ticket_id"].as_str().unwrap().to_owned();
+    assert_eq!(plan["ticket_revision"], 1);
+    // An empty edit, a stale revision and an unregistered repository are refused without a change.
+    let (status, body) = harness
+        .request(
+            "PUT",
+            &format!("/api/v1/tickets/{ticket_id}"),
+            Some(json!({"expected_revision": 1})),
+        )
+        .await;
+    assert_eq!(status, StatusCode::UNPROCESSABLE_ENTITY, "{body}");
+    let (status, body) = harness
+        .request(
+            "PUT",
+            &format!("/api/v1/tickets/{ticket_id}"),
+            Some(json!({"expected_revision": 2, "title": "Stale edit"})),
+        )
+        .await;
+    assert_eq!(status, StatusCode::CONFLICT, "{body}");
+    let (status, body) = harness
+        .request(
+            "PUT",
+            &format!("/api/v1/tickets/{ticket_id}"),
+            Some(json!({"expected_revision": 1, "repository_ids": ["elsewhere"]})),
+        )
+        .await;
+    assert_eq!(status, StatusCode::UNPROCESSABLE_ENTITY, "{body}");
+    assert!(
+        body["error"].as_str().unwrap().contains("elsewhere"),
+        "{body}"
+    );
+    let (status, unknown) = harness
+        .request(
+            "PUT",
+            "/api/v1/tickets/ticket-missing",
+            Some(json!({"expected_revision": 1, "title": "x"})),
+        )
+        .await;
+    assert_eq!(status, StatusCode::NOT_FOUND, "{unknown}");
+    let (status, unchanged) = harness
+        .request("GET", &format!("/api/v1/tickets/{ticket_id}"), None)
+        .await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(unchanged["revision"], 1, "{unchanged}");
+    // The edit at the expected revision changes only the named fields and bumps the revision.
+    let (status, edited) = harness
+        .request(
+            "PUT",
+            &format!("/api/v1/tickets/{ticket_id}"),
+            Some(json!({"expected_revision": 1, "intent": "Make src/main.py print a different greeting.", "acceptance_criteria": ["fixture:write_in_scope", "main prints the new greeting"]})),
+        )
+        .await;
+    assert_eq!(status, StatusCode::OK, "{edited}");
+    assert_eq!(edited["revision"], 2);
+    assert_eq!(edited["title"], "Implement the greeting");
+    assert_eq!(
+        edited["intent"],
+        "Make src/main.py print a different greeting."
+    );
+    assert_eq!(edited["repository_ids"], json!(["app"]));
+    assert_eq!(edited["source"], "luuna_sqlite_temporary");
+    let (_, events) = harness
+        .request("GET", "/api/v1/projects/fixture/events", None)
+        .await;
+    let updated = events
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|e| e["type"] == "ticket.updated")
+        .expect("ticket.updated is durable");
+    assert_eq!(updated["payload"]["revision"], 2);
+    assert_eq!(updated["payload"]["previous_revision"], 1);
+    assert_eq!(
+        updated["payload"]["fields"],
+        json!(["intent", "acceptance_criteria"])
+    );
+    // The approval still binds plan r1 to ticket revision 1: implementing it is refused
+    // before any state changes, and the approved run is left for re-planning.
+    let (status, refused) = harness.implement(&run_id).await;
+    assert_eq!(status, StatusCode::UNPROCESSABLE_ENTITY, "{refused}");
+    let reason = refused["error"].as_str().unwrap();
+    assert!(reason.contains("revision 2"), "{reason}");
+    assert!(reason.contains("plan was made for revision 1"), "{reason}");
+    assert!(reason.contains("re-plan"), "{reason}");
+    assert_eq!(harness.run(&run_id).await["state"], "approved");
+    let (_, attempts) = harness
+        .request("GET", &format!("/api/v1/runs/{run_id}/attempts"), None)
+        .await;
+    assert_eq!(attempts.as_array().unwrap().len(), 0, "{attempts}");
+    // The next plan revision binds the edited ticket and implements normally.
+    let opened = harness.plan(&ticket_id, json!({})).await;
+    assert_eq!(opened["plan"]["ticket_revision"], 2, "{opened}");
+    harness.approve(&opened["plan"]).await;
+    let next = opened["run"]["id"].as_str().unwrap().to_owned();
+    assert_eq!(harness.implement(&next).await.0, StatusCode::ACCEPTED);
+    assert_eq!(harness.settled(&next).await["state"], "validating");
+    assert_eq!(snapshot(repo.path()), before);
+}
+
+#[tokio::test]
+async fn retention_policy_is_durable_per_project_and_applying_it_needs_components() {
+    let harness = Harness::new();
+    let repo = tempfile::tempdir().unwrap();
+    clean_repository(repo.path());
+    register(&harness, repo.path()).await;
+    let (status, policy) = harness
+        .request("GET", "/api/v1/projects/fixture/memory/retention", None)
+        .await;
+    assert_eq!(status, StatusCode::OK, "{policy}");
+    assert_eq!(
+        policy,
+        json!({"process_max_age_days": null, "project_max_age_days": null})
+    );
+    let (status, body) = harness
+        .request(
+            "PUT",
+            "/api/v1/projects/fixture/memory/retention",
+            Some(json!({"process_max_age_days": 0})),
+        )
+        .await;
+    assert_eq!(status, StatusCode::UNPROCESSABLE_ENTITY, "{body}");
+    let (status, body) = harness
+        .request(
+            "PUT",
+            "/api/v1/projects/fixture/memory/retention",
+            Some(json!({"process_max_age_days": 30, "project_max_age_days": null})),
+        )
+        .await;
+    assert_eq!(status, StatusCode::OK, "{body}");
+    assert_eq!(body["process_max_age_days"], 30);
+    let (_, policy) = harness
+        .request("GET", "/api/v1/projects/fixture/memory/retention", None)
+        .await;
+    assert_eq!(policy["process_max_age_days"], 30);
+    assert_eq!(policy["project_max_age_days"], Value::Null);
+    let (_, events) = harness
+        .request("GET", "/api/v1/projects/fixture/events", None)
+        .await;
+    assert!(
+        events
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|e| e["type"] == "memory.retention_set"
+                && e["payload"]["process_max_age_days"] == 30)
+    );
+    let (status, missing) = harness
+        .request("GET", "/api/v1/projects/absent/memory/retention", None)
+        .await;
+    assert_eq!(status, StatusCode::NOT_FOUND, "{missing}");
+    // Applying the policy deletes through the Atlas adapter, so it fails closed without
+    // enabled components; the user memory export needs the component toolchain.
+    let (status, refused) = harness
+        .request(
+            "POST",
+            "/api/v1/projects/fixture/memory/retention/apply",
+            Some(json!({"idempotency_key": "retention-1"})),
+        )
+        .await;
+    assert_eq!(status, StatusCode::CONFLICT, "{refused}");
+    // The personal export needs the component toolchain; where the pinned toolchain
+    // is discoverable and no user memory exists yet, it answers an empty export
+    // without touching any project memory or path.
+    let (status, export) = harness
+        .request("GET", "/api/v1/memory/user/export", None)
+        .await;
+    assert!(
+        matches!(status, StatusCode::OK | StatusCode::SERVICE_UNAVAILABLE),
+        "{status} {export}"
+    );
+    if status == StatusCode::OK {
+        assert_eq!(export["kind"], "luuna-user-memory-export");
+        assert_eq!(export["scope"], "user");
+        assert_eq!(export["memory"], json!([]));
+        assert!(export["omitted"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|item| item == "project and process memory"));
+    }
+    assert!(!export
+        .to_string()
+        .contains(&repo.path().to_string_lossy().to_string()));
+}

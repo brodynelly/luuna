@@ -62,6 +62,16 @@ def writer_scenario():
     return name
 
 
+def remove_file(relative):
+    path = os.path.join(os.getcwd(), relative)
+    if os.path.isfile(path):
+        os.remove(path)
+    send({"type": "tool_execution_start", "toolCallId": "call-2", "toolName": "delete",
+          "args": {"path": relative}})
+    send({"type": "tool_execution_end", "toolCallId": "call-2", "toolName": "delete",
+          "result": {"content": [{"type": "text", "text": "removed"}]}, "isError": False})
+
+
 def write_file(relative, content):
     path = os.path.join(os.getcwd(), relative)
     os.makedirs(os.path.dirname(path) or ".", exist_ok=True)
@@ -219,7 +229,15 @@ def run_writer(request_id, kind, scenario, prompt):
         # the system prompt stated them.
         "dependency_env": {name: value for name, value in sorted(os.environ.items())
                            if name.startswith("LUUNA_DEPENDENCY_")},
-        "dependencies_stated": "LUUNA_DEPENDENCY_" in (flag("--system-prompt") or "")})
+        "dependencies_stated": "LUUNA_DEPENDENCY_" in (flag("--system-prompt") or ""),
+        # ADR 0022: whether the testing-setup role contract and the recipes the
+        # runtime will execute reached a testing-setup writer's system prompt.
+        "role_contract_stated": "<<<ROLE_CONTRACT>>>" in (flag("--system-prompt") or "")
+            and "Testing prerequisite specialist" in (flag("--system-prompt") or ""),
+        "recipes_stated": "-m unittest discover" in (flag("--system-prompt") or ""),
+        # ADR 0023: whether the system prompt carried a dependency's recorded
+        # advisory result as fenced reference data.
+        "advisories_stated": "<<<ADVISORY_RESULTS>>>" in (flag("--system-prompt") or "")})
     send({"type": "response", "id": request_id, "command": kind,
           "success": True, "data": {"disposition": "started"}})
     send({"type": "agent_start"})
@@ -260,6 +278,25 @@ def run_writer(request_id, kind, scenario, prompt):
         # the same task then writes in scope.
         if os.path.exists(os.path.join(os.getcwd(), os.pardir, os.pardir, "RELEASE")):
             write_file("src/main.py", "print('implemented by the synthetic writer after release')\n")
+    elif scenario == "write_testing_setup":
+        # ADR 0022: the testing-setup prerequisite writer adds a real unittest
+        # harness for existing behavior; the runtime then executes the plan's
+        # recipe (`python -B -m unittest discover -s tests -v`) in the worktree.
+        write_file("tests/test_main.py",
+                   "import os\nimport unittest\n\n\n"
+                   "class MainModuleTests(unittest.TestCase):\n"
+                   "    def test_main_module_prints(self):\n"
+                   "        with open(os.path.join('src', 'main.py'), encoding='utf-8') as handle:\n"
+                   "            self.assertIn('print(', handle.read())\n")
+    elif scenario == "write_testing_setup_without_tests":
+        # A setup writer that adds a harness whose only test is skipped: the
+        # recipe exits 0 while the runner executes nothing.
+        write_file("tests/test_main.py",
+                   "import unittest\n\n\n"
+                   "class MainModuleTests(unittest.TestCase):\n"
+                   "    @unittest.skip('needs a device')\n"
+                   "    def test_main_module_prints(self):\n"
+                   "        pass\n")
     elif scenario == "write_rename_function":
         # M4 integration: an incompatible producer change that renames the
         # function its consumers import; the producer's own check still passes.
@@ -275,10 +312,37 @@ def run_writer(request_id, kind, scenario, prompt):
         # must quote the failing check output, not just an exit code.
         repaired = repairing and "test result: FAILED" in prompt
         write_file("src/main.py", "print('repaired by the synthetic writer')\n" if repaired else "print('seeded regression')\n")
+    elif scenario == "ci_repair":
+        # A24: the first candidate passes its local checks and review; its
+        # pull request then fails CI on GitHub. The synthetic repair writer
+        # only fixes what the runtime quoted: the `ci_failure` evidence and
+        # the failing check's name (never log content) must be in the prompt.
+        repairing = "Repair feedback:" in prompt or "Repair feedback:" in (flag("--system-prompt") or "")
+        repaired = repairing and "ci_failure" in prompt and "ci-unit" in prompt
+        write_file("src/main.py", "print('repaired after the ci failure')\n" if repaired
+                   else "print('repaired without ci evidence')\n" if repairing
+                   else "print('implemented by the synthetic writer')\n")
     elif scenario == "extension_error":
         send({"type": "extension_error", "extensionPath": "luuna-scope-guard.js",
               "event": "tool_call", "error": "synthetic scope guard failure"})
         write_file("src/main.py", "print('must not become a candidate')\n")
+    elif scenario in ("write_secret", "secret_then_repair"):
+        # M7 pre-push policy: an in-scope change that passes its check and the
+        # synthetic review but carries a credential-shaped literal and a
+        # credential store by name; publication must refuse it before any push.
+        # The synthetic repair writer removes both files and keeps the change.
+        # `secret_then_repair` fails its check first (the check refuses the
+        # config file), so the repair starts from the refused commit and the
+        # publication scan must find the credential in that ancestor.
+        repairing = "Repair feedback:" in prompt or "Repair feedback:" in (flag("--system-prompt") or "")
+        if repairing:
+            write_file("src/main.py", "print('repaired without the credential')\n")
+            remove_file("src/config.py")
+            remove_file("src/.env")
+        else:
+            write_file("src/main.py", "print('implemented by the synthetic writer')\n")
+            write_file("src/config.py", "GITHUB_TOKEN = 'ghp_" + "a1b2c3d4e5f6g7h8i9j0k1l2m3n4o5p6q7r8s9t0" + "'\n")
+            write_file("src/.env", "DB_PASSWORD=Xk9f2mQ8vL3pR7wZq1\n")
     elif scenario == "write_out_of_scope":
         write_file("src/main.py", "print('changed')\n")
         write_file("README.md", "tampered outside the task paths\n")
@@ -308,8 +372,29 @@ def run_writer(request_id, kind, scenario, prompt):
         # vendor/lib is an unpopulated submodule; Git never lists its contents.
         write_file("src/main.py", "print('changed')\n")
         write_file("vendor/lib/injected.py", "x = 1\n")
+    elif scenario == "advise_writes":
+        # ADR 0023: an advisory role (project orchestrator, repository lead)
+        # that changes a file anyway; the runtime must reject the attempt.
+        write_file("src/main.py", "print('an advisor must not write')\n")
+    final_text = f"synthetic writer finished {scenario}"
+    if scenario in ("advise_json", "advise_writes"):
+        # ADR 0023: the structured advisory result an orchestrator or lead
+        # returns in its final message, surrounded by prose as a model would.
+        advice = {"findings": ["api_pkg.greet is imported by shared_pkg.banner (src/shared_pkg/__init__.py)",
+                               "consumer_pkg.use_shared imports shared_pkg.helper"],
+                  "proposed_tasks": [
+                      {"id": "api", "repository_id": "api", "role": "implementer", "depends_on": [],
+                       "paths": ["src"], "acceptance_criteria": ["api tests pass"], "rationale": "producer first"},
+                      {"id": "shared", "repository_id": "shared", "depends_on": ["api"], "paths": ["src"],
+                       "acceptance_criteria": ["shared tests pass against the api candidate"], "rationale": "binds api"},
+                      {"id": "consumer", "repository_id": "consumer", "depends_on": ["shared"], "paths": ["src"],
+                       "acceptance_criteria": ["consumer tests pass against the shared candidate"], "rationale": "binds shared"}],
+                  "risks": ["renaming helper breaks the consumer import"]}
+        final_text = "Advisory result:\n```json\n" + json.dumps(advice) + "\n```\n"
+    elif scenario == "advise_malformed":
+        final_text = "I looked around and the plan seems fine."
     message = {"role": "assistant", "stopReason": "stop", "usage": usage(cost),
-               "content": [{"type": "text", "text": f"synthetic writer finished {scenario}"}]}
+               "content": [{"type": "text", "text": final_text}]}
     send({"type": "message_update", "usage": usage(cost), "assistantMessageEvent":
           {"type": "text_delta", "contentIndex": 0, "delta": "done"}})
     send({"type": "message_end", "message": message})

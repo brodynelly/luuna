@@ -5,7 +5,7 @@
 use crate::{integrations, internal, projects::storage_error, ApiError, AppState};
 use axum::http::StatusCode;
 use luuna_domain::{Ticket, TicketSource};
-use luuna_storage::MissionsBinding;
+use luuna_storage::{MissionsBinding, TicketRevision};
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 use sha2::{Digest, Sha256};
@@ -407,6 +407,150 @@ pub(crate) async fn reconcile(
         .map_err(storage_error)
 }
 
+/// Edit the Missions-owned intent of an enabled project's ticket through the
+/// Missions CLI, then reconcile the projection so its revision advances and
+/// every plan made for the earlier revision is stale (ADR 0014 point 4 keeps
+/// refusing them at the work and evidence boundaries). The edit runs under the
+/// durable component-operation ledger: the intent is recorded before the CLI
+/// write, a retry after an uncertain write finds the written title and
+/// envelope in the source instead of writing twice, and a concurrent external
+/// edit is refused rather than overwritten.
+pub(crate) async fn update(
+    state: &AppState,
+    ticket: &Ticket,
+    expected_revision: u64,
+    changes: &TicketRevision,
+) -> Result<Ticket, ApiError> {
+    if !integrations::enabled(state, &ticket.project_id)? {
+        return Err(conflict(
+            "enable components before editing Missions tickets",
+        ));
+    }
+    if ticket.revision != expected_revision {
+        return Err(conflict(&format!(
+            "revision conflict: expected {expected_revision}, current {}",
+            ticket.revision
+        )));
+    }
+    let (binding, issue, _all, hash) = current(state, ticket).await?;
+    let source_id = binding.source_id.clone().ok_or_else(malformed)?;
+    // The edit applies to the projection Luuna reconciled last, not to whatever
+    // the source holds now: a retry after an uncertain write must compute the
+    // same desired content (and the same ledger request) as the first attempt,
+    // which the already-written source could no longer yield.
+    let before = ticket.clone();
+    let mut desired = before.clone();
+    changes.apply(&mut desired);
+    desired
+        .validate()
+        .map_err(|error| ApiError(StatusCode::UNPROCESSABLE_ENTITY, error.to_string()))?;
+    if desired.title == before.title
+        && desired.intent == before.intent
+        && desired.acceptance_criteria == before.acceptance_criteria
+        && desired.repository_ids == before.repository_ids
+    {
+        return Err(ApiError(
+            StatusCode::UNPROCESSABLE_ENTITY,
+            "the edit changes nothing; name a field with a new value".into(),
+        ));
+    }
+    let registered: Vec<String> = state
+        .store
+        .lock()
+        .map_err(internal)?
+        .repositories(&ticket.project_id)
+        .map_err(internal)?
+        .into_iter()
+        .map(|registration| registration.repository_id)
+        .collect();
+    if let Some(unknown) = desired
+        .repository_ids
+        .iter()
+        .find(|id| !registered.contains(id))
+    {
+        return Err(ApiError(
+            StatusCode::UNPROCESSABLE_ENTITY,
+            format!(
+                "repository {unknown} is not registered in project {}",
+                ticket.project_id
+            ),
+        ));
+    }
+    let description = serde_json::to_string(&Intent::from_ticket(&desired)).map_err(internal)?;
+    let key = format!("ticket-update:{}:{expected_revision}", ticket.id);
+    let operation = state
+        .store
+        .lock()
+        .map_err(internal)?
+        .begin_component_operation(
+            &ticket.project_id,
+            &key,
+            "ticket.update",
+            &json!({"title": desired.title, "description": description}),
+            &ticket.id,
+        )
+        .map_err(|_| conflict("A different edit of this ticket revision was already recorded; refresh and edit the current revision"))?;
+    if let Some(response) = operation.response {
+        return serde_json::from_value(response).map_err(internal);
+    }
+    let written = issue["title"].as_str() == Some(desired.title.as_str())
+        && issue["description"].as_str() == Some(description.as_str());
+    if !written {
+        // A changed fingerprint with the requested content absent is an edit
+        // made outside Luuna. (A changed fingerprint with the content present
+        // is this edit's own uncertain write, resolved by its ledger entry
+        // above: the lost response is reconciled below instead of refused.)
+        if binding.source_revision.as_deref() != Some(hash.as_str()) {
+            return Err(conflict(
+                "Missions ticket changed outside Luuna; reconcile the source before editing it",
+            ));
+        }
+        if operation.attempted {
+            return Err(conflict("Uncertain Missions update cannot be reconciled by its identity; inspect the managed source before retrying"));
+        }
+        state
+            .store
+            .lock()
+            .map_err(internal)?
+            .mark_component_operation_attempted(&ticket.project_id, &key)
+            .map_err(internal)?;
+        call(
+            state,
+            &ticket.project_id,
+            &[
+                "update".into(),
+                source_id,
+                format!("--title={}", desired.title),
+                format!("--description={description}"),
+            ],
+        )
+        .await?;
+    }
+    // The source fingerprint changed, so the projection revision advances;
+    // a plan bound to the previous revision is stale from here on.
+    let reconciled = reconcile(state, ticket, expected_revision).await?;
+    if reconciled.title != desired.title
+        || reconciled.intent != desired.intent
+        || reconciled.acceptance_criteria != desired.acceptance_criteria
+        || reconciled.repository_ids != desired.repository_ids
+    {
+        return Err(conflict(
+            "Missions ticket changed during the edit; reconcile the source before continuing",
+        ));
+    }
+    state
+        .store
+        .lock()
+        .map_err(internal)?
+        .complete_component_operation(
+            &ticket.project_id,
+            &key,
+            &serde_json::to_value(&reconciled).map_err(internal)?,
+        )
+        .map_err(internal)?;
+    Ok(reconciled)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -437,6 +581,7 @@ mod tests {
             intent: "Implement the test feature".into(),
             acceptance_criteria: vec!["The isolated check passes".into()],
             repository_ids: vec!["app".into()],
+            purpose: luuna_domain::TicketPurpose::Feature,
             created_at: "2026-10-21T00:00:00.000Z".into(),
             updated_at: "2026-10-21T00:00:00.000Z".into(),
         }
@@ -586,6 +731,104 @@ mod tests {
         let ready = reconcile(&state, &blocked, 3).await.unwrap();
         ensure_current(&state, &ready).await.unwrap();
         assert!(!state.config.data_dir.join("unused-developer-root").exists());
+    }
+
+    #[tokio::test]
+    #[ignore = "requires pinned Bun and real component checkouts; run with --ignored"]
+    async fn missions_real_uncertain_ticket_edit_reconciles_on_retry() {
+        let directory = tempfile::tempdir().unwrap();
+        let state = new_state(config(directory.path()));
+        register(&state);
+        let original = legacy();
+        state
+            .store
+            .lock()
+            .unwrap()
+            .create_ticket(&original, "legacy-request")
+            .unwrap();
+        let _ = integrations::enable(State(state.clone()), Path(original.project_id.clone()))
+            .await
+            .unwrap();
+        let migrated = state
+            .store
+            .lock()
+            .unwrap()
+            .get_ticket(&original.id)
+            .unwrap()
+            .unwrap();
+        let changes = TicketRevision {
+            title: Some("Edited by Luuna, response lost".into()),
+            ..Default::default()
+        };
+        // The first attempt wrote to Missions and lost its response before
+        // reconciling: the ledger holds the attempted intent and the source
+        // holds the requested content while the projection still holds the
+        // pre-edit fingerprint.
+        let mut desired = migrated.clone();
+        changes.apply(&mut desired);
+        let description = serde_json::to_string(&Intent::from_ticket(&desired)).unwrap();
+        let key = format!("ticket-update:{}:1", migrated.id);
+        state
+            .store
+            .lock()
+            .unwrap()
+            .begin_component_operation(
+                &migrated.project_id,
+                &key,
+                "ticket.update",
+                &json!({"title": desired.title, "description": description}),
+                &migrated.id,
+            )
+            .unwrap();
+        state
+            .store
+            .lock()
+            .unwrap()
+            .mark_component_operation_attempted(&migrated.project_id, &key)
+            .unwrap();
+        let source_id = source(&state, &migrated).await.unwrap()["source_id"]
+            .as_str()
+            .unwrap()
+            .to_owned();
+        call(
+            &state,
+            &migrated.project_id,
+            &[
+                "update".into(),
+                source_id,
+                format!("--title={}", desired.title),
+                format!("--description={description}"),
+            ],
+        )
+        .await
+        .unwrap();
+        // The retry of the same edit is reconciled, not refused as an external edit.
+        let edited = update(&state, &migrated, 1, &changes).await.unwrap();
+        assert_eq!(edited.revision, 2);
+        assert_eq!(edited.title, "Edited by Luuna, response lost");
+        // A genuinely external edit of the new revision is still refused.
+        call(
+            &state,
+            &migrated.project_id,
+            &[
+                "update".into(),
+                source(&state, &edited).await.unwrap()["source_id"]
+                    .as_str()
+                    .unwrap()
+                    .into(),
+                "--title=Edited outside Luuna".into(),
+            ],
+        )
+        .await
+        .unwrap();
+        let other = TicketRevision {
+            title: Some("Another Luuna edit".into()),
+            ..Default::default()
+        };
+        assert_eq!(
+            update(&state, &edited, 2, &other).await.unwrap_err().0,
+            StatusCode::CONFLICT
+        );
     }
 
     #[tokio::test]

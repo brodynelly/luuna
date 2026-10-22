@@ -1,6 +1,6 @@
 import { describe, expect, it, vi } from "vitest";
-import { ApiError, EventReplay, EventWindow, LuunaClient, assistantText, awaitsValidation, checkResults, confirmedManifest, isTerminal, loopbackUrl, mergeEvents } from "../src/index";
-import type { EventEnvelope, ProjectManifest } from "../src/index";
+import { ApiError, EventReplay, EventWindow, LuunaClient, MAX_REASON_LENGTH, advisoryRole, assistantText, awaitsValidation, checkResults, confirmedManifest, isTerminal, loopbackUrl, mergeEvents, nextStep, overrideFromRefusal, planRequestForTasks, registerProjectRequest } from "../src/index";
+import type { DoctorReport, EventEnvelope, ProjectManifest, ProjectExport } from "../src/index";
 
 it("retains bounded event payloads while replaying text and rejects a gap atomically", () => {
   const window = new EventWindow();
@@ -118,6 +118,27 @@ describe("local runtime connection", () => {
     expect(result.state).toBe("cancelled");
     expect(fetcher.mock.calls[0][1]).toMatchObject({ method: "POST", signal });
   });
+
+  it("reads the runtime's doctor report as a token-protected GET and returns it unchanged (ADR 0027 point 4)", async () => {
+    const report: DoctorReport = { ok: false, items: [
+      { name: "git", required: true, status: "ok", detail: "git version 2.55.0" },
+      { name: "api_token", required: false, status: "ok", detail: "LUUNA_API_TOKEN is configured (value not shown)" },
+      { name: "provider_credentials", required: false, status: "warning", detail: "set but empty: ANTHROPIC_API_KEY (an empty variable configures nothing); no provider credential carries a value (model runs fail until one does)" },
+      { name: "pi", required: true, status: "missing", detail: "unsupported Pi version; expected 1.3.0" },
+    ] };
+    const fetcher = vi.fn<typeof fetch>().mockResolvedValue(new Response(JSON.stringify(report), { headers: { "Content-Type": "application/json" } }));
+    const signal = new AbortController().signal;
+    const client = new LuunaClient("http://localhost:4242", "private-token", fetcher);
+    expect(await client.doctor(signal)).toEqual(report);
+    const [url, init] = fetcher.mock.calls[0];
+    expect(String(url)).toBe("http://localhost:4242/api/v1/doctor");
+    expect(init?.method ?? "GET").toBe("GET");
+    expect(init?.body).toBeUndefined();
+    expect(init?.signal).toBe(signal);
+    expect(new Headers(init?.headers).get("Authorization")).toBe("Bearer private-token");
+    const rejected = vi.fn<typeof fetch>().mockResolvedValue(new Response("sensitive", { status: 401 }));
+    await expect(new LuunaClient("http://localhost:4242", "t", rejected).doctor()).rejects.toMatchObject({ status: 401, name: "ApiError" });
+  });
 });
 
 describe("durable event replay", () => {
@@ -208,6 +229,20 @@ describe("project import and discovery", () => {
     expect(() => client.confirmManifest("fixture", -1, manifest)).toThrow("Invalid manifest revision");
   });
 
+  it("imports an export with local checkouts through POST and refuses a non-export document locally", async () => {
+    const fetcher = vi.fn<typeof fetch>().mockImplementation(() => Promise.resolve(new Response("{}")));
+    const client = new LuunaClient("http://127.0.0.1:4242", "test-token", fetcher);
+    const exported = { kind: "luuna-project-export", schema_version: "0.1", export_hash: `sha256:${"a".repeat(64)}` } as unknown as ProjectExport;
+    await client.importProject({ export: exported, repositories: [{ id: "app", path: "/srv/clone" }], idempotency_key: "import-1" });
+    const [url, init] = fetcher.mock.calls[0];
+    expect(String(url)).toBe("http://127.0.0.1:4242/api/v1/projects/import");
+    expect(init?.method).toBe("POST");
+    expect(JSON.parse(String(init?.body))).toEqual({ export: exported, repositories: [{ id: "app", path: "/srv/clone" }], idempotency_key: "import-1" });
+    expect(() => client.importProject({ export: { kind: "other" } as unknown as ProjectExport, repositories: [{ id: "app", path: "/srv/clone" }], idempotency_key: "k" })).toThrow("not a Luuna project export");
+    expect(() => client.importProject({ export: exported, repositories: [], idempotency_key: "k" })).toThrow("local checkout path");
+    expect(fetcher).toHaveBeenCalledTimes(1);
+  });
+
   it("surfaces short deterministic runtime reasons for conflicts and validation failures only", async () => {
     const respond = (status: number, body: string) => vi.fn<typeof fetch>().mockResolvedValue(new Response(body, { status, headers: { "Content-Type": "application/json" } }));
     const conflict = new LuunaClient("http://localhost:4242", "t", respond(409, '{"error":"revision conflict: expected 1, current 0"}'));
@@ -216,7 +251,10 @@ describe("project import and discovery", () => {
     await expect(invalid.discover("fixture")).rejects.toThrow("default branch release");
     const invalidPath = new LuunaClient("http://localhost:4242", "t", respond(400, '{"error":"repository path must be an absolute path to the repository root"}'));
     await expect(invalidPath.registerProject({ name: "x", repositories: [{ id: "app", path: "relative" }] })).rejects.toThrow("absolute path");
-    const long = new LuunaClient("http://localhost:4242", "t", respond(422, JSON.stringify({ error: "x".repeat(301) })));
+    // A deterministic reason may quote a testing-setup offer or a dependency override (ADR 0022, ADR 0023), so the bound is 1000; longer bodies are never surfaced.
+    const quoted = new LuunaClient("http://localhost:4242", "t", respond(422, JSON.stringify({ error: `task consumer in repository consumer must depend on task shared in repository shared: ${"x".repeat(400)}` })));
+    await expect(quoted.discover("fixture")).rejects.toThrow("task consumer in repository consumer must depend on");
+    const long = new LuunaClient("http://localhost:4242", "t", respond(422, JSON.stringify({ error: "x".repeat(MAX_REASON_LENGTH + 1) })));
     await expect(long.discover("fixture")).rejects.toThrow("Runtime request failed (HTTP 422)");
     const server = new LuunaClient("http://localhost:4242", "t", respond(500, '{"error":"secret prompt text"}'));
     await expect(server.discover("fixture")).rejects.not.toThrow("secret");
@@ -397,5 +435,155 @@ describe("live event following over SSE", () => {
     const client = new LuunaClient("http://127.0.0.1:4242", "t", fetcher);
     await expect((async () => { for await (const _event of client.followEvents("run", 0, undefined, { wait: async () => undefined })) { /* consume */ } })()).rejects.toMatchObject({ status: 401 });
     expect(fetcher).toHaveBeenCalledTimes(1);
+  });
+});
+
+describe("ticket editing, memory correction, the personal export and retention (ADR 0026)", () => {
+  it("sends each edit at the revision or hash the client read, and the retention routes as cataloged", async () => {
+    const fetcher = vi.fn<typeof fetch>().mockImplementation(() => Promise.resolve(new Response("{}")));
+    const client = new LuunaClient("http://localhost:4242", "t", fetcher);
+    await client.updateTicket("ticket/one", { expected_revision: 3, title: "Edited", repository_ids: ["app", "web"] });
+    await client.updateMemory("p", "mem/1", { idempotency_key: "k1", expected_hash: "sha256:exact", content: "corrected" });
+    await client.exportUserMemory();
+    await client.memoryRetention("p");
+    await client.setMemoryRetention("p", { process_max_age_days: 30, project_max_age_days: null });
+    await client.applyMemoryRetention("p", { idempotency_key: "k2" });
+    expect(fetcher.mock.calls.map(([url, init]) => [String(url), init?.method ?? "GET", init?.body])).toEqual([
+      ["http://localhost:4242/api/v1/tickets/ticket%2Fone", "PUT", JSON.stringify({ expected_revision: 3, title: "Edited", repository_ids: ["app", "web"] })],
+      ["http://localhost:4242/api/v1/projects/p/memory/mem%2F1", "PUT", JSON.stringify({ idempotency_key: "k1", expected_hash: "sha256:exact", content: "corrected" })],
+      ["http://localhost:4242/api/v1/memory/user/export", "GET", undefined],
+      ["http://localhost:4242/api/v1/projects/p/memory/retention", "GET", undefined],
+      ["http://localhost:4242/api/v1/projects/p/memory/retention", "PUT", JSON.stringify({ process_max_age_days: 30, project_max_age_days: null })],
+      ["http://localhost:4242/api/v1/projects/p/memory/retention/apply", "POST", JSON.stringify({ idempotency_key: "k2" })],
+    ]);
+    for (const [, init] of fetcher.mock.calls) expect(new Headers(init?.headers).get("Authorization")).toBe("Bearer t");
+    expect(() => client.updateTicket("t", { expected_revision: 0, title: "x" })).toThrow("Invalid ticket revision");
+    expect(() => client.updateTicket("t", { expected_revision: 1 })).toThrow("at least one ticket field");
+    expect(() => client.updateMemory("p", "m", { idempotency_key: "k", expected_hash: "", content: "x" })).toThrow("exact content hash");
+    expect(() => client.updateMemory("p", "m", { idempotency_key: "k", expected_hash: "sha256:x", content: " " })).toThrow("content is required");
+    expect(() => client.setMemoryRetention("p", { process_max_age_days: 0, project_max_age_days: null })).toThrow("between 1 and 3650");
+    expect(() => client.setMemoryRetention("p", { process_max_age_days: null, project_max_age_days: 4000 })).toThrow("between 1 and 3650");
+    expect(() => client.applyMemoryRetention("p", { idempotency_key: " " })).toThrow("idempotency key");
+  });
+});
+
+describe("shared request builders (R02, A33: the desktop and the TUI send the same body)", () => {
+  it("registers every repository row once, trimmed, and refuses a row without an id or a path", () => {
+    expect(registerProjectRequest(" Walkthrough ", [{ id: "app", path: "/srv/app" }, { id: " web ", path: " /srv/web " }], " walkthrough ")).toEqual({ name: "Walkthrough", id: "walkthrough", repositories: [{ id: "app", path: "/srv/app" }, { id: "web", path: "/srv/web" }] });
+    expect(registerProjectRequest("One", [{ id: "app", path: "/srv/app" }, { id: "", path: "" }])).toEqual({ name: "One", repositories: [{ id: "app", path: "/srv/app" }] });
+    expect(() => registerProjectRequest("One", [{ id: "app", path: "" }])).toThrow("needs an id and an absolute root path");
+    expect(() => registerProjectRequest("One", [{ id: "app", path: "/a" }, { id: "app", path: "/b" }])).toThrow("unique");
+    expect(() => registerProjectRequest("One", [])).toThrow("at least one repository");
+    expect(() => registerProjectRequest(" ", [{ id: "app", path: "/a" }])).toThrow("needs a name");
+  });
+
+  it("keeps a single task in its pre-M4 shape and builds a task graph with dependencies and workers", () => {
+    expect(planRequestForTasks([{ repository_id: "app", paths: [" src ", ""], operations: ["read", "write"] }], { max_attempts: 2, timeout_seconds: 600, cost_usd_micros: 1_000_000, max_workers: 1 }))
+      .toEqual({ task: { repository_id: "app", paths: ["src"], operations: ["read", "write"] }, budgets: { max_attempts: 2, timeout_seconds: 600, cost_usd_micros: 1_000_000 } });
+    expect(planRequestForTasks([{ repository_id: "app", paths: [], operations: ["read"] }])).toEqual({ task: { repository_id: "app", paths: ["src"], operations: ["read"] } });
+    const graph = planRequestForTasks([
+      { repository_id: "shared", paths: ["lib"], operations: ["read", "write"] },
+      { repository_id: "api", paths: ["src"], operations: ["read", "write"], depends_on: ["shared"] },
+      { repository_id: "consumer", paths: ["src", "tests"], operations: ["read", "write"], depends_on: ["shared", "api"], acceptance_criteria: ["imports the shared package"] },
+    ], { max_workers: 2, max_attempts: 3 }, { componentContext: { memory_ids: ["mem-1"], prompt: null } });
+    expect(graph).toEqual({
+      tasks: [
+        { id: "shared", repository_id: "shared", paths: ["lib"], operations: ["read", "write"] },
+        { id: "api", repository_id: "api", paths: ["src"], operations: ["read", "write"], depends_on: ["shared"] },
+        { id: "consumer", repository_id: "consumer", paths: ["src", "tests"], operations: ["read", "write"], acceptance_criteria: ["imports the shared package"], depends_on: ["shared", "api"] },
+      ],
+      budgets: { max_attempts: 3, max_workers: 2 },
+      component_context: { memory_ids: ["mem-1"], prompt: null },
+    });
+    expect(planRequestForTasks([{ repository_id: "a", paths: ["src"], operations: ["read"] }], {}, { componentContext: { memory_ids: [], prompt: null } })).not.toHaveProperty("component_context");
+    expect(() => planRequestForTasks([])).toThrow("at least one task");
+    expect(() => planRequestForTasks([{ repository_id: "a", paths: [], operations: ["read"] }, { repository_id: "a", paths: [], operations: ["read"] }])).toThrow("distinct repository");
+    expect(() => planRequestForTasks([{ repository_id: "a", paths: [], operations: ["read"], depends_on: ["a"] }, { repository_id: "b", paths: [], operations: ["read"] }])).toThrow("cannot depend on itself");
+    expect(() => planRequestForTasks([{ repository_id: "a", paths: [], operations: ["read"], depends_on: ["zzz"] }, { repository_id: "b", paths: [], operations: ["read"] }])).toThrow("not a task of this plan");
+    expect(() => planRequestForTasks([{ repository_id: "a", paths: [], operations: ["read"] }, { repository_id: "b", paths: [], operations: ["read"] }], { max_workers: 3 })).toThrow("between 1 and 2");
+    expect(() => planRequestForTasks([{ repository_id: "a", paths: [], operations: ["read"] }], { max_attempts: 0 })).toThrow("budgets.max_attempts");
+  });
+});
+
+// ---- ADR 0022 (testing-setup prerequisite) and ADR 0023 (roles, traces, overrides): the request
+// fields both clients send through one client, and the structured offer a refusal carries. ----
+describe("testing-setup prerequisite and delegated roles", () => {
+  const sent = () => {
+    const fetcher = vi.fn<typeof fetch>().mockImplementation(() => Promise.resolve(new Response("{}")));
+    return { fetcher, client: new LuunaClient("http://localhost:4242", "t", fetcher), body: (index: number) => JSON.parse(String(fetcher.mock.calls[index][1]?.body)) };
+  };
+
+  it("creates a testing_setup ticket and a setup plan with its check recipes", async () => {
+    const { client, body } = sent();
+    await client.createTicket("p", { idempotency_key: "k", title: "Establish tests", intent: "Add a harness", acceptance_criteria: ["python -m unittest executes one test"], repository_ids: ["app"], purpose: "testing_setup" });
+    expect(body(0)).toMatchObject({ purpose: "testing_setup", repository_ids: ["app"] });
+    const request = planRequestForTasks([{ repository_id: "app", paths: ["tests"], operations: ["read", "write"] }], { max_attempts: 2 }, { checks: [{ id: "unit", executable: "python", args: ["-m", "unittest"], timeout_seconds: 120 }, { id: "lint", executable: "ruff", args: [], cwd: ".", timeout_seconds: 60, capabilities: ["network"] }] });
+    expect(request).toEqual({ task: { repository_id: "app", paths: ["tests"], operations: ["read", "write"] }, budgets: { max_attempts: 2 }, checks: [{ id: "unit", executable: "python", args: ["-m", "unittest"], timeout_seconds: 120, capabilities: [], required: true }, { id: "lint", executable: "ruff", args: [], timeout_seconds: 60, capabilities: ["network"], required: true }] });
+    await client.createPlan("ticket-1", { ...request, idempotency_key: "k2" });
+    expect(body(1)).toEqual({ ...request, idempotency_key: "k2" });
+    // What no runtime accepts is refused before anything is sent.
+    expect(() => planRequestForTasks([{ repository_id: "app", paths: [], operations: ["read"] }], {}, { checks: [{ id: "", executable: "python", timeout_seconds: 10 }] })).toThrow("id and an executable");
+    expect(() => planRequestForTasks([{ repository_id: "app", paths: [], operations: ["read"] }], {}, { checks: [{ id: "unit", executable: "python", timeout_seconds: 0 }] })).toThrow("timeout");
+    expect(() => planRequestForTasks([{ repository_id: "app", paths: [], operations: ["read"] }], {}, { checks: [{ id: "unit", executable: "python", timeout_seconds: 10, required: false as never }] })).toThrow("required checks only");
+    expect(() => planRequestForTasks([{ repository_id: "app", paths: [], operations: ["read"] }], {}, { checks: [{ id: "unit", executable: "python", timeout_seconds: 10 }, { id: "unit", executable: "pytest", timeout_seconds: 10 }] })).toThrow("unique");
+    expect(() => planRequestForTasks([{ repository_id: "app", paths: [], operations: ["read"] }, { repository_id: "web", paths: [], operations: ["read"] }], {}, { checks: [{ id: "unit", executable: "python", timeout_seconds: 10 }] })).toThrow("exactly one task");
+    expect(planRequestForTasks([{ repository_id: "app", paths: [], operations: ["read"] }], {}, { checks: [] })).not.toHaveProperty("checks");
+  });
+
+  it("surfaces the structured testing-setup offer of a refused implementation with the shared next step", async () => {
+    const prerequisite = { kind: "testing_setup", project_id: "p", repository_id: "app", baseline_id: "b1", reason: "the manifest names no required check for repository app", next: "POST /api/v1/projects/p/tickets with purpose testing_setup and repository_ids [\"app\"], then POST /api/v1/tickets/{id}/plans with the check recipes (checks)" };
+    const error = `implementation refused: repository app has no usable testing setup (${prerequisite.reason}); a prerequisite testing-setup ticket is offered: ${prerequisite.next}`;
+    const refused = new LuunaClient("http://localhost:4242", "t", vi.fn<typeof fetch>().mockResolvedValue(new Response(JSON.stringify({ error, prerequisite }), { status: 422, headers: { "Content-Type": "application/json" } })));
+    const failure = await refused.implement("run-1").catch((caught: unknown) => caught);
+    expect(failure).toBeInstanceOf(ApiError);
+    expect((failure as ApiError).message).toBe(error);
+    expect((failure as ApiError).fromRuntime).toBe(true);
+    expect((failure as ApiError).prerequisite).toEqual(prerequisite);
+    expect(nextStep(error)).toContain("Create the testing-setup ticket the runtime offers");
+    // A detail of another shape is not an offer; a plain refusal carries none.
+    const odd = new LuunaClient("http://localhost:4242", "t", vi.fn<typeof fetch>().mockResolvedValue(new Response(JSON.stringify({ error: "refused", prerequisite: { kind: "other", next: "x" } }), { status: 422, headers: { "Content-Type": "application/json" } })));
+    expect(((await odd.implement("run-1").catch((caught: unknown) => caught)) as ApiError).prerequisite).toBeUndefined();
+  });
+
+  it("sends roles, derivation and dependency overrides only when given, and refuses what the domain refuses", () => {
+    const drafts = [
+      { id: "lead", repository_id: "shared", paths: ["lib"], operations: ["read" as const], role: "repository_lead" as const },
+      { id: "api", repository_id: "api", paths: ["src"], operations: ["read" as const, "write" as const], depends_on: ["lead"], derived_from_task: "orchestrate" },
+      { id: "consumer", repository_id: "consumer", paths: ["src"], operations: ["read" as const, "write" as const], role: "implementer" as const },
+    ];
+    const request = planRequestForTasks(drafts, { max_workers: 2 }, { dependencyOverrides: [{ consumer: "consumer", producer: "api", action: "waive", justification: " the consumer pins the published package " }] });
+    expect(request).toEqual({
+      tasks: [
+        { id: "lead", repository_id: "shared", paths: ["lib"], operations: ["read"], role: "repository_lead" },
+        { id: "api", repository_id: "api", paths: ["src"], operations: ["read", "write"], depends_on: ["lead"], derived_from_task: "orchestrate" },
+        { id: "consumer", repository_id: "consumer", paths: ["src"], operations: ["read", "write"] },
+      ],
+      dependency_overrides: [{ consumer: "consumer", producer: "api", action: "waive", justification: "the consumer pins the published package" }],
+      budgets: { max_workers: 2 },
+    });
+    // A single advisory task keeps the single-task shape with its role; a single implementer stays pre-M4.
+    expect(planRequestForTasks([{ repository_id: "app", paths: [], operations: ["read"], role: "project_orchestrator" }])).toEqual({ task: { repository_id: "app", paths: ["src"], operations: ["read"], role: "project_orchestrator" } });
+    expect(planRequestForTasks([{ repository_id: "app", paths: [], operations: ["read", "write"], role: "implementer" }])).toEqual({ task: { repository_id: "app", paths: ["src"], operations: ["read", "write"] } });
+    expect(() => planRequestForTasks([{ repository_id: "app", paths: [], operations: ["read", "write"], role: "repository_lead" }])).toThrow("reads only");
+    expect(() => planRequestForTasks([{ repository_id: "app", paths: [], operations: ["read"], role: "reviewer" as never }])).toThrow("unknown role");
+    expect(() => planRequestForTasks([{ id: "a", repository_id: "app", paths: [], operations: ["read"] }, { id: "b", repository_id: "web", paths: [], operations: ["read"], derived_from_task: "a" }])).toThrow("same plan");
+    expect(() => planRequestForTasks([{ repository_id: "app", paths: [], operations: ["read"], derived_from_task: "implement" }])).toThrow("derive from itself");
+    const two = [{ id: "a", repository_id: "app", paths: [], operations: ["read" as const, "write" as const] }, { id: "b", repository_id: "web", paths: [], operations: ["read" as const, "write" as const] }];
+    expect(() => planRequestForTasks(two, {}, { dependencyOverrides: [{ consumer: "a", producer: "zzz", action: "add", justification: "x" }] })).toThrow("not a task of this plan");
+    expect(() => planRequestForTasks(two, {}, { dependencyOverrides: [{ consumer: "a", producer: "a", action: "add", justification: "x" }] })).toThrow("both consumer and producer");
+    expect(() => planRequestForTasks(two, {}, { dependencyOverrides: [{ consumer: "a", producer: "b", action: "add", justification: "  " }] })).toThrow("justification");
+    expect(() => planRequestForTasks(two, {}, { dependencyOverrides: [{ consumer: "a", producer: "b", action: "add", justification: "x" }, { consumer: "a", producer: "b", action: "waive", justification: "y" }] })).toThrow("repeated");
+    expect(() => planRequestForTasks(two, {}, { dependencyOverrides: [{ consumer: "a", producer: "b", action: "skip" as never, justification: "x" }] })).toThrow("waive or add");
+    expect(() => planRequestForTasks([two[0], { ...two[1], operations: ["read"], role: "repository_lead" }], {}, { dependencyOverrides: [{ consumer: "a", producer: "b", action: "add", justification: "x" }] })).toThrow("advisory task");
+    expect(advisoryRole("repository_lead") && advisoryRole("project_orchestrator") && !advisoryRole("implementer") && !advisoryRole(undefined)).toBe(true);
+  });
+
+  it("reads the override a relationship refusal quotes, so the developer only adds the justification", () => {
+    const reason = 'task consumer in repository consumer must depend on task shared in repository shared: confirmed relationship shared -> consumer (package npm:@fixture/shared); add the dependency, or waive it with dependency_overrides [{"consumer": "consumer", "producer": "shared", "action": "waive", "justification": "..."}]';
+    expect(overrideFromRefusal(reason)).toEqual({ consumer: "consumer", producer: "shared", action: "waive", justification: "" });
+    expect(overrideFromRefusal('… record it with dependency_overrides [{"consumer": "b", "producer": "a", "action": "add", "justification": "..."}]')).toEqual({ consumer: "b", producer: "a", action: "add", justification: "" });
+    expect(overrideFromRefusal("repository app already has an active writer")).toBeNull();
+    expect(overrideFromRefusal("dependency_overrides [{broken")).toBeNull();
+    expect(nextStep(reason)).toContain("record the quoted dependency override");
   });
 });

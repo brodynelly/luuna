@@ -1,5 +1,5 @@
 import assert from 'node:assert/strict';
-import { readFileSync } from 'node:fs';
+import { readFileSync, readdirSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import { resolve, dirname } from 'node:path';
 import Ajv2020 from 'ajv/dist/2020.js';
@@ -113,3 +113,82 @@ const uncataloged = [...served].flatMap(([route, methods]) => [...methods].filte
 if (process.env.LUUNA_CATALOG_STRICT !== '0') assert.deepEqual(uncataloged, [], `runtime mutations missing from schemas/capability-catalog.json: ${uncataloged.join(', ')}`);
 checks += 1;
 console.log(`Capability catalog: ${capabilities.length} actions validated against ${served.size} runtime routes and the typed client.${uncataloged.length ? ` Runtime mutations without client parity yet (${uncataloged.length}): ${uncataloged.join(', ')}.` : ''}`);
+// ---- Required actions (R02, R14, A33; docs/06-memory.md, docs/09-experience.md, ADR 0017/0018/0026):
+// each product action the specification requires maps to at least one catalog entry whose desktop
+// control (a data-capability marker in apps/desktop/src) and TUI command (packages/tui/src/commands.mjs)
+// both exist, and every entry says what requires it. A catalog that merely lists routes cannot
+// establish these obligations; this check fails when either client loses the control. ----
+const REQUIRED_ACTIONS = {
+  'ticket edit (docs/09-experience.md#browser-and-tui-parity, docs/06-memory.md#personal-memory)': ['tickets.update'],
+  'memory inspect (docs/06-memory.md#personal-memory)': ['memory.list'],
+  'memory edit (docs/06-memory.md#personal-memory)': ['memory.update'],
+  'memory export, personal (docs/06-memory.md#personal-memory)': ['memory.user.export'],
+  'memory delete (docs/06-memory.md#boundaries)': ['memory.delete'],
+  'memory disable: private memory excluded unless explicitly included, retention by policy (docs/06-memory.md#boundaries)': ['memory.list', 'memory.retention.set', 'memory.retention.apply'],
+  'memory promotion (docs/06-memory.md#project-knowledge-and-process-lessons)': ['memory.promote'],
+  'multi-repository registration (R05, docs/09-experience.md#existing-project)': ['projects.register'],
+  'multi-repository planning with dependencies and workers (R05, A12, ADR 0017)': ['plans.create'],
+  'per-repository baselines (R08, ADR 0017)': ['baselines.start', 'baselines.list'],
+  'task resume by task_id (A20, ADR 0017)': ['runs.implement', 'runs.tasks'],
+  'publication reconcile (R11, R12, ADR 0018)': ['runs.publication.reconcile'],
+  'cancel (docs/09-experience.md#views)': ['runs.cancel'],
+  'recovery and reconnect (R15, A20, docs/09-experience.md#lifecycle-and-portability)': ['health', 'runs.stream', 'runs.events'],
+  'testing-setup prerequisite: the offer, a testing_setup ticket, a setup plan with recipes and the handoff (R08, A06, ADR 0022)': ['baselines.list', 'projects.show', 'tickets.create', 'plans.create', 'runs.candidate'],
+  'delegated roles, assignment traces, dependency overrides and advisory results (R06, P42, P44, ADR 0023)': ['plans.create', 'runs.tasks', 'runs.candidate'],
+};
+// ---- Experience surfaces (docs/09-experience.md#views, ADR 0027 point 4): projections of the
+// cataloged read actions, not actions of their own. Each is traced to the catalog entries it
+// projects (both clients wired), to a desktop panel carrying `data-surface="<name>"` and to a TUI
+// projection command (`PROJECTIONS` in packages/tui/src/commands.mjs) reading only those entries. ----
+const REQUIRED_SURFACES = {
+  'home summary: projects, validation health, blockers, create ticket (docs/09-experience.md#views, ADR 0027 point 4)': { projects: ['projects.list', 'projects.show', 'baselines.list', 'tickets.list', 'runs.list', 'tickets.create'], desktop: 'home', tui: 'home' },
+  'kanban projection of authoritative run state (docs/09-experience.md#views, ADR 0027 point 4)': { projects: ['projects.list', 'projects.show', 'tickets.list', 'runs.list'], desktop: 'board', tui: 'board' },
+  'help: onboarding, states, evidence, documentation (docs/09-experience.md#views, ADR 0027 point 4)': { projects: ['health'], desktop: 'help', tui: null },
+  'external-editor handoff: the candidate worktree path with a copy control (docs/09-experience.md#views, ADR 0027 point 4)': { projects: ['runs.worktrees', 'runs.candidate'], desktop: 'editor-handoff', tui: null },
+  'settings: the runtime environment and credential presence as shown by doctor, never values, not an editor (docs/09-experience.md#views, ADR 0027 point 4)': { projects: ['doctor'], desktop: 'settings', tui: 'doctor' },
+};
+const byId = new Map(capabilities.map((capability) => [capability.id, capability]));
+const desktopSources = readdirSync(resolve(root, 'apps/desktop/src'), { recursive: true })
+  .map((file) => String(file).replaceAll('\\', '/'))
+  .filter((file) => file.endsWith('.tsx') && !file.includes('.test.'))
+  .map((file) => readFileSync(resolve(root, 'apps/desktop/src', file), 'utf8'))
+  .join('\n');
+const desktopMarkers = new Set([...desktopSources.matchAll(/data-capability="([^"]+)"/g)].flatMap((match) => match[1].split(/\s+/).filter(Boolean)));
+const { commandsById } = await import('../packages/tui/src/commands.mjs');
+for (const [action, ids] of Object.entries(REQUIRED_ACTIONS)) {
+  const wired = ids.filter((id) => {
+    const capability = byId.get(id);
+    return capability && desktopMarkers.has(capability.desktop) && commandsById.has(id);
+  });
+  assert.ok(wired.length > 0, `required action "${action}" maps to no catalog entry with both clients wired (candidates: ${ids.join(', ')})`);
+  for (const id of ids) {
+    const capability = byId.get(id);
+    assert.ok(capability, `required action "${action}": catalog has no entry ${id}`);
+    assert.ok(desktopMarkers.has(capability.desktop), `required action "${action}": no desktop control carries data-capability="${capability.desktop}"`);
+    assert.ok(commandsById.has(id), `required action "${action}": no TUI command implements ${id}`);
+  }
+}
+for (const capability of capabilities) assert.ok(capability.required_by.length > 0, `${capability.id}: required_by names what requires this action`);
+checks += Object.keys(REQUIRED_ACTIONS).length;
+console.log(`Required actions: ${Object.keys(REQUIRED_ACTIONS).length} specification obligations traced to cataloged actions with desktop and TUI controls.`);
+const desktopSurfaces = new Set([...desktopSources.matchAll(/data-surface="([^"]+)"/g)].map((match) => match[1]));
+const { commandsByName, projectionsByName } = await import('../packages/tui/src/commands.mjs');
+for (const [surface, trace] of Object.entries(REQUIRED_SURFACES)) {
+  for (const id of trace.projects) {
+    const capability = byId.get(id);
+    assert.ok(capability, `required surface "${surface}": catalog has no entry ${id}`);
+    assert.ok(desktopMarkers.has(capability.desktop) && commandsById.has(id), `required surface "${surface}": projected action ${id} is not wired in both clients`);
+  }
+  assert.ok(desktopSurfaces.has(trace.desktop), `required surface "${surface}": no desktop panel carries data-surface="${trace.desktop}"`);
+  if (trace.tui) {
+    // A projection command (`PROJECTIONS`) reads the entries it names; a surface that is one
+    // cataloged read (settings: `doctor`) is the action's own command.
+    const command = projectionsByName.get(trace.tui) ?? commandsByName.get(trace.tui);
+    assert.ok(command, `required surface "${surface}": no TUI command ${trace.tui}`);
+    const reads = command.projects ?? [command.id];
+    assert.ok(reads.every((id) => trace.projects.includes(id)), `required surface "${surface}": TUI ${trace.tui} reads ${reads.join(', ')}, outside the traced actions`);
+    assert.ok(reads.every((id) => byId.get(id)?.method === 'GET'), `required surface "${surface}": TUI ${trace.tui} must read only`);
+  }
+}
+checks += Object.keys(REQUIRED_SURFACES).length;
+console.log(`Required surfaces: ${Object.keys(REQUIRED_SURFACES).length} experience surfaces traced to the cataloged actions they project, a desktop panel and (where one exists) a TUI projection.`);

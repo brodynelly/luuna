@@ -23,6 +23,30 @@ pub struct MemoryBinding {
     pub deleted: bool,
 }
 
+/// A project's memory retention policy: the longest age, in days, a record of
+/// each scope may reach before `POST …/memory/retention/apply` deletes it.
+/// `None` keeps records of that scope indefinitely. User memory is personal and
+/// never subject to a project policy.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct MemoryRetentionPolicy {
+    #[serde(default)]
+    pub process_max_age_days: Option<u32>,
+    #[serde(default)]
+    pub project_max_age_days: Option<u32>,
+}
+
+impl MemoryRetentionPolicy {
+    /// The policy's limit for one scope, if any.
+    pub fn max_age_days(&self, scope: &str) -> Option<u32> {
+        match scope {
+            "process" => self.process_max_age_days,
+            "project" => self.project_max_age_days,
+            _ => None,
+        }
+    }
+}
+
 impl Store {
     pub fn initialize_component_state(&self) -> Result<()> {
         self.connection.execute_batch(
@@ -37,7 +61,10 @@ impl Store {
              CREATE TABLE IF NOT EXISTS component_memories (
                 id TEXT PRIMARY KEY, project_id TEXT NOT NULL REFERENCES projects(id),
                 scope TEXT NOT NULL, source_id TEXT NOT NULL, domain TEXT NOT NULL,
-                created_at TEXT NOT NULL, deleted INTEGER NOT NULL DEFAULT 0);",
+                created_at TEXT NOT NULL, deleted INTEGER NOT NULL DEFAULT 0);
+             CREATE TABLE IF NOT EXISTS memory_retention (
+                project_id TEXT PRIMARY KEY REFERENCES projects(id), policy TEXT NOT NULL,
+                updated_at TEXT NOT NULL);",
         )?;
         let columns = self
             .connection
@@ -175,6 +202,34 @@ impl Store {
         Ok(rows.collect::<std::result::Result<Vec<_>, _>>()?)
     }
 
+    /// The recorded intent under `key`, if one was begun, without creating one.
+    /// A multi-step operation that died between steps resumes from it; a key
+    /// the ledger has never seen is `None`.
+    pub fn component_operation(
+        &self,
+        project_id: &str,
+        key: &str,
+    ) -> Result<Option<ComponentOperation>> {
+        let row: Option<(String, Option<String>, bool)> = self
+            .connection
+            .query_row(
+                "SELECT record_id,response,attempted FROM component_operations WHERE project_id=?1 AND operation_key=?2",
+                params![project_id, key],
+                |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
+            )
+            .optional()?;
+        row.map(|(record_id, response, attempted)| {
+            Ok(ComponentOperation {
+                record_id,
+                response: response
+                    .map(|text| serde_json::from_str(&text))
+                    .transpose()?,
+                attempted,
+            })
+        })
+        .transpose()
+    }
+
     /// The recorded response of a finished component operation, if any; used to
     /// resume a multi-step operation whose later step died before completion.
     pub fn component_operation_response(
@@ -199,6 +254,80 @@ impl Store {
     pub fn delete_memory_binding(&self, id: &str) -> Result<()> {
         self.connection
             .execute("UPDATE component_memories SET deleted=1 WHERE id=?1", [id])?;
+        Ok(())
+    }
+
+    /// Every live user-scope memory binding, whichever project created it:
+    /// user memory lives in the one private user store, not in a project.
+    pub fn user_memory_bindings(&self) -> Result<Vec<MemoryBinding>> {
+        let mut statement = self.connection.prepare(
+            "SELECT id,project_id,scope,source_id,domain,created_at,deleted FROM component_memories
+             WHERE deleted=0 AND scope='user' ORDER BY created_at,id",
+        )?;
+        let rows = statement.query_map([], |row| {
+            Ok(MemoryBinding {
+                id: row.get(0)?,
+                project_id: row.get(1)?,
+                scope: row.get(2)?,
+                source_id: row.get(3)?,
+                domain: row.get(4)?,
+                created_at: row.get(5)?,
+                deleted: row.get(6)?,
+            })
+        })?;
+        Ok(rows.collect::<std::result::Result<Vec<_>, _>>()?)
+    }
+
+    /// The project's retention policy; the default keeps everything.
+    pub fn memory_retention(&self, project_id: &str) -> Result<MemoryRetentionPolicy> {
+        let policy: Option<String> = self
+            .connection
+            .query_row(
+                "SELECT policy FROM memory_retention WHERE project_id=?1",
+                [project_id],
+                |row| row.get(0),
+            )
+            .optional()?;
+        Ok(policy
+            .map(|text| serde_json::from_str(&text))
+            .transpose()?
+            .unwrap_or_default())
+    }
+
+    /// Replace the project's retention policy and record `memory.retention_set`.
+    pub fn set_memory_retention(
+        &mut self,
+        project_id: &str,
+        policy: &MemoryRetentionPolicy,
+    ) -> Result<MemoryRetentionPolicy> {
+        let tx = self
+            .connection
+            .transaction_with_behavior(rusqlite::TransactionBehavior::Immediate)?;
+        crate::projects::get_project_in(&tx, project_id)?
+            .ok_or_else(|| StorageError::NotFound(project_id.into()))?;
+        tx.execute(
+            "INSERT INTO memory_retention(project_id,policy,updated_at) VALUES (?1,?2,?3)
+             ON CONFLICT(project_id) DO UPDATE SET policy=excluded.policy,updated_at=excluded.updated_at",
+            params![project_id, serde_json::to_string(policy)?, now()],
+        )?;
+        crate::projects::append_project_event(
+            &tx,
+            project_id,
+            "memory.retention_set",
+            serde_json::to_value(policy)?,
+        )?;
+        tx.commit()?;
+        Ok(policy.clone())
+    }
+
+    /// Test seam: rewrite a binding's recorded creation time so retention can
+    /// be exercised without waiting. Not a product operation.
+    #[doc(hidden)]
+    pub fn set_memory_binding_created_at(&self, id: &str, created_at: &str) -> Result<()> {
+        self.connection.execute(
+            "UPDATE component_memories SET created_at=?2 WHERE id=?1",
+            params![id, created_at],
+        )?;
         Ok(())
     }
 

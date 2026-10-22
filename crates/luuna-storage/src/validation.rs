@@ -5,6 +5,7 @@ use crate::{
 use luuna_domain::{
     BudgetUsage, CandidateEvidence, CandidateSet, CandidateStatus, CheckResult, CheckStatus,
     DomainError, PlanRevision, ProjectManifest, ReviewResult, ReviewVerdict, RunState,
+    TicketPurpose,
 };
 use rusqlite::{params, Connection, OptionalExtension, Transaction, TransactionBehavior};
 use serde::Serialize;
@@ -85,9 +86,21 @@ impl Store {
             );
         }
         let plan = current_plan(&tx, run_id)?;
+        // A candidate freezes one commit per repository that a writer task
+        // changes; a repository an advisory task (ADR 0023) only reads has a
+        // base commit in the plan but no candidate commit.
+        let writer_repositories: std::collections::BTreeSet<&String> = plan
+            .tasks
+            .iter()
+            .filter(|task| !task.is_advisory())
+            .map(|task| &task.repository_id)
+            .collect();
         if candidate.plan_hash != plan.hash
-            || candidate.repository_commits.keys().collect::<Vec<_>>()
-                != plan.base_commits.keys().collect::<Vec<_>>()
+            || candidate
+                .repository_commits
+                .keys()
+                .collect::<std::collections::BTreeSet<_>>()
+                != writer_repositories
         {
             return invalid("candidate does not match the approved plan and repositories");
         }
@@ -117,6 +130,7 @@ impl Store {
             finished_at: None,
             reason: None,
             content_drift: false,
+            policy_refused: false,
         };
         evidence.validate()?;
         tx.execute(
@@ -320,6 +334,33 @@ impl Store {
             "required candidate checks could not run meaningfully{}",
             named(CheckStatus::Blocked)
         );
+        // A testing-setup candidate exists to make tests run: besides every
+        // required check passing, at least one of them must have executed a
+        // test its recognised runner counted. A check that merely exits 0, or
+        // whose runner the executor does not recognise, is not evidence that a
+        // suite exists (ADR 0022); the executor already blocks empty and
+        // skip-only suites, which the rule above turns into `testing_blocked`.
+        let setup_without_tests = plan.purpose == TicketPurpose::TestingSetup
+            && !statuses.contains(&None)
+            && statuses
+                .iter()
+                .all(|status| *status == Some(CheckStatus::Passed))
+            && !required.iter().any(|recipe| {
+                evidence.results.iter().any(|r| {
+                    r.recipe_id == recipe.id
+                        && r.repository_id == recipe.repository_id
+                        && r.status == CheckStatus::Passed
+                        && r.tests_detected.is_some_and(|count| count > 0)
+                })
+            });
+        let setup_reason = format!(
+            "testing setup candidate executed no recognised test: every required check passed without a test runner summary counting at least one executed test ({}); the setup must make real tests run",
+            required
+                .iter()
+                .map(|recipe| format!("{}/{}", recipe.repository_id, recipe.id))
+                .collect::<Vec<_>>()
+                .join(", ")
+        );
         let (mut next, mut status, mut reason) = if statuses.contains(&None) {
             (
                 RunState::Failed,
@@ -349,6 +390,12 @@ impl Store {
                 RunState::Failed,
                 CandidateStatus::Failed,
                 Some(failed_reason.as_str()),
+            )
+        } else if setup_without_tests {
+            (
+                RunState::TestingBlocked,
+                CandidateStatus::TestingBlocked,
+                Some(setup_reason.as_str()),
             )
         } else {
             (RunState::Reviewing, CandidateStatus::Reviewing, None)
@@ -478,6 +525,66 @@ impl Store {
         reason: &str,
     ) -> Result<CandidateEvidence> {
         self.settle_candidate_stage(run_id, expected_revision, hash, next, reason, false)
+    }
+
+    /// The plan a workflow is authorized to act on right now: its durably
+    /// stored approval must still authorize the *latest* revision of its plan
+    /// (a newer revision supersedes the approval), and the plan's ticket and
+    /// manifest bindings must still hold. This is the gate validation and
+    /// repair apply in their transactions, evaluated read-only for
+    /// publication admission so a reviewed candidate cannot be published
+    /// under superseded authorization.
+    pub fn authorize_workflow(&self, run_id: &str) -> Result<PlanRevision> {
+        let tx = self.connection.unchecked_transaction()?;
+        current_plan(&tx, run_id)
+    }
+
+    /// Invalidate a reviewed candidate whose inputs changed after the review:
+    /// the owned worktree drifted from the frozen candidate when publication
+    /// was requested, the pre-push policy refused its content, or the
+    /// developer sends a CI failure to repair. The candidate is marked failed
+    /// with the reason (content drift marked so it is never re-validated in
+    /// place; a policy refusal marked so its repair starts history-clean from
+    /// the base), the run leaves `reviewed` for
+    /// `failed`, and `candidate.invalidated` records it; repair or the next
+    /// plan revision follow as for any failed candidate.
+    pub fn invalidate_reviewed_candidate(
+        &mut self,
+        run_id: &str,
+        hash: &str,
+        reason: &str,
+        content_drift: bool,
+        policy_refused: bool,
+    ) -> Result<CandidateEvidence> {
+        if reason.trim().is_empty() {
+            return invalid("candidate invalidation needs a reason");
+        }
+        let tx = self
+            .connection
+            .transaction_with_behavior(TransactionBehavior::Immediate)?;
+        let run = get_run(&tx, run_id)?.ok_or_else(|| StorageError::NotFound(run_id.into()))?;
+        let mut evidence = require_candidate(&tx, run_id, hash)?;
+        if run.state != RunState::Reviewed || evidence.status != CandidateStatus::Reviewed {
+            return invalid("only a reviewed candidate can be invalidated after review");
+        }
+        evidence.status = CandidateStatus::Failed;
+        evidence.reason = Some(reason.into());
+        evidence.finished_at = Some(now());
+        evidence.stage_started_at = None;
+        evidence.stage_checkpoint_at = None;
+        evidence.content_drift |= content_drift;
+        evidence.policy_refused |= policy_refused;
+        save_candidate(&tx, &evidence)?;
+        transition(
+            &tx,
+            run_id,
+            run.revision,
+            RunState::Failed,
+            "candidate.invalidated",
+            json!({"candidate_hash":hash,"reason":reason,"content_drift":content_drift,"policy_refused":policy_refused,"review_retained_as_history":true}),
+        )?;
+        tx.commit()?;
+        Ok(evidence)
     }
 
     /// Fail a generation whose owned worktree no longer holds the frozen
@@ -744,6 +851,22 @@ impl Store {
         repair_gate(&self.connection, run_id, hash).map(|_| ())
     }
 
+    /// Whether a reviewed candidate whose published pull request failed CI
+    /// may be sent to a bounded repair (A24): the same authorization, plan,
+    /// ticket and manifest bindings, the multi-repository limitation and the
+    /// repair and attempt budgets `POST …/repair` applies, evaluated before
+    /// the reviewed evidence is invalidated, so a repair that the budgets
+    /// would refuse never costs the candidate its review.
+    pub fn can_repair_after_ci_failure(&self, run_id: &str, hash: &str) -> Result<()> {
+        let tx = self.connection.unchecked_transaction()?;
+        let run = get_run(&tx, run_id)?.ok_or_else(|| StorageError::NotFound(run_id.into()))?;
+        let evidence = require_candidate(&tx, run_id, hash)?;
+        if run.state != RunState::Reviewed || evidence.status != CandidateStatus::Reviewed {
+            return invalid("only a reviewed candidate can be sent to repair after a CI failure");
+        }
+        repair_budget_gate(&tx, run_id).map(|_| ())
+    }
+
     /// Whether a failed candidate may start a fresh validation generation in
     /// place: its required checks passed in the current generation, no
     /// reviewer verdict was recorded (the reviewer failed, produced invalid or
@@ -792,7 +915,12 @@ impl Store {
         if environment_fingerprint.is_empty() {
             return invalid("repair requires the current host fingerprint");
         }
+        // A testing-setup candidate is repaired under the same admission that
+        // scheduled it: there is no baseline yet by definition (ADR 0022).
         for repository_id in plan.base_commits.keys() {
+            if plan.purpose == TicketPurpose::TestingSetup {
+                break;
+            }
             let evidence = crate::baselines::latest_baseline(&tx, &plan.project_id, repository_id)?
                 .ok_or_else(|| {
                     StorageError::Domain(DomainError::BaselineRequired(
@@ -1007,6 +1135,14 @@ fn repair_gate(connection: &Connection, run_id: &str, hash: &str) -> Result<Budg
     ) {
         return invalid("candidate is not repairable");
     }
+    repair_budget_gate(connection, run_id)
+}
+
+/// The authorization, binding and budget half of the repair gate, shared by
+/// the repair of a failed candidate and the CI-failure repair of a reviewed
+/// one: the current approved plan, ticket and manifest, the single-repository
+/// limitation, `max_task_repairs` and the attempt, time and cost headroom.
+fn repair_budget_gate(connection: &Connection, run_id: &str) -> Result<BudgetUsage> {
     let plan = bound_plan(connection, run_id)?;
     // Repair of a multi-repository candidate set is re-planning (ADR 0017):
     // a repair writer in one repository cannot re-establish the other

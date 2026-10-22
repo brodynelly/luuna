@@ -67,6 +67,7 @@ fn ticket() -> Ticket {
         intent: "Implement the fixture feature.".into(),
         acceptance_criteria: vec!["The fixture test passes.".into()],
         repository_ids: vec!["app".into()],
+        purpose: luuna_domain::TicketPurpose::Feature,
         created_at: "2026-10-17T00:00:00.000Z".into(),
         updated_at: "2026-10-17T00:00:00.000Z".into(),
     }
@@ -345,7 +346,7 @@ fn tickets_are_idempotent_revisioned_and_project_scoped() {
     assert_eq!(store.get_ticket("ticket-1").unwrap().unwrap().revision, 2);
     let events = store.project_events_after("project", 0).unwrap();
     assert!(events.iter().any(|e| e.event_type == "ticket.created"));
-    assert!(events.iter().any(|e| e.event_type == "ticket.revised"));
+    assert!(events.iter().any(|e| e.event_type == "ticket.updated"));
 }
 
 #[test]

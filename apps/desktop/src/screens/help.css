@@ -1,0 +1,17 @@
+/* Screen: help. Layout and screen-specific presentation, tokens only (docs/DESIGN-SYSTEM.md). */
+/*
+ * The Help panel (docs/09-experience.md, ADR 0027 point 4): onboarding steps, what each state
+ * means (the six tones of the design system with their runtime values), where evidence lives,
+ * and the repository documents. Static prose; every rule is scoped by a class unique to this
+ * screen and the panel grid spaces the sections.
+ */
+
+.help-sections { display: grid; grid-template-columns: repeat(auto-fit, minmax(min(100%, var(--hint-min)), 1fr)); gap: var(--space-5); min-width: 0; }
+.help-section { display: grid; grid-template-columns: minmax(0, 1fr); align-content: start; gap: var(--space-2); min-width: 0; }
+.help-section > h3 { margin: 0; }
+.help-section > :is(ol, ul) { display: grid; gap: var(--space-1-5); margin: 0; padding-left: var(--space-5); color: var(--color-text); font-size: var(--text-xs); line-height: var(--leading); }
+.help-section > ul.help-plain { padding-left: 0; list-style: none; }
+.help-section > .help-states { display: grid; gap: var(--space-2); margin: 0; font-size: var(--text-xs); }
+.help-section > .help-states > div { display: grid; grid-template-columns: minmax(0, 1fr); gap: var(--space-0-5); }
+.help-section > .help-states dt { display: flex; flex-wrap: wrap; align-items: baseline; gap: var(--space-1-5); color: var(--color-text); font-weight: var(--weight-medium); }
+.help-section > .help-states dd { margin: 0; color: var(--color-text-muted); }

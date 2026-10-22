@@ -466,7 +466,17 @@ pub fn missing_tools(check: &ProposedCheck, host: &HostCapabilities, root: &Path
             missing.insert(executable.clone());
         }
     } else if host.tool(executable).is_some() && !host.available(executable) {
-        missing.insert(executable.clone());
+        // A capability already named its conventional tool (`python3` for
+        // the `python` capability on Unix); the interpreter spelled in the
+        // recipe is the same missing tool, not a second one.
+        let covered = check.check.capabilities.iter().any(|capability| {
+            CAPABILITY_TOOLS
+                .iter()
+                .any(|(name, tools)| name == capability && tools.contains(&executable.as_str()))
+        });
+        if !covered {
+            missing.insert(executable.clone());
+        }
     }
     missing.into_iter().collect()
 }

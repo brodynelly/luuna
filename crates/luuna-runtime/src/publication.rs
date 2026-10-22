@@ -15,13 +15,14 @@ use axum::{
     Json,
 };
 use luuna_domain::{
-    remotes_equivalent, CandidateEvidence, CandidateStatus, PublicationState, ReviewVerdict,
-    SCHEMA_VERSION,
+    remotes_equivalent, CandidateEvidence, CandidateStatus, DomainError, PlanRevision,
+    PublicationState, ReviewVerdict, SCHEMA_VERSION,
 };
 use luuna_git::{redact_remote, GitHubRepository, PushCredential, RemoteOperations, RemoteRef};
 use luuna_storage::{
     intent_key, CiCheck, CiObservation, CiState, IntentState, MergeObservation, PublicationIntent,
-    PublicationRecord, PullRequestRef, RepositoryPublication, StepState,
+    PublicationRecord, PullRequestRef, RepositoryPublication, StepState, StorageError,
+    MULTI_REPOSITORY_REPAIR,
 };
 use serde::Deserialize;
 use serde_json::{json, Value};
@@ -149,6 +150,8 @@ pub fn branch_name(ticket_id: &str, candidate_hash: &str) -> String {
 struct Prepared {
     evidence: CandidateEvidence,
     ticket: luuna_domain::Ticket,
+    /// The plan revision the workflow's approval still authorizes.
+    plan: PlanRevision,
     project_id: String,
     repositories: BTreeMap<String, RepositoryPublication>,
     /// The registered developer checkout and, when it still exists, the
@@ -171,7 +174,7 @@ fn prepare(state: &AppState, id: &str, expected_hash: &str) -> Result<Prepared, 
             "workflow has active work; wait for it to settle, then publish",
         ));
     }
-    let store = state.store.lock().map_err(internal)?;
+    let mut store = state.store.lock().map_err(internal)?;
     let run = store.get_run(id).map_err(internal)?.ok_or_else(not_found)?;
     if run.metadata["kind"] != "workflow" {
         return Err(unprocessable("only a plan workflow can be published"));
@@ -247,6 +250,43 @@ fn prepare(state: &AppState, id: &str, expected_hash: &str) -> Result<Prepared, 
             "the confirmed manifest changed since the plan; create the next plan revision before publishing",
         ));
     }
+    // An edited ticket (PUT /api/v1/tickets/{id}, or a reconciled external
+    // edit) is a changed source: the candidate was reviewed against intent
+    // the ticket no longer states. Record the refusal durably, as `admit`
+    // does for a source that changed under the components, before the
+    // generic authorization gate below refuses the same binding.
+    if ticket.revision != plan.ticket_revision {
+        let reason = format!(
+            "Ticket changed since plan approval (ticket {} is at revision {}, the plan was made for revision {}); create a new plan",
+            ticket.id, ticket.revision, plan.ticket_revision
+        );
+        store
+            .append_event(
+                id,
+                "publication.refused",
+                json!({"kind": "source_changed", "candidate_hash": evidence.candidate.hash, "reason": reason}),
+            )
+            .map_err(internal)?;
+        return Err(conflict(reason));
+    }
+    // The same authorization gate validation and repair apply: the stored
+    // approval must authorize the latest revision of the plan (a newer
+    // revision supersedes it), and the ticket and manifest bindings must
+    // still hold. A reviewed candidate is evidence for one exact plan
+    // revision; it never carries over to a later one.
+    let plan = store.authorize_workflow(id).map_err(|error| match error {
+        StorageError::Domain(DomainError::StaleApproval) => conflict(format!(
+            "the approval this candidate was implemented under no longer authorizes the latest revision of plan {}; a newer plan revision supersedes it, so this candidate cannot be published: implement, validate and review the latest revision's workflow, or re-plan",
+            plan.id
+        )),
+        StorageError::Domain(error) => conflict(format!(
+            "the plan's bindings no longer hold ({error}); create the next plan revision before publishing"
+        )),
+        StorageError::Invalid(detail) => conflict(format!(
+            "publication is not authorized: {detail}; create the next plan revision before publishing"
+        )),
+        other => internal(other),
+    })?;
     let active_leases = store.active_worktree_leases().map_err(internal)?;
     let leases = store.worktree_leases(id).map_err(internal)?;
     let registrations = store.repositories(&run.project_id).map_err(internal)?;
@@ -321,10 +361,199 @@ fn prepare(state: &AppState, id: &str, expected_hash: &str) -> Result<Prepared, 
     Ok(Prepared {
         evidence,
         ticket,
+        plan,
         project_id: run.project_id,
         repositories,
         checkouts,
     })
+}
+
+/// The scan budget for the pre-push policy check: a candidate whose patch
+/// does not fit is refused as unscanned rather than pushed unchecked.
+/// Git's empty tree: the parent a root commit's patch is read against.
+const EMPTY_TREE: &str = "4b825dc642cb6eb9a060e54bf8d69288fbee4904";
+const POLICY_DIFF_BYTES: usize = 16 * 1024 * 1024;
+
+fn refused(state: &AppState, id: &str, kind: &str, payload: Value) -> Result<(), ApiError> {
+    let mut payload = payload;
+    payload["kind"] = json!(kind);
+    state.event(id, "publication.refused", payload)
+}
+
+/// Revalidate, after the transactional gate and before any external side
+/// effect, every authoritative input a publication consumes that only the
+/// repository, the host or the components can answer: the ticket's source and
+/// the approved component context are re-resolved (`verify_plan_sources`),
+/// every repository's Luuna-owned worktree must still hold exactly the frozen
+/// candidate (manual drift after the review invalidates the candidate; the
+/// evidence is marked and the run leaves `reviewed`), and the exact patch
+/// that will be pushed passes the deterministic secrets/path policy. Applies
+/// to the initial publication and to every reconciliation alike. Refusals are
+/// durable `publication.refused` events naming the kind and the next step.
+async fn admit(state: &AppState, id: &str, prepared: &mut Prepared) -> Result<(), ApiError> {
+    crate::integrations::verify_plan_sources(state, &prepared.plan)
+        .await
+        .inspect_err(|error| {
+            let _ = refused(
+                state,
+                id,
+                "source_changed",
+                json!({"candidate_hash": prepared.evidence.candidate.hash, "reason": error.1}),
+            );
+        })?;
+    let evidence = prepared.evidence.clone();
+    let worktrees = match crate::candidates::worktrees_for(state, id, &evidence) {
+        Ok(worktrees) => worktrees,
+        Err(error) => {
+            let reason = format!(
+                "the candidate's Luuna-owned worktree cannot be verified against the frozen candidate ({}); publication needs the reviewed worktree: repair the candidate (POST /repair) or create the next plan revision",
+                error.1
+            );
+            refused(
+                state,
+                id,
+                "worktree_unverifiable",
+                json!({"candidate_hash": evidence.candidate.hash, "reason": reason}),
+            )?;
+            return Err(conflict(reason));
+        }
+    };
+    for (repository_id, worktree) in &worktrees {
+        let drift = crate::candidates::content_drift(state, &evidence, repository_id, worktree)
+            .await
+            .map_err(|detail| {
+                ApiError(
+                    StatusCode::INTERNAL_SERVER_ERROR,
+                    format!("repository {repository_id}: {detail}"),
+                )
+            })?;
+        if let Some(drift) = drift {
+            let drift = if evidence.candidate.repository_commits.len() > 1 {
+                format!("repository {repository_id}: {drift}")
+            } else {
+                drift
+            };
+            let reason = format!(
+                "candidate content drift: the Luuna-owned worktree was changed outside Luuna after the review and no longer holds the frozen candidate ({drift}); the reviewed evidence is invalidated and nothing was pushed; the worktree is kept for inspection; repair the candidate (POST /repair, a new revision in a fresh worktree) or create the next plan revision"
+            );
+            let invalidated = state
+                .store
+                .lock()
+                .map_err(internal)?
+                .invalidate_reviewed_candidate(id, &evidence.candidate.hash, &reason, true, false)
+                .map_err(storage_error)?;
+            refused(
+                state,
+                id,
+                "candidate_drift",
+                json!({"candidate_hash": evidence.candidate.hash, "repository_id": repository_id, "reason": reason, "candidate_status": invalidated.status}),
+            )?;
+            return Err(conflict(reason));
+        }
+    }
+    let known = crate::writer::known_secrets(state);
+    let mut findings = Vec::new();
+    for (repository_id, worktree) in &worktrees {
+        let commit = &evidence.candidate.repository_commits[repository_id];
+        let Some(base) = prepared.plan.base_commits.get(repository_id) else {
+            return Err(conflict(format!(
+                "the plan has no base commit for repository {repository_id}; create the next plan revision before publishing"
+            )));
+        };
+        // Every commit the push would publish is scanned on its own patch,
+        // not only the net base-to-candidate patch: a repair that removes a
+        // credential still pushes the earlier commit that added it. (A repair
+        // after a policy refusal starts history-clean, so this is the guard
+        // for every other way a secret can sit in an ancestor.)
+        let commits = state
+            .git
+            .commits_between(worktree, base, commit)
+            .await
+            .map_err(|error| {
+                ApiError(
+                    StatusCode::INTERNAL_SERVER_ERROR,
+                    format!("repository {repository_id}: cannot list the commits the publication would push: {error}"),
+                )
+            })?;
+        if commits.is_empty() {
+            return Err(conflict(format!(
+                "repository {repository_id}: candidate commit {commit} adds nothing beyond the base {base}; nothing to publish"
+            )));
+        }
+        for (published, parent) in &commits {
+            let parent = parent.as_deref().unwrap_or(EMPTY_TREE);
+            let diff = state
+                .git
+                .review_diff(worktree, parent, published, POLICY_DIFF_BYTES)
+                .await
+                .map_err(|error| {
+                    ApiError(
+                        StatusCode::INTERNAL_SERVER_ERROR,
+                        format!("repository {repository_id}: cannot read commit {published} for the pre-push policy check: {error}"),
+                    )
+                })?;
+            // Files the patch could only summarize are read from their blobs so
+            // a binary or non-UTF-8 file never carries unscanned content.
+            let mut binary = Vec::new();
+            for file in diff
+                .files
+                .iter()
+                .filter(|file| file.shown == luuna_git::DiffShown::Summary && file.status != "D")
+            {
+                let bytes = state.git.blob_bytes(worktree, &file.new_blob).await.ok();
+                binary.push(crate::policy::BinaryContent {
+                    path: file.path.clone(),
+                    bytes,
+                });
+            }
+            for mut finding in crate::policy::scan_repository(
+                repository_id,
+                &prepared.plan,
+                &diff,
+                &known,
+                &binary,
+            ) {
+                if published != commit {
+                    finding.detail = format!(
+                        "{} (in ancestor commit {}, which the push would publish)",
+                        finding.detail,
+                        &published[..12]
+                    );
+                }
+                if !findings.contains(&finding) {
+                    findings.push(finding);
+                }
+            }
+        }
+    }
+    if !findings.is_empty() {
+        let reason = format!(
+            "pre-push policy refused the candidate ({}); nothing was pushed; the reviewed evidence is invalidated and the candidate is failed so a bounded repair can remove the finding: repair the candidate (POST /repair) or create the next plan revision",
+            crate::policy::describe(&findings)
+        );
+        // The candidate's content is what the policy refused, so its review
+        // is no longer evidence that it may be published; failing it opens
+        // the same bounded repair path as a failed check.
+        state
+            .store
+            .lock()
+            .map_err(internal)?
+            .invalidate_reviewed_candidate(id, &evidence.candidate.hash, &reason, false, true)
+            .map_err(storage_error)?;
+        refused(
+            state,
+            id,
+            "policy",
+            json!({"candidate_hash": evidence.candidate.hash, "findings": findings, "reason": reason}),
+        )?;
+        return Err(unprocessable(reason));
+    }
+    for (repository_id, worktree) in worktrees {
+        if let Some(checkout) = prepared.checkouts.get_mut(&repository_id) {
+            checkout.worktree = Some(worktree);
+        }
+    }
+    Ok(())
 }
 
 fn status_name(status: &CandidateStatus) -> String {
@@ -386,9 +615,9 @@ pub async fn publish(
             ));
         }
     }
-    let prepared = prepare(&state, &id, &request.expected_hash)?;
+    let mut prepared = prepare(&state, &id, &request.expected_hash)?;
     let credential = require_token(&state)?;
-    crate::missions::ensure_current(&state, &prepared.ticket).await?;
+    admit(&state, &id, &mut prepared).await?;
     let (tx, rx) = watch::channel(false);
     let record = {
         let mut active = state.active.lock().map_err(internal)?;
@@ -417,6 +646,9 @@ pub async fn publish(
             created_at: now.clone(),
             updated_at: now,
             observed_at: None,
+            superseded_by_repair: false,
+            superseded_reason: None,
+            superseded_at: None,
         };
         let mut store = state.store.lock().map_err(internal)?;
         match store.create_publication(&record) {
@@ -451,6 +683,7 @@ pub async fn publish(
         credential,
         reconcile: false,
         stop: rx,
+        superseded: Vec::new(),
     };
     state.spawn_supervised(id, job.run());
     Ok((StatusCode::ACCEPTED, Json(view(&state, &record)?)))
@@ -483,9 +716,9 @@ pub async fn reconcile(
     {
         return Ok((StatusCode::OK, Json(view(&state, &record)?)));
     }
-    let prepared = prepare(&state, &id, &record.candidate_hash)?;
+    let mut prepared = prepare(&state, &id, &record.candidate_hash)?;
     let credential = require_token(&state)?;
-    crate::missions::ensure_current(&state, &prepared.ticket).await?;
+    admit(&state, &id, &mut prepared).await?;
     let (tx, rx) = watch::channel(false);
     {
         let mut active = state.active.lock().map_err(internal)?;
@@ -512,6 +745,7 @@ pub async fn reconcile(
         credential,
         reconcile: true,
         stop: rx,
+        superseded: Vec::new(),
     };
     state.spawn_supervised(id, job.run());
     Ok((StatusCode::ACCEPTED, Json(view(&state, &record)?)))
@@ -551,6 +785,247 @@ pub async fn get(
         observe(&state, &mut record).await?;
     }
     Ok(Json(view(&state, &record)?))
+}
+
+/// `POST /api/v1/runs/{id}/publication/repair` with the exact candidate hash
+/// (and the provider and model, as for `POST …/repair`): the bounded repair
+/// after a published candidate's pull request failed CI (A24). The run's
+/// latest publication must be complete with its pull requests open, its CI
+/// observation is refreshed first through the same bounded `observe` (a stale
+/// view never triggers a repair) and must be `failure` on at least one
+/// repository, the hash must match, no work may be active, and the ordinary
+/// repair gates and budgets must hold before anything changes. Then the
+/// reviewed candidate is invalidated with a reason naming the failing checks
+/// per repository (names and conclusions, never log content), the record is
+/// marked superseded, `publication.repair_requested` is recorded and the
+/// existing repair path creates the next candidate revision in a fresh
+/// worktree with the CI failure in its evidence. Nothing is merged, closed or
+/// pushed here.
+pub async fn repair(
+    State(state): State<AppState>,
+    Path(id): Path<String>,
+    Json(request): Json<crate::candidates::CandidateRequest>,
+) -> Result<(StatusCode, Json<Value>), ApiError> {
+    if state.active.lock().map_err(internal)?.contains_key(&id) {
+        return Err(conflict(
+            "workflow has active work; wait for it to settle, then request the repair",
+        ));
+    }
+    let record = {
+        let store = state.store.lock().map_err(internal)?;
+        if store.get_run(&id).map_err(internal)?.is_none() {
+            return Err(not_found());
+        }
+        store.latest_publication(&id).map_err(internal)?
+    };
+    let Some(mut record) = record else {
+        return Err(ApiError(
+            StatusCode::NOT_FOUND,
+            "no publication exists for this run; a CI repair follows a published candidate (POST /publish)"
+                .into(),
+        ));
+    };
+    if record.candidate_hash != request.candidate_hash {
+        return Err(conflict(format!(
+            "candidate hash changed; the latest publication is of candidate {}: reload the publication (GET /publication) and request the repair for that hash",
+            record.candidate_hash
+        )));
+    }
+    if record.superseded_by_repair {
+        return Err(conflict(
+            "this publication was already superseded by a repair; validate, review and publish the repaired candidate (GET /candidate)",
+        ));
+    }
+    let not_open = match record.publication_state {
+        PublicationState::PrOpen if record.complete() => None,
+        PublicationState::PrOpen | PublicationState::Pending | PublicationState::Pushing => {
+            Some("the publication is still in progress or incomplete; wait for it to settle or reconcile it (POST /publication/reconcile)")
+        }
+        PublicationState::Failed => Some(
+            "the publication did not complete; reconcile it (POST /publication/reconcile) before a CI repair",
+        ),
+        PublicationState::Integrated => Some(
+            "every pull request was already merged; there is nothing to repair, and a further change is the next plan revision",
+        ),
+    };
+    if let Some(next) = not_open {
+        return Err(conflict(format!(
+            "a CI repair needs open pull requests (publication is {}): {next}",
+            state_text(&record.publication_state)
+        )));
+    }
+    // Refresh the observation under the bounded timeouts before deciding.
+    observe(&state, &mut record).await?;
+    if record.publication_state == PublicationState::Integrated {
+        return Err(conflict(
+            "a CI repair needs open pull requests (publication is integrated): every pull request was observed merged; there is nothing to repair",
+        ));
+    }
+    let failing: Vec<(String, RepositoryPublication)> = record
+        .repositories
+        .iter()
+        .filter(|(_, r)| r.ci.state == CiState::Failure)
+        .map(|(id, r)| (id.clone(), r.clone()))
+        .collect();
+    if failing.is_empty() {
+        let states: Vec<String> = record
+            .repositories
+            .iter()
+            .map(|(repository_id, r)| {
+                let next = match r.ci.state {
+                    CiState::Unknown => "CI could not be observed or no checks are reported; read the publication again (GET /publication) once CI reports",
+                    CiState::Pending => "CI is still running; wait for it to finish, then read the publication again (GET /publication)",
+                    CiState::Success => "CI passed; there is nothing to repair and merging is the developer's decision on GitHub",
+                    CiState::Failure => "",
+                };
+                format!(
+                    "repository {repository_id}: ci {}{}; {next}",
+                    ci_state_text(&r.ci.state),
+                    r.ci
+                        .reason
+                        .as_deref()
+                        .map(|reason| format!(" ({reason})"))
+                        .unwrap_or_default()
+                )
+            })
+            .collect();
+        return Err(conflict(format!(
+            "a CI repair needs an observed CI failure on at least one pull request; none is observed: {}",
+            states.join("; ")
+        )));
+    }
+    // The ordinary repair gates and budgets (ADR 0009, ADR 0017), evaluated
+    // before the reviewed evidence is touched: a repair the budgets refuse
+    // never costs the candidate its review.
+    state
+        .store
+        .lock()
+        .map_err(internal)?
+        .can_repair_after_ci_failure(&id, &record.candidate_hash)
+        .map_err(|error| match error {
+            StorageError::Invalid(detail) if detail == MULTI_REPOSITORY_REPAIR => {
+                conflict(format!("CI repair refused: {detail}"))
+            }
+            StorageError::Invalid(detail) => conflict(format!("CI repair refused: {detail}")),
+            StorageError::Domain(DomainError::BudgetExceeded(detail)) => {
+                unprocessable(format!("CI repair refused: {detail}"))
+            }
+            StorageError::Domain(error) => conflict(format!("CI repair refused: {error}")),
+            other => storage_error(other),
+        })?;
+    let mut summary = Vec::new();
+    let mut sentences = Vec::new();
+    for (repository_id, repository) in &failing {
+        let failed: Vec<&CiCheck> = repository
+            .ci
+            .checks
+            .iter()
+            .filter(|c| {
+                matches!(
+                    c.conclusion.as_deref(),
+                    Some(
+                        "failure"
+                            | "cancelled"
+                            | "timed_out"
+                            | "action_required"
+                            | "startup_failure"
+                    )
+                )
+            })
+            .collect();
+        let pr = repository.pull_request.clone();
+        sentences.push(format!(
+            "repository {repository_id}, pull request {}: {}",
+            pr.as_ref()
+                .map(|pr| format!("#{} ({})", pr.number, pr.url))
+                .unwrap_or_else(|| "unknown".into()),
+            failed
+                .iter()
+                .map(|c| format!(
+                    "{} {}",
+                    c.name,
+                    c.conclusion.as_deref().unwrap_or("unknown")
+                ))
+                .collect::<Vec<_>>()
+                .join(", ")
+        ));
+        summary.push(json!({
+            "repository_id": repository_id,
+            "pull_request": pr,
+            "commit": repository.commit,
+            "ci_state": repository.ci.state,
+            "observed_at": repository.ci.observed_at,
+            "checks": repository.ci.checks,
+            "failed_checks": failed.iter().map(|c| json!({"name": c.name, "status": c.status, "conclusion": c.conclusion})).collect::<Vec<_>>(),
+        }));
+    }
+    let reason = format!(
+        "CI failed on the published pull request ({}); the developer sent the candidate to a bounded repair: the reviewed evidence is invalidated, the pull request stays open for the developer, and the next candidate revision is implemented in a fresh worktree with the CI failure in its evidence",
+        sentences.join("; ")
+    );
+    let hash = record.candidate_hash.clone();
+    let invalidated = state
+        .store
+        .lock()
+        .map_err(internal)?
+        .invalidate_reviewed_candidate(&id, &hash, &reason, false, false)
+        .map_err(storage_error)?;
+    let now = luuna_git_now();
+    record.superseded_by_repair = true;
+    record.superseded_reason = Some(reason.clone());
+    record.superseded_at = Some(now.clone());
+    state
+        .store
+        .lock()
+        .map_err(internal)?
+        .update_publication(
+            &mut record,
+            Some((
+                "publication.repair_requested",
+                json!({
+                    "candidate_hash": hash,
+                    "candidate_status": invalidated.status,
+                    "observed_at": now,
+                    "ci_failure": summary,
+                    "reason": reason,
+                }),
+            )),
+        )
+        .map_err(storage_error)?;
+    let ci_failure = json!({
+        "observed_at": record.observed_at,
+        "repositories": summary,
+        "note": "observed on GitHub after the independent review; check names, statuses and conclusions only, no log content",
+    });
+    let (status, Json(run)) =
+        crate::writer::repair_after_ci_failure(state.clone(), id.clone(), request, ci_failure)
+            .await
+            .map_err(|error| {
+                ApiError(
+                    error.0,
+                    format!(
+                        "{}; the reviewed candidate was invalidated after the CI failure and the publication is marked superseded: repair it (POST /repair) once the refusal is resolved, or create the next plan revision",
+                        error.1
+                    ),
+                )
+            })?;
+    let mut body = view(&state, &record)?;
+    body["run"] = serde_json::to_value(run).map_err(internal)?;
+    Ok((status, Json(body)))
+}
+
+fn state_text(state: &PublicationState) -> String {
+    serde_json::to_value(state)
+        .ok()
+        .and_then(|v| v.as_str().map(ToOwned::to_owned))
+        .unwrap_or_default()
+}
+
+fn ci_state_text(state: &CiState) -> String {
+    serde_json::to_value(state)
+        .ok()
+        .and_then(|v| v.as_str().map(ToOwned::to_owned))
+        .unwrap_or_default()
 }
 
 fn luuna_git_now() -> String {
@@ -683,6 +1158,9 @@ struct Job {
     credential: PushCredential,
     reconcile: bool,
     stop: watch::Receiver<bool>,
+    /// Earlier publications of this run that a CI repair superseded; the
+    /// pull request bodies name them.
+    superseded: Vec<PublicationRecord>,
 }
 
 struct Failure {
@@ -765,7 +1243,7 @@ impl Job {
         *self.stop.borrow()
     }
 
-    async fn run(self) {
+    async fn run(mut self) {
         let Some(mut record) = self.load() else {
             eprintln!(
                 "luuna-runtime: publication of run {} vanished before it started",
@@ -773,6 +1251,18 @@ impl Job {
             );
             return;
         };
+        self.superseded = self
+            .state
+            .store
+            .lock()
+            .ok()
+            .and_then(|store| store.publications(&self.run_id).ok())
+            .unwrap_or_default()
+            .into_iter()
+            .filter(|earlier| {
+                earlier.superseded_by_repair && earlier.candidate_hash != self.candidate_hash
+            })
+            .collect();
         let settings = self.state.publication.clone();
         let Some(token) = settings.github_token.as_deref() else {
             record.publication_state = PublicationState::Failed;
@@ -1097,6 +1587,10 @@ impl Job {
         }
         if record.repositories.len() > 1 {
             body.push_str("\n## Linked pull requests\n\n");
+            body.push_str(&format!(
+                "This pull request is part of a {}-repository candidate set; each repository's checks ran against the others' exact candidate commits.\n\n",
+                record.repositories.len()
+            ));
             for (id, repository) in &record.repositories {
                 if id == repository_id {
                     continue;
@@ -1108,6 +1602,66 @@ impl Job {
                         repository.branch
                     )),
                 }
+            }
+            body.push_str("\n## Dependencies and merge order\n\n");
+            let order = merge_order(
+                record.repositories.keys().cloned().collect(),
+                &evidence.candidate.dependency_bindings,
+            );
+            let mut producers: BTreeMap<&str, Vec<&str>> = BTreeMap::new();
+            for binding in evidence.candidate.dependency_bindings.keys() {
+                if let Some((consumer, producer)) = binding.split_once(':') {
+                    producers.entry(consumer).or_default().push(producer);
+                }
+            }
+            for (position, id) in order.iter().enumerate() {
+                let depends = producers
+                    .get(id.as_str())
+                    .map(|p| {
+                        format!(
+                            " (depends on {})",
+                            p.iter()
+                                .map(|producer| format!(
+                                    "`{producer}` at `{}`",
+                                    evidence.candidate.dependency_bindings
+                                        [&format!("{id}:{producer}")]
+                                ))
+                                .collect::<Vec<_>>()
+                                .join(", ")
+                        )
+                    })
+                    .unwrap_or_default();
+                body.push_str(&format!(
+                    "{}. `{id}`{}{depends}\n",
+                    position + 1,
+                    if id == repository_id {
+                        " (this pull request)"
+                    } else {
+                        ""
+                    }
+                ));
+            }
+            body.push_str(
+                "\nMerge producers before their consumers, in this order. The pull requests are not merged atomically: until every one is merged, a consumer's default branch may not build against its producer's; if a partial merge leaves the remaining change obsolete, re-plan instead of merging it.\n",
+            );
+        }
+        for earlier in &self.superseded {
+            let Some(previous) = earlier.repositories.get(repository_id) else {
+                continue;
+            };
+            body.push_str("\n## Supersedes\n\n");
+            match &previous.pull_request {
+                Some(pr) => body.push_str(&format!(
+                    "- Pull request #{} ({}) of candidate `{}` (branch `{}`) is superseded by this candidate revision after CI failed on it; Luuna leaves it to the developer to close.\n",
+                    pr.number, pr.url, earlier.candidate_hash, previous.branch
+                )),
+                None => body.push_str(&format!(
+                    "- Branch `{}` of candidate `{}` is superseded by this candidate revision after CI failed on it.\n",
+                    previous.branch, earlier.candidate_hash
+                )),
+            }
+            if let Some(reason) = &earlier.superseded_reason {
+                body.push_str(&format!("- Reason: {reason}\n"));
             }
         }
         body.push_str(
@@ -1262,6 +1816,40 @@ impl Job {
             }
         }
     }
+}
+
+/// The merge order of a candidate set: producers before their consumers,
+/// derived from the set's `<consumer>:<producer>` bindings; repositories with
+/// no ordering between them follow their identifiers. A binding that names a
+/// repository outside the set is ignored (the domain refuses such sets).
+pub fn merge_order(
+    repositories: Vec<String>,
+    dependency_bindings: &BTreeMap<String, String>,
+) -> Vec<String> {
+    let mut remaining: Vec<String> = repositories;
+    remaining.sort();
+    let edges: Vec<(String, String)> = dependency_bindings
+        .keys()
+        .filter_map(|binding| binding.split_once(':'))
+        .map(|(consumer, producer)| (consumer.to_owned(), producer.to_owned()))
+        .collect();
+    let mut order = Vec::new();
+    while !remaining.is_empty() {
+        let next = remaining.iter().position(|candidate| {
+            !edges
+                .iter()
+                .any(|(consumer, producer)| consumer == candidate && remaining.contains(producer))
+        });
+        match next {
+            Some(index) => order.push(remaining.remove(index)),
+            // A cycle cannot reach here (the domain refuses it); keep the
+            // rest in identifier order rather than loop.
+            None => {
+                order.append(&mut remaining);
+            }
+        }
+    }
+    order
 }
 
 fn url_encode(text: &str) -> String {
@@ -1504,6 +2092,27 @@ mod tests {
         let none = PublicationSettings::from_env(|_| None).unwrap();
         assert!(!none.github_token_configured());
         assert_eq!(none.github_api_url, DEFAULT_GITHUB_API_URL);
+    }
+
+    #[test]
+    fn merge_order_puts_producers_before_consumers() {
+        let bindings: BTreeMap<String, String> = [
+            ("consumer:shared".to_owned(), "c".repeat(40)),
+            ("shared:api".to_owned(), "a".repeat(40)),
+        ]
+        .into_iter()
+        .collect();
+        assert_eq!(
+            merge_order(
+                vec!["consumer".into(), "api".into(), "shared".into()],
+                &bindings
+            ),
+            ["api", "shared", "consumer"]
+        );
+        assert_eq!(
+            merge_order(vec!["b".into(), "a".into()], &BTreeMap::new()),
+            ["a", "b"]
+        );
     }
 
     #[test]

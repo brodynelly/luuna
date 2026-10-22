@@ -1,0 +1,135 @@
+{
+  "date": "2026-10-22T09:28:58.124Z",
+  "host": {
+    "platform": "linux",
+    "arch": "x64",
+    "node": "v22.22.0"
+  },
+  "model": "synthetic Pi fixture (fixtures/pi-rpc/mock_pi.py); not provider evidence",
+  "repository": "<fresh clone of components/beacon at 072e4821>",
+  "checks": [
+    {
+      "name": "the real checkout was observed, not changed",
+      "pass": true,
+      "evidence": "HEAD 072e482169e0 dirty={\"staged\":0,\"unstaged\":0,\"untracked\":0,\"conflicted\":0,\"paths\":[],\"truncated\":false}"
+    },
+    {
+      "name": "the manifest with the repository's real checks was confirmed",
+      "pass": true,
+      "evidence": "revision 1"
+    },
+    {
+      "name": "the baseline ran the repository's real test command",
+      "pass": true,
+      "evidence": "passed:  install=passed, test=passed, large-output=passed; 459 pass;  0 fail; Ran 459 tests across 36 files. [14.61s]"
+    },
+    {
+      "name": "a running session is cancelled promptly",
+      "pass": true,
+      "evidence": "cancelled"
+    },
+    {
+      "name": "the writer produced a candidate in a Luuna-owned worktree",
+      "pass": true,
+      "evidence": "validating"
+    },
+    {
+      "name": "a SIGKILL during validation is recovered on restart with the run and candidate durable",
+      "pass": true,
+      "evidence": "run interrupted; candidate interrupted; revalidate_allowed=false repair_allowed=false"
+    },
+    {
+      "name": "the candidate reached an independent review after recovery",
+      "pass": true,
+      "evidence": "reviewed; verdict passed; install=passed, test=passed"
+    },
+    {
+      "name": "the developer checkout is untouched after the pilot",
+      "pass": true,
+      "evidence": "clean"
+    }
+  ],
+  "measurements": {
+    "runtime_startup_ms": {
+      "value": 91,
+      "unit": "ms",
+      "note": "spawn to first /health answer"
+    },
+    "runtime_rss_start_kib": {
+      "value": 10844,
+      "unit": "KiB"
+    },
+    "time_to_first_project_map_ms": {
+      "value": 864,
+      "unit": "ms",
+      "note": "register 40 ms + discover; 3 proposed checks, 1 questions"
+    },
+    "baseline_wall_ms": {
+      "value": 14950,
+      "unit": "ms",
+      "note": "status passed; 3 results"
+    },
+    "largest_log_fetch_ms": {
+      "value": 13,
+      "unit": "ms",
+      "note": "2048890 bytes (large-output.stdout)"
+    },
+    "largest_log_bytes": {
+      "value": 2048890,
+      "unit": "bytes"
+    },
+    "cancellation_delay_ms": {
+      "value": 208,
+      "unit": "ms",
+      "note": "state cancelled"
+    },
+    "plan_creation_ms": {
+      "value": 5,
+      "unit": "ms",
+      "note": "plan plan-ticket-76de4d15-61bd-4bf9-adb4-ab60d47082f0@1"
+    },
+    "implementation_wall_ms": {
+      "value": 348,
+      "unit": "ms",
+      "note": "state validating; writer attempt completed"
+    },
+    "task_overhead_ms": {
+      "value": 0,
+      "unit": "ms",
+      "note": "wall time minus the writer's own elapsed seconds (worktree, judgement, commit)"
+    },
+    "model_cost_usd_micros": {
+      "value": 0,
+      "unit": "usd_micros",
+      "note": "synthetic fixture; not provider usage"
+    },
+    "restart_after_kill_ms": {
+      "value": 56,
+      "unit": "ms",
+      "note": "kill to /health 69 ms"
+    },
+    "revalidation_after_recovery_ms": {
+      "value": 15220,
+      "unit": "ms",
+      "note": "status reviewed"
+    },
+    "event_delivery_latency_p50_ms": {
+      "value": 65,
+      "unit": "ms",
+      "note": "29 events (timestamp to receipt, same host clock)"
+    },
+    "event_delivery_latency_max_ms": {
+      "value": 195,
+      "unit": "ms"
+    },
+    "runtime_rss_end_kib": {
+      "value": 14608,
+      "unit": "KiB",
+      "note": "after restart and the full workflow"
+    },
+    "runtime_rss_growth_kib": {
+      "value": 3764,
+      "unit": "KiB"
+    }
+  }
+}

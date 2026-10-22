@@ -1,7 +1,15 @@
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import type { FormEvent } from "react";
-import type { BaselineEvidence, CheckResult, ComponentContext, ComponentStatus, Discovery, EventEnvelope, LuunaClient, ProjectExport, ProjectRecord, ProjectView, ScaffoldProfile, ScaffoldProposal, ScaffoldResult } from "@luuna/api-client";
-import { ApiError, isTerminal, mergeEvents, readEventPages } from "@luuna/api-client";
+import type { BaselineEvidence, CheckResult, ComponentContext, ComponentStatus, Discovery, EventEnvelope, LuunaClient, ProjectExport, ProjectImportResult, ProjectRecord, ProjectView, ScaffoldProfile, ScaffoldProposal, ScaffoldResult } from "@luuna/api-client";
+
+/** What another panel (Home, Board) asks this one to show: a project, one of its tickets, or its ticket form. */
+export interface ProjectRequest { projectId: string; ticketId?: string; ticketForm?: boolean; nonce: number }
+
+/** The element a request lands on, in DOM order of the Projects panel. */
+export function requestTarget(request: Pick<ProjectRequest, "ticketId" | "ticketForm">): string {
+  return request.ticketId ? `ticket-${request.ticketId}` : request.ticketForm ? "ticket-title" : "projects-heading";
+}
+import { ApiError, isTerminal, mergeEvents, readEventPages, registerProjectRequest } from "@luuna/api-client";
 import { Workflows } from "./Workflows";
 import { ProjectComponents } from "./ProjectComponents";
 import { StatusBadge } from "./design/StatusBadge";
@@ -32,6 +40,45 @@ export function baselineArtifacts(result: CheckResult): string[] {
   return ["stdout", "stderr"].map((stream) => `${result.recipe_id}.${stream}`).filter((id) => ARTIFACT_ID.test(id) && !id.includes(".."));
 }
 
+/** One row of the registration form; a project registers several repositories at once (R05). */
+export interface RepositoryRow { id: string; path: string }
+
+/** The registration the desktop sends: every row, through the builder the TUI shares (R02). */
+export function registrationRequest(name: string, projectId: string, rows: RepositoryRow[]) {
+  return registerProjectRequest(name, rows, projectId);
+}
+
+/**
+ * The latest recorded baseline of each registered repository. The runtime lists baselines newest
+ * first (`ORDER BY rowid DESC`) and the client keeps that order, so the first match is the latest.
+ */
+export function latestBaselines(baselines: BaselineEvidence[], repositoryIds: string[]): Record<string, BaselineEvidence | undefined> {
+  return Object.fromEntries(repositoryIds.map((id) => [id, baselines.find((baseline) => baseline.identity.repository_id === id)]));
+}
+
+/**
+ * One baseline control per registered repository with that repository's latest status: a
+ * multi-repository feature needs every repository's passing baseline, and one baseline per
+ * repository runs at a time.
+ */
+export function RepositoryBaselines({ repositoryIds, baselines, running, busy, manifestConfirmed, onRun, onCancel }: {
+  repositoryIds: string[]; baselines: BaselineEvidence[]; running: Record<string, string | undefined>; busy: boolean; manifestConfirmed: boolean;
+  onRun: (repositoryId: string) => void; onCancel: (runId: string) => void;
+}) {
+  const latest = latestBaselines(baselines, repositoryIds);
+  return <ul className="repository-baselines record-list" aria-label="Baseline per repository">{repositoryIds.map((id) => {
+    const record = latest[id];
+    const active = running[id];
+    return <li key={id} className="record repository-baseline">
+      <code>{id}</code>
+      {record ? <StatusBadge tone={baselineTone[record.status]}>{record.status}</StatusBadge> : <StatusBadge tone="attention">no baseline</StatusBadge>}
+      {record && <span className="meta">manifest r{record.manifest_revision} · commit <code>{record.identity.commit.slice(0, 12)}</code></span>}
+      <button type="button" disabled={busy || !manifestConfirmed || active !== undefined} data-capability="baselines.start" onClick={() => onRun(id)}>Run baseline for {id}</button>
+      {active && <button type="button" className="danger" disabled={busy} data-capability="runs.cancel" onClick={() => onCancel(active)}>Cancel baseline for {id}</button>}
+    </li>;
+  })}</ul>;
+}
+
 /** The message for a baseline run that settled before any baseline record existed. */
 export function baselineRunFailure(state: string, reason: string): string {
   if (!reason) return `Baseline run ${state} before a baseline was recorded; its events in Session history hold the details.`;
@@ -47,7 +94,8 @@ export function BaselineList({ baselines, busy, onLog }: { baselines: BaselineEv
     return <li key={baseline.id} className="record record-headed baseline-record" data-tone={baselineTone[baseline.status]}>
       <StatusBadge tone={baselineTone[baseline.status]}>{baseline.status}</StatusBadge>
       <span className="baseline-summary meta">manifest r{baseline.manifest_revision} · commit <code>{baseline.identity.commit.slice(0, 12)}</code> · {baseline.results.length}/{baseline.required_checks.length} required results</span>
-      {baseline.reason && <small className="failure-note" data-tone={baselineTone[baseline.status]}>{baseline.reason}{step && <> <span className="recovery-note">{step}</span></>}</small>}
+      {baseline.reason && <small className="failure-note" data-tone={baselineTone[baseline.status]}>{baseline.reason}{step && !baseline.prerequisite && <> <span className="recovery-note">{step}</span></>}</small>}
+      {baseline.prerequisite && <p className="callout baseline-offer" data-tone="attention" role="status">Testing setup needed for <code>{baseline.prerequisite.repository_id}</code>: {baseline.prerequisite.reason} <span className="recovery-note">{baseline.prerequisite.next} The ticket is created from the offer in the workflows below.</span></p>}
       <small className="baseline-results meta">{baseline.results.map((result) => `${result.recipe_id}: ${result.status}${result.exit_code === null || result.exit_code === undefined ? "" : ` (exit ${result.exit_code})`}`).join(" · ")}</small>
       {baseline.results.length > 0 && <div className="baseline-logs actions">{baseline.results.flatMap((result) => baselineArtifacts(result).map((id) => <button type="button" key={`${result.id}-${id}`} disabled={busy} data-capability="artifacts.read" onClick={() => onLog(baseline.run_id, id)}>View {result.recipe_id} {id.endsWith(".stdout") ? "stdout" : "stderr"}</button>))}</div>}
     </li>;
@@ -59,19 +107,20 @@ export function BaselineList({ baselines, busy, onLog }: { baselines: BaselineEv
  * and confirm an exact manifest revision. The runtime inspects and validates;
  * this panel only displays authoritative state and submits the developer's confirmation.
  */
-export function Projects({ client, connectionEpoch = 0 }: { client: LuunaClient | null; connectionEpoch?: number }) {
+export function Projects({ client, connectionEpoch = 0, requested = null }: { client: LuunaClient | null; connectionEpoch?: number; requested?: ProjectRequest | null }) {
   const [projects, setProjects] = useState<ProjectRecord[]>([]);
   const [selected, setSelected] = useState<string | null>(null);
   const [view, setView] = useState<ProjectView | null>(null);
   const [events, setEvents] = useState<EventEnvelope[]>([]);
   const [name, setName] = useState("");
   const [projectId, setProjectId] = useState("");
-  const [repositoryId, setRepositoryId] = useState("app");
-  const [path, setPath] = useState("");
+  const [rows, setRows] = useState<RepositoryRow[]>([{ id: "app", path: "" }]);
   const [draft, setDraft] = useState("");
   const [discovery, setDiscovery] = useState<Discovery | null>(null);
   const [baselines, setBaselines] = useState<BaselineEvidence[]>([]);
-  const [pendingBaselineRun, setPendingBaselineRun] = useState<string | null>(null);
+  // Baseline runs accepted by the runtime and not yet settled, by repository.
+  const [pendingBaselineRuns, setPendingBaselineRuns] = useState<Record<string, string>>({});
+  const [rebindRepository, setRebindRepository] = useState("");
   const [pollTick, setPollTick] = useState(0);
   const [error, setError] = useState("");
   const [busy, setBusy] = useState(false);
@@ -82,6 +131,9 @@ export function Projects({ client, connectionEpoch = 0 }: { client: LuunaClient 
   const [rebindPath, setRebindPath] = useState("");
   const [rebindConfirmed, setRebindConfirmed] = useState(false);
   const [exported, setExported] = useState<ProjectExport | null>(null);
+  const [importText, setImportText] = useState("");
+  const [importPaths, setImportPaths] = useState<Record<string, string>>({});
+  const [importResult, setImportResult] = useState<ProjectImportResult | null>(null);
   const [scaffoldProfile, setScaffoldProfile] = useState<ScaffoldProfile>("python");
   const [scaffoldName, setScaffoldName] = useState("");
   const [scaffoldParent, setScaffoldParent] = useState("");
@@ -93,8 +145,35 @@ export function Projects({ client, connectionEpoch = 0 }: { client: LuunaClient 
   const currentClient = useRef(client);
   currentClient.current = client;
   const projectEvents = useRef<{ id: string; events: EventEnvelope[] } | null>(null);
+  // A request from Home or the Board: select the project, then land on its ticket or form once it renders.
+  const pendingRequest = useRef<ProjectRequest | null>(null);
 
   useEffect(() => () => operation.current?.abort(), []);
+
+  useEffect(() => {
+    if (!requested || !client) return;
+    pendingRequest.current = requested;
+    setSelected((current) => (current === requested.projectId ? current : requested.projectId));
+    setView((current) => (current?.project.id === requested.projectId ? current : null));
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [requested]);
+
+  useEffect(() => {
+    const pending = pendingRequest.current;
+    if (!pending || !view || view.project.id !== pending.projectId || typeof document === "undefined") return;
+    pendingRequest.current = null;
+    // Tickets load after the view, so the landing is retried briefly; nothing else depends on it.
+    const timers: ReturnType<typeof setTimeout>[] = [];
+    const land = (attempt: number) => {
+      const target = document.getElementById(requestTarget(pending));
+      if (target) {
+        target.scrollIntoView?.({ block: "start" });
+        if (pending.ticketForm || pending.ticketId) target.focus?.();
+      } else if (attempt < 6) timers.push(setTimeout(() => land(attempt + 1), 500));
+    };
+    land(0);
+    return () => timers.forEach(clearTimeout);
+  }, [view]);
 
   /** The project's event record, read after the last sequence this panel holds. */
   async function readProjectEvents(id: string, signal: AbortSignal): Promise<EventEnvelope[]> {
@@ -142,9 +221,10 @@ export function Projects({ client, connectionEpoch = 0 }: { client: LuunaClient 
     setDiscovery(null);
     setDraft("");
     setBaselines([]);
-    setPendingBaselineRun(null);
+    setPendingBaselineRuns({});
     setBaselineLog(null);
     setRebindPath("");
+    setRebindRepository("");
     setRebindConfirmed(false);
     setComponentContext({ memory_ids: [] });
     setComponentStatus(null);
@@ -201,33 +281,36 @@ export function Projects({ client, connectionEpoch = 0 }: { client: LuunaClient 
 
   // A baseline advances on the runtime: poll its durable record from the moment the
   // run is accepted (its record appears after inspection and probing) until it settles.
-  const baselineInFlight = pendingBaselineRun !== null || baselines.some((baseline) => baseline.status === "running");
+  const pendingList = Object.values(pendingBaselineRuns);
+  const baselineInFlight = pendingList.length > 0 || baselines.some((baseline) => baseline.status === "running");
   useEffect(() => {
     if (!client || !selected || !baselineInFlight) return;
     const controller = new AbortController();
-    const pending = pendingBaselineRun;
+    const pending = pendingList;
     const timer = setTimeout(() => {
       // A run can settle before any baseline record exists (inspection or identity
-      // failure), so the run itself is polled too; otherwise the button never returns.
+      // failure), so each pending run itself is polled too; otherwise its button never returns.
       Promise.all([
         client.listBaselines(selected, controller.signal),
-        pending ? client.run(pending, controller.signal) : Promise.resolve(null),
-      ]).then(async ([recorded, run]) => {
+        Promise.all(pending.map((runId) => client.run(runId, controller.signal))),
+      ]).then(async ([recorded, runs]) => {
         if (controller.signal.aborted) return;
-        if (!pending) { setBaselines(recorded); return; }
-        const recordSettled = recorded.some((baseline) => baseline.run_id === pending && baseline.status !== "running");
-        const runSettled = run !== null && isTerminal(run.state);
-        if (recordSettled || runSettled) {
-          if (!recordSettled && run !== null) {
-            // Without a record, the run's terminal event carries the reason.
-            const reason = workflowReason(await client.events(pending, 0, controller.signal));
-            if (controller.signal.aborted) return;
-            setError(baselineRunFailure(run.state, reason));
+        const settled: string[] = [];
+        for (const run of runs) {
+          const recordSettled = recorded.some((baseline) => baseline.run_id === run.id && baseline.status !== "running");
+          if (recordSettled || isTerminal(run.state)) {
+            if (!recordSettled) {
+              // Without a record, the run's terminal event carries the reason.
+              const reason = workflowReason(await client.events(run.id, 0, controller.signal));
+              if (controller.signal.aborted) return;
+              setError(baselineRunFailure(run.state, reason));
+            }
+            settled.push(run.id);
           }
-          setPendingBaselineRun(null);
         }
+        if (settled.length) setPendingBaselineRuns((current) => Object.fromEntries(Object.entries(current).filter(([, runId]) => !settled.includes(runId))));
         // Updating an effect dependency aborts this request. Do it only after
-        // the terminal reason has been read, otherwise polling livelocks.
+        // the terminal reasons have been read, otherwise polling livelocks.
         setBaselines(recorded);
       }).catch(() => {
         // A poll that fails (the runtime restarting, for example) is retried;
@@ -236,17 +319,18 @@ export function Projects({ client, connectionEpoch = 0 }: { client: LuunaClient 
       });
     }, 1500);
     return () => { controller.abort(); clearTimeout(timer); };
-  }, [client, selected, baselines, baselineInFlight, pendingBaselineRun, pollTick]);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [client, selected, baselines, baselineInFlight, pendingBaselineRuns, pollTick]);
 
-  function runBaseline() {
+  /** Baselines are per repository: each registered repository runs its own confirmed recipes. */
+  function runBaseline(repositoryId: string) {
     if (!selected || !view) return;
-    const repository = view.repositories[0];
-    if (!repository) return;
+    if (!view.repositories.some((repository) => repository.repository_id === repositoryId)) return;
     void guarded("Baseline", async (signal) => {
       if (!client) return;
-      const run = await client.startBaseline(selected, { repository_id: repository.repository_id }, signal);
+      const run = await client.startBaseline(selected, { repository_id: repositoryId }, signal);
       if (signal.aborted) return;
-      setPendingBaselineRun(run.id);
+      setPendingBaselineRuns((current) => ({ ...current, [repositoryId]: run.id }));
       await refresh(selected, signal);
     });
   }
@@ -271,7 +355,7 @@ export function Projects({ client, connectionEpoch = 0 }: { client: LuunaClient 
   function rebind(event: FormEvent) {
     event.preventDefault();
     if (!selected || !registration || !rebindConfirmed) return;
-    const repository = registration.repository_id;
+    const repository = rebindRepository || registration.repository_id;
     void guarded("Rebind", async (signal) => {
       if (!client) return;
       await client.rebindRepository(selected, repository, rebindPath.trim() ? { local_path: rebindPath.trim() } : {}, signal);
@@ -286,15 +370,12 @@ export function Projects({ client, connectionEpoch = 0 }: { client: LuunaClient 
     event.preventDefault();
     void guarded("Registration", async (signal) => {
       if (!client) return;
-      const created = await client.registerProject({
-        name: name.trim(),
-        ...(projectId.trim() && { id: projectId.trim() }),
-        repositories: [{ id: repositoryId.trim(), path: path.trim() }],
-      }, signal);
+      // Every row is sent; the shared builder refuses an incomplete or repeated row before any request.
+      const created = await client.registerProject(registrationRequest(name, projectId, rows), signal);
       if (signal.aborted) return;
       setName("");
       setProjectId("");
-      setPath("");
+      setRows([{ id: "app", path: "" }]);
       await refresh(created.project.id, signal);
     });
   }
@@ -305,6 +386,41 @@ export function Projects({ client, connectionEpoch = 0 }: { client: LuunaClient 
       if (!client) return;
       const value = await client.exportProject(selected, signal);
       if (!signal.aborted) setExported(value);
+    });
+  }
+
+  // The pasted document is parsed locally only to list the repositories it names;
+  // the runtime validates its hash, identities and content.
+  const importDraft = useMemo<ProjectExport | null>(() => {
+    if (!importText.trim()) return null;
+    try {
+      const value = JSON.parse(importText) as ProjectExport;
+      // Only a document with the export kind and a manifest naming at least
+      // one repository by id is rendered; the runtime validates the rest.
+      const repositories = value && typeof value === "object" && value.manifest && typeof value.manifest === "object" ? value.manifest.repositories : undefined;
+      const shaped = Array.isArray(repositories) && repositories.every((repository) => repository && typeof repository === "object" && typeof repository.id === "string" && repository.id.length > 0);
+      return value && typeof value === "object" && value.kind === "luuna-project-export" && shaped ? value : null;
+    } catch {
+      return null;
+    }
+  }, [importText]);
+  const importRepositories = importDraft?.manifest?.repositories.map((repository) => repository.id) ?? [];
+  const importReady = importDraft !== null && importRepositories.length > 0 && importRepositories.every((id) => (importPaths[id] ?? "").trim());
+
+  function importProject(event: FormEvent) {
+    event.preventDefault();
+    if (!importDraft || !importReady) return;
+    const draft = importDraft;
+    const repositories = importRepositories.map((id) => ({ id, path: (importPaths[id] ?? "").trim() }));
+    void guarded("Project import", async (signal) => {
+      if (!client) return;
+      setImportResult(null);
+      const result = await client.importProject({ export: draft, repositories, idempotency_key: `import-${(draft.export_hash ?? "").slice(7, 31) || draft.project.id}` }, signal);
+      if (signal.aborted) return;
+      setImportResult(result);
+      setImportText("");
+      setImportPaths({});
+      await refresh(result.project.project.id, signal);
     });
   }
 
@@ -376,7 +492,11 @@ export function Projects({ client, connectionEpoch = 0 }: { client: LuunaClient 
 
   const registration = view?.repositories[0];
   const observation = registration?.observation;
-  const runningBaseline = pendingBaselineRun ?? baselines.find((baseline) => baseline.status === "running")?.run_id ?? null;
+  const repositoryIds = view?.repositories.map((repository) => repository.repository_id) ?? [];
+  // The baseline run in flight per repository: accepted and pending, or recorded as running.
+  const runningBaselines: Record<string, string | undefined> = Object.fromEntries(repositoryIds.map((id) => [id, pendingBaselineRuns[id] ?? baselines.find((baseline) => baseline.identity.repository_id === id && baseline.status === "running")?.run_id]));
+  const rebindTarget = view?.repositories.find((repository) => repository.repository_id === rebindRepository) ?? registration;
+  const rowsComplete = rows.length > 0 && rows.every((row) => row.id.trim() && row.path.trim());
   const shownLog = baselineLog && baselines.some((baseline) => baseline.run_id === baselineLog.runId) ? baselineLog : null;
 
   function selectProject(id: string) {
@@ -398,16 +518,31 @@ export function Projects({ client, connectionEpoch = 0 }: { client: LuunaClient 
           <fieldset disabled={!client || busy}>
             <label>Project name<input value={name} onChange={(event) => setName(event.target.value)} required placeholder="My product" /></label>
             <label>Project ID<input value={projectId} onChange={(event) => setProjectId(event.target.value)} placeholder="derived from the name" spellCheck={false} pattern="[a-z][a-z0-9\-]{0,63}" /></label>
-            <label>Repository ID<input value={repositoryId} onChange={(event) => setRepositoryId(event.target.value)} required spellCheck={false} pattern="[a-z][a-z0-9\-]{0,63}" /></label>
-            <label>Repository root path<input value={path} onChange={(event) => setPath(event.target.value)} required spellCheck={false} placeholder="/absolute/path/to/checkout" /></label>
-            <div className="form-footer"><small>Paths stay in the local machine registry; the manifest never contains them.</small><button className="primary" disabled={!name.trim() || !path.trim()} data-capability="projects.register">Register repository</button></div>
+            <ul className="repository-rows record-list" aria-label="Repositories to register">{rows.map((row, index) => <li key={index} className="record repository-row field-row">
+              <label>Repository ID<input value={row.id} onChange={(event) => setRows((current) => current.map((item, i) => i === index ? { ...item, id: event.target.value } : item))} required spellCheck={false} pattern="[a-z][a-z0-9\-]{0,63}" /></label>
+              <label>Repository root path<input value={row.path} onChange={(event) => setRows((current) => current.map((item, i) => i === index ? { ...item, path: event.target.value } : item))} required spellCheck={false} placeholder="/absolute/path/to/checkout" /></label>
+              {rows.length > 1 && <button type="button" className="text-button" onClick={() => setRows((current) => current.filter((_, i) => i !== index))}>Remove repository {row.id || index + 1}</button>}
+            </li>)}</ul>
+            <button type="button" className="text-button" onClick={() => setRows((current) => [...current, { id: "", path: "" }])}>Add another repository</button>
+            <div className="form-footer"><small>A project registers every related repository at once; paths stay in the local machine registry, and the manifest never contains them.</small><button className="primary" disabled={!name.trim() || !rowsComplete} data-capability="projects.register">Register {rows.length > 1 ? `${rows.length} repositories` : "repository"}</button></div>
           </fieldset>
         </form>
+        <details className="import section"><summary>Import a project export from another machine</summary>
+          <form onSubmit={importProject} className="form-group">
+            <fieldset disabled={!client || busy}>
+              <label>Export JSON<textarea value={importText} onChange={(event) => setImportText(event.target.value)} rows={4} spellCheck={false} placeholder='{"kind":"luuna-project-export", …}' aria-describedby="import-note" /></label>
+              {importText.trim() && !importDraft && <p className="reason" role="status">The pasted text is not a Luuna project export.</p>}
+              {importRepositories.map((id) => <label key={id}>Checkout of repository <code>{id}</code><input value={importPaths[id] ?? ""} onChange={(event) => setImportPaths({ ...importPaths, [id]: event.target.value })} required spellCheck={false} placeholder="/absolute/path/to/clone" /></label>)}
+              <div className="form-footer"><small id="import-note">The runtime checks the export hash, matches each clone's remote and root commits against the exported identity, and refuses user memory, credentials and host paths. Tickets, project and process memory and prompts arrive through Missions, Atlas and Beacon.</small><button className="primary" disabled={!importReady} data-capability="projects.import">Import project</button></div>
+            </fieldset>
+          </form>
+          {importResult && <p className="reason" role="status">Imported <code>{importResult.project.project.id}</code> at manifest <code>{importResult.manifest_hash.slice(0, 23)}…</code>: {importResult.counts.tickets} tickets, {importResult.counts.memory} memories, {importResult.counts.prompts} prompts{importResult.components_enabled ? "" : " (components not enabled on this host)"}{importResult.replayed ? " (replayed)" : ""}.</p>}
+        </details>
         <details className="scaffold section"><summary>Create a new project from a stack profile</summary>
           <form onSubmit={proposeScaffold} className="form-group">
             <fieldset disabled={!client || busy}>
               <label>Stack profile<select aria-label="Stack profile" value={scaffoldProfile} onChange={(event) => setScaffoldProfile(event.target.value as ScaffoldProfile)}>
-                {(["python", "node", "node-typescript", "react", "rust", "go", "flutter", "android", "ios"] as ScaffoldProfile[]).map((profile) => <option key={profile} value={profile}>{profile}</option>)}
+                {(["python", "node", "node-typescript", "react", "nextjs", "rust", "go", "flutter", "android", "ios"] as ScaffoldProfile[]).map((profile) => <option key={profile} value={profile}>{profile}</option>)}
               </select></label>
               <label>New project name<input value={scaffoldName} onChange={(event) => setScaffoldName(event.target.value)} required spellCheck={false} pattern="[a-z][a-z0-9\-]{0,63}" /></label>
               <label>Parent directory<input value={scaffoldParent} onChange={(event) => setScaffoldParent(event.target.value)} required spellCheck={false} placeholder="/absolute/existing/directory" /></label>
@@ -439,7 +574,7 @@ export function Projects({ client, connectionEpoch = 0 }: { client: LuunaClient 
       <div className="project-detail">
         {view && registration && observation ? <>
           <dl className="facts project-facts">
-            <div><dt>Repository</dt><dd><code>{registration.repository_id}</code> · {registration.local_path}</dd></div>
+            <div><dt>{view.repositories.length > 1 ? "Repositories" : "Repository"}</dt><dd>{view.repositories.map((repository, index) => <span key={repository.repository_id}>{index > 0 && " · "}<code>{repository.repository_id}</code> {repository.local_path}</span>)}</dd></div>
             <div><dt>Remote identity</dt><dd>{observation.identity.remote ?? "no portable origin"}{observation.identity.push_remote && ` · push ${observation.identity.push_remote}`}{observation.identity.shallow && " · shallow clone"}</dd></div>
             <div><dt>HEAD at registration</dt><dd><code>{observation.head_commit.slice(0, 12)}</code> on {observation.branch ?? "detached HEAD"}</dd></div>
             <div><dt>Dirty state</dt><dd>{observation.dirty.staged} staged · {observation.dirty.unstaged} unstaged · {observation.dirty.untracked} untracked · {observation.dirty.conflicted} conflicted</dd></div>
@@ -448,8 +583,9 @@ export function Projects({ client, connectionEpoch = 0 }: { client: LuunaClient 
           <details className="rebind section"><summary>Rebind repository</summary>
             <form onSubmit={rebind} className="rebind-form">
               <fieldset disabled={busy}>
-                <label>New repository root path (empty re-inspects the registered path)<input value={rebindPath} onChange={(event) => setRebindPath(event.target.value)} spellCheck={false} placeholder={registration.local_path} /></label>
-                <label className="checkbox"><input type="checkbox" checked={rebindConfirmed} onChange={(event) => setRebindConfirmed(event.target.checked)} /> I moved this checkout or changed its remote on purpose; bind {registration.repository_id} to it.</label>
+                {view.repositories.length > 1 && <label>Repository to rebind<select aria-label="Repository to rebind" value={rebindTarget?.repository_id ?? ""} onChange={(event) => setRebindRepository(event.target.value)}>{view.repositories.map((repository) => <option key={repository.repository_id} value={repository.repository_id}>{repository.repository_id}</option>)}</select></label>}
+                <label>New repository root path (empty re-inspects the registered path)<input value={rebindPath} onChange={(event) => setRebindPath(event.target.value)} spellCheck={false} placeholder={rebindTarget?.local_path ?? registration.local_path} /></label>
+                <label className="checkbox"><input type="checkbox" checked={rebindConfirmed} onChange={(event) => setRebindConfirmed(event.target.checked)} /> I moved this checkout or changed its remote on purpose; bind {rebindTarget?.repository_id ?? registration.repository_id} to it.</label>
                 <div className="form-footer"><small>The runtime inspects the checkout read-only and records the old and new identity. Plans, baselines and approvals stay bound to exact commits; a manifest whose remote no longer matches must be confirmed again.</small><button className="primary" disabled={!rebindConfirmed} data-capability="projects.repositories.rebind">Rebind repository</button></div>
               </fieldset>
             </form>
@@ -457,10 +593,9 @@ export function Projects({ client, connectionEpoch = 0 }: { client: LuunaClient 
           <div className="project-actions actions">
             <button type="button" disabled={busy} data-capability="projects.discover" onClick={discover}>Discover proposed map</button>
             <button type="button" disabled={busy} data-capability="projects.export" onClick={exportProject}>Export project</button>
-            <button type="button" disabled={busy || !view.manifest || baselineInFlight} data-capability="baselines.start" onClick={runBaseline}>Run baseline</button>
-            {runningBaseline && <button type="button" className="danger" disabled={busy} data-capability="runs.cancel" onClick={() => cancelBaseline(runningBaseline)}>Cancel baseline</button>}
-            <small>Discovery reads manifests and lockfiles; it never runs repository commands. A baseline runs the confirmed required recipes on a clean checkout and records exact evidence.</small>
+            <small>Discovery reads manifests and lockfiles; it never runs repository commands. A baseline runs one repository's confirmed required recipes on a clean checkout and records exact evidence; a multi-repository feature needs every repository's passing baseline.</small>
           </div>
+          <RepositoryBaselines repositoryIds={repositoryIds} baselines={baselines} running={runningBaselines} busy={busy} manifestConfirmed={view.manifest !== null && view.manifest !== undefined} onRun={runBaseline} onCancel={cancelBaseline} />
           {exported && exported.project.id === selected && <details open className="project-export section"><summary>Project export · omits {exported.omitted.join(", ")}</summary>
             <p><a href={`data:application/json;charset=utf-8,${encodeURIComponent(JSON.stringify(exported, null, 2))}`} download={`luuna-${exported.project.id}-export.json`}>Save export JSON</a> · {exported.tickets.length} tickets, {exported.memory.length} memories, {exported.prompts.length} prompts</p>
             <pre aria-label="Project export" tabIndex={0}>{JSON.stringify(exported, null, 2)}</pre>
@@ -483,7 +618,7 @@ export function Projects({ client, connectionEpoch = 0 }: { client: LuunaClient 
             </form>
           </>}
           <ProjectComponents key={view.project.id} client={client} projectId={view.project.id} connectionEpoch={connectionEpoch} onContextChange={setComponentContext} onStatusChange={setComponentStatus} onChanged={() => setComponentEpoch((value) => value + 1)} />
-          <Workflows client={client} projectId={view.project.id} repositoryId={registration.repository_id} manifestConfirmed={view.manifest !== null && view.manifest !== undefined} connectionEpoch={connectionEpoch} componentContext={componentContext} componentsEnabled={componentStatus?.enabled ?? false} componentEpoch={componentEpoch} onChanged={() => { if (selected) void guarded("Refresh", (signal) => refresh(selected, signal)); }} />
+          <Workflows client={client} projectId={view.project.id} repositoryId={registration.repository_id} repositoryIds={repositoryIds} prerequisites={view.prerequisites ?? []} manifestConfirmed={view.manifest !== null && view.manifest !== undefined} connectionEpoch={connectionEpoch} componentContext={componentContext} componentsEnabled={componentStatus?.enabled ?? false} componentEpoch={componentEpoch} onChanged={() => { if (selected) void guarded("Refresh", (signal) => refresh(selected, signal)); }} />
           <details className="project-events section" data-capability="projects.events"><summary>Project event record ({events.length})</summary>
             <ol className="events" aria-label="Durable project events" tabIndex={0}>{events.map((event) => <li key={event.event_id}><details><summary><span className="event-number">{event.sequence}</span><span>{event.type}</span></summary><pre>{JSON.stringify(event.payload, null, 2)}</pre></details></li>)}</ol>
           </details>

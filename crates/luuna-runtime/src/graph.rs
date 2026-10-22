@@ -22,7 +22,8 @@ use axum::{
     Json,
 };
 use luuna_domain::{
-    dependency_binding_key, CandidateSet, PlanRevision, RunState, TaskState, SCHEMA_VERSION,
+    dependency_binding_key, CandidateSet, PlanRevision, RunState, TaskRole, TaskState,
+    SCHEMA_VERSION,
 };
 use luuna_engine_pi::PI_VERSION;
 use luuna_storage::{RepositoryRegistration, RunRecord, StorageError, TaskRecord};
@@ -498,6 +499,24 @@ impl Scheduler {
                                 Some((&commit, &tree)),
                             );
                         }
+                        TaskOutcome::Advised(result) => {
+                            let recorded =
+                                self.state.store.lock().map_err(|e| e.to_string()).and_then(
+                                    |mut store| {
+                                        store
+                                            .settle_advisory_task(&self.run_id, &task_id, &result)
+                                            .map_err(|e| e.to_string())
+                                    },
+                                );
+                            if let Err(error) = recorded {
+                                self.settle(
+                                    &task_id,
+                                    TaskState::Failed,
+                                    Some(&format!("cannot record advisory result: {error}")),
+                                    None,
+                                );
+                            }
+                        }
                         TaskOutcome::Failed(reason) => {
                             self.settle(&task_id, TaskState::Failed, Some(&reason), None);
                         }
@@ -561,10 +580,20 @@ impl Scheduler {
             .cloned()
             .ok_or("task repository is not registered")?;
         let mut producers = Vec::new();
+        let mut advisories = Vec::new();
         for dependency in &task.depends_on {
             let producer = tasks
                 .get(dependency)
                 .ok_or_else(|| format!("dependency {dependency} has no recorded state"))?;
+            // An advisory producer binds no commit; its recorded result is
+            // reference data for the dependent task's prompt (ADR 0023).
+            if TaskRole::parse(&producer.role).is_some_and(TaskRole::is_advisory) {
+                let result = producer.advisory_result.clone().ok_or_else(|| {
+                    format!("advisory dependency {dependency} completed without a recorded result")
+                })?;
+                advisories.push((producer.task_id.clone(), producer.role.clone(), result));
+                continue;
+            }
             let commit = producer
                 .candidate_commit
                 .clone()
@@ -597,8 +626,13 @@ impl Scheduler {
                         "trigger": "implement",
                         "task_id": task.task_id,
                         "repository_id": task.repository_id,
+                        "role": task.role,
+                        "assigned_by": task.assigned_by,
+                        "derived_from_task": task.derived_from_task,
+                        "dependency_overrides": task.dependency_overrides,
                         "depends_on": task.depends_on,
                         "dependency_commits": producers.iter().map(|(repository, _, commit, _)| (repository.clone(), commit.clone())).collect::<BTreeMap<_, _>>(),
+                        "advisory_dependencies": advisories.iter().map(|(task, _, _)| task.clone()).collect::<Vec<_>>(),
                     }),
                 )
                 .map_err(|e| e.to_string())?;
@@ -617,10 +651,14 @@ impl Scheduler {
             provider: self.provider.clone(),
             model: self.model.clone(),
             previous_candidate: None,
+            history_clean: false,
             repair_feedback: None,
             preparation_seconds: 0,
             component_resources: self.component_resources.clone(),
-            graph: Some(GraphContext { producers }),
+            graph: Some(GraphContext {
+                producers,
+                advisories,
+            }),
         };
         let state = self.state.clone();
         let task_id = task.task_id.clone();
@@ -699,11 +737,24 @@ impl Scheduler {
             );
             return;
         }
+        // Advisory tasks froze nothing: a plan of advisory tasks only
+        // completes with their recorded results and no candidate (ADR 0023);
+        // the next plan revision carries what the developer adopts.
+        let advisory =
+            |task: &&TaskRecord| TaskRole::parse(&task.role).is_some_and(TaskRole::is_advisory);
+        if tasks.values().all(|task| advisory(&task)) {
+            let _ = self.state.finish(
+                &self.run_id,
+                RunState::Completed,
+                json!({"reason": "every task of this plan is advisory; their results are recorded on the tasks and no candidate exists, so create the next plan revision from the proposals you adopt (derived_from_task names the advisory task)", "tasks": tasks.values().collect::<Vec<_>>()}),
+            );
+            return;
+        }
         let mut repository_commits = BTreeMap::new();
         let mut repository_trees = BTreeMap::new();
         let mut dependency_bindings = BTreeMap::new();
         let mut implementer = None;
-        for task in tasks.values() {
+        for task in tasks.values().filter(|task| !advisory(task)) {
             let (Some(commit), Some(tree)) = (&task.candidate_commit, &task.candidate_tree) else {
                 let _ = self.state.finish(
                     &self.run_id,
@@ -716,7 +767,8 @@ impl Scheduler {
             repository_trees.insert(task.repository_id.clone(), tree.clone());
             implementer = task.attempt_id.clone().or(implementer);
             for dependency in &task.depends_on {
-                if let Some(producer) = tasks.get(dependency) {
+                if let Some(producer) = tasks.get(dependency).filter(|producer| !advisory(producer))
+                {
                     if let Some(producer_commit) = &producer.candidate_commit {
                         dependency_bindings.insert(
                             dependency_binding_key(&task.repository_id, &producer.repository_id),

@@ -23,6 +23,35 @@ pub enum TicketSource {
     Missions,
 }
 
+/// What a ticket, and every plan made for it, is for. `Feature` is the
+/// default and is omitted from serialization, so records written before the
+/// purpose existed keep their bytes and hashes. A `TestingSetup` ticket is the
+/// prerequisite workflow of docs/08-validation.md: its plan carries the
+/// testing-setup role and the check recipes that will become the repository's
+/// baseline, and it is the only plan admitted to implementation without a
+/// passing baseline (ADR 0022).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum TicketPurpose {
+    #[default]
+    Feature,
+    TestingSetup,
+}
+
+impl TicketPurpose {
+    pub fn is_feature(&self) -> bool {
+        *self == Self::Feature
+    }
+
+    /// The process role (`agents/<role>.md`) a plan task of this purpose carries.
+    pub fn role(&self) -> &'static str {
+        match self {
+            Self::Feature => "implementer",
+            Self::TestingSetup => "testing-setup",
+        }
+    }
+}
+
 pub const MAX_TICKET_TITLE_BYTES: usize = 200;
 pub const MAX_TICKET_INTENT_BYTES: usize = 16_000;
 pub const MAX_ACCEPTANCE_CRITERIA: usize = 32;
@@ -41,6 +70,9 @@ pub struct Ticket {
     pub acceptance_criteria: Vec<String>,
     /// Registered repositories the ticket may touch.
     pub repository_ids: Vec<String>,
+    /// Absent (feature) preserves the bytes of earlier records.
+    #[serde(default, skip_serializing_if = "TicketPurpose::is_feature")]
+    pub purpose: TicketPurpose,
     pub created_at: String,
     pub updated_at: String,
 }
@@ -294,6 +326,21 @@ impl CheckRecipe {
                 .unwrap_or_else(|| "native".into()),
         }
     }
+
+    /// The recipe as a manifest check: what a testing-setup plan proposes as
+    /// the repository's baseline, and what the host is fingerprinted for when
+    /// such a plan is scheduled without one.
+    pub fn to_manifest_check(&self) -> ManifestCheck {
+        ManifestCheck {
+            id: self.id.clone(),
+            executable: self.executable.clone(),
+            args: self.args.clone(),
+            required: self.required,
+            timeout_seconds: self.timeout_seconds,
+            capabilities: self.capabilities.clone(),
+            cwd: self.cwd.clone(),
+        }
+    }
 }
 
 #[cfg(test)]
@@ -312,6 +359,7 @@ mod tests {
             intent: "Print a greeting from main.".into(),
             acceptance_criteria: vec!["main prints hello".into()],
             repository_ids: vec!["app".into()],
+            purpose: TicketPurpose::Feature,
             created_at: "2026-10-17T00:00:00.000Z".into(),
             updated_at: "2026-10-17T00:00:00.000Z".into(),
         }
@@ -327,6 +375,7 @@ mod tests {
             operations: vec![Operation::Read, Operation::Write],
             acceptance_criteria: vec!["ok".into()],
             execution_profile: "native".into(),
+            derived_from_task: None,
         }
     }
 

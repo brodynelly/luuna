@@ -53,10 +53,12 @@ fn project_not_found() -> ApiError {
     ApiError(StatusCode::NOT_FOUND, "project not found".into())
 }
 
+/// Every baseline of the project, newest first. A blocked baseline that shows
+/// no usable testing setup carries the `prerequisite` offer (ADR 0022).
 pub async fn list_baselines(
     State(state): State<AppState>,
     Path(id): Path<String>,
-) -> Result<Json<Vec<BaselineEvidence>>, ApiError> {
+) -> Result<Json<Vec<serde_json::Value>>, ApiError> {
     if !valid_project_id(&id) {
         return Err(project_not_found());
     }
@@ -65,7 +67,43 @@ pub async fn list_baselines(
         .get_project(&id)
         .map_err(internal)?
         .ok_or_else(project_not_found)?;
-    Ok(Json(store.baselines(&id).map_err(internal)?))
+    store
+        .baselines(&id)
+        .map_err(internal)?
+        .into_iter()
+        .map(|evidence| {
+            let prerequisite = evidence.testing_prerequisite();
+            let mut view = serde_json::to_value(evidence).map_err(internal)?;
+            if let Some(prerequisite) = prerequisite {
+                view["prerequisite"] = serde_json::to_value(prerequisite).map_err(internal)?;
+            }
+            Ok(view)
+        })
+        .collect::<Result<Vec<_>, ApiError>>()
+        .map(Json)
+}
+
+/// The settled baseline's prerequisite offer, recorded durably on the run as
+/// `baseline.prerequisite_offered` and returned for the run's final metadata.
+fn offer_prerequisite(
+    state: &AppState,
+    run_id: &str,
+    baseline_id: &str,
+) -> Option<serde_json::Value> {
+    let evidence = state
+        .store
+        .lock()
+        .ok()?
+        .get_baseline(baseline_id)
+        .ok()
+        .flatten()?;
+    let prerequisite = serde_json::to_value(evidence.testing_prerequisite()?).ok()?;
+    let _ = state.event(
+        run_id,
+        "baseline.prerequisite_offered",
+        prerequisite.clone(),
+    );
+    Some(prerequisite)
 }
 
 pub async fn start_baseline(
@@ -414,6 +452,17 @@ async fn baseline_worker(state: AppState, job: BaselineJob, cancel: watch::Recei
             json!({"reason": reason, "baseline_status": baseline_status}),
         );
     };
+    // A blocked baseline that shows no usable testing setup settles with the
+    // prerequisite offer in its metadata, so the refusal and the next step are
+    // one record (A06).
+    let fail_blocked = |state: &AppState, reason: String, baseline_id: &str| {
+        let prerequisite = offer_prerequisite(state, &run_id, baseline_id);
+        let _ = state.finish(
+            &run_id,
+            RunState::Failed,
+            json!({"reason": reason, "baseline_status": BaselineStatus::Blocked, "prerequisite": prerequisite}),
+        );
+    };
     if *cancel.borrow() {
         let _ = state.finish(
             &job.run_id,
@@ -582,7 +631,7 @@ async fn baseline_worker(state: AppState, job: BaselineJob, cancel: watch::Recei
             "baseline.finished",
             json!({"baseline_id": baseline_id, "status": BaselineStatus::Blocked, "reason": reason}),
         );
-        fail(&state, reason, Some(BaselineStatus::Blocked));
+        fail_blocked(&state, reason, &baseline_id);
         return;
     }
 
@@ -810,6 +859,11 @@ async fn baseline_worker(state: AppState, job: BaselineJob, cancel: watch::Recei
                 json!({"reason":"interrupted by runtime shutdown; check process group reaped","baseline_id":baseline_id}),
             );
         }
+        (Ok(_), BaselineStatus::Blocked) => fail_blocked(
+            &state,
+            reason.unwrap_or_else(|| "baseline did not pass".into()),
+            &baseline_id,
+        ),
         (Ok(_), other) => fail(
             &state,
             reason.unwrap_or_else(|| "baseline did not pass".into()),
