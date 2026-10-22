@@ -243,7 +243,11 @@ After setup, double-click `Configure Luuna.cmd` to replace the key, or
 `Start Luuna.cmd` to open the native development app; `Stop Luuna.cmd` requests
 authenticated orderly runtime shutdown without closing the client. A second
 native launch reuses the verified service/window; unrecognized occupied ports
-are refused. Omitting `-Native` launches the Vite/browser client. During this verification
+are refused. Omitting `-Native` launches the Vite/browser client.
+For the terminal client, add this checkout's `bin` folder to the user PATH once
+and run `luuna` (interactive) or `luuna <command>` (for example `luuna projects`)
+from PowerShell, cmd or Git Bash; it runs `scripts/start-terminal.ps1`, which
+reuses the running runtime and its saved data directory. During this verification
 the launcher was given the successful diagnostic's existing data directory, so
 the running client can inspect the two genuinely reviewed fixture workflows.
 
