@@ -64,9 +64,9 @@ Windows packages carry `luuna-tui.exe` and its Node bridge together. Historical
 JavaScript interactive audit results above do not establish native renderer
 coverage; native UI and staged-launch evidence must be recorded separately.
 The native renderer draws on an event-driven frame clock (dirty flag, 60 Hz
-default cap, no idle redraws) with DEC 2026 synchronized updates, each with an
-environment opt-out; eased whole-row scrolling is planned and not yet merged
-([ADR 0031](decisions/0031-client-frame-pacing.md)).
+default cap, no idle redraws) with DEC 2026 synchronized updates and eased whole-row scrolling, each with an
+environment opt-out (`LUUNA_TUI_SYNC`, `LUUNA_TUI_ANIMATION`;
+[ADR 0031](decisions/0031-client-frame-pacing.md)).
 
 ## Runtime ownership
 
