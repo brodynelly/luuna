@@ -1,7 +1,9 @@
 //! The native menu bar (ADR 0030): every view and the sidebar toggle are reachable from a menu,
 //! with the same shortcuts the page answers, and the platform's standard Edit commands make copy
 //! and paste work in the web view. A menu command reaches the page as a `luuna:command` DOM event
-//! through `eval`, so the frontend needs no additional Tauri permission.
+//! through `eval`, so the frontend needs no additional Tauri permission. macOS and Linux only: on
+//! Windows the in-app top bar is the title bar and there is no menu bar (ADR 0036); the page answers
+//! the same shortcuts itself, and WebView2 handles the standard Edit keys without a menu.
 
 use tauri::menu::{Menu, MenuBuilder, MenuItemBuilder, SubmenuBuilder};
 use tauri::{AppHandle, Manager, Runtime};

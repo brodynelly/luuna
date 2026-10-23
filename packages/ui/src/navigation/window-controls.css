@@ -1,0 +1,39 @@
+/*
+ * Window controls (ADR 0036): the caption buttons at the right end of a top bar that is the window's title bar,
+ * in the Windows caption size (46 px wide, the bar's full height, flush to the window edge). Token values only.
+ * Nothing moves: hover and press change the ground instantly, and hover rules need a fine hover pointer.
+ * Close takes the danger role (white on the light danger, black on the dark danger; both above 4.5:1).
+ */
+/* The top bar pads its ends by --space-8 (--space-4 at 768 px and below); the controls cancel that padding to touch the edge. */
+.window-controls { display: flex; flex: none; align-self: stretch; margin-inline: var(--space-2) calc(var(--space-8) * -1); }
+.window-controls > button.caption-button {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: calc(var(--space-12) - var(--space-0-5));
+  min-height: 0;
+  padding: 0;
+  border: 0;
+  border-radius: 0;
+  box-shadow: none;
+  background: transparent;
+  color: var(--ink);
+}
+.window-controls > button.caption-button:active:not(:disabled) { background: var(--fill-strong); }
+.window-controls > button.caption-close:active:not(:disabled) { background: var(--danger); color: var(--ink-on-danger); }
+@media (hover: hover) and (pointer: fine) {
+  .window-controls > button.caption-button:hover:not(:disabled) { background: var(--fill); }
+  .window-controls > button.caption-close:hover:not(:disabled) { background: var(--danger); color: var(--ink-on-danger); }
+}
+/* The buttons touch the window edge, so the ring is drawn inside them where it cannot be clipped. */
+.window-controls > button.caption-button:focus-visible { outline-offset: var(--focus-inset); }
+.window-controls .icon { flex: none; width: var(--icon-size); height: var(--icon-size); fill: none; stroke: currentColor; stroke-width: var(--icon-stroke); stroke-linecap: round; stroke-linejoin: round; }
+/* A drag region takes the press itself, so the brand mark inside it must not swallow it. */
+.wordmark[data-tauri-drag-region] > .wordmark-mark { pointer-events: none; }
+@media (max-width: 768px) {
+  .window-controls { margin-inline-end: calc(var(--space-4) * -1); }
+}
+@media (forced-colors: active) {
+  .window-controls > button.caption-button { color: ButtonText; }
+  .window-controls > button.caption-button:hover:not(:disabled), .window-controls > button.caption-close:hover:not(:disabled) { forced-color-adjust: none; background: Highlight; color: HighlightText; }
+}

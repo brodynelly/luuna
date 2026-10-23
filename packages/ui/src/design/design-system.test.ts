@@ -13,7 +13,7 @@ const TAILWIND = "ui/styles/tailwind.css";
 // Bundled font (ADR 0035): the Outfit @font-face descriptors. Last import of the tokens layer, but not a token sheet.
 const FONTS = "ui/styles/fonts.css";
 // Every sheet is registered once (ADR 0032); later items replace a sheet's content, never this list.
-const EXPECTED_SHEETS = [MANIFEST, ...TOKEN_SHEETS, FONTS, "ui/styles/base.css", "ui/styles/components.css", "ui/styles/overlays.css", "ui/styles/controls.css", "ui/styles/motion.css", "ui/navigation/navigation.css", "ui/forms/forms.css", "ui/forms/pickers.css", "ui/data/data.css", "ui/data/table.css", "ui/overlay/overlay.css", "ui/overlay/feedback.css", "ui/primitives/primitives.css", "screens/app.css", "screens/shell.css", "screens/projects.css", "screens/workflows.css", "screens/candidate-review.css", "screens/project-components.css", "screens/help.css", "screens/settings.css", "screens/sessions.css", "ui/styles/tailwind.css"];
+const EXPECTED_SHEETS = [MANIFEST, ...TOKEN_SHEETS, FONTS, "ui/styles/base.css", "ui/styles/components.css", "ui/styles/overlays.css", "ui/styles/controls.css", "ui/styles/motion.css", "ui/navigation/navigation.css", "ui/navigation/window-controls.css", "ui/forms/forms.css", "ui/forms/pickers.css", "ui/data/data.css", "ui/data/table.css", "ui/overlay/overlay.css", "ui/overlay/feedback.css", "ui/primitives/primitives.css", "screens/app.css", "screens/shell.css", "screens/projects.css", "screens/workflows.css", "screens/candidate-review.css", "screens/project-components.css", "screens/help.css", "screens/settings.css", "screens/sessions.css", "ui/styles/tailwind.css"];
 // The desktop manifest imports library sheets by package path (ADR 0034) and its own screen sheets relatively.
 const importPath = (sheet: string) => (sheet.startsWith("ui/") ? "@luuna/ui/" + sheet.slice("ui/".length) : "./" + sheet);
 function layerOf(sheet: string): string {
@@ -56,9 +56,10 @@ describe("stylesheets", () => {
         if (/--tone-(?:success|active|danger|attention|neutral|interrupted)-/.test(value) && file !== "ui/styles/components.css") problems.push(`raw tone token outside the tone indirection: ${where}`);
       }
       for (const { selector, body } of rules(css)) {
+        // `.content` is the one scroller of the fixed-height shell (the main landmark); the page itself never scrolls.
         for (const [property, value] of declarations(`${body};`)) {
           if (property === "outline" && /^(?:none|0)$/.test(value) && selector !== "main:focus") problems.push(`outline removed in ${selector}`);
-          if ((property === "max-height" || (/^overflow(-y)?$/.test(property) && /auto|scroll/.test(value))) && !/ol\.events|pre\[aria-label|\[role="listbox"\]|\[data-scroll-area\]/.test(selector)) problems.push(`only labelled scroll regions may scroll: ${selector} { ${property}: ${value} }`);
+          if ((property === "max-height" || (/^overflow(-y)?$/.test(property) && /auto|scroll/.test(value))) && !/ol\.events|pre\[aria-label|\[role="listbox"\]|\[data-scroll-area\]|^\.content$/.test(selector)) problems.push(`only labelled scroll regions may scroll: ${selector} { ${property}: ${value} }`);
           if (/\b(?:code|pre)\b/.test(selector) && (property === "text-overflow" || property === "-webkit-line-clamp" || (property === "overflow" && value === "hidden"))) problems.push(`identities are never truncated: ${selector} { ${property}: ${value} }`);
         }
         if (/\[data-tone=/.test(selector) && file !== "ui/styles/components.css") problems.push(`tone mapping outside components.css: ${selector}`);

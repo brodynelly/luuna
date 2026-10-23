@@ -12,18 +12,20 @@
   --side: var(--sidebar-width);
   display: grid;
   grid-template-columns: var(--side) minmax(0, 1fr);
-  grid-template-rows: auto 1fr;
-  align-items: start;
-  min-height: var(--viewport-height);
+  grid-template-rows: auto minmax(0, 1fr);
+  height: var(--viewport-height);
+  overflow: hidden;
   background: var(--surface);
 }
 .app[data-rail] { grid-template-columns: var(--side) minmax(0, 1fr) var(--rail-width); }
-/* A banner is sticky above 768 px, so the sidebar and the top bar start below it. */
-.app[data-banner] > .sidebar { top: var(--banner-height); height: calc(var(--viewport-height) - var(--banner-height)); }
-.app[data-banner] .topbar { top: var(--banner-height); }
-.shell-banner { position: sticky; top: 0; z-index: var(--z-sticky); grid-column: 1 / -1; grid-row: 1; }
+/* The window is a fixed-height shell (the document never scrolls): the banner row, the sidebar and the top bar stay put and only
+   .content scrolls, so its scrollbar starts below the top bar and the window controls. A banner takes the first grid row, so the
+   sidebar and the main column fill the rest. */
+.shell-banner { flex: none; grid-column: 1 / -1; grid-row: 1; }
 .sidebar { grid-column: 1; grid-row: 2; }
-.shell-main { grid-column: 2; grid-row: 2; min-width: 0; }
+.shell-main { display: flex; flex-direction: column; grid-column: 2; grid-row: 2; min-width: 0; min-height: 0; }
+/* Sticky rails stick to the scrolling column, whose top edge is already below the top bar and the banner. */
+.app .split-rail[data-sticky] { top: var(--spacing-lg); }
 .shell-rail { grid-column: 3; grid-row: 2; min-width: 0; padding: var(--space-4) var(--space-8) var(--space-8) 0; }
 
 /* Banner: the one app-wide notice, full width above the shell. Above 768 px it is exactly --banner-height tall (one line, cut with an
@@ -44,16 +46,16 @@
 .banner-label { flex: none; font-weight: var(--weight-body-strong); }
 .banner-message { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 
-/* Sidebar: window chrome. It stays in view while the content scrolls. Critical actions never sit at its bottom. */
+/* Sidebar: window chrome. It fills its grid row, so it stays in view while the content scrolls; its top row is as tall as the top bar. Critical actions never sit at its bottom. */
 .sidebar {
-  position: sticky;
-  top: 0;
+  position: relative;
   display: flex;
-  height: var(--viewport-height);
-  padding: var(--space-4) var(--space-3);
+  min-height: 0;
+  padding: 0 var(--space-3) var(--space-4);
   border-right: var(--border-width) solid var(--separator);
   background: var(--surface);
 }
+.sidebar-top { flex: none; min-height: var(--topbar-height); }
 .sidebar-top > .wordmark {
   flex: 1 1 auto;
   min-width: 0;
@@ -97,11 +99,11 @@
 }
 
 /* Navigation: sections of icon items (Mantine NavLink: 8px 12px, 8px radius). The current item is accent text on the light accent ground, semibold. */
-.nav-section + .nav-section { margin-top: var(--space-4); }
+.nav-section + .nav-section { margin-top: var(--space-3); }
 .nav-section > ul { margin: 0; padding: 0; list-style: none; }
 .nav-section-label {
   display: block;
-  padding: var(--space-4) var(--space-2) var(--space-1);
+  padding: var(--space-2) var(--space-3) var(--space-1);
   color: var(--ink-muted);
   font-size: var(--text-overline);
   font-weight: var(--weight-overline);
@@ -142,12 +144,11 @@
   line-height: var(--leading-caption);
 }
 
-/* Top bar: sticky, the menu button (narrow only) and the palette trigger shaped as a search field. */
+/* Top bar: fixed above the scrolling column, the menu button (narrow only) and the palette trigger shaped as a search field. */
 .topbar {
-  position: sticky;
-  top: 0;
   z-index: var(--z-sticky);
   display: flex;
+  flex: none;
   align-items: center;
   gap: var(--space-2);
   height: var(--topbar-height);
@@ -178,17 +179,21 @@
 .topbar-search-label { flex: 1 1 auto; text-align: left; }
 .topbar-spacer { flex: 1 1 0; }
 
-/* Content: one left-aligned column of Ledger's maximum width; the document scrolls. */
+/* Content: the one scrolling column. Its children form one left-aligned column of Ledger's maximum width (the padding is outside it). */
 .content {
   display: flex;
+  flex: 1 1 auto;
   flex-direction: column;
   gap: var(--space-5);
   width: 100%;
-  max-width: var(--content-max-width);
   min-width: 0;
-  padding: var(--space-2) var(--space-8) var(--space-8);
+  min-height: 0;
+  padding: var(--space-5) var(--space-8) var(--space-8);
   overflow-x: clip;
+  overflow-y: auto;
+  scrollbar-gutter: stable;
 }
+.content > * { flex: none; max-width: calc(var(--content-max-width) - 2 * var(--space-8)); }
 .content > .view[hidden] { display: none; }
 
 /* A view's own panel is the page header: title, one line of description and actions, no card. */
@@ -234,7 +239,7 @@
 /* The icon rail, chosen with the sidebar toggle (Ctrl+backslash). App sets data-sidebar only above the off-canvas width. */
 .app[data-sidebar="collapsed"] { --side: var(--sidebar-compact); }
 .app[data-sidebar="collapsed"] > .sidebar { padding-inline: var(--space-2); }
-.app[data-sidebar="collapsed"] .sidebar-top { flex-direction: column; }
+.app[data-sidebar="collapsed"] .sidebar-top { flex-direction: column; min-height: 0; padding-block: var(--space-4) 0; }
 .app[data-sidebar="collapsed"] :is(.wordmark, .connection, .nav-item) { justify-content: center; padding-inline: 0; }
 .app[data-sidebar="collapsed"] .sidebar-footer { padding-inline: 0; text-align: center; }
 .app[data-sidebar="collapsed"] .sidebar-label { position: absolute; width: var(--border-width); height: var(--border-width); overflow: hidden; clip-path: inset(50%); white-space: nowrap; }
@@ -247,10 +252,7 @@
 }
 @media (max-width: 768px) {
   .app, .app[data-rail] { grid-template-columns: minmax(0, 1fr); }
-  .app[data-banner] .topbar { top: 0; }
-  .app[data-banner] > .sidebar { top: 0; height: auto; }
-  .shell-banner { position: static; }
-  /* Not sticky here, so the whole text may wrap. */
+  /* The banner may wrap here, so its row grows. */
   .banner { justify-content: flex-start; height: auto; min-height: var(--banner-height); padding: var(--space-2) var(--space-4); }
   .banner-message { overflow: visible; white-space: normal; }
   .shell-main, .shell-rail { grid-column: 1; }

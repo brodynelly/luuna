@@ -15,3 +15,5 @@ export { TableOfContents } from "./TableOfContents";
 export type { TableOfContentsProps } from "./TableOfContents";
 export { tocHref, tocItems } from "./toc";
 export type { TocItem } from "./toc";
+export { WindowControls } from "./WindowControls";
+export type { WindowControlsProps } from "./WindowControls";

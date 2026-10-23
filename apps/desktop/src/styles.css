@@ -23,6 +23,7 @@
 @import "@luuna/ui/styles/controls.css" layer(components);
 @import "@luuna/ui/styles/motion.css" layer(components);
 @import "@luuna/ui/navigation/navigation.css" layer(components);
+@import "@luuna/ui/navigation/window-controls.css" layer(components);
 @import "@luuna/ui/forms/forms.css" layer(components);
 @import "@luuna/ui/forms/pickers.css" layer(components);
 @import "@luuna/ui/data/data.css" layer(components);

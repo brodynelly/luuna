@@ -36,7 +36,7 @@ Styles load through one ordered manifest, `apps/desktop/src/styles.css`:
 tokens      tokens.css, tokens-depth.css, tokens-scale.css, tokens-motion.css, tokens-legacy.css, fonts.css
 base        styles/base.css
 components  styles/components.css, overlays.css, controls.css, motion.css,
-            navigation/navigation.css, forms/forms.css, forms/pickers.css,
+            navigation/navigation.css, navigation/window-controls.css, forms/forms.css, forms/pickers.css,
             data/data.css, data/table.css, overlay/overlay.css, overlay/feedback.css,
             primitives/primitives.css
 screens     apps/desktop/src/screens/*.css (desktop-only)
@@ -58,6 +58,7 @@ Each family fragment has the full props, states, keyboard and accessibility note
 | `NavGroup` | Collapsible sidebar group (native `details`) | `label`, `defaultOpen`, `NavItem` children |
 | `RailLayout` | Main column plus a labelled side rail; stacks under 920 px | `main`, `rail`, `railLabel` |
 | `SegmentedControl` | Single-choice segments built on native radios | `aria-label`, `options`, `value`, `onChange`, `name` |
+| `WindowControls` | Minimize, maximize or restore, and close buttons for an app-drawn title bar (ADR 0036) | `maximized`, `onMinimize`, `onToggleMaximize`, `onClose` |
 | `Stepper` | Ordered steps with state; not interactive | `aria-label`, `steps[{id,label,state,detail}]`, `current` |
 | `TableOfContents` | In-page links, current entry marked | `aria-label`, `items[{id,label,level}]`, `current` |
 

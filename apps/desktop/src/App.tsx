@@ -13,8 +13,9 @@ import { ACTIVE_STATES } from "./shell/runtime";
 import { useRuntime } from "./shell/useRuntime";
 import { usePalette } from "./shell/usePalette";
 import { useWindowNavigation } from "./shell/useWindowNavigation";
+import { useWindowChrome } from "./shell/useWindowChrome";
 import { OUTAGE_LABEL, OUTAGE_NOTE } from "./content/views";
-import { AppShell, Alert, Banner, CommandPalette, NoticeProvider, NoticeRegion, TopBar, ViewSlot } from "@luuna/ui";
+import { AppShell, Alert, Banner, CommandPalette, NoticeProvider, NoticeRegion, TopBar, ViewSlot, WindowControls } from "@luuna/ui";
 
 export { authenticationLost, historySelection, sessionStatus, watchRuns } from "./shell/runtime";
 export { VIEWS, viewFromHash } from "./content/views";
@@ -26,6 +27,8 @@ const ProjectPanel = memo(Projects);
 export function App() {
   const runtime = useRuntime();
   const { client, connectionEpoch, refresh, error, setError, outage } = runtime;
+  // The Windows desktop window has no native title bar; the top bar draws it (ADR 0036). Null elsewhere.
+  const chrome = useWindowChrome();
   const { view, navigate, entering, motion, collapsed, toggle, toggleSidebar, palette, setPalette, nav } = useWindowNavigation();
   // A Home or Board control opens a project (and a ticket, or the ticket form) in Projects.
   const [requested, setRequested] = useState<ProjectRequest | null>(null);
@@ -33,14 +36,14 @@ export function App() {
   // Help reads without a runtime; every other view needs one, so it shows the connect page instead.
   const gated = !client && view !== "help";
   const activeRuns = runtime.runs.filter((run) => ACTIVE_STATES.includes(run.state)).length;
-  const sidebar = <WindowSidebar view={view} onSelect={navigate} connection={runtime.connectionState} address={client?.baseUrl} activeRuns={activeRuns} collapsed={collapsed} onToggle={toggle} />;
+  const sidebar = <WindowSidebar view={view} onSelect={navigate} connection={runtime.connectionState} address={client?.baseUrl} activeRuns={activeRuns} collapsed={collapsed} onToggle={toggle} dragRegion={!!chrome} />;
   // The one app-wide notice: the runtime is unreachable (the connect page covers having no runtime).
   const banner = client && outage ? <Banner label={OUTAGE_LABEL} className="outage" title={`${OUTAGE_LABEL}: ${outage} ${OUTAGE_NOTE}`}>{outage} {OUTAGE_NOTE}</Banner> : undefined;
-  const topbar = <TopBar onMenu={nav.toggle} menuOpen={nav.open} onSearch={() => setPalette(true)} />;
+  const topbar = <TopBar onMenu={nav.toggle} menuOpen={nav.open} onSearch={() => setPalette(true)} windowControls={chrome ? <WindowControls {...chrome} /> : undefined} />;
   const finder = usePalette({ client, open: palette, onView: navigate, onOpen: open, onToggleSidebar: toggleSidebar, onDisconnect: runtime.disconnect });
 
   return <NoticeProvider scope={client}>
-    <AppShell collapsed={collapsed && !nav.narrow} sidebar={sidebar} banner={banner} topbar={topbar} navOpen={nav.open} onDismissNav={() => nav.close({ restoreFocus: true })} motion={motion}>
+    <AppShell collapsed={collapsed && !nav.narrow} sidebar={sidebar} banner={banner} topbar={topbar} titleBar={!!chrome} navOpen={nav.open} onDismissNav={() => nav.close({ restoreFocus: true })} motion={motion}>
       {error && <Alert tone="danger" onDismiss={() => setError("")}>{error}</Alert>}
       <NoticeRegion />
       {gated && <ConnectPage runtime={runtime} />}

@@ -27,7 +27,7 @@ For the native Tauri 2 window:
 npm run desktop
 ```
 
-This requires the pinned Rust toolchain and [Tauri system prerequisites](https://v2.tauri.app/start/prerequisites/). Linux additionally needs GTK 3, WebKitGTK 4.1 and their development packages; a headless cloud machine can use the browser frontend. The shell has no filesystem, process or shell plugin permissions. Runtime lifecycle is manual at this milestone and closing the desktop does not stop the service.
+This requires the pinned Rust toolchain and [Tauri system prerequisites](https://v2.tauri.app/start/prerequisites/). Linux additionally needs GTK 3, WebKitGTK 4.1 and their development packages; a headless cloud machine can use the browser frontend. The shell has no filesystem, process or shell plugin permissions. On Windows the window has no native title bar ([ADR 0036](../../docs/decisions/0036-custom-windows-title-bar.md)): `src-tauri/tauri.windows.conf.json` removes the frame (keeping the shadow), the top bar draws the title bar with in-app minimize, maximize or restore and close buttons, and `src-tauri/capabilities/windows-titlebar.json` grants only the window commands those need (`start-dragging`, `internal-toggle-maximize`, `minimize`, `toggle-maximize`, `is-maximized`, `close`). There is no native menu bar on Windows (every menu command is a page shortcut or in the `Ctrl+K` palette); macOS and Linux keep the native frame and menu. Runtime lifecycle is manual at this milestone and closing the desktop does not stop the service.
 
 Validation:
 

@@ -40,7 +40,8 @@ export function useWindowNavigation() {
   sidebarRef.current = sidebar;
   useEffect(() => {
     history.replaceState(null, "", `#${view}`);
-    window.scrollTo({ top: 0 });
+    // The main column is the one scroller (the document is a fixed-height shell).
+    document.getElementById("main")?.scrollTo?.({ top: 0 });
   }, [view]);
   useEffect(() => {
     const shortcut = (event: KeyboardEvent) => {

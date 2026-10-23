@@ -11,16 +11,20 @@ import { Kbd } from "./docs";
  * collapsed to an icon rail above 768 px; at 768 px and below it is an off-canvas panel (`navOpen`)
  * and the rest of the window is inert while it is open.
  */
-export function AppShell({ collapsed, sidebar, banner, topbar, rail, navOpen, onDismissNav, children, motion }: {
+export function AppShell({ collapsed, sidebar, banner, topbar, rail, navOpen, onDismissNav, children, motion, titleBar }: {
   collapsed: boolean; sidebar: ReactNode; banner?: ReactNode; topbar?: ReactNode; rail?: ReactNode; navOpen?: boolean; onDismissNav?: () => void; children: ReactNode; motion?: ViewMotion;
+  /** The top bar is the window's title bar (ADR 0036): it stays on the window's top edge, so the banner sits under it. */
+  titleBar?: boolean;
 }) {
-  return <div className="app" data-sidebar={collapsed ? "collapsed" : undefined} data-nav={navOpen ? "open" : undefined} data-banner={banner ? "" : undefined} data-rail={rail ? "" : undefined} data-view-motion={motion}>
+  const bannerBar = banner ? <div className="shell-banner" inert={navOpen}>{banner}</div> : null;
+  return <div className="app" data-sidebar={collapsed ? "collapsed" : undefined} data-nav={navOpen ? "open" : undefined} data-banner={banner && !titleBar ? "" : undefined} data-rail={rail ? "" : undefined} data-view-motion={motion} data-titlebar={titleBar ? "" : undefined}>
     <a className="skip-link" href="#main" inert={navOpen}>Skip to main content</a>
-    {banner && <div className="shell-banner" inert={navOpen}>{banner}</div>}
+    {!titleBar && bannerBar}
     {sidebar}
     {navOpen && <button type="button" className="sidebar-scrim" aria-label="Close navigation" tabIndex={-1} onClick={onDismissNav} />}
     <div className="shell-main" inert={navOpen}>
       {topbar}
+      {titleBar && bannerBar}
       <main id="main" tabIndex={-1} className="content">{children}</main>
     </div>
     {rail && <aside className="shell-rail" aria-label="Details" inert={navOpen}>{rail}</aside>}
@@ -39,15 +43,21 @@ export function Banner({ label, children, action, className, title }: { label: s
   </div>;
 }
 
-/** The sticky top bar: the menu button (under 768 px), the palette trigger shaped as a Ledger search field, then `actions`. */
-export function TopBar({ onMenu, menuOpen, onSearch, actions }: { onMenu: () => void; menuOpen: boolean; onSearch: () => void; actions?: ReactNode }) {
-  return <header className="topbar">
+/**
+ * The sticky top bar: the menu button (under 768 px), the palette trigger shaped as a Ledger search field, then `actions`.
+ * With `windowControls` (ADR 0036) it is also the window's title bar: the bar and its spacer are drag regions and the
+ * controls sit flush at the right edge. Buttons stay separate elements, so pressing one never starts a drag.
+ */
+export function TopBar({ onMenu, menuOpen, onSearch, actions, windowControls }: { onMenu: () => void; menuOpen: boolean; onSearch: () => void; actions?: ReactNode; windowControls?: ReactNode }) {
+  const drag = windowControls ? "" : undefined;
+  return <header className="topbar" data-tauri-drag-region={drag}>
     <button type="button" id="nav-menu" className="topbar-menu" aria-label={menuOpen ? "Close navigation" : "Open navigation"} aria-expanded={menuOpen} aria-controls="app-sidebar" onClick={onMenu}><Icon name="sidebar" /></button>
     <button type="button" className="topbar-search" aria-label="Go to a view, project or ticket" aria-haspopup="dialog" aria-keyshortcuts="Control+K" title="Go to a view, project or ticket (Ctrl+K)" onClick={onSearch}>
       <Icon name="search" /><span className="topbar-search-label">Go to…</span><Kbd>Ctrl K</Kbd>
     </button>
-    <span className="topbar-spacer" />
+    <span className="topbar-spacer" data-tauri-drag-region={drag} />
     {actions}
+    {windowControls}
   </header>;
 }
 
@@ -71,10 +81,12 @@ export function Breadcrumbs({ items }: { items: ReadonlyArray<Crumb> }) {
   </nav>;
 }
 
-export function Sidebar({ status, onToggle, collapsed, children }: { status: ReactNode; onToggle: () => void; collapsed: boolean; children: ReactNode }) {
+/** `dragRegion` (ADR 0036) makes the brand row move the window; the toggle button inside it stays a button. */
+export function Sidebar({ status, onToggle, collapsed, children, dragRegion }: { status: ReactNode; onToggle: () => void; collapsed: boolean; children: ReactNode; dragRegion?: boolean }) {
+  const drag = dragRegion ? "" : undefined;
   return <aside id="app-sidebar" className="sidebar flex flex-col gap-5">
-    <div className="sidebar-top flex items-center gap-2">
-      <h1 className="wordmark flex items-center gap-2"><Mark className="wordmark-mark" /><span className="sidebar-label">luuna</span></h1>
+    <div className="sidebar-top flex items-center gap-2" data-tauri-drag-region={drag}>
+      <h1 className="wordmark flex items-center gap-2" data-tauri-drag-region={drag}><Mark className="wordmark-mark" /><span className="sidebar-label" data-tauri-drag-region={drag}>luuna</span></h1>
       <button type="button" className="sidebar-toggle" aria-label={collapsed ? "Show sidebar labels" : "Collapse sidebar"} aria-expanded={!collapsed} aria-keyshortcuts="Control+\" title={`${collapsed ? "Expand" : "Collapse"} sidebar (Ctrl+\\)`} onClick={onToggle}><Icon name="sidebar" /></button>
     </div>
     <nav className="sidebar-nav" aria-label="Views">{children}</nav>
