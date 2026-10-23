@@ -335,7 +335,10 @@ async function paletteAndMenus(projectName) {
   const landed = await waitFor(async () => (await page.locator(".nav-item[aria-current=page]").innerText()).includes("Projects") ? true : null, 10_000);
   record("command palette: Ctrl+K opens it, typing finds the project, Enter opens it in Projects", opened && offered && Boolean(landed) && !(await palette.isVisible()));
   await page.keyboard.press("ControlOrMeta+K");
+  // Escape only closes a dialog that is already open: wait for it, then for it to close.
+  await palette.waitFor({ state: "visible", timeout: 5000 }).catch(() => {});
   await page.keyboard.press("Escape");
+  await palette.waitFor({ state: "hidden", timeout: 5000 }).catch(() => {});
   record("command palette: Escape closes it", !(await palette.isVisible()));
   const card = page.locator('ul[aria-label="Registered projects"] button').filter({ hasText: projectName }).first();
   await card.click({ button: "right" });
