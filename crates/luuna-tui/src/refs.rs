@@ -92,6 +92,19 @@ fn named_by(id: &str, prefix: &str) -> bool {
     uuid_in(id).is_some_and(|u| u.starts_with(prefix))
 }
 
+/// The one id among `ids` that a reference names (exactly, or by a unique short-id prefix).
+pub fn unique_match(text: &str, ids: &[String]) -> Option<String> {
+    if let Some(exact) = ids.iter().find(|id| id.as_str() == text) {
+        return Some(exact.clone());
+    }
+    let prefix = reference(text)?;
+    let mut matched = ids.iter().filter(|id| named_by(id, &prefix));
+    match (matched.next(), matched.next()) {
+        (Some(one), None) => Some(one.clone()),
+        _ => None,
+    }
+}
+
 /// The one record a reference names, or a refusal listing what it matched.
 fn pick<'a>(
     kind: &str,

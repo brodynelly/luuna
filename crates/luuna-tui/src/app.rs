@@ -351,7 +351,12 @@ impl AppState {
                     .iter()
                     .zip(&args)
                     .filter(|(arg, _)| arg.context)
-                    .map(|(arg, value)| (arg.name.clone(), value.clone()))
+                    // The context keeps exact identities: a short id or `latest` becomes the
+                    // loaded record it names (ADR 0040).
+                    .map(|(arg, value)| {
+                        let exact = crate::views::exact_context(self, &arg.name, value);
+                        (arg.name.clone(), exact)
+                    })
                     .collect::<Vec<_>>();
                 for (name, value) in contexts {
                     if name == "project" {

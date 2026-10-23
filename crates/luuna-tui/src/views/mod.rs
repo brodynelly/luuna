@@ -1041,21 +1041,18 @@ fn known_choices(app: &AppState, command: &str, field: &str) -> Vec<(String, Str
         "repository" | "repository-id" if command != "register" && command != "import" => {
             repositories()
         }
+        // Record choices carry the exact identity, which the workbench context must hold; the
+        // form shows each by its short id and label (ADR 0040).
         "ticket" => cards()
             .iter()
-            .map(|c| {
-                pair(
-                    crate::refs::short_id(&text(c, "ticket_id")),
-                    text(c, "title"),
-                )
-            })
+            .map(|c| pair(text(c, "ticket_id"), text(c, "title")))
             .collect(),
         "plan" => cards()
             .iter()
             .filter(|c| !text(c, "run_id").is_empty())
             .map(|c| {
                 pair(
-                    crate::refs::short_id(&text(c, "ticket_id")),
+                    format!("plan-{}", text(c, "ticket_id")),
                     format!("plan of {}", text(c, "title")),
                 )
             })
@@ -1065,7 +1062,7 @@ fn known_choices(app: &AppState, command: &str, field: &str) -> Vec<(String, Str
             out.extend(
                 array(snapshot(app, "runs"))
                     .iter()
-                    .map(|r| pair(crate::refs::short_id(&text(r, "id")), render::run_title(r))),
+                    .map(|r| pair(text(r, "id"), render::run_title(r))),
             );
             out
         }
@@ -1079,10 +1076,7 @@ fn known_choices(app: &AppState, command: &str, field: &str) -> Vec<(String, Str
                     .chars()
                     .take(40)
                     .collect();
-                pair(
-                    crate::refs::short_id(&text(m, "id")),
-                    format!("[{}] {content}", text(m, "scope")),
-                )
+                pair(text(m, "id"), format!("[{}] {content}", text(m, "scope")))
             })
             .collect(),
         "scope" => fixed(&["project", "process", "user"]),
@@ -1135,6 +1129,27 @@ fn known_choices(app: &AppState, command: &str, field: &str) -> Vec<(String, Str
             .collect(),
         _ => Vec::new(),
     }
+}
+
+/// The exact identity a context value names, so the workbench context never holds a short id or
+/// `latest` (its record checks compare exact identities). A value no loaded record matches is kept;
+/// the command resolves it against the runtime and refuses it if it names nothing.
+pub fn exact_context(app: &AppState, name: &str, value: &str) -> String {
+    if name == "run" && value.trim().eq_ignore_ascii_case("latest") {
+        return array(snapshot(app, "runs"))
+            .iter()
+            .max_by_key(|r| text(r, "created_at"))
+            .map(|r| text(r, "id"))
+            .unwrap_or_else(|| value.to_string());
+    }
+    if !crate::refs::is_short_reference(value) {
+        return value.to_string();
+    }
+    let ids: Vec<String> = known_choices(app, "", name)
+        .into_iter()
+        .map(|(id, _)| id)
+        .collect();
+    crate::refs::unique_match(value, &ids).unwrap_or_else(|| value.to_string())
 }
 
 /// Gives each field of a new form the choices the workbench already knows, and fills a required

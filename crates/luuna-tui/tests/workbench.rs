@@ -1010,3 +1010,47 @@ fn a_scaffold_confirms_the_proposal_just_shown_without_typing_its_hash() {
         hash()
     );
 }
+#[test]
+fn a_short_or_latest_run_in_a_form_keeps_the_exact_identity_as_context() {
+    const RUN: &str = "workflow-8b1e0000-1b2c-4d5e-8f90-0123456789ab";
+    for typed in ["8b1e0000", "8b1e", "latest", RUN] {
+        let mut a = app();
+        a.context.remove("run");
+        a.snapshots.insert(
+            "runs".into(),
+            json!([
+                {"id":"run-1","state":"completed","metadata":{"kind":"session"},"created_at":"2026-10-21T00:00:00Z"},
+                {"id":RUN,"state":"implementing","metadata":{"kind":"workflow"},"created_at":"2026-10-22T00:00:00Z"}
+            ]),
+        );
+        a.begin("cancel");
+        let form = a.form.as_mut().unwrap();
+        let run = form.fields.iter_mut().find(|f| f.name == "run").unwrap();
+        assert!(
+            run.choices.iter().any(|(value, _)| value == RUN),
+            "choices carry exact ids"
+        );
+        run.value = typed.into();
+        a.submit();
+        assert_eq!(
+            a.context.get("run").map(String::as_str),
+            Some(RUN),
+            "{typed}"
+        );
+    }
+    // A picked record shows its short id in the form.
+    let mut a = app();
+    a.snapshots.insert("runs".into(), json!([{"id":RUN,"state":"implementing","metadata":{"kind":"workflow"},"created_at":"2026-10-22T00:00:00Z"}]));
+    a.context.remove("run");
+    a.begin("cancel");
+    let form = a.form.as_mut().unwrap();
+    form.cursor = form.fields.iter().position(|f| f.name == "run").unwrap();
+    key(&mut a, KeyCode::Right);
+    assert!(draw(&mut a, 120, 35, false).contains("run ◂▸: latest  the newest run"));
+    key(&mut a, KeyCode::Right);
+    let painted = draw(&mut a, 120, 35, false);
+    assert!(
+        painted.contains("run ◂▸: 8b1e0000  workflow 8b1e0000"),
+        "{painted}"
+    );
+}

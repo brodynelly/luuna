@@ -191,6 +191,8 @@ fn render_form(frame: &mut Frame, app: &mut AppState, area: Rect, theme: Theme) 
                 "<optional>"
             }
             .to_string()
+        } else if field.choice_index().is_some() {
+            safe_text(&crate::refs::short_id(&field.value))
         } else {
             safe_text(&field.value).replace('\n', " ↵ ")
         };
@@ -245,7 +247,7 @@ fn render_form(frame: &mut Frame, app: &mut AppState, area: Rect, theme: Theme) 
             let names = field
                 .choices
                 .iter()
-                .map(|(value, _)| value.as_str())
+                .map(|(value, _)| crate::refs::short_id(value))
                 .collect::<Vec<_>>()
                 .join(", ");
             safe_text(&format!(
