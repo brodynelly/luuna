@@ -49,12 +49,13 @@ export function TaskGraph({ run, tasks, overrides = [], busy, onResume, onDerive
   return <ListGroup className="task-graph" aria-label="Task graph">{tasks.map((task) => {
     const named = task.dependency_overrides ?? overrides.filter((override) => override.consumer === task.task_id || override.producer === task.task_id);
     const result = task.advisory_result ?? undefined;
-    return <ListRow key={task.task_id} title={<Inline as="span" wrap gap={2}>
-      <Id>{task.task_id}</Id> ({task.repository_id}) · role {stateText(String(task.role ?? "implementer"))} · {task.state}
+    // One line of running text: the chip sits inline with the sentence and only role and state carry weight.
+    return <ListRow key={task.task_id} className="task-row" title={<span className="task-line">
+      <Id>{task.task_id}</Id> ({task.repository_id}) · <strong>{`role ${stateText(String(task.role ?? "implementer"))} · ${task.state}`}</strong>
       {task.depends_on.length ? ` · after ${task.depends_on.join(", ")}` : ""}
       {task.candidate_commit ? ` · commit ${task.candidate_commit.slice(0, 12)}` : ""}
       {task.reason ? ` · ${task.reason}` : ""}
-    </Inline>} detail={<Stack gap={1}>
+    </span>} detail={<Stack gap={1}>
       {taskResumable(run, task) && <Inline><Button disabled={busy} data-capability="runs.implement" onClick={() => onResume(task.task_id)}>Resume task {task.task_id}</Button></Inline>}
       <TaskTraces task={task} named={named} />
       {result && <AdvisoryResultView task={task} result={result} busy={busy} onDerive={onDerive} />}

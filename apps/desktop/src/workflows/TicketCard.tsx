@@ -83,7 +83,7 @@ export function TicketCard({ ticket, source, revisions, snapshots, diffs, attemp
   const offline = busy || !connected;
   const reconcile = source?.reconciliation_required === true;
   const badge = `ticket r${ticket.revision} · ${stateText(ticket.source)}${setup ? " · testing setup" : ""}`;
-  return <ListRow className="ticket-card" id={`ticket-${ticket.id}`} tabIndex={-1} title={<Inline as="span" className="ticket-head"><strong>{ticket.title}</strong></Inline>} trailing={<StatusBadge>{badge}</StatusBadge>} detail={<Stack gap={2}>
+  return <ListRow className="ticket-card" id={`ticket-${ticket.id}`} tabIndex={-1} title={<Inline as="span" className="ticket-head"><strong>{ticket.title}</strong></Inline>} trailing={<StatusBadge>{badge}</StatusBadge>} detail={<Stack gap={3}>
     <Hint className="ticket-intent">{ticket.intent}</Hint>
     {reconcile && <Alert tone="attention" announce="status" className="reconcile-note">This ticket changed outside Luuna. Reconcile its current source before creating another plan or starting work.</Alert>}
     {setup && <SetupChecksEditor ticket={ticket} rows={checkRows} busy={offline} onChange={setCheckRows} />}

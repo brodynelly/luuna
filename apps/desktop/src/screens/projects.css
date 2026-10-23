@@ -3,7 +3,12 @@
 /* Layout: a rail (register form, project list) beside the selected project's detail. `Split stickyRail`
    keeps the rail in view above 920 px (topbar and runtime-banner offsets live in the library). */
 .projects-layout { display: grid; grid-template-columns: var(--rail-width) minmax(0, 1fr); align-items: start; gap: var(--spacing-lg) var(--space-6); min-width: 0; }
-.projects-rail > details.section > summary { color: var(--accent-text); }
+/* The three "add" disclosures sit on a 4 px rhythm under the project list (Stack's 12 px gap read as loose beside a 32 px summary), take the body ink like every other disclosure, and keep a muted caret; opened forms get room below. */
+.projects-layout .projects-rail[data-gap] { gap: var(--space-1); }
+.projects-rail > .project-list { margin-bottom: var(--space-2); }
+.projects-rail > details.section > summary { color: var(--ink-body); }
+.projects-rail > details.section > summary::before { color: var(--ink-muted); }
+.projects-rail > details.section[open] { padding-bottom: var(--space-2); }
 
 /* Detail: a hairline panel without a popover shadow; the Workflows subpanel and the candidate review nest inside it. */
 .projects-layout > .project-detail { border: var(--border-width) solid var(--separator); border-radius: var(--radius-md); box-shadow: none; }
@@ -17,6 +22,11 @@
 .project-questions { display: grid; gap: var(--space-1-5); padding-left: var(--space-6); }
 .recipe-command { color: var(--color-text); font-size: var(--text-xs); }
 .manifest-form { min-width: 0; }
+
+/* Manifest editor: machine text at the code size, resizable vertically only; the hint reads left and the confirm button right on one baseline. */
+.manifest-form textarea { width: 100%; font-size: var(--text-xs); line-height: var(--leading-label); resize: vertical; }
+.manifest-form .form-footer { margin-top: var(--space-2); align-items: baseline; align-items: last baseline; }
+.manifest-form .form-footer > small { max-width: var(--measure); }
 
 /* Event record: ruled off from the Workflows subpanel above it. */
 .project-events { min-width: 0; padding-top: var(--spacing-md); border-top: var(--border-width) solid var(--color-border); }

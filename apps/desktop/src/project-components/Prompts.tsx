@@ -1,5 +1,5 @@
 import type { PromptRecord, RenderedPrompt } from "@luuna/api-client";
-import { Button, CodeBlock, Form, Hint, ListGroup, ListRow, PropertyList, Section, Stack, submitted, TextArea, TextField } from "@luuna/ui";
+import { Button, CodeBlock, Form, Hint, Inline, ListGroup, ListRow, PropertyList, Section, Stack, submitted, TextArea, TextField } from "@luuna/ui";
 import type { ComponentsState } from "./useComponents";
 
 /** A rendered prompt: its exact version, body and hash, before the developer selects it. */
@@ -30,5 +30,5 @@ export function BeaconPrompts({ state }: { state: ComponentsState }) {
 function PromptList({ prompts, busy, onPreview }: { prompts: PromptRecord[]; busy: boolean; onPreview: (prompt: PromptRecord) => void }) {
   return <ListGroup className="component-records" aria-label="Beacon prompts" data-capability="prompts.list">{prompts.map((prompt) => <ListRow key={prompt.name}
     title={<strong>{prompt.name} · version {prompt.version}</strong>}
-    detail={<Button disabled={busy} data-capability="prompts.render" onClick={() => onPreview(prompt)}>Preview prompt</Button>} />)}</ListGroup>;
+    detail={<Inline gap={1} wrap><Button disabled={busy} data-capability="prompts.render" onClick={() => onPreview(prompt)}>Preview prompt</Button></Inline>} />)}</ListGroup>;
 }

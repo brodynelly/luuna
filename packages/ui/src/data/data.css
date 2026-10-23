@@ -24,11 +24,11 @@
 .list-group { margin: 0; padding: 0; list-style: none; }
 .list-row { border-bottom: var(--border-width) solid var(--separator); }
 .list-row:last-child { border-bottom: 0; }
-.list-row-body { display: flex; align-items: center; gap: var(--space-3); box-sizing: border-box; width: 100%; min-height: var(--row-height); padding: var(--space-2) var(--space-3); color: var(--ink-body); font-size: var(--text-body); text-align: start; }
-button.list-row-body { justify-content: flex-start; border-color: transparent; border-radius: 0; background: transparent; box-shadow: none; font-weight: var(--weight-regular); }
+.list-row-body { display: flex; align-items: center; gap: var(--space-3); box-sizing: border-box; width: 100%; min-height: var(--row-height); padding: var(--space-2-5) var(--space-3); color: var(--ink-body); font-size: var(--text-body); line-height: var(--leading-body); text-align: start; white-space: normal; }
+button.list-row-body { justify-content: flex-start; border-color: transparent; border-radius: var(--radius-md); background: transparent; box-shadow: none; font-weight: var(--weight-regular); }
 @media (hover: hover) and (pointer: fine) { button.list-row-body:hover:not(:disabled) { background: var(--fill); } }
 button.list-row-body[aria-pressed="true"] { background: var(--control-selected); color: var(--ink); }
-.list-row-detail { padding: 0 var(--space-3) var(--space-2); }
+.list-row-detail { padding: 0 var(--space-3) var(--space-2-5); }
 button.list-row-body:disabled { cursor: not-allowed; }
 .list-row-leading, .list-row-trailing { display: inline-flex; flex: none; align-items: center; gap: var(--space-2); }
 .list-row-trailing { margin-inline-start: auto; font-variant-numeric: tabular-nums; }
@@ -36,8 +36,12 @@ button.list-row-body:disabled { cursor: not-allowed; }
 .list-row-head { display: flex; align-items: center; min-width: 0; }
 .list-row-head > .list-row-body { flex: 1 1 auto; width: auto; min-width: 0; }
 .list-row-actions { display: inline-flex; flex: none; align-items: center; gap: var(--space-2); padding-inline: var(--space-2) var(--space-3); }
-.list-row-title { margin: 0; color: var(--ink); font-weight: var(--weight-medium); overflow-wrap: anywhere; }
-.list-row-meta { color: var(--ink-muted); font-size: var(--text-label); overflow-wrap: anywhere; }
+.list-row-title { margin: 0; color: var(--ink); font-weight: var(--weight-medium); line-height: var(--leading-body); overflow-wrap: anywhere; }
+.list-row-meta { color: var(--ink-muted); font-size: var(--text-label); line-height: var(--leading-label); overflow-wrap: anywhere; }
+.list-row-title + .list-row-meta { margin-top: var(--space-1); }
+/* A badge and a timestamp in the meta line: a wrapping row, so a wide stamp drops whole to the next line. */
+.list-row-meta:has(> .state, > time) { display: flex; flex-wrap: wrap; align-items: center; gap: var(--space-1) var(--space-2); }
+.list-row-meta time { white-space: nowrap; }
 
 /* Timeline: a marker column (shape carries the tone) and a neutral connector. */
 .timeline { margin: 0; padding: 0; list-style: none; }

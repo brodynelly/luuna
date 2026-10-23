@@ -5,6 +5,19 @@
 .app .panel :is(.panel, .form-group) { box-shadow: var(--shadow-card); }
 .app .view .panel .panel { background: var(--color-surface); }
 
+/* Board: the columns of one grid row share their head, scope and body rows (subgrid), so descriptions of unequal length never skew
+   the cards. A card is a raised tile on the column's muted ground; its row button inherits the tile's radius. */
+.board-column > .scope { color: var(--ink-muted); font-size: var(--text-caption); line-height: var(--leading-caption); }
+.board-cards > .empty { font-size: var(--text-label); }
+.board-cards > li.board-card { border: var(--border-width) solid var(--separator); border-radius: var(--radius-md); background: var(--surface-raised); }
+.board-cards > li.board-card .list-row-body { border-radius: inherit; }
+@supports (grid-template-rows: subgrid) {
+  .board-columns > .board-column { display: grid; grid-row: span 3; grid-template-rows: subgrid; row-gap: var(--space-2); align-content: start; }
+}
+
+/* Home, Waiting on you: the status badge sits in one leading column, so every title starts at the same x. */
+.home-blockers .list-row-leading { justify-content: flex-start; width: calc(var(--space-12) * 2.75); }
+
 /* Connect page: Container, Surface and Stack carry the layout; this adds the top offset and the text alignment. */
 .connect-page { margin-top: var(--space-7); text-align: center; }
 .connection-form { align-self: stretch; text-align: left; }

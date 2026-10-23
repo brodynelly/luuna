@@ -3,6 +3,29 @@
 /* A ticket's card is a list item (the smokes read ul[aria-label="Tickets"] > li), which Surface cannot render, so the li takes the card ground. */
 .workflows .ticket-card { border: var(--border-width) solid var(--separator); border-radius: var(--radius-md); background: var(--surface-raised); box-shadow: var(--shadow-card); }
 .ticket-intent, .workflow-models-note { max-width: var(--measure); }
+/* The ticket's description is its first sentence of context: label size like the usage and plan lines under it, not the caption size of a hint. */
+.workflows .ticket-intent { font-size: var(--text-label); line-height: var(--leading-label); }
 
 /* Plan review: the complete plan is read in a bounded region, never hidden (no motion, no hover reveal). */
 .plan-review pre[aria-label] { max-height: var(--plan-max); }
+
+/* Plan review: hash and acknowledgement read as one block, the approval row keeps its checkbox and button on one centre line, and the plan stays a bounded region. */
+.plan-review .plan-hash { overflow-wrap: anywhere; }
+.plan-review .plan-document { margin-top: var(--space-1); }
+.plan-review .form-footer, .plan-review .actions { align-items: center; }
+
+/* Ticket cards: the action row wraps by whole buttons and keeps one gap; intent and blocker text hold the reading measure. */
+.workflows .ticket-actions { align-items: center; row-gap: var(--space-2); }
+.workflows .plan-blocker { max-width: var(--measure); }
+.workflows .form-footer { align-items: baseline; align-items: last baseline; }
+
+/* Identities inside a ticket card stay whole: an inline code chip moves to the next line before it breaks, and one wider than the line wraps in balanced halves instead of leaving a few characters alone. */
+.ticket-card :not(pre) > code { display: inline-block; max-width: 100%; text-wrap: balance; vertical-align: baseline; }
+
+/* Task graph: a task is one running sentence at body weight; only its role and state are emphasised. */
+.task-graph .task-line { font-weight: var(--weight-regular); color: var(--ink-body); }
+.task-graph .task-line > strong { color: var(--ink); font-weight: var(--weight-medium); }
+
+/* Advisory result: findings, proposed tasks and risks are body text in tight rows, not row titles at the label weight with a row-height floor. */
+.advisory-result .list-row-title { color: var(--ink-body); font-weight: var(--weight-regular); }
+.advisory-result .list-row-body { min-height: 0; padding-block: var(--space-1-5); }

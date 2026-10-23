@@ -1,5 +1,5 @@
 import type { SetupHandoff, WorktreeLease } from "@luuna/api-client";
-import { Alert, Button, Id, Item, List, ListGroup, ListRow, Meta, NextStep, Stack, Surface, Text } from "@luuna/ui";
+import { Alert, Button, Id, Inline, Item, List, ListGroup, ListRow, Meta, NextStep, Stack, Surface, Text } from "@luuna/ui";
 import { copyPath } from "./rules";
 
 /** The testing-setup handoff of a setup workflow (ADR 0022 point 6): the proposed checks and the runtime's next step. */
@@ -24,6 +24,6 @@ export function EditorHandoff({ worktrees, busy }: { worktrees: WorktreeLease[];
     <ListGroup className="worktree-paths" aria-label="Candidate worktree paths">{worktrees.map((lease) => <ListRow key={lease.id}
       title={<Id>{lease.repository_id}</Id>}
       meta={<><Id className="worktree-path">{lease.path}</Id> ({lease.state})</>}
-      detail={<Button variant="text" disabled={busy} onClick={() => copyPath(lease.path)}>Copy path for {lease.repository_id}</Button>} />)}</ListGroup>
+      detail={<Inline gap={1} wrap><Button variant="text" disabled={busy} onClick={() => copyPath(lease.path)}>Copy path for {lease.repository_id}</Button></Inline>} />)}</ListGroup>
   </Stack></Surface>;
 }

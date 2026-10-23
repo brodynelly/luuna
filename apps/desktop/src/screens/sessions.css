@@ -5,8 +5,21 @@
  * continuously, so they get no entrance animation and no transition.
  */
 
-/* History rail: keyboard focus tints the unselected card; hover, radius and selection come from the library. */
+/* History rail: each session is a soft card. The title and the meta line get real line height (the button's reset is 1), the meta
+   wraps as whole items so a timestamp never breaks mid-value, and the current session shows by the accent ground, not a border. */
+.history-list { display: grid; gap: var(--space-1); }
+.history-list > li { border-bottom: 0; }
+.history-list > li button.run-card { gap: var(--space-1); padding: var(--space-2) var(--space-3); border-color: transparent; border-radius: var(--radius-md); }
+.history-list > li button.run-card[aria-pressed="true"] { border-color: transparent; background: var(--accent-soft); }
+.history-list .list-row-title { font-size: var(--text-label); font-weight: var(--weight-medium); line-height: var(--leading-body); }
+.history-list .list-row-meta { display: flex; flex-wrap: wrap; align-items: center; gap: var(--space-1) var(--space-2); font-size: var(--text-caption); line-height: var(--leading-caption); }
+.history-list .list-row-meta > time { white-space: nowrap; font-variant-numeric: tabular-nums; }
 .history-list > li button.run-card:focus-visible:not([aria-pressed="true"]) { background: var(--fill); }
+@media (forced-colors: active) {
+  .history-list > li button.run-card[aria-pressed="true"] { border-color: Highlight; }
+}
+/* Paging is secondary: two quiet text buttons at the rail's edges. */
+.history > .panel-heading:last-child { justify-content: space-between; margin-top: var(--space-1); padding-inline: var(--space-2); }
 
 /* The streaming dots sit in the run bar, outside the response region. */
 .run-detail > .streaming-dots { flex: none; }

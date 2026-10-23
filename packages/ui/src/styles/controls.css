@@ -7,6 +7,11 @@
  * 2 px offset. Disabled is shown by colour, never by opacity. Control edges use the border-strong role (3:1).
  */
 
+/* Mantine's disabled ground: gray-2 in light (fill-strong), dark-6 in dark (fill); aliases only, no new colour. */
+:root { --surface-disabled: var(--fill-strong); }
+:root[data-theme="dark"] { --surface-disabled: var(--fill); }
+@media (prefers-color-scheme: dark) { :root:not([data-theme="light"]) { --surface-disabled: var(--fill); } }
+
 /* Buttons: the base is Mantine's default variant (surface, default border, hover fill); 36 px, 14 px at weight 600. */
 button {
   gap: var(--space-2-5);
@@ -23,7 +28,7 @@ button {
   white-space: nowrap;
   transition: none;
 }
-button:disabled { border-color: transparent; background: var(--fill-strong); color: var(--ink-disabled); box-shadow: none; cursor: not-allowed; }
+button:disabled { border-color: transparent; background: var(--surface-disabled); color: var(--ink-disabled); box-shadow: none; cursor: not-allowed; }
 /* Press: Mantine's 1 px nudge. Pressed is also a colour step on neutral buttons; selectable, tab, menu and nav buttons style their own. */
 button:not(.text-button, .chip, .run-card, .nav-item, [role="tab"], [role="menuitem"]):active:not(:disabled) { transform: translateY(var(--press-offset)); }
 button:not(.quiet, .text-button, .primary, .danger, .chip, .run-card, .nav-item, [role="tab"], [role="menuitem"]):active:not(:disabled) { background: var(--fill-strong); }
@@ -32,15 +37,16 @@ button.button-lg { min-height: var(--control-lg); padding: 0 var(--control-pad-x
 
 button.primary { border-color: var(--accent); background: var(--accent); color: var(--ink-on-accent); box-shadow: none; }
 button.primary:active:not(:disabled) { border-color: var(--accent-hover); background: var(--accent-hover); }
-button.primary:disabled { border-color: transparent; background: var(--fill-strong); color: var(--ink-disabled); }
+button.primary:disabled { border-color: transparent; background: var(--surface-disabled); color: var(--ink-disabled); }
 button.quiet { border-color: transparent; background: transparent; box-shadow: none; }
 button.quiet:active:not(:disabled) { background: var(--fill-strong); }
-button.text-button { padding: 0 var(--space-1); border-color: transparent; background: transparent; color: var(--accent-text); box-shadow: none; }
+/* Text button: Mantine compact subtle, a 30 px hit target (control-sm) with 8 px inline padding, so stacked links sit close and inline ones add no height. */
+button.text-button { min-height: var(--control-sm); padding: 0 var(--space-2); border-color: transparent; background: transparent; color: var(--accent-text); box-shadow: none; }
 button.quiet:disabled, button.text-button:disabled { border-color: transparent; background: transparent; color: var(--ink-disabled); }
 /* Danger: the solid danger role, with an inner hairline on hover and press (the palette has no shade darker than danger). */
 button.danger { border-color: var(--danger); background: var(--danger); color: var(--ink-on-danger); box-shadow: none; }
 button.danger:active:not(:disabled) { background: var(--danger); box-shadow: inset 0 0 0 var(--border-width) var(--ink-on-danger); }
-button.danger:disabled { border-color: transparent; background: var(--fill-strong); color: var(--ink-disabled); }
+button.danger:disabled { border-color: transparent; background: var(--surface-disabled); color: var(--ink-disabled); }
 @media (hover: hover) and (pointer: fine) {
   button:hover:not(:disabled) { background: var(--fill); }
   button.primary:hover:not(:disabled) { border-color: var(--accent-hover); background: var(--accent-hover); }
@@ -64,6 +70,11 @@ input:where(:not([type="checkbox"], [type="radio"])), textarea, select {
   line-height: var(--field-line);
 }
 textarea { min-height: var(--textarea-min); padding: var(--field-pad-y-multiline) var(--space-3); line-height: var(--leading); }
+/* Typed identifiers and code (spellCheck off, the TextArea `mono` prop): Mantine Code metrics, 12 px mono. This sits in the
+   components layer because the field rule above would otherwise beat base.css's monospace rule; the line height stays the
+   textarea's 1.55 (--leading-code). */
+:is(input, textarea)[spellcheck="false"] { font-family: var(--font-mono); font-size: var(--text-caption); }
+textarea[spellcheck="false"] { line-height: var(--leading-code); tab-size: 2; }
 input::placeholder, textarea::placeholder { color: var(--ink-muted); }
 /* Focus: the border takes the focus-ring colour and the base 2 px outline shows at the shared 2 px offset. */
 input:focus-visible, textarea:focus-visible, select:focus-visible { outline-offset: var(--focus-offset); border-color: var(--focus-ring); box-shadow: none; }
@@ -72,16 +83,16 @@ input:focus-visible, textarea:focus-visible, select:focus-visible { outline-offs
 :is(input, textarea, select)[aria-invalid="true"]:focus-visible { border-color: var(--danger); }
 /* A native pop-up button (the caret stays the platform's). */
 select { display: block; width: 100%; margin-top: var(--space-1-5); font: inherit; font-size: var(--text-body); }
-input:disabled, textarea:disabled, select:disabled { border-color: transparent; background: var(--fill-strong); color: var(--ink-disabled); cursor: not-allowed; }
+input:disabled, textarea:disabled, select:disabled { border-color: transparent; background: var(--surface-disabled); color: var(--ink-disabled); cursor: not-allowed; }
 
-/* Checkbox: 20 px box, 8 px radius, a drawn check at 60% of the box, a dash when indeterminate. */
-input[type="checkbox"]:not([role="switch"]) { appearance: none; display: inline-grid; flex: none; place-content: center; width: var(--checkbox-size); height: var(--checkbox-size); margin: 0; border: var(--border-width) solid var(--border-strong); border-radius: var(--radius-md); background: var(--field); cursor: pointer; }
+/* Checkbox: 20 px box, 4 px radius (Mantine's xs radius step; radios stay circular), a drawn check at 60% of the box, a dash when indeterminate. */
+input[type="checkbox"]:not([role="switch"]) { appearance: none; display: inline-grid; flex: none; place-content: center; width: var(--checkbox-size); height: var(--checkbox-size); margin: 0; border: var(--border-width) solid var(--border-strong); border-radius: var(--radius-sm); background: var(--field); cursor: pointer; }
 input[type="checkbox"]:not([role="switch"])::before { content: ""; width: var(--checkbox-check-w); height: var(--checkbox-check-h); margin-top: calc(var(--border-width) * -2); border: solid var(--ink-on-accent); border-width: 0 var(--mark-stroke) var(--mark-stroke) 0; transform: rotate(45deg); visibility: hidden; }
 input[type="checkbox"]:not([role="switch"]):checked, input[type="checkbox"]:not([role="switch"]):indeterminate { border-color: var(--accent); background: var(--accent); }
 input[type="checkbox"]:not([role="switch"]):is(:checked, :indeterminate)::before { visibility: visible; }
 input[type="checkbox"]:not([role="switch"]):indeterminate::before { width: var(--checkbox-icon); height: 0; margin-top: 0; border-width: 0 0 var(--mark-stroke) 0; transform: none; }
 input[type="checkbox"]:not([role="switch"])[aria-invalid="true"]:not(:checked, :indeterminate) { border-color: var(--danger); }
-input[type="checkbox"]:not([role="switch"]):disabled { border-color: var(--separator); background: var(--fill-strong); cursor: not-allowed; }
+input[type="checkbox"]:not([role="switch"]):disabled { border-color: var(--separator); background: var(--surface-disabled); cursor: not-allowed; }
 input[type="checkbox"]:not([role="switch"]):disabled::before { border-color: var(--ink-disabled); }
 
 /* Switch: a checkbox with the switch role; 38 x 20 px pill, 14 px white knob inset 2 px that slides by transform only. */
@@ -90,7 +101,7 @@ input[type="checkbox"][role="switch"] { appearance: none; position: relative; fl
 input[type="checkbox"][role="switch"]::before { content: ""; position: absolute; top: 50%; left: var(--space-0-5); width: var(--switch-knob); height: var(--switch-knob); border-radius: var(--radius-full); background: var(--ink-on-accent); transform: translate(0, -50%); transition: transform var(--duration-micro) var(--ease-standard); }
 input[type="checkbox"][role="switch"]:checked { background: var(--accent); }
 input[type="checkbox"][role="switch"]:checked::before { transform: translate(var(--switch-knob-travel), -50%); }
-input[type="checkbox"][role="switch"]:disabled { background: var(--fill-strong); cursor: not-allowed; }
+input[type="checkbox"][role="switch"]:disabled { background: var(--surface-disabled); cursor: not-allowed; }
 input[type="checkbox"][role="switch"]:disabled::before { background: var(--surface-muted); }
 
 /* Tabs (Ledger Tabs): a hairline under the row, a static accent underline on the selected tab. */
@@ -102,7 +113,7 @@ input[type="checkbox"][role="switch"]:disabled::before { background: var(--surfa
 .tabs > [role="tab"][aria-selected="true"]::after { content: ""; position: absolute; inset-inline: 0; bottom: calc(var(--border-width) * -1); height: var(--tab-indicator-height); border-radius: var(--radius-sm); background: var(--accent); }
 
 /* Table (Ledger DataTable): fixed layout that wraps rather than scrolls sideways; sentence-case headers; hairline rows. */
-.table { width: 100%; table-layout: fixed; border-collapse: collapse; overflow-wrap: anywhere; color: var(--ink-body); font-size: var(--text-body); }
+.table { width: 100%; table-layout: fixed; border-collapse: collapse; overflow-wrap: anywhere; color: var(--ink-body); font-size: var(--text-label); line-height: var(--leading-body); }
 .table th { padding: var(--space-2) var(--space-3); border-bottom: var(--border-width) solid var(--separator); color: var(--ink); font-size: var(--text-label); font-weight: var(--weight-semibold); text-align: left; }
 .table td { padding: var(--space-2-5) var(--space-3); border-bottom: var(--border-width) solid var(--separator); vertical-align: middle; }
 .table tbody tr:hover { background: var(--surface-muted); }

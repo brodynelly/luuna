@@ -1,6 +1,6 @@
 import { useState } from "react";
 import type { MemoryRecord } from "@luuna/api-client";
-import { Button, Checkbox, Form, FormFooter, Hint, Id, Inline, ListGroup, ListRow, Stack, submitted, TextArea } from "@luuna/ui";
+import { Button, Checkbox, Form, FormFooter, Hint, Id, Inline, ListGroup, ListRow, Meta, Stack, submitted, TextArea } from "@luuna/ui";
 import { promotionTarget } from "./model";
 
 /**
@@ -34,8 +34,8 @@ export function MemorySelection({ records, selected, busy, onToggle, onDelete, o
       meta={<Hint>{record.scope === "user" ? "Private user memory" : `${record.scope} memory`} · provenance: {record.provenance}</Hint>}
       detail={<Stack gap={2}>
         <Checkbox className="component-selection" label="Include this memory in the next plan" checked={selected.includes(record.id)} disabled={busy} onChange={() => onToggle(record)} />
-        <Inline gap={3} align="center" wrap className="component-record-meta">
-          <Id>{record.id}</Id>
+        <Meta block className="component-record-meta"><Id>{record.id}</Id></Meta>
+        <Inline gap={1} align="center" wrap className="component-record-actions">
           <Button variant="text" disabled={busy} data-capability="memory.delete" onClick={() => onDelete(record)}>Delete memory</Button>
           {onPromote && target && <Button variant="text" disabled={busy} data-capability="memory.promote" onClick={() => onPromote(record, target)}>Promote to {target} memory</Button>}
           {onCorrect && correcting !== record.id && <Button variant="text" disabled={busy} onClick={() => setCorrecting(record.id)}>Correct memory</Button>}

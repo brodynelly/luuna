@@ -23,8 +23,8 @@ export function History({ runs, selected, connected, newer, onSelect, onRefresh,
         ]} />)}</ListGroup>
       : connected ? <EmptyState title="No sessions yet">Start one to create a durable run record.</EmptyState> : <EmptyState>Connect to see sessions saved by your runtime.</EmptyState>}
     {connected && runs.length > 0 && <Toolbar>
-      <Button disabled={!newer} onClick={onNewer}>Newer sessions</Button>
-      <Button disabled={runs.length < 200} onClick={onOlder}>Older sessions</Button>
+      <Button variant="text" disabled={!newer} onClick={onNewer}>Newer sessions</Button>
+      <Button variant="text" disabled={runs.length < 200} onClick={onOlder}>Older sessions</Button>
     </Toolbar>}
   </Section>;
 }

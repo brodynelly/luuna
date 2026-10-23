@@ -15,6 +15,27 @@ export interface MenuCommand {
   group?: boolean;
 }
 
+/** The structural slice of an element the focus-return logic needs, so it can be tested without a DOM. */
+export interface FocusableLike {
+  closest(selector: string): FocusableLike | null;
+  contains(other: unknown): boolean;
+  focus(): void;
+}
+
+export const FOCUSABLE_SELECTOR = "button, a[href], input, select, textarea, summary, [tabindex]:not([tabindex='-1'])";
+
+/**
+ * The element focus returns to when a menu closes: the nearest focusable at or above the event
+ * target, but never above the owner. A secondary click usually lands on a span inside the row's
+ * button, and a span cannot take focus, so returning focus to the raw target would drop it on the body.
+ */
+export function focusReturnTarget<T extends FocusableLike>(target: T | null, owner: T | null): T | null {
+  if (!target) return null;
+  const found = target.closest(FOCUSABLE_SELECTOR) as T | null;
+  if (found && (!owner || owner.contains(found))) return found;
+  return target;
+}
+
 interface OpenMenu { x: number; y: number; trigger: HTMLElement | null }
 
 export interface ContextMenuBinding {
@@ -31,13 +52,13 @@ export function useContextMenu(label: string, commands: (() => readonly MenuComm
   function show(event: ReactMouseEvent<HTMLElement>) {
     if (!commands?.().length) return;
     event.preventDefault();
-    setOpen({ x: event.clientX, y: event.clientY, trigger: event.target instanceof HTMLElement ? event.target : null });
+    setOpen({ x: event.clientX, y: event.clientY, trigger: focusReturnTarget(event.target instanceof HTMLElement ? event.target : null, event.currentTarget) });
   }
 
   function key(event: ReactKeyboardEvent<HTMLElement>) {
     if (!(event.key === "ContextMenu" || (event.key === "F10" && event.shiftKey)) || !commands?.().length) return;
     event.preventDefault();
-    const target = event.target instanceof HTMLElement ? event.target : null;
+    const target = focusReturnTarget(event.target instanceof HTMLElement ? event.target : null, event.currentTarget);
     const box = target?.getBoundingClientRect();
     setOpen({ x: box ? box.left + box.width / 2 : 0, y: box ? box.bottom : 0, trigger: target });
   }

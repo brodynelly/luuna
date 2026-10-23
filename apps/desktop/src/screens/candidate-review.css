@@ -27,3 +27,14 @@
 /* Handoff checks and finding evidence: plain bulleted lists under their prose. */
 .candidate-review :is(.handoff-checks, .finding-evidence) { display: grid; gap: var(--space-0-5); margin: 0; padding-left: var(--spacing-md); overflow-wrap: anywhere; }
 .candidate-review .finding-evidence { color: var(--color-text-muted); }
+
+/* Verdict and finding rows: long identities and evidence wrap inside the row instead of widening it, and footers align hint and action on one baseline. */
+.candidate-review :is(.handoff-checks, .finding-evidence, .check-record) { min-width: 0; }
+.candidate-review .form-footer { align-items: baseline; align-items: last baseline; }
+
+/* Identity facts: a hash-like value takes its own line under its term and is never cut; short facts (exit code, tests) flow inline. A value wider than the line wraps in balanced halves, so no line holds an orphaned few characters. */
+.candidate-review .property-list > div { align-items: baseline; }
+.candidate-review .property-list[data-layout="inline"] { row-gap: var(--space-2); }
+.candidate-review .property-list dt { font-size: var(--text-label); line-height: var(--leading-label); white-space: nowrap; }
+.candidate-review .property-list > div:has(> dd > code) { flex: 1 1 100%; flex-direction: column; align-items: flex-start; gap: var(--space-0-5); }
+.candidate-review .property-list dd > code { display: inline-block; max-width: 100%; text-wrap: balance; }

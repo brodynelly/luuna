@@ -5,7 +5,7 @@
 *, *::before, *::after { box-sizing: border-box; }
 
 /* Thin scrollbars in the token colour (standard properties; WKWebView's overlay bars ignore them). */
-html { background: var(--color-bg); -webkit-text-size-adjust: 100%; scrollbar-color: var(--color-scrollbar) transparent; }
+html { background: var(--color-bg); -webkit-text-size-adjust: 100%; scrollbar-color: var(--color-scrollbar) var(--color-bg); }
 :where(html, body *) { scrollbar-width: thin; }
 
 body {

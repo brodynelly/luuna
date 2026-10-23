@@ -6,3 +6,16 @@
 .component-content { white-space: pre-wrap; overflow-wrap: anywhere; }
 .component-records small, .component-record-meta code, .prompt-preview small { overflow-wrap: anywhere; }
 .component-context { border-top: var(--border-width) solid var(--color-border); padding-top: var(--spacing-sm); }
+
+/* The two cards size to their own content and may shrink; they stack in one column at Grid's compact step. */
+.component-columns { align-items: start; }
+.component-columns > * { min-width: 0; }
+.project-components .form-footer { align-items: baseline; align-items: last baseline; }
+.project-components .component-context { max-width: none; padding-inline-end: calc(100% - var(--measure)); }
+
+/* Memory records: the content is body text (the row title is a label weight), the id is its own muted line and the actions wrap as one small-gap group below it. */
+.component-records .component-content { color: var(--ink-body); font-weight: var(--weight-regular); }
+.component-record-actions { margin-inline-start: calc(var(--space-1) * -1); }
+
+/* Memory and prompts sit side by side only when each card keeps at least two field minimums (about 56 characters of memory text); in the Projects detail pane they stack, so a memory record reads as a sentence and its actions share a line. */
+.project-components .component-columns[data-cols] { grid-template-columns: repeat(auto-fit, minmax(min(100%, calc(var(--field-min) * 2)), 1fr)); }
