@@ -316,10 +316,8 @@ impl Keymap {
         }
         let chord = normalize(&key);
         if let Some(&index) = self.lookup.get(&chord) {
+            // Always the canonical event: a terminal's Ctrl+Shift+S must reach the Ctrl+S handler.
             let canonical = self.canonical[index];
-            if canonical == chord {
-                return Some(key);
-            }
             return Some(KeyEvent {
                 code: canonical.code,
                 modifiers: canonical.modifiers,

@@ -683,14 +683,14 @@ impl AppState {
                 self.filter.clear();
             }
             KeyCode::F(5) | KeyCode::Char('r') => self.refresh(),
-            KeyCode::Up | KeyCode::Char('k') => {
+            KeyCode::Up => {
                 if self.mode == Mode::Result {
                     self.scroll.scroll_up(1);
                 } else {
                     self.selected = self.selected.saturating_sub(1);
                 }
             }
-            KeyCode::Down | KeyCode::Char('j') => {
+            KeyCode::Down => {
                 if self.mode == Mode::Result {
                     self.scroll.scroll_down(1);
                 } else {
@@ -868,6 +868,22 @@ mod tests {
         assert!(!app.quit);
         let value = &app.form.as_ref().unwrap().fields[0].value;
         assert_eq!(value, "?q\n@");
+    }
+    #[test]
+    fn unbinding_down_also_removes_its_letter_alias() {
+        let (map, _) = crate::keys::Keymap::build(&BTreeMap::from([("down".into(), vec![])]));
+        let j = KeyEvent::new(KeyCode::Char('j'), KeyModifiers::NONE);
+        let down = KeyEvent::new(KeyCode::Down, KeyModifiers::NONE);
+        assert_eq!(map.translate(down, false), None);
+        // `j` reaches handlers only as itself, and no handler moves on a raw `j` any more.
+        let mut app = AppState {
+            mode: Mode::Catalog,
+            selected: 1,
+            ..Default::default()
+        };
+        app.key(KeyEvent::new(KeyCode::Char('k'), KeyModifiers::NONE));
+        assert_eq!(app.selected, 0);
+        assert_eq!(map.translate(j, false), Some(j));
     }
     #[test]
     fn stale_prompt_cannot_replace_active_request() {

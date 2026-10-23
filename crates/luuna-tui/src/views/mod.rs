@@ -605,11 +605,11 @@ pub fn key(app: &mut AppState, key: KeyEvent) -> bool {
     }
     match key.code {
         KeyCode::Tab | KeyCode::BackTab => app.workbench.nav = true,
-        KeyCode::Up | KeyCode::Char('k') => {
+        KeyCode::Up => {
             app.workbench.cursor = app.workbench.cursor.saturating_sub(1);
             app.scroll.scroll_up(1);
         }
-        KeyCode::Down | KeyCode::Char('j') => {
+        KeyCode::Down => {
             app.workbench.cursor = (app.workbench.cursor + 1).min(count.saturating_sub(1));
             app.scroll.scroll_down(1);
         }
