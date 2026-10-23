@@ -90,7 +90,18 @@ async fn actual_node_process_catalog_read_fresh_hash_and_shutdown() {
         .unwrap();
     let catalog = next(&mut bridge, "catalog", "catalog").await;
     let commands = catalog.fields["commands"].as_array().unwrap();
-    assert_eq!(commands.len(), 61);
+    assert_eq!(commands.len(), 66);
+    // Orbit (ADR 0036): status and the sandbox plan are reads; exec, run and sync are mutations.
+    for (name, read_only) in [
+        ("orbit", true),
+        ("sbx", true),
+        ("orbit-exec", false),
+        ("orbit-run", false),
+        ("orbit-sync", false),
+    ] {
+        let command = commands.iter().find(|c| c["name"] == name).unwrap();
+        assert_eq!(command["read_only"], read_only, "{name}");
+    }
     assert!(commands.iter().any(|c| c["name"] == "home"));
     bridge
         .send(&ClientCommand::new(

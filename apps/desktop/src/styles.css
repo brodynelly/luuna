@@ -39,4 +39,5 @@
 @import "./screens/help.css" layer(screens);
 @import "./screens/settings.css" layer(screens);
 @import "./screens/sessions.css" layer(screens);
+@import "./screens/orbit.css" layer(screens);
 @import "@luuna/ui/styles/tailwind.css" layer(utilities);

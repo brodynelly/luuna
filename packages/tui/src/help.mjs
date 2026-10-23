@@ -13,6 +13,7 @@ export const DEFAULT_NAME = "luuna-tui";
 export const HELP_GROUPS = [
   { title: "Start here", blurb: "Is the runtime up, and what needs attention?", commands: ["health", "home", "board", "doctor"] },
   { title: "Projects", blurb: "Register repositories, confirm their manifest and record a baseline.", commands: ["projects", "project", "register", "discover", "confirm", "baseline", "baselines", "rebind", "project-events", "propose-scaffold", "scaffold", "export", "import"] },
+  { title: "Orbit and sandbox", blurb: "Every repository of a project at once, and a shell that reaches only them (ADR 0036).", commands: ["orbit", "orbit-exec", "orbit-run", "orbit-sync", "sbx"] },
   { title: "Tickets", blurb: "Work items, kept in the project's authoritative source (Missions when enabled).", commands: ["tickets", "create-ticket", "show-ticket", "edit-ticket", "ticket-source", "reconcile-ticket"] },
   { title: "Plans and approval", blurb: "Immutable plan revisions; approval binds to one exact hash.", commands: ["plan", "plans", "show-plan", "approve"] },
   { title: "Runs and candidates", blurb: "Implement, follow, validate and review a candidate.", commands: ["runs", "run", "events", "follow", "implement", "candidate", "diff", "validate", "repair", "tasks", "attempts", "worktrees", "artifact", "cancel"] },

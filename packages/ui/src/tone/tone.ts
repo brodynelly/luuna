@@ -1,4 +1,4 @@
-import type { BaselineStatus, CandidateStatus, CheckStatus, LeaseState, ProposedCheck, ReviewFinding, ReviewResult, RunState } from "@luuna/api-client";
+import type { BaselineStatus, CandidateStatus, CheckStatus, LeaseState, OrbitStatus, ProposedCheck, ReviewFinding, ReviewResult, RunState } from "@luuna/api-client";
 
 /**
  * Six outcome tones, each carried by colour, a shape mark and the unchanged runtime text.
@@ -69,6 +69,23 @@ export const leaseTone: Record<LeaseState, Tone> = {
   released: "neutral",
   abandoned: "interrupted",
 };
+
+/**
+ * Orbit results are the developer's own commands (ADR 0036), never evidence: a command that
+ * succeeded is a plain outcome, not green; a failed or blocked one is danger.
+ */
+export const orbitTone: Record<OrbitStatus, Tone> = {
+  succeeded: "neutral",
+  failed: "danger",
+  blocked: "danger",
+  cancelled: "neutral",
+  skipped: "neutral",
+};
+
+/** A missing checkout or an unavailable sandbox waits on the developer; a present one is a plain descriptor, never green. */
+export function presenceTone(present: boolean): Tone | undefined {
+  return present ? undefined : "attention";
+}
 
 /** An inferred recipe is an uncertainty marker; an observed one is a plain descriptor. */
 export const confidenceTone: Record<ProposedCheck["confidence"], Tone | undefined> = {

@@ -1305,6 +1305,116 @@
       "required_by": [
         "docs/decisions/0010-authenticated-service-shutdown.md"
       ]
+    },
+    {
+      "id": "orbit.status",
+      "title": "Show every registered checkout of a project: branch, upstream, dirty state and recipes",
+      "method": "GET",
+      "route": "/api/v1/projects/{id}/orbit",
+      "client_method": "orbit",
+      "desktop": "orbit.status",
+      "tui": "orbit",
+      "failure_modes": [
+        "unreachable",
+        "aborted",
+        "rejected_token",
+        "not_found",
+        "internal"
+      ],
+      "required_by": [
+        "R05",
+        "docs/decisions/0036-orbit-and-project-sandbox.md#1-orbit-cross-repository-developer-commands"
+      ]
+    },
+    {
+      "id": "orbit.exec",
+      "title": "Run one command in each selected repository of a project (the developer's command, never evidence)",
+      "method": "POST",
+      "route": "/api/v1/projects/{id}/orbit/exec",
+      "client_method": "orbitExec",
+      "desktop": "orbit.exec",
+      "tui": "orbit-exec",
+      "failure_modes": [
+        "unreachable",
+        "aborted",
+        "rejected_token",
+        "not_found",
+        "refused",
+        "shutting_down",
+        "internal",
+        "client"
+      ],
+      "required_by": [
+        "R05",
+        "docs/decisions/0036-orbit-and-project-sandbox.md#1-orbit-cross-repository-developer-commands"
+      ]
+    },
+    {
+      "id": "orbit.run",
+      "title": "Run a confirmed manifest recipe in each repository that defines it",
+      "method": "POST",
+      "route": "/api/v1/projects/{id}/orbit/run",
+      "client_method": "orbitRun",
+      "desktop": "orbit.run",
+      "tui": "orbit-run",
+      "failure_modes": [
+        "unreachable",
+        "aborted",
+        "rejected_token",
+        "not_found",
+        "refused",
+        "shutting_down",
+        "internal",
+        "client"
+      ],
+      "required_by": [
+        "R05",
+        "docs/decisions/0036-orbit-and-project-sandbox.md#1-orbit-cross-repository-developer-commands"
+      ]
+    },
+    {
+      "id": "orbit.sync",
+      "title": "Clone missing checkouts from their registered remotes and fetch present ones",
+      "method": "POST",
+      "route": "/api/v1/projects/{id}/orbit/sync",
+      "client_method": "orbitSync",
+      "desktop": "orbit.sync",
+      "tui": "orbit-sync",
+      "failure_modes": [
+        "unreachable",
+        "aborted",
+        "rejected_token",
+        "not_found",
+        "refused",
+        "shutting_down",
+        "internal",
+        "client"
+      ],
+      "required_by": [
+        "R05",
+        "docs/decisions/0036-orbit-and-project-sandbox.md#1-orbit-cross-repository-developer-commands"
+      ]
+    },
+    {
+      "id": "orbit.sandbox",
+      "title": "Read the project sandbox plan and open a shell or agent that reaches only its repositories",
+      "method": "GET",
+      "route": "/api/v1/projects/{id}/orbit/sandbox",
+      "client_method": "orbitSandbox",
+      "desktop": "orbit.sandbox",
+      "desktop_note": "The desktop shows the plan and the exact lu sbx command; a browser view cannot host an interactive terminal.",
+      "tui": "sbx",
+      "failure_modes": [
+        "unreachable",
+        "aborted",
+        "rejected_token",
+        "not_found",
+        "internal",
+        "client"
+      ],
+      "required_by": [
+        "docs/decisions/0036-orbit-and-project-sandbox.md#2-the-project-sandbox-lu-sbx"
+      ]
     }
   ]
 }

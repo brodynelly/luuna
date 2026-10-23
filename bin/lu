@@ -1,0 +1,4 @@
+#!/bin/sh
+# `lu <command>`: the short name of `luuna` (ADR 0036), the same fixed launcher.
+here=$(cd "$(dirname "$0")" && pwd)
+exec "$here/luuna" "$@"

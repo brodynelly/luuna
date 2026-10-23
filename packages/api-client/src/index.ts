@@ -456,6 +456,126 @@ export interface ProjectImportResult {
 
 export type ScaffoldProfile = "node" | "node-typescript" | "react" | "nextjs" | "python" | "go" | "rust" | "flutter" | "android" | "ios";
 
+/** Orbit (ADR 0036): a project's repositories seen together. Read-only status. */
+export interface Upstream {
+  name: string;
+  ahead: number;
+  behind: number;
+}
+
+export interface OrbitRepository {
+  repository_id: string;
+  local_path: string;
+  present: boolean;
+  branch: string | null;
+  head_commit: string | null;
+  upstream: Upstream | null;
+  dirty: DirtyState | null;
+  remote: string | null;
+  recipes: string[];
+  error: string | null;
+}
+
+export interface OrbitView {
+  project_id: string;
+  name: string;
+  observed_at: string;
+  manifest_revision: number | null;
+  repositories: OrbitRepository[];
+  recipes: string[];
+}
+
+/** Orbit outcomes are the developer's commands, never check evidence. */
+export type OrbitStatus = "succeeded" | "failed" | "blocked" | "cancelled" | "skipped";
+
+export interface OrbitResult {
+  repository_id: string;
+  status: OrbitStatus;
+  /** Sync only: cloned, fetched or unchanged. */
+  action?: "cloned" | "fetched" | "unchanged";
+  exit_code: number | null;
+  reason: string | null;
+  command: string[];
+  stdout_excerpt: string;
+  stderr_excerpt: string;
+  started_at: string;
+  finished_at: string;
+}
+
+export interface OrbitExecution {
+  id: string;
+  project_id: string;
+  kind: "exec" | "recipe" | "sync";
+  command: string[];
+  started_at: string;
+  finished_at: string;
+  results: OrbitResult[];
+}
+
+export interface OrbitExecRequest {
+  executable: string;
+  args?: string[];
+  /** Repository ids; omitted or empty selects every registered repository. */
+  repositories?: string[];
+  cwd?: string;
+  timeout_seconds?: number;
+  parallel?: boolean;
+}
+
+export interface OrbitRunRequest {
+  recipe: string;
+  repositories?: string[];
+  parallel?: boolean;
+}
+
+export interface OrbitSyncRequest {
+  repositories?: string[];
+  /** Fetch present checkouts (default true); missing ones are cloned. */
+  fetch?: boolean;
+}
+
+export type SandboxBackend = "bwrap" | "seatbelt" | "app_container" | "unavailable";
+export type SandboxNetwork = "open" | "none";
+
+export interface SandboxRepository {
+  repository_id: string;
+  host_path: string;
+  sandbox_path: string;
+}
+
+/** What `luuna-sbx` may reach for one project, as the runtime decided it. */
+export interface SandboxPlan {
+  version: number;
+  project_id: string;
+  backend: SandboxBackend;
+  available: boolean;
+  reason: string | null;
+  workdir: string;
+  host_root: string | null;
+  home: string;
+  repositories: SandboxRepository[];
+  network: SandboxNetwork;
+  container_name: string | null;
+  notes: string[];
+}
+
+/** Exec timeout bounds the runtime enforces, in seconds. */
+export const ORBIT_TIMEOUT_LIMITS = [1, 3600] as const;
+
+/** Splits a command line typed by the developer into executable and arguments (quotes group words); no shell runs it. */
+export function orbitCommand(line: string): { executable: string; args: string[] } {
+  const words: string[] = [];
+  const pattern = /"([^"]*)"|'([^']*)'|(\S+)/g;
+  for (const match of line.matchAll(pattern)) words.push(match[1] ?? match[2] ?? match[3]);
+  if (words.length === 0) throw new Error("Type a command to run in each repository.");
+  return { executable: words[0], args: words.slice(1) };
+}
+
+/** The terminal command that opens the sandbox a plan describes. */
+export function sandboxCommand(projectId: string, network: SandboxNetwork = "open"): string {
+  return `lu sbx ${projectId}${network === "none" ? " --network none" : ""}`;
+}
+
 export interface ScaffoldProposalRequest {
   profile: ScaffoldProfile;
   name: string;
@@ -1598,6 +1718,35 @@ export class LuunaClient {
     if (!request.idempotency_key.trim()) throw new Error("An idempotency key is required.");
     if (request.repositories.length === 0) throw new Error("Give the local checkout path of each exported repository.");
     return this.request("/projects/import", { method: "POST", body: JSON.stringify(request), signal });
+  }
+
+  /** Orbit status: every registered checkout of the project, read-only. */
+  orbit(projectId: string, signal?: AbortSignal): Promise<OrbitView> {
+    return this.request(`/projects/${encodeURIComponent(projectId)}/orbit`, { signal });
+  }
+
+  /** Runs one executable plus arguments in each selected repository (the developer's command, never evidence). */
+  orbitExec(projectId: string, request: OrbitExecRequest, signal?: AbortSignal): Promise<OrbitExecution> {
+    if (!request.executable.trim()) throw new Error("Type a command to run in each repository.");
+    const timeout = request.timeout_seconds;
+    if (timeout !== undefined && (!Number.isSafeInteger(timeout) || timeout < ORBIT_TIMEOUT_LIMITS[0] || timeout > ORBIT_TIMEOUT_LIMITS[1])) throw new Error(`The timeout must be ${ORBIT_TIMEOUT_LIMITS[0]} to ${ORBIT_TIMEOUT_LIMITS[1]} seconds.`);
+    return this.request(`/projects/${encodeURIComponent(projectId)}/orbit/exec`, { method: "POST", body: JSON.stringify(request), signal });
+  }
+
+  /** Runs a confirmed manifest recipe in each repository that defines it; the others are skipped. */
+  orbitRun(projectId: string, request: OrbitRunRequest, signal?: AbortSignal): Promise<OrbitExecution> {
+    if (!request.recipe.trim()) throw new Error("Choose a recipe to run.");
+    return this.request(`/projects/${encodeURIComponent(projectId)}/orbit/run`, { method: "POST", body: JSON.stringify(request), signal });
+  }
+
+  /** Clones missing checkouts from their registered remotes and fetches present ones. */
+  orbitSync(projectId: string, request: OrbitSyncRequest = {}, signal?: AbortSignal): Promise<OrbitExecution> {
+    return this.request(`/projects/${encodeURIComponent(projectId)}/orbit/sync`, { method: "POST", body: JSON.stringify(request), signal });
+  }
+
+  /** The sandbox plan `luuna-sbx` applies: only this project's checkouts, a private home and the network policy. */
+  orbitSandbox(projectId: string, network: SandboxNetwork = "open", signal?: AbortSignal): Promise<SandboxPlan> {
+    return this.request(`/projects/${encodeURIComponent(projectId)}/orbit/sandbox?network=${network}`, { signal });
   }
 
   /** A deterministic scaffold proposal; nothing is written until it is confirmed by exact hash. */

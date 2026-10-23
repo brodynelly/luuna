@@ -1,15 +1,15 @@
- Home  Projects  Missions  Atlas  Beacon  Runs  Commands  Help
+ Home  Projects  Orbit  Missions  Atlas  Beacon  Runs  Commands  Help
  LUUNA  / WORKBENCH connected
 ╔ LUUNA ══════════════════════╗╔ > Atlas / scoped memory ══════════════════════════════════════════════════════════════╗
 ║ 1 Home                      ║║Search:                                                                                ║
 ║ 2 Projects                  ║║User memory: excluded (explicit choice)                                                ║
-║ 3 Missions                  ║║> [project] mem-1                  ║mem-1                                              ║
-║ 4 Atlas *                   ║║  Use structured errors            ║Scope: project                                     ║
-║ 5 Beacon                    ║║                                   ║Provenance: Maintainer notes                       ║
-║ 6 Runs                      ║║                                   ║Exact hash: sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa║
-║ 7 Commands                  ║║                                   ║aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa                   ║
-║ 8 Help                      ║║                                   ║                                                   ║
-║                             ║║                                   ║CONTENT                                            ║
+║ 3 Orbit                     ║║> [project] mem-1                  ║mem-1                                              ║
+║ 4 Missions                  ║║  Use structured errors            ║Scope: project                                     ║
+║ 5 Atlas *                   ║║                                   ║Provenance: Maintainer notes                       ║
+║ 6 Beacon                    ║║                                   ║Exact hash: sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa║
+║ 7 Runs                      ║║                                   ║aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa                   ║
+║ 8 Commands                  ║║                                   ║                                                   ║
+║ 9 Help                      ║║                                   ║CONTENT                                            ║
 ║                             ║║                                   ║Use structured errors                              ║
 ║                             ║║                                   ║                                                   ║
 ║                             ║║                                   ║Context selection is unsent until you submit a plan║

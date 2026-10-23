@@ -5,7 +5,7 @@
 // id and whose `name` is the catalog's `tui` command. `example` is the input the parity test runs
 // against a mocked fetch to prove the command issues the cataloged method and route.
 import { randomUUID } from "node:crypto";
-import { boardProjection, homeSummary, planRequestForTasks, readEventPages, registerProjectRequest } from "@luuna/api-client";
+import { boardProjection, homeSummary, orbitCommand, planRequestForTasks, readEventPages, registerProjectRequest } from "@luuna/api-client";
 
 const HASH = `sha256:${"a".repeat(64)}`;
 
@@ -30,6 +30,21 @@ function modelSettings(flags) {
 /** A problem with the command line itself (exit code 2), never a runtime refusal. */
 export class UsageError extends Error {
   constructor(message) { super(message); this.name = "UsageError"; }
+}
+
+/** A sandboxed command ran; its exit code becomes the client's (`lu sbx`). */
+export class SandboxExit {
+  constructor(code) { this.code = code; }
+}
+
+/** An Orbit run in which some repository failed or was blocked exits 1, so scripts can chain on it. */
+function orbitFailed(execution) {
+  return (execution?.results ?? []).some((result) => result.status === "failed" || result.status === "blocked");
+}
+
+/** `--repository` flags as the repository ids an Orbit request selects. */
+function repositories(flags) {
+  return list(flags.repository).map(String);
 }
 
 /** The runtime refused nothing; the client declined to send the request (exit code 1). */
@@ -407,6 +422,49 @@ export const COMMANDS = [
     run: (client, { args }, io) => client.attempts(args[0], io.signal) },
   { id: "runs.tasks", name: "tasks", action: "Task graph listing", context: "run", args: [{ name: "run", context: true }], flags: {}, example: { args: ["run-1"], flags: {} },
     run: (client, { args }, io) => client.tasks(args[0], io.signal) },
+  // ---- orbit (ADR 0036): every repository of a project at once; the developer's commands, never evidence ----
+  { id: "orbit.status", name: "orbit", action: "Orbit status", context: "project", args: [{ name: "project", context: true }], flags: {}, example: { args: ["walkthrough"], flags: {} },
+    run: (client, { args }, io) => client.orbit(args[0], io.signal) },
+  { id: "orbit.exec", name: "orbit-exec", action: "Orbit command", context: "project", failed: orbitFailed,
+    args: [{ name: "project", context: true }, { name: "command", description: "the command to run in each repository, for example \"git status --short\" (no shell runs it)", prompt: "Command to run in each repository" }],
+    flags: { repository: { repeat: true, description: "only this repository (repeatable; all when omitted)" }, parallel: { boolean: true, description: "run up to four repositories at once" }, timeout: { description: "seconds per repository (1-3600, default 300)" }, cwd: { description: "working directory relative to each repository root" } },
+    example: { args: ["walkthrough", "git status --short"], flags: { parallel: true } },
+    run: (client, { args, flags }, io) => {
+      let command;
+      try { command = orbitCommand(args[1]); } catch (failure) { throw new ClientRefusal(failure.message); }
+      const selected = repositories(flags);
+      return client.orbitExec(args[0], { ...command, ...(selected.length && { repositories: selected }), ...(flags.parallel && { parallel: true }), ...(flags.timeout !== undefined && { timeout_seconds: integer(flags.timeout, "timeout", { min: 1 }) }), ...(flags.cwd && { cwd: String(flags.cwd) }) }, io.signal);
+    } },
+  { id: "orbit.run", name: "orbit-run", action: "Orbit recipe run", context: "project", failed: orbitFailed,
+    args: [{ name: "project", context: true }, { name: "recipe", description: "a confirmed manifest recipe id, for example test", prompt: "Recipe id" }],
+    flags: { repository: { repeat: true, description: "only this repository (repeatable; all when omitted)" }, parallel: { boolean: true, description: "run up to four repositories at once" } },
+    example: { args: ["walkthrough", "test"], flags: {} },
+    run: (client, { args, flags }, io) => {
+      const selected = repositories(flags);
+      return client.orbitRun(args[0], { recipe: args[1], ...(selected.length && { repositories: selected }), ...(flags.parallel && { parallel: true }) }, io.signal);
+    } },
+  { id: "orbit.sync", name: "orbit-sync", action: "Orbit sync", context: "project", failed: orbitFailed, args: [{ name: "project", context: true }],
+    flags: { repository: { repeat: true, description: "only this repository (repeatable; all when omitted)" }, "no-fetch": { boolean: true, description: "only clone missing checkouts; do not fetch present ones" } },
+    example: { args: ["walkthrough"], flags: {} },
+    run: (client, { args, flags }, io) => {
+      const selected = repositories(flags);
+      return client.orbitSync(args[0], { ...(selected.length && { repositories: selected }), ...(flags["no-fetch"] && { fetch: false }) }, io.signal);
+    } },
+  // `lu sbx <project> [-- command …]`: the runtime's plan, applied by the native launcher with the
+  // terminal attached. --plan-only (or --json) prints the plan instead of opening the sandbox.
+  { id: "orbit.sandbox", name: "sbx", action: "Project sandbox", context: "project", rest: true, args: [{ name: "project", context: true }],
+    flags: { network: { description: "open (default) or none" }, "plan-only": { boolean: true, description: "print the plan without opening the sandbox" }, "grant-read": { repeat: true, description: "another absolute directory the sandbox may read and run tools from (repeatable)" } },
+    example: { args: ["walkthrough"], flags: { "plan-only": true } },
+    run: async (client, { args, flags }, io) => {
+      const network = flags.network === undefined ? "open" : String(flags.network);
+      if (!["open", "none"].includes(network)) throw new UsageError("--network takes open or none.");
+      const plan = await client.orbitSandbox(args[0], network, io.signal);
+      if (flags["plan-only"] || io.json || !io.launch) return plan;
+      if (!plan.available) throw new ClientRefusal(plan.reason ?? "The sandbox is not available on this host.");
+      const reachable = plan.repositories.map((repository) => repository.repository_id).join(", ");
+      io.note(`Opening the ${args[0]} sandbox (${plan.backend}, network ${plan.network}) in ${plan.workdir}; only ${reachable} ${plan.repositories.length === 1 ? "is" : "are"} reachable. Exit the shell to leave it.`);
+      return new SandboxExit(await io.launch(plan, args.slice(1), list(flags["grant-read"]).map(String)));
+    } },
   { id: "artifacts.read", name: "artifact", action: "Log inspection", context: "run",
     args: [{ name: "run", context: true }, { name: "artifact-id", description: "<recipe>.stdout or <recipe>.stderr", prompt: "Artifact id (<recipe>.stdout or <recipe>.stderr)" }],
     flags: {}, example: { args: ["run-1", "unit.stderr"], flags: {} },

@@ -207,6 +207,52 @@ function formatTicket(ticket) {
  * The doctor report as `luuna-runtime doctor` prints it: status, item name, detail and the
  * required marker per line, then the verdict. Details name credentials, never values.
  */
+export const orbitTone = { succeeded: "success", failed: "danger", blocked: "danger", cancelled: "neutral", skipped: "neutral" };
+
+const plural = (count, one, many) => `${count} ${count === 1 ? one : many}`;
+
+/** One line per repository: branch, upstream distance, uncommitted changes and recipes. */
+export function formatOrbit(view, options) {
+  const p = painter(options);
+  const repositories = view.repositories ?? [];
+  const lines = [`${view.name} (${view.project_id}) · ${plural(repositories.length, "repository", "repositories")} · ${view.manifest_revision == null ? "manifest unconfirmed" : `manifest r${view.manifest_revision}`}`];
+  for (const repository of repositories) {
+    if (!repository.present) { lines.push(`  ${repository.repository_id}  ${p("missing", "attention")}  ${repository.local_path}  (orbit-sync clones it)`); continue; }
+    const dirty = repository.dirty ? repository.dirty.staged + repository.dirty.unstaged + repository.dirty.untracked + repository.dirty.conflicted : 0;
+    const upstream = repository.upstream ? `  ${repository.upstream.name} ↑${repository.upstream.ahead} ↓${repository.upstream.behind}` : "  no upstream";
+    const recipes = repository.recipes?.length ? `  recipes: ${repository.recipes.join(", ")}` : "";
+    lines.push(`  ${repository.repository_id}  ${repository.branch ?? "(detached)"}${upstream}  ${dirty ? p(`${dirty} changed`, "attention") : p("clean", "neutral")}  ${repository.local_path}${recipes}`);
+    if (repository.error) lines.push(`    ${p(repository.error, "danger")}`);
+  }
+  return lines.join("\n");
+}
+
+/** Per repository: the outcome, then the tail of its output. */
+export function formatOrbitExecution(execution, options) {
+  const p = painter(options);
+  const results = execution.results ?? [];
+  const lines = [`${execution.kind ?? "orbit"} ${(execution.command ?? []).join(" ")} · ${plural(results.length, "repository", "repositories")} · not evidence`];
+  for (const result of results) {
+    lines.push(`── ${result.repository_id}  ${p(result.status, orbitTone[result.status])}${result.action ? ` (${result.action})` : ""}${result.exit_code == null ? "" : ` exit ${result.exit_code}`}${result.reason && result.reason !== `exit code ${result.exit_code}` ? ` · ${result.reason}` : ""}`);
+    for (const text of [result.stdout_excerpt, result.stderr_excerpt]) if (text && text.trim()) lines.push(text.trimEnd().split(/\r?\n/).map((line) => `   ${line}`).join("\n"));
+  }
+  return lines.join("\n");
+}
+
+/** What the sandbox reaches, and the limits that come with it. */
+export function formatSandboxPlan(plan, options) {
+  const p = painter(options);
+  return [
+    `sandbox ${plan.project_id} · ${plan.backend} · ${plan.available ? p("available", "success") : p("unavailable", "danger")}${plan.reason ? ` · ${plan.reason}` : ""}`,
+    `  starts in ${plan.workdir}`,
+    ...(plan.repositories ?? []).map((r) => `  read-write ${r.repository_id}: ${r.host_path}${r.sandbox_path !== r.host_path ? ` (as ${r.sandbox_path})` : ""}`),
+    `  home ${plan.home}`,
+    `  network ${plan.network}`,
+    ...(plan.notes ?? []).map((note) => `  note: ${note}`),
+    `  open it with: lu sbx ${plan.project_id}${plan.network === "none" ? " --network none" : ""}`,
+  ].join("\n");
+}
+
 export function formatDoctor(report) {
   const lines = report.items.map((item) => `${item.status.padEnd(8)} ${item.name.padEnd(20)} ${item.detail}${item.required ? " (required)" : ""}`);
   lines.push(`doctor: ${report.ok ? "ok" : "FAILED"}`);
@@ -253,6 +299,9 @@ export function format(id, value, options = {}) {
     case "projection.home": return formatHome(value, options);
     case "projection.board": return formatBoard(value, options);
     case "artifacts.read": return value || "Empty log.";
+    case "orbit.status": return formatOrbit(value, options);
+    case "orbit.exec": case "orbit.run": case "orbit.sync": return formatOrbitExecution(value, options);
+    case "orbit.sandbox": return formatSandboxPlan(value, options);
     case "shutdown": return `Runtime ${value.status}. Runs, candidates and worktrees stay durable; start it again with the same data directory and token.`;
     default: return typeof value === "string" ? value : JSON.stringify(value, null, 2);
   }

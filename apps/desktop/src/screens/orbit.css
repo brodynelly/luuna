@@ -1,0 +1,32 @@
+/* Screen: orbit. Layout and screen-specific presentation, tokens only (docs/DESIGN-SYSTEM.md). */
+/*
+ * Orbit (ADR 0036): a project picker in the page toolbar, the status table of every registered
+ * checkout, the repository choice with the exec, recipe and sync forms, the latest results with
+ * each stream's tail, then the sandbox plan and its command. Every rule is scoped by a class
+ * unique to this screen; tables, records, badges, callouts and code blocks come from the library.
+ */
+
+.orbit-toolbar { display: flex; flex-wrap: wrap; align-items: end; gap: var(--space-2) var(--space-3); min-width: 0; }
+.orbit-panel .orbit-cell { display: grid; gap: var(--space-1); min-width: 0; }
+.orbit-panel .orbit-cell code { overflow-wrap: anywhere; }
+/* A checkout path shows its last segments on one line (the full path is its title), so the column keeps a readable width. */
+.orbit-panel .orbit-path code { overflow-wrap: normal; white-space: nowrap; }
+.orbit-panel .orbit-tags { display: flex; flex-wrap: wrap; gap: var(--space-1); min-width: 0; }
+.orbit-status { display: grid; gap: var(--space-3); min-width: 0; }
+
+/* Commands: the repository choice first, then the three forms as ruled subpanels. */
+.orbit-actions > .orbit-choice { display: grid; gap: var(--space-2); }
+.orbit-choice > .orbit-checks { display: flex; flex-wrap: wrap; align-items: center; gap: var(--space-2) var(--space-4); min-width: 0; }
+.orbit-forms { display: grid; gap: var(--space-4); min-width: 0; }
+
+/* Results: the stream tails wrap long lines instead of scrolling sideways. */
+.orbit-result .orbit-output { white-space: pre-wrap; overflow-wrap: anywhere; font-size: var(--text-xs); }
+.orbit-result > .orbit-result-meta code { overflow-wrap: anywhere; }
+
+/* Sandbox: the network radios on one row, the plan as facts, the command beside its copy control. */
+.orbit-sandbox { display: grid; gap: var(--space-3); min-width: 0; }
+.orbit-network { display: flex; flex-wrap: wrap; gap: var(--space-2) var(--space-5); }
+.orbit-plan { display: grid; gap: var(--space-2); min-width: 0; }
+.orbit-plan > .orbit-plan-repositories, .orbit-plan > .orbit-plan-notes { display: grid; gap: var(--space-1); margin: 0; padding-inline-start: var(--space-5); }
+.orbit-command { display: flex; flex-wrap: wrap; align-items: center; gap: var(--space-2) var(--space-3); min-width: 0; }
+.orbit-command > .orbit-command-text { overflow-wrap: anywhere; }

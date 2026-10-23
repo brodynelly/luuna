@@ -434,3 +434,61 @@ test("doctor prints the runtime's doctor table exactly as luuna-runtime doctor d
   const command = commandsByName.get("doctor");
   assert.equal(command.context, "runtime", "doctor is listed in the runtime menu of the interactive workbench");
 });
+
+test("orbit-exec sends the typed command as an argument array with the selected repositories, and refuses an empty one", async () => {
+  const { fetcher, requests } = mockFetch();
+  const client = new LuunaClient("http://127.0.0.1:4242", "test-token", fetcher);
+  const command = commandsByName.get("orbit-exec");
+  const { io: context } = io();
+  const input = parseArguments(["luuna", `git commit -m "two words"`, "--repository", "atlas", "--repository", "beacon", "--parallel", "--timeout", "60"], command);
+  assert.equal(await runCommand(command, input, client, context), 0);
+  assert.deepEqual(JSON.parse(requests[0].body), { executable: "git", args: ["commit", "-m", "two words"], repositories: ["atlas", "beacon"], parallel: true, timeout_seconds: 60 });
+  const { io: refused, err } = io();
+  assert.equal(await runCommand(command, { args: ["luuna", "   "], flags: {} }, client, refused), 1);
+  assert.match(err(), /Type a command/);
+});
+
+test("sbx opens the sandbox through the launcher with the trailing command and returns its exit code", async () => {
+  const plan = { version: 1, project_id: "luuna", backend: "bwrap", available: true, reason: null, workdir: "/home/dev/github", host_root: null, home: "/data/home", repositories: [{ repository_id: "luuna", host_path: "/home/dev/github/luuna", sandbox_path: "/home/dev/github/luuna" }], network: "none", container_name: null, notes: [] };
+  const fetcher = async (url) => new Response(JSON.stringify(new URL(url).search === "?network=none" ? plan : { ...plan, available: false, reason: "bwrap missing" }), { status: 200, headers: { "Content-Type": "application/json" } });
+  const client = new LuunaClient("http://127.0.0.1:4242", "test-token", fetcher);
+  const command = commandsByName.get("sbx");
+  const launched = [];
+  const { io: context } = io({ json: false, launch: async (received, sandboxed, grants) => { launched.push({ received, sandboxed, grants }); return 7; } });
+  const code = await runCommand(command, parseArguments(["luuna", "--network", "none", "--grant-read", "/opt/tools", "--", "pi", "--model", "x"], command), client, context);
+  assert.equal(code, 7);
+  assert.deepEqual(launched, [{ received: plan, sandboxed: ["pi", "--model", "x"], grants: ["/opt/tools"] }]);
+  const { io: unavailable, err } = io({ json: false, launch: async () => 0 });
+  assert.equal(await runCommand(command, parseArguments(["luuna"], command), client, unavailable), 1);
+  assert.match(err(), /bwrap missing/);
+  const { io: badNetwork } = io({ json: false, launch: async () => 0 });
+  assert.equal(await runCommand(command, parseArguments(["luuna", "--network", "wide"], command), client, badNetwork), 2);
+});
+
+test("the sandbox launcher never receives the runtime token or URL and gets the plan through its environment", async () => {
+  const { sandboxEnvironment, launchSandbox, sandboxBinary } = await import("../src/sandbox.mjs");
+  const env = sandboxEnvironment({ PATH: "/usr/bin", LUUNA_API_TOKEN: "secret", luuna_url: "http://127.0.0.1:4242" }, { project_id: "p" });
+  assert.equal(env.LUUNA_API_TOKEN, undefined);
+  assert.equal(env.luuna_url, undefined);
+  assert.equal(env.PATH, "/usr/bin");
+  assert.deepEqual(JSON.parse(env.LUUNA_SBX_PLAN), { project_id: "p" });
+  const missing = sandboxBinary({ root: "/nonexistent-luuna-root", env: {}, platform: "linux" });
+  assert.equal(missing.binary.replaceAll("\\", "/").endsWith("/nonexistent-luuna-root/luuna-sbx"), true);
+  await assert.rejects(launchSandbox({}, [], { root: "/nonexistent-luuna-root", env: {} }), /luuna-sbx|sandbox launcher/);
+});
+
+test("sbx keeps the sandboxed command's own flags whether or not a launcher kept the --", () => {
+  const command = commandsByName.get("sbx");
+  for (const argv of [["luuna", "--network", "none", "--", "pi", "--model", "x"], ["luuna", "--network", "none", "pi", "--model", "x"]]) {
+    assert.deepEqual(parseArguments(argv, command), { args: ["luuna", "pi", "--model", "x"], flags: { network: "none" } });
+  }
+});
+
+test("orbit-run prints every repository and exits 1 when any of them failed", async () => {
+  const execution = { id: "x", kind: "recipe", command: ["test"], results: [{ repository_id: "app", status: "succeeded", exit_code: 0, reason: null, stdout_excerpt: "ok", stderr_excerpt: "" }, { repository_id: "lib", status: "failed", exit_code: 1, reason: "exit code 1", stdout_excerpt: "1 failed", stderr_excerpt: "" }] };
+  const fetcher = async () => new Response(JSON.stringify(execution), { status: 200, headers: { "Content-Type": "application/json" } });
+  const client = new LuunaClient("http://127.0.0.1:4242", "test-token", fetcher);
+  const { io: context, out } = io({ json: false });
+  assert.equal(await runCommand(commandsByName.get("orbit-run"), { args: ["p", "test"], flags: {} }, client, context), 1);
+  assert.match(out(), /── app {2}succeeded exit 0\n {3}ok\n── lib {2}failed exit 1\n {3}1 failed/);
+});
