@@ -1,0 +1,8 @@
+.luuna/roots/*.jsonl merge=union
+.luuna/missions/issues.jsonl merge=union
+.luuna/missions/templates.jsonl merge=union
+.luuna/missions/plans.jsonl merge=union
+.luuna/atlas/expertise/*.jsonl merge=union
+.luuna/beacon/prompts.jsonl merge=union
+.luuna/beacon/schemas.jsonl merge=union
+.luuna/beacon/artifacts.jsonl merge=union
