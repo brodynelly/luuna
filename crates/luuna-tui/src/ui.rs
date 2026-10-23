@@ -118,7 +118,7 @@ pub fn render(frame: &mut Frame, app: &mut AppState, theme: Theme) {
     } else if app.prompt.is_some() {
         " Enter answer · PgUp/PgDn plan · Esc abort"
     } else if app.mode == Mode::Form {
-        " Tab field · Alt+Enter line · Ctrl+S submit · Esc back"
+        " Tab field · Alt+Enter/Ctrl+J line · Ctrl+S submit · Esc back"
     } else if app.mode == Mode::Result {
         " ↑↓ PgUp/PgDn scroll · Esc back/abort · q quit"
     } else {

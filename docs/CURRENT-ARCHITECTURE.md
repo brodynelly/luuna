@@ -66,7 +66,11 @@ involved. The command table is data (`crates/luuna-tui/commands.json`) that
 `@luuna/api-client`; the terminal client carries a Rust port of its client, failure explanations,
 request builders and projections, so parity is held by `check-contracts`, the Rust tests that
 assert request bodies, and the differential evidence ADR 0037 records rather than by one shared
-module. Windows packages carry `luuna-tui.exe` alone for the terminal. Historical JavaScript
+module. Windows packages carry `luuna-tui.exe` alone for the terminal. The workbench's key
+bindings, colors and terminal options are read from a JSON settings file
+([ADR 0040](decisions/0040-terminal-keymap-and-settings.md)): every handler matches one canonical
+key per action and `keys::Keymap` translates what was pressed into it, with macOS-reachable
+alternatives by default. Historical JavaScript
 interactive audit results above do not establish native renderer coverage; native UI and
 staged-launch evidence must be recorded separately.
 The native renderer draws on an event-driven frame clock (dirty flag, 60 Hz

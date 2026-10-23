@@ -5,7 +5,7 @@ use crate::{
     app::{AppState, FormField, Mode},
     protocol::BridgeEvent,
 };
-use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
+use crossterm::event::{KeyCode, KeyEvent};
 use serde_json::{json, Map, Value};
 use std::collections::BTreeSet;
 
@@ -523,9 +523,7 @@ pub fn key(app: &mut AppState, key: KeyEvent) -> bool {
             KeyCode::Backspace => {
                 app.workbench.query.pop();
             }
-            KeyCode::Char(c) if !key.modifiers.contains(KeyModifiers::CONTROL) => {
-                app.workbench.query.push(c)
-            }
+            KeyCode::Char(c) if crate::keys::is_text(&key) => app.workbench.query.push(c),
             _ => {}
         }
         app.workbench.cursor = 0;
