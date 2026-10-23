@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 // Luuna TUI parity smoke: drives the terminal client's non-interactive mode
-// (`node packages/tui/bin/luuna-tui.mjs <command> --json`) against a built runtime and the
+// (`luuna-tui <command> --json`, the Rust client of crates/luuna-tui) against a built runtime and the
 // SYNTHETIC Pi fixture through the documented walkthrough (docs/MVP-WALKTHROUGH.md), exactly as
 // scripts/mvp-ui-smoke.mjs drives the browser client, and asserts that the TUI reports the same
 // authoritative states the runtime's API shows (R02, A19, A33). Client and lifecycle evidence
@@ -10,6 +10,7 @@
 //
 // Requirements: the pinned toolchains (cargo unless --runtime is given, Node, python3, git) and
 // `npm ci` done at the root. Exit code 1 when any check fails.
+import { clientBinary } from "./tui-client.mjs";
 import { execFile, execFileSync, spawn } from "node:child_process";
 import { existsSync, mkdirSync, rmSync, writeFileSync } from "node:fs";
 import { createServer } from "node:net";
@@ -29,7 +30,7 @@ mkdirSync(out, { recursive: true });
 if (process.platform === "win32" && out.length > 120) console.warn(`warning: --out ${out} is ${out.length} characters long; Git may refuse the runtime's worktree paths beneath it. Prefer a short directory such as %TEMP%\luuna-tui-smoke.`);
 const python = process.platform === "win32" ? "python" : "python3";
 const token = randomBytes(32).toString("hex");
-const tuiBin = path.join(repository, "packages", "tui", "bin", "luuna-tui.mjs");
+const tuiBin = clientBinary(repository);
 const checks = [];
 const notes = [];
 function record(name, ok, detail = "") {
@@ -154,7 +155,7 @@ const invocations = [];
 function tui(args, { json = true, serviceToken = token, timeoutMs = 60_000 } = {}) {
   return new Promise((resolve) => {
     const argv = json ? [...args, "--json"] : args;
-    execFile(process.execPath, [tuiBin, ...argv], { env: { ...toolEnv(), LUUNA_URL: base, LUUNA_API_TOKEN: serviceToken }, encoding: "utf8", timeout: timeoutMs, maxBuffer: 64 * 1024 * 1024 }, (error, stdout, stderr) => {
+    execFile(tuiBin, argv, { env: { ...toolEnv(), LUUNA_URL: base, LUUNA_API_TOKEN: serviceToken }, encoding: "utf8", timeout: timeoutMs, maxBuffer: 64 * 1024 * 1024 }, (error, stdout, stderr) => {
       const code = error && typeof error.code === "number" ? error.code : error ? 1 : 0;
       let value = null;
       if (json) { const last = stdout.trim().split("\n").at(-1); try { value = last ? JSON.parse(last) : null; } catch { value = null; } }
@@ -312,7 +313,7 @@ async function recovery() {
   // A live follower on the workflow's events, through the SSE stream, started before the outage.
   let followOut = "";
   let followErr = "";
-  const follower = spawn(process.execPath, [tuiBin, "follow", run.id], { env: { ...toolEnv(), LUUNA_URL: base, LUUNA_API_TOKEN: token }, stdio: ["ignore", "pipe", "pipe"] });
+  const follower = spawn(tuiBin, ["follow", run.id], { env: { ...toolEnv(), LUUNA_URL: base, LUUNA_API_TOKEN: token }, stdio: ["ignore", "pipe", "pipe"] });
   follower.stdout.on("data", (chunk) => { followOut += chunk; });
   follower.stderr.on("data", (chunk) => { followErr += chunk; });
   const followerExit = new Promise((resolve) => follower.once("exit", (code) => resolve(code)));

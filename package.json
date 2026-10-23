@@ -10,14 +10,13 @@
   "workspaces": [
     "apps/desktop",
     "packages/api-client",
-    "packages/ui",
-    "packages/tui"
+    "packages/ui"
   ],
   "scripts": {
     "dev": "npm run dev --workspace @luuna/desktop",
     "desktop": "npm run tauri --workspace @luuna/desktop -- dev",
     "build": "npm run build --workspace @luuna/desktop",
-    "tui": "node packages/tui/bin/luuna-tui.mjs",
+    "tui": "cargo run --quiet --locked -p luuna-tui --",
     "build:tui": "cargo build --locked -p luuna-tui",
     "test:tui-terminal": "node --test scripts/tui-terminal.test.mjs",
     "test:tui-smoke": "node scripts/tui-smoke.mjs",

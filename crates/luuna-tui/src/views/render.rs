@@ -57,6 +57,7 @@ pub fn render(frame: &mut Frame, app: &mut AppState, area: Rect, theme: Theme) {
         Screen::Plan => "Plan / immutable snapshot",
         Screen::Commands => "Commands",
         Screen::Help => "Help / keyboard reference",
+        Screen::Setup => "Setup",
     };
     let block = panel(title, !app.workbench.nav, theme);
     let inside = block.inner(content);

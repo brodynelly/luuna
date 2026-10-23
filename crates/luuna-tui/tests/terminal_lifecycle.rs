@@ -14,7 +14,7 @@ fn nonterminal_and_help_need_no_token() {
         .output()
         .unwrap();
     assert!(help.status.success());
-    assert!(String::from_utf8_lossy(&help.stdout).contains("Rust terminal"));
+    assert!(String::from_utf8_lossy(&help.stdout).contains("terminal client for the Luuna runtime"));
     let plain = std::process::Command::new(binary)
         .env_remove("LUUNA_API_TOKEN")
         .output()
@@ -33,19 +33,6 @@ fn real_pty_keyboard_resize_and_terminal_cleanup() {
     ] {
         let control = tempfile::tempdir().unwrap();
         let marker = control.path().join("shutdown");
-        let stopped = control.path().join("bridge-stopped");
-        let wrapper = control.path().join("bridge.mjs");
-        std::fs::write(
-            &wrapper,
-            r#"
-            import { writeFileSync } from 'node:fs';
-            import { pathToFileURL } from 'node:url';
-            const { serveBridge } = await import(pathToFileURL(process.env.LUUNA_TEST_BRIDGE).href);
-            await serveBridge();
-            writeFileSync(process.env.LUUNA_TEST_BRIDGE_STOPPED, 'stopped');
-        "#,
-        )
-        .unwrap();
         let pair = native_pty_system()
             .openpty(PtySize {
                 rows,
@@ -54,13 +41,9 @@ fn real_pty_keyboard_resize_and_terminal_cleanup() {
                 pixel_height: 0,
             })
             .expect("Real PTY required for terminal audit");
-        let mut command = CommandBuilder::new(env!("CARGO_BIN_EXE_luuna-tui"));
-        command.arg("--bridge");
-        command.arg(&wrapper);
-        if let Some(node) = std::env::var_os("LUUNA_TEST_NODE") {
-            command.arg("--node");
-            command.arg(node);
-        }
+        // No command on a terminal opens the workbench; its actions run in process.
+        let command_path = env!("CARGO_BIN_EXE_luuna-tui");
+        let mut command = CommandBuilder::new(command_path);
         command.env(
             "LUUNA_API_TOKEN",
             if token_present {
@@ -71,8 +54,6 @@ fn real_pty_keyboard_resize_and_terminal_cleanup() {
         );
         command.env("LUUNA_URL", "http://127.0.0.1:1");
         command.env("LUUNA_TUI_SHUTDOWN_FILE", &marker);
-        command.env("LUUNA_TEST_BRIDGE", luuna_tui::bridge::default_bridge());
-        command.env("LUUNA_TEST_BRIDGE_STOPPED", &stopped);
         let mut child = pair.slave.spawn_command(command).unwrap();
         drop(pair.slave);
         let captured = Arc::new(Mutex::new(Vec::new()));
@@ -180,10 +161,5 @@ fn real_pty_keyboard_resize_and_terminal_cleanup() {
         assert!(text.contains("\x1b[?1049h"), "alternate screen entered");
         assert!(text.contains("\x1b[?1049l"), "alternate screen left");
         assert!(text.contains("\x1b[?25h"), "cursor restored");
-        assert_eq!(
-            stopped.exists(),
-            token_present,
-            "the owned bridge completes shutdown; hidden-token cancellation never starts it"
-        );
     }
 }

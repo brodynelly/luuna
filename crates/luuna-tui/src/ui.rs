@@ -23,6 +23,10 @@ pub fn render(frame: &mut Frame, app: &mut AppState, theme: Theme) {
         );
         return;
     }
+    if app.mode == Mode::Guide && app.guide.is_some() {
+        crate::views::guide::render(frame, app, theme);
+        return;
+    }
     let [menu, header, body, status, footer] = Layout::vertical([
         Constraint::Length(1),
         Constraint::Length(1),
@@ -46,7 +50,7 @@ pub fn render(frame: &mut Frame, app: &mut AppState, theme: Theme) {
     let menu_text = if area.width < 65 {
         " F10 Menu  F2 Commands  F1 Help"
     } else {
-        " Home  Projects  Missions  Atlas  Beacon  Runs  Commands  Help"
+        " Home  Setup  Projects  Missions  Atlas  Beacon  Runs  Commands  Help"
     };
     let menu_line = Line::from(
         menu_text
@@ -78,7 +82,7 @@ pub fn render(frame: &mut Frame, app: &mut AppState, theme: Theme) {
         Mode::Workbench => crate::views::render::render(frame, app, content, theme),
         Mode::Catalog => render_catalog(frame, app, content, theme),
         Mode::Form => render_form(frame, app, content, theme),
-        Mode::Result => render_result(frame, app, content, theme),
+        Mode::Result | Mode::Guide => render_result(frame, app, content, theme),
     }
     let status_text = if app.workbench.searching {
         format!("Search: {}  Enter apply · Esc close", app.workbench.query)

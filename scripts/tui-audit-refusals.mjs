@@ -1,7 +1,7 @@
 import { setTimeout as sleep } from "node:timers/promises";
 import { writeFileSync } from "node:fs";
 import path from "node:path";
-import { commandsByName } from "../packages/tui/src/commands.mjs";
+import { commandsByName } from "./tui-client.mjs";
 import { keys } from "./tui-audit-workflows.mjs";
 import { waitUntil } from "./tui-audit-runtime.mjs";
 

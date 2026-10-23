@@ -1,10 +1,10 @@
 import { cpSync, existsSync, mkdirSync, readFileSync, realpathSync, renameSync, writeFileSync } from "node:fs";
 import { execFileSync } from "node:child_process";
 import { createServer } from "node:net";
-import { pathToFileURL } from "node:url";
+
 import path from "node:path";
 import { stageTerminal } from "./stage-terminal.mjs";
-import { nativePaths } from "../packages/tui/src/native.mjs";
+import { clientBinary } from "./tui-client.mjs";
 import { waitUntil } from "./tui-audit-runtime.mjs";
 const sameExecutable = (left, right) => { try { return realpathSync.native(left).toLowerCase() === realpathSync.native(right).toLowerCase(); } catch { return false; } };
 
@@ -25,19 +25,14 @@ export async function auditLaunchRoutes({ fixture, clientRoot, out, open, quit, 
   await capture(rootNpm, "npm-root-connected"); await quit(rootNpm, "npm-root");
   record("npm run tui enters native workbench", true);
 
-  const binary = nativePaths({ root: clientRoot }).binary;
+  const binary = clientBinary(clientRoot);
   const stage = path.join(out, "staged");
   const staged = stageTerminal({ root: clientRoot, out: stage, binary });
   writeFileSync(path.join(out, "staged-identity.json"), JSON.stringify(staged, null, 2));
-  const entry = path.join(stage, "packages/tui/bin/luuna-tui.mjs");
   const stagedEnv = { CARGO_TARGET_DIR: path.join(out, "deliberately-missing-development-target") };
-  const terminal = await open("staged", { argv: [process.execPath, entry], env: stagedEnv });
+  const terminal = await open("staged", { argv: [staged.binary], env: stagedEnv });
   record("staged native launch from unrelated cwd ignores development overrides", terminal.ownedProcesses.some((row) => row.executable.toLowerCase() === staged.binary.toLowerCase()));
   await capture(terminal, "staged-connected"); await quit(terminal, "staged");
-  const local = await open("package-local", { argv: [process.execPath, npm, "start"], cwd: path.join(stage, "packages/tui"), env: stagedEnv });
-  local.expectedConsoleModes = baselineModes.after;
-  await capture(local, "package-local-connected"); await quit(local, "package-local");
-  record("package-local npm start enters native workbench", true);
 
   const tokenCancelled = await open("token-cancel", { env: { LUUNA_API_TOKEN: "" }, expected: /Service token \(hidden\)/ });
   await tokenCancelled.send("private-disposable-input");
@@ -48,19 +43,8 @@ export async function auditLaunchRoutes({ fixture, clientRoot, out, open, quit, 
   const tokenEntered = await open("token-enter", { env: { LUUNA_API_TOKEN: "" }, expected: /Service token \(hidden\)/ });
   await tokenEntered.send(fixture.token + "\r"); await screenContains(tokenEntered, /\bconnected\b/);
   await capture(tokenEntered, "hidden-token-connected"); await quit(tokenEntered, "token-enter");
-  record("hidden token entry connects through owned bridge", true);
+  record("hidden token entry connects through the in-process service", true);
 
-  const absent = `${staged.binary}.disabled`;
-  renameSync(staged.binary, absent);
-  try {
-    const missing = await open("missing-binary", { argv: [process.execPath, entry], expected: /installed Rust terminal application is missing/i });
-    await capture(missing, "missing-binary-message"); await quit(missing, "missing-binary", null, 1);
-    record("missing packaged binary fails clearly without JavaScript fallback", true);
-  } finally { renameSync(absent, staged.binary); }
-  const failingBridge = path.join(out, "failing-bridge.mjs"); writeFileSync(failingBridge, "process.exit(1);\n");
-  const broken = await open("bridge-failure", { argv: [binary, "--bridge", failingBridge, "--node", process.execPath], expected: /bridge.*(fail|exit|start|closed)|Bridge unavailable/i });
-  await capture(broken, "bridge-failure"); await quit(broken, "bridge-failure");
-  record("owned bridge failure is visible and remains cleanly quittable", true);
 
   const following = await open("event-follow");
   await following.send("\x1b[19~"); await screenContains(following, /Runs \/ recorded workflows/);
@@ -80,22 +64,22 @@ export async function auditLaunchRoutes({ fixture, clientRoot, out, open, quit, 
   const authoritative = (await fixture.api("GET", `/runs/${fixture.run.id}/events?after=0`)).body;
   record("native event follow resumes replay after runtime reconnect", ids.length >= 4 && ids.length === new Set(ids).size && authoritative.every((event) => ids.includes(event.event_id)), JSON.stringify({ displayed_event_ids: ids, expected_event_ids: authoritative.map((event) => event.event_id) }));
   await quit(following, "busy-follow", "\x03");
-  record("busy Ctrl-C restores console and reaps owned bridge", true);
+  record("busy Ctrl-C restores the console", true);
 
   await auditShutdownAndPowerShell({ fixture, clientRoot, out, open, quit, screenContains, capture, record });
 }
 
 export async function auditShutdownAndPowerShell({ fixture, clientRoot, out, open, quit, screenContains, capture, record }) {
-  const signalEntry = path.join(out, "launcher-signal.mjs");
-  const signalTrigger = path.join(out, "launcher-signal-trigger");
-  writeFileSync(signalEntry, `import {existsSync} from 'node:fs';const timer=setInterval(()=>{if(existsSync(${JSON.stringify(signalTrigger)})){clearInterval(timer);process.emit('SIGTERM');}},50);try{await import(${JSON.stringify(pathToFileURL(fixture.entry).href)});}finally{clearInterval(timer);}`);
-  const signalled = await open("launcher-signal", { argv: [process.execPath, signalEntry] });
-  await capture(signalled, "launcher-before-signal"); writeFileSync(signalTrigger, ""); await quit(signalled, "launcher-signal", null);
-  record("launcher signal restores console and reaps owned bridge", true, "SIGTERM event delivered to the real Node launcher handler; Windows process.kill(SIGTERM) is a forced termination and is not used.");
+  // An orderly shutdown request (the marker file the workbench polls; Windows has no
+  // graceful SIGTERM) must restore the console like a keyed quit.
+  const marker = path.join(out, "shutdown-request");
+  const signalled = await open("shutdown-request", { env: { LUUNA_TUI_SHUTDOWN_FILE: marker } });
+  await capture(signalled, "before-shutdown-request"); writeFileSync(marker, ""); await quit(signalled, "shutdown-request", null);
+  record("shutdown request restores the console", true, "LUUNA_TUI_SHUTDOWN_FILE marker observed by the running workbench.");
 
   if (process.platform !== "win32") return;
   const stage = path.join(out, "shutdown-staged");
-  const staged = stageTerminal({ root: clientRoot, out: stage, binary: nativePaths({ root: clientRoot }).binary });
+  const staged = stageTerminal({ root: clientRoot, out: stage, binary: clientBinary(clientRoot) });
   // Preserve an existing fixed-port service. A controlled helper may supply
   // only the disposable connection to exercise unchanged launcher routing; the
   // production bootstrap gap remains explicit in the report.

@@ -11,6 +11,8 @@ pub enum Mode {
     Catalog,
     Form,
     Result,
+    /// The full-screen setup guide (`lu prime`), see crate::guide.
+    Guide,
 }
 
 #[derive(Clone, Debug)]
@@ -148,6 +150,7 @@ pub struct AppState {
     pub quit: bool,
     pub bridge_failed: bool,
     pub approval_visible: bool,
+    pub guide: Option<crate::guide::GuideState>,
     next_id: u64,
 }
 
@@ -177,6 +180,7 @@ impl Default for AppState {
             quit: false,
             bridge_failed: false,
             approval_visible: false,
+            guide: None,
             next_id: 0,
         }
     }
@@ -185,7 +189,19 @@ impl Default for AppState {
 impl AppState {
     /// Frame-clock hook: true while an eased scroll still needs frames at cadence.
     pub fn animating(&self) -> bool {
-        self.scroll.animating()
+        self.scroll.animating() || self.guide.as_ref().is_some_and(|guide| guide.animating())
+    }
+    /// The editor a guide asked for, to run with the terminal suspended: (prompt id, path).
+    pub fn take_editor(&mut self) -> Option<(String, String)> {
+        self.guide.as_mut().and_then(|guide| guide.editor.clone())
+    }
+    /// Answers the guide's edit question after the main loop ran the editor.
+    pub fn editor_closed(&mut self, prompt_id: String, saved: bool) {
+        let id = self.id();
+        if let Some(guide) = self.guide.as_mut() {
+            let reply = guide.edited(id, prompt_id, saved);
+            self.queue.push_back(reply);
+        }
     }
     /// Frame-clock hook: advance animation state by the clamped time since the
     /// previous frame.
@@ -395,6 +411,14 @@ impl AppState {
         self.queue.clear();
     }
     pub fn apply(&mut self, event: BridgeEvent) {
+        if self
+            .guide
+            .as_ref()
+            .is_some_and(|guide| guide.request_id == event.id)
+        {
+            self.apply_guide(event);
+            return;
+        }
         let notification = event.clone();
         let original = self.pending.get(&event.id).cloned();
         let origin_name = original
@@ -494,9 +518,41 @@ impl AppState {
         }
         crate::views::received(self, &notification, origin_name.as_deref(), was_read);
     }
+    /// Frames of the running guide request: its presentation frames and how it ended.
+    fn apply_guide(&mut self, event: BridgeEvent) {
+        let Some(guide) = self.guide.as_mut() else {
+            return;
+        };
+        match event.event.as_str() {
+            "guide" => guide.apply(&event.fields),
+            "result" | "error" => {
+                if event.event == "result" {
+                    guide.ended(event.fields.get("value").unwrap_or(&Value::Null));
+                } else {
+                    let outcome = match event.text("outcome") {
+                        "unknown" | "completed" => {
+                            " A step may have completed: inspect the project before repeating it."
+                        }
+                        _ => "",
+                    };
+                    guide.failed(&format!("{}{outcome}", event.text("message")));
+                }
+                self.pending.remove(&event.id);
+                if self.active_request.as_deref() == Some(&event.id) {
+                    self.active_request = None;
+                }
+                self.status = "Setup ended · Enter opens the workbench".into();
+            }
+            _ => {}
+        }
+    }
     pub fn key(&mut self, key: KeyEvent) {
         if key.modifiers.contains(KeyModifiers::CONTROL) && key.code == KeyCode::Char('c') {
             self.quit = true;
+            return;
+        }
+        if self.mode == Mode::Guide {
+            crate::views::guide::key(self, key);
             return;
         }
         if crate::views::key(self, key) {
@@ -659,6 +715,12 @@ impl AppState {
         }
     }
     pub fn paste(&mut self, text: &str) {
+        if self.mode == Mode::Guide {
+            if let Some(guide) = self.guide.as_mut() {
+                guide.paste(text);
+            }
+            return;
+        }
         let clean = safe_text(text);
         let target = if let Some(prompt) = &mut self.prompt {
             Some(&mut prompt.value)

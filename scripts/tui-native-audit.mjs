@@ -9,7 +9,7 @@ import { setTimeout as sleep } from "node:timers/promises";
 import { AuditRuntime, waitUntil } from "./tui-audit-runtime.mjs";
 import { ConptyTerminal, terminalSnapshotHtml } from "./tui-terminal.mjs";
 import { TmuxTerminal } from "./tui-tmux.mjs";
-import { nativePaths } from "../packages/tui/src/native.mjs";
+import { clientBinary } from "./tui-client.mjs";
 import { auditWorkflows } from "./tui-audit-workflows.mjs";
 import { auditLaunchRoutes, auditShutdownAndPowerShell } from "./tui-audit-launch.mjs";
 import { auditRefusals } from "./tui-audit-refusals.mjs";
@@ -35,9 +35,9 @@ const required = [
   "long Unicode multiline input remains visible in the native form", "stale Beacon version cannot overwrite a concurrent prompt update",
   "40x12: visible header/footer and bounded cursor", "60x24: visible header/footer and bounded cursor", "80x24: visible header/footer and bounded cursor", "120x40: visible header/footer and bounded cursor",
   "runtime reconnect reloads the client", "normal client quit leaves the runtime alive", "no-color: native screen retains words without color", "dumb: native screen retains words without color",
-  "npm run tui enters native workbench", "staged native launch from unrelated cwd ignores development overrides", "package-local npm start enters native workbench",
-  "missing token prompts without echo", "missing token can be cancelled", "hidden token entry connects through owned bridge", "missing packaged binary fails clearly without JavaScript fallback",
-  "owned bridge failure is visible and remains cleanly quittable", "busy Ctrl-C restores console and reaps owned bridge", "launcher signal restores console and reaps owned bridge",
+  "npm run tui enters native workbench", "staged native launch from unrelated cwd ignores development overrides",
+  "missing token prompts without echo", "missing token can be cancelled", "hidden token entry connects through the in-process service",
+  "busy Ctrl-C restores the console", "shutdown request restores the console",
   "native event follow resumes replay after runtime reconnect", "PowerShell launcher routes to staged native workbench", "stale revision and hash refusals remain visible"
 ];
 const record = (name, ok, detail = "") => { checks.push({ name, status: ok ? "pass" : "fail", detail }); console.log(`${ok ? "PASS" : "FAIL"} ${name}${detail ? `: ${detail}` : ""}`); };
@@ -52,7 +52,7 @@ async function capture(terminal, label) {
 async function screenContains(terminal, pattern, timeout = 15000) {
   return waitUntil(async () => { const state = await terminal.capture(); return pattern.test(state.lines.join("\n")) && state; }, { timeout, message: `Native screen did not show ${pattern}` });
 }
-async function open(label, { columns = 120, rows = 35, env = {}, argv = [process.execPath, fixture.entry], cwd = out, expected = /\bconnected\b/ } = {}) {
+async function open(label, { columns = 120, rows = 35, env = {}, argv = [fixture.entry], cwd = out, expected = /\bconnected\b/ } = {}) {
   const terminal = new Terminal({ env: fixture.environment(env), ...(options.tmux ? { tmux: options.tmux } : {}) }); terminals.push(terminal);
   terminal.resultPath = path.join(out, `${label}-console.json`);
   await terminal.open({ argv, cwd, columns, rows, result: terminal.resultPath });
@@ -83,8 +83,7 @@ try {
   let screen = await capture(terminal, "default-connected");
   record("default public CLI enters real native alternate screen", screen.alternate && screen.lines.join("\n").includes("LUUNA"));
   const native = terminal.ownedProcesses.find((row) => row.name.toLowerCase() === (process.platform === "win32" ? "luuna-tui.exe" : "luuna-tui"));
-  const expected = nativePaths({ root: clientRoot });
-  record("public entry runs the resolved native executable and owns a Node bridge", native?.executable.toLowerCase() === expected.binary.toLowerCase() && terminal.ownedProcesses.some((row) => row.parent === native?.pid && /^(node|node.exe)$/.test(row.name.toLowerCase())));
+  record("public entry runs the resolved native executable without a Node process", native?.executable.toLowerCase() === clientBinary(clientRoot).toLowerCase() && !terminal.ownedProcesses.some((row) => /^(node|node.exe)$/.test(row.name.toLowerCase())));
   writeFileSync(path.join(out, "native-processes.json"), JSON.stringify(terminal.ownedProcesses, null, 2));
   record("VT model understands the native output", screen.unknown.length === 0, screen.unknown.join(", "));
   record("DOS blue background is present in native cells", screen.colors.some((row) => row.some((sgr) => /48;2;0;0;170/.test(sgr))));
@@ -115,8 +114,8 @@ finally {
   for (const terminal of terminals) { try { await terminal.close(); } catch (failure) { record("owned terminal cleanup", false, failure.message); } }
   await fixture.stop();
 }
-const paths = nativePaths({ root: clientRoot });
-const binary = existsSync(paths.binary) ? { path: paths.binary, sha256: createHash("sha256").update(readFileSync(paths.binary)).digest("hex") } : { path: paths.binary, missing: true };
+const clientPath = clientBinary(clientRoot);
+const binary = existsSync(clientPath) ? { path: clientPath, sha256: createHash("sha256").update(readFileSync(clientPath)).digest("hex") } : { path: clientPath, missing: true };
 const coverage = required.filter((name) => process.platform === "win32" || name !== "PowerShell launcher routes to staged native workbench").map((name) => checks.find((check) => check.name === name) || { name, status: "not-run" });
 const uiComplete = [...checks, ...coverage].every((check) => check.status === "pass") && !options.foundation && !options["shutdown-launch-only"];
 const validationGaps = fixture.validationGaps || [];

@@ -1,7 +1,11 @@
+//! `luuna-tui` (installed as `lu` and `luuna`): the Luuna terminal client. With a command it runs
+//! one cataloged action (crate::cli); without one on a terminal, or for `init`, it opens the
+//! interactive workbench, whose actions run in process (crate::bridge).
 use crossterm::event::{Event, KeyCode, KeyEventKind, KeyModifiers};
 use luuna_tui::{
     app::AppState,
-    bridge::{default_bridge, Bridge},
+    bridge::Bridge,
+    cli::{self, Next, Process},
     frame::{sync_from, FrameClock},
     input::{Input, INPUT_QUEUE},
     protocol::{safe_text, BridgeEvent, QUEUE_SIZE},
@@ -16,65 +20,65 @@ use ratatui::{
 };
 use std::{
     io::{self, IsTerminal},
-    path::PathBuf,
     time::{Duration, Instant},
 };
 
 /// Shutdown marker/signal check cadence; it never draws.
 const SHUTDOWN_POLL: Duration = Duration::from_millis(100);
 
-const HELP:&str="luuna-tui — Rust terminal workbench\n\nUsage: luuna-tui [--bridge <absolute bridge.mjs path>] [--node <node executable>]\n\nConnection: LUUNA_URL (HTTP loopback) and LUUNA_API_TOKEN (hidden prompt if absent).\nUse the existing Luuna CLI for named script commands and JSON output.\nF1 help · F2 catalog · F5 refresh · q/Ctrl+C quit · Esc stops local request.\n";
-
 #[tokio::main]
 async fn main() -> std::process::ExitCode {
-    match run().await {
-        Ok(code) => std::process::ExitCode::from(code),
-        Err(error) => {
-            eprintln!("Luuna terminal: {}", safe_text(&error.to_string()));
-            std::process::ExitCode::FAILURE
+    let argv: Vec<String> = std::env::args().skip(1).collect();
+    // `--guide init [--guide-flag key=value]...` opens the guide directly (the tests' entry).
+    let next = if argv.first().map(String::as_str) == Some("--guide") {
+        match guide_arguments(&argv) {
+            Ok(flags) => Next::Workbench { guide: Some(flags) },
+            Err(message) => {
+                eprintln!("Luuna terminal: {message}");
+                return std::process::ExitCode::from(2);
+            }
         }
+    } else {
+        let mut process = Process::real();
+        cli::main(argv, &mut process).await
+    };
+    match next {
+        Next::Exit(code) => std::process::ExitCode::from(code),
+        Next::Workbench { guide } => match workbench(guide).await {
+            Ok(code) => std::process::ExitCode::from(code),
+            Err(error) => {
+                eprintln!("Luuna terminal: {}", safe_text(&error.to_string()));
+                std::process::ExitCode::FAILURE
+            }
+        },
     }
 }
 
-async fn run() -> io::Result<u8> {
-    let mut args = std::env::args().skip(1);
-    let mut script = default_bridge();
-    let mut node = PathBuf::from("node");
+fn guide_arguments(argv: &[String]) -> Result<Vec<(String, String)>, String> {
+    let mut args = argv.iter().skip(1);
+    if args.next().map(String::as_str) != Some("init") {
+        return Err("The only guide is init.".into());
+    }
+    let mut flags = Vec::new();
     while let Some(arg) = args.next() {
-        match arg.as_str() {
-            "--help" | "-h" => {
-                print!("{HELP}");
-                return Ok(0);
+        if arg != "--guide-flag" {
+            return Err(format!("Unknown terminal option {arg}."));
+        }
+        let spec = args.next().ok_or("--guide-flag needs key=value")?;
+        match spec.split_once('=') {
+            Some((key @ ("path" | "project"), value)) if !value.is_empty() => {
+                flags.push((key.to_string(), value.to_string()))
             }
-            "--bridge" => {
-                script = PathBuf::from(
-                    args.next()
-                        .ok_or_else(|| io::Error::other("--bridge needs a path"))?,
-                );
-                if !script.is_absolute() {
-                    return Err(io::Error::other("--bridge must be an absolute path"));
-                }
-            }
-            "--node" => {
-                node = PathBuf::from(
-                    args.next()
-                        .ok_or_else(|| io::Error::other("--node needs an executable"))?,
-                )
-            }
-            _ => {
-                eprintln!("Unknown terminal option.\n{HELP}");
-                return Ok(2);
-            }
+            _ => return Err("--guide-flag takes path=<dir> or project=<id>".into()),
         }
     }
+    Ok(flags)
+}
+
+async fn workbench(guide: Option<Vec<(String, String)>>) -> io::Result<u8> {
     if !io::stdin().is_terminal() || !io::stdout().is_terminal() {
-        print!("{HELP}");
+        eprintln!("The Luuna workbench needs a terminal.");
         return Ok(2);
-    }
-    if !script.is_file() {
-        return Err(io::Error::other(
-            "Transport bridge missing; use the packaged launcher or --bridge.",
-        ));
     }
     install_panic_restore();
     let shutdown = Shutdown::install()?;
@@ -107,11 +111,18 @@ async fn run() -> io::Result<u8> {
         }
     }
     let url = std::env::var("LUUNA_URL").ok();
-    let mut bridge = Bridge::spawn(&node, &script, &token, url.as_deref())?;
+    let mut bridge = Bridge::start(&token, url.as_deref());
     token.clear();
     let mut app = AppState::default();
     app.set_scroll_motion(ScrollMotion::from_env());
     app.start();
+    if let Some(flags) = guide {
+        let flags = flags
+            .into_iter()
+            .map(|(k, v)| (k, serde_json::Value::String(v)))
+            .collect();
+        luuna_tui::views::guide::begin(&mut app, "init", flags);
+    }
     let mut transport_stopped = false;
     let mut bridge_open = true;
     clock.mark_dirty();
@@ -120,6 +131,20 @@ async fn run() -> io::Result<u8> {
     let result = loop {
         if shutdown.requested() {
             break Ok(0);
+        }
+        // The guide asked for an editor: hand it the terminal, then take the terminal back.
+        if let Some((prompt_id, path)) = app.take_editor() {
+            input.pause();
+            let saved = luuna_tui::terminal::suspend().is_ok()
+                && tokio::task::block_in_place(|| run_editor(&path));
+            if let Err(error) = luuna_tui::terminal::resume(&mut terminal) {
+                break Err(error);
+            }
+            if let Err(error) = input.resume() {
+                break Err(error);
+            }
+            app.editor_closed(prompt_id, saved);
+            clock.mark_dirty();
         }
         while let Some(request) = app.queue.pop_front() {
             clock.mark_dirty();
@@ -206,6 +231,29 @@ async fn run() -> io::Result<u8> {
     drop(terminal);
     drop(guard);
     result
+}
+
+/// Runs $VISUAL, $EDITOR or the platform default on the guide's draft file and waits for it.
+fn run_editor(path: &str) -> bool {
+    let file = std::path::Path::new(path);
+    if !file.is_file() || path.contains('"') {
+        return false;
+    }
+    let chosen = ["VISUAL", "EDITOR"]
+        .iter()
+        .filter_map(|name| std::env::var(name).ok())
+        .find(|value| !value.trim().is_empty());
+    let status = match chosen {
+        Some(editor) if cfg!(windows) => std::process::Command::new("cmd")
+            .args(["/C", &format!("{editor} \"{path}\"")])
+            .status(),
+        Some(editor) => std::process::Command::new("sh")
+            .args(["-c", &format!("{editor} \"$1\""), "editor", path])
+            .status(),
+        None if cfg!(windows) => std::process::Command::new("notepad.exe").arg(file).status(),
+        None => std::process::Command::new("vi").arg(file).status(),
+    };
+    status.is_ok_and(|status| status.success())
 }
 
 fn handle_input(app: &mut AppState, clock: &mut FrameClock, event: Event) {

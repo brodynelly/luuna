@@ -1,0 +1,36 @@
+ ◐ LUUNA  INIT · guided project setup  connected
+╔ Setup ═════════════════╗╔ 7 of 8 · Agents ═══════════════════════════════════════════════════════════════════════════╗
+║                        ║║ ◐ L U U N A  ·  I N I T                                                                    ║
+║ ✔  Runtime             ║║ set up a project with the Luuna suite, one runtime action at a time                        ║
+║ ✔  Project             ║║                                                                                            ║
+║ –  Discovery           ║║ Coding agents that open a repository directly read CLAUDE.md or AGENTS.md at session       ║
+║ ✔  Manifest            ║║ start. Onboarding adds a section per component; priming prints what they work from.        ║
+║ ✔  Baseline            ║║                                                                                            ║
+║ ✔  Suite               ║║ ── 7 of 8 · Agents ──                                                                      ║
+║ ●  Agents              ║║    demo  C:\work\demo                                                                      ║
+║ ○  Ticket              ║║      ○ Missions  tickets and plans .luuna/missions not created                             ║
+║                        ║║  ✔ Atlas store created                                                                     ║
+║ ████████████░░░░ 6/8   ║║    ╭─ Sections for CLAUDE.md ────────────────────────────────────────────────────────────  ║
+║                        ║║    │ <!-- luuna-missions:start -->                                                         ║
+║                        ║║    │ ## Missions                                                                           ║
+║                        ║║    │ At the start of every session, run luuna-missions prime.                              ║
+║                        ║║    │ <!-- luuna-missions:end -->                                                           ║
+║                        ║║    ╰────────────────────────────────────────────────────────────────────────────────────── ║
+║                        ║║                                                                                            ║
+║        ████████        ║║                                                                                            ║
+║     ░░████████████     ║║                                                                                            ║
+║    ░░░█████████████    ║║                                                                                            ║
+║   ░░░░██████████████   ║║                                                                                            ║
+║   ░░░░██████████████   ║║                                                                                            ║
+║   ░░░░██████████████   ║║                                                                                            ║
+║    ░░░█████████████    ║║                                                                                            ║
+║     ░░████████████     ║║                                                                                            ║
+║        ████████        ║║                                                                                            ║
+║                        ║║────────────────────────────────────────────────────────────────────────────────────────────║
+║                        ║║ ? Set up the agents in demo                                                                ║
+║                        ║║ ❯ [x] Create the repo-local stores   .luuna/missions, .luuna/atlas                         ║
+║                        ║║   [x] Add session-start instructions to CLAUDE.md   creates the file                       ║
+║                        ║║   [ ] Install Claude Code hooks   .claude/settings.json                                    ║
+║                        ║║   [x] Show what each agent is primed with   read-only                                      ║
+╚════════════════════════╝╚════════════════════════════════════════════════════════════════════════════════════════════╝
+ ↑↓ move · Space toggle · a all · Enter continue · Esc leave

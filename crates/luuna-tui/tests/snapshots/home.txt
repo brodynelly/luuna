@@ -1,15 +1,15 @@
- Home  Projects  Missions  Atlas  Beacon  Runs  Commands  Help
+ Home  Setup  Projects  Missions  Atlas  Beacon  Runs  Commands  Help
  LUUNA  / WORKBENCH connected
 ╔ LUUNA ══════════════════════╗╔ > Home / workspace health ════════════════════════════════════════════════════════════╗
 ║ 1 Home *                    ║║> Demo workspace [1/1]                                                                 ║
-║ 2 Projects                  ║║Up/Down project / Enter opens / PgUp/PgDn details                                      ║
-║ 3 Missions                  ║║YOUR DEVELOPMENT WORKSPACE                                                             ║
-║ 4 Atlas                     ║║Repository health and work waiting for your attention.                                 ║
-║ 5 Beacon                    ║║                                                                                       ║
-║ 6 Runs                      ║║> Demo workspace                                                                       ║
-║ 7 Commands                  ║║Project: demo                                                                          ║
-║ 8 Help                      ║║Manifest revision: 2                                                                   ║
-║                             ║║Manifest hash:                                                                         ║
+║ 2 Set up a project          ║║Up/Down project / Enter opens / PgUp/PgDn details                                      ║
+║ 3 Projects                  ║║YOUR DEVELOPMENT WORKSPACE                                                             ║
+║ 4 Missions                  ║║Repository health and work waiting for your attention.                                 ║
+║ 5 Atlas                     ║║                                                                                       ║
+║ 6 Beacon                    ║║> Demo workspace                                                                       ║
+║ 7 Runs                      ║║Project: demo                                                                          ║
+║ 8 Commands                  ║║Manifest revision: 2                                                                   ║
+║ 9 Help                      ║║Manifest hash:                                                                         ║
 ║                             ║║Work: 1 tickets / 1 active workflows                                                   ║
 ║                             ║║Repository: api                                                                        ║
 ║                             ║║Checkout: /fixture/api                                                                 ║
@@ -29,7 +29,7 @@
 ║UNSENT PLAN CONTEXT          ║║                                                                                       ║
 ║0 memory selection(s)        ║║                                                                                       ║
 ║No prompt selected           ║║                                                                                       ║
-║F10 menu / Tab focus         ║║Enter project  F3 Projects  F5 refresh                                                 ║
+║F10 menu / Tab focus         ║║Enter project  s set up a project  F3 Projects  F5 refresh                             ║
 ╚═════════════════════════════╝╚═══════════════════════════════════════════════════════════════════════════════════════╝
 Connecting to the local runtime…
-Enter project  F3 Projects  F5 refresh
+Enter project  s set up a project  F3 Projects  F5 refresh

@@ -4,6 +4,7 @@ import { createHash, randomBytes } from "node:crypto";
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { createServer } from "node:net";
 import path from "node:path";
+import { clientBinary } from "./tui-client.mjs";
 import { setTimeout as sleep } from "node:timers/promises";
 
 export const waitUntil = async (read, { timeout = 15000, delay = 100, message = "Condition timed out" } = {}) => {
@@ -23,7 +24,8 @@ export class AuditRuntime {
     this.token = randomBytes(32).toString("hex"); this.child = null; this.exited = null;
     this.python = process.platform === "win32" ? "python" : "python3";
     this.projectId = "native-audit";
-    this.entry = path.join(clientRoot, "packages/tui/bin/luuna-tui.mjs");
+    // The Rust terminal client (crates/luuna-tui): one executable for commands and the workbench.
+    this.entry = clientBinary(clientRoot);
     mkdirSync(out, { recursive: true });
   }
   async start() {
@@ -43,7 +45,7 @@ export class AuditRuntime {
   }
   command(args, { requireSuccess = true } = {}) {
     return new Promise((resolve, reject) => {
-      execFile(process.execPath, [this.entry, ...args, "--json"], { cwd: this.out, env: this.environment(), timeout: 60000, windowsHide: true, encoding: "utf8", maxBuffer: 16 * 1024 * 1024 }, (error, stdout, stderr) => {
+      execFile(this.entry, [...args, "--json"], { cwd: this.out, env: this.environment(), timeout: 60000, windowsHide: true, encoding: "utf8", maxBuffer: 16 * 1024 * 1024 }, (error, stdout, stderr) => {
         const code = error ? typeof error.code === "number" ? error.code : 1 : 0;
         let value; try { value = JSON.parse(stdout.trim().split("\n").at(-1)); } catch { value = null; }
         const result = { code, value, stdout, stderr: stderr.replaceAll(this.token, "[redacted]") };

@@ -1,12 +1,11 @@
-# Opens the Rust terminal workbench through packages/tui against the local development
-# runtime. The fixed startup helper starts or reuses the runtime and hands the
-# connection back through memory only (ADR 0011); the token reaches the client
-# as an environment variable of this process and is never written or echoed.
-# Works from a development checkout (host Node, root node_modules) and from the
-# packaged layout (scripts/package-windows.ps1), which stages packages/tui, its
-# @luuna/api-client dependency and the capability catalog beside this script.
-# Node.js 24.19 or newer on PATH is a host prerequisite; it runs the
-# TypeScript client through its built-in type stripping.
+# `lu` / `luuna`: runs the Rust terminal client (crates/luuna-tui) against the local
+# development runtime. The fixed startup helper starts or reuses the runtime and hands
+# the connection back through memory only (ADR 0011); the token reaches the client as
+# an environment variable of this process and is never written or echoed. Works from a
+# development checkout (target\debug\luuna-tui.exe from `cargo build --locked -p
+# luuna-tui`; CARGO_TARGET_DIR is honoured) and from the packaged layout
+# (scripts/package-windows.ps1), which places luuna-tui.exe beside the scripts folder.
+# The client embeds its command table and the capability catalog; it needs no Node.
 # `luuna atlas|beacon|missions` dispatches to the independently installed
 # component CLIs without starting the runtime.
 # -DataDirectory is accepted only by name: every positional word belongs to the
@@ -38,16 +37,23 @@ if ($Arguments.Count -gt 0 -and $suiteComponents.ContainsKey($Arguments[0])) {
     & $bun $entry @componentArguments
     exit $LASTEXITCODE
 }
-$client = Join-Path $root 'packages\tui\bin\luuna-tui.mjs'
-if (!(Test-Path -LiteralPath $client)) { throw 'The terminal client is not present beside this script.' }
-$node = (Get-Command node.exe -ErrorAction Stop).Source
+$development = Test-Path -LiteralPath (Join-Path $root 'Cargo.toml')
+if ($development) {
+    $target = if ($env:CARGO_TARGET_DIR) { $env:CARGO_TARGET_DIR } else { Join-Path $root 'target' }
+    if (![System.IO.Path]::IsPathRooted($target)) { $target = Join-Path $root $target }
+    $client = Join-Path $target 'debug\luuna-tui.exe'
+    if (!(Test-Path -LiteralPath $client)) { throw 'The terminal client is not built. Run `cargo build --locked -p luuna-tui` at the Luuna checkout root.' }
+} else {
+    $client = Join-Path $root 'luuna-tui.exe'
+    if (!(Test-Path -LiteralPath $client)) { throw 'The installed terminal client (luuna-tui.exe) is missing. Reinstall the complete Luuna distribution.' }
+}
 # The client's help names the command the developer types.
 $env:LUUNA_CLI_NAME = 'lu'
 # Help (`help`, `-h`, `<command> --help`) and catalog are local, credential-free
 # operations and must not start a service. A `--help` after `--` is an argument.
 $beforeSeparator = @($Arguments | ForEach-Object -Begin { $ended = $false } -Process { if ($_ -eq '--') { $ended = $true }; if (!$ended) { $_ } })
 if ($Arguments.Count -gt 0 -and ($Arguments[0] -in @('help', '--help', '-h', 'catalog') -or $beforeSeparator -contains '--help' -or $beforeSeparator -contains '-h')) {
-    & $node $client @Arguments
+    & $client @Arguments
     exit $LASTEXITCODE
 }
 $connection = if ($DataDirectory) { & (Join-Path $PSScriptRoot 'ensure-windows-runtime.ps1') -DataDirectory $DataDirectory } else { & (Join-Path $PSScriptRoot 'ensure-windows-runtime.ps1') }
@@ -56,7 +62,7 @@ foreach ($name in @('LUUNA_URL', 'LUUNA_API_TOKEN')) { $saved[$name] = [Environm
 try {
     $env:LUUNA_URL = $connection.url
     $env:LUUNA_API_TOKEN = $connection.token
-    & $node $client @Arguments
+    & $client @Arguments
     exit $LASTEXITCODE
 } finally {
     foreach ($name in $saved.Keys) { [Environment]::SetEnvironmentVariable($name, $saved[$name], 'Process') }

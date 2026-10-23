@@ -56,17 +56,29 @@ Client parity (R02, A33) follows one capability catalog ([ADR 0020](decisions/00
 
 The workspace should add crates when they contain a real contract or implementation: domain, storage, runtime/API, engine/Pi, Git, executor, validation, and external adapters. Shared frontend packages are created when an actual shared consumer needs them. Empty placeholders do not establish implementation progress.
 
-The terminal renderer is now the native Rust application in `crates/luuna-tui`
-([ADR 0029](decisions/0029-rust-terminal-workbench.md)). `packages/tui` retains
-script commands and supplies the versioned local JSONL bridge to the shared
-client. Public no-command terminal launches select Rust deterministically;
-Windows packages carry `luuna-tui.exe` and its Node bridge together. Historical
-JavaScript interactive audit results above do not establish native renderer
-coverage; native UI and staged-launch evidence must be recorded separately.
+The terminal client is one Rust executable, `crates/luuna-tui` (`luuna-tui`, run as `lu` and
+`luuna`; [ADR 0029](decisions/0029-rust-terminal-workbench.md) for the workbench,
+[ADR 0037](decisions/0037-single-rust-terminal-client.md) for the rewrite). It carries the
+scriptable command line and the interactive workbench; the workbench's actions run through an
+in-process service that speaks the versioned protocol the Node bridge spoke, and no Node process is
+involved. The command table is data (`crates/luuna-tui/commands.json`) that
+`scripts/check-contracts.mjs` traces against the catalog. The desktop keeps
+`@luuna/api-client`; the terminal client carries a Rust port of its client, failure explanations,
+request builders and projections, so parity is held by `check-contracts`, the Rust tests that
+assert request bodies, and the differential evidence ADR 0037 records rather than by one shared
+module. Windows packages carry `luuna-tui.exe` alone for the terminal. Historical JavaScript
+interactive audit results above do not establish native renderer coverage; native UI and
+staged-launch evidence must be recorded separately.
 The native renderer draws on an event-driven frame clock (dirty flag, 60 Hz
 default cap, no idle redraws) with DEC 2026 synchronized updates and eased whole-row scrolling, each with an
 environment opt-out (`LUUNA_TUI_SYNC`, `LUUNA_TUI_ANIMATION`;
 [ADR 0031](decisions/0031-client-frame-pacing.md)).
+
+`lu init` opens the workbench in a full-screen setup guide (ADR 0029, 2026-10-22 amendment;
+renamed from `prime` by ADR 0037): the guide's flow (`crates/luuna-tui/src/prime.rs`) runs
+cataloged commands and streams `guide` frames to the guide screen; it is not a catalog action,
+and its agent-onboarding step runs the component CLIs only in the developer's checkout, only as
+chosen, without the runtime's credentials.
 
 ## Runtime ownership
 

@@ -15,14 +15,14 @@ development distribution with unverified portable component evidence.**
 
 ## What the installer carries
 
-The terminal payload includes `luuna-tui.exe` built with `cargo build --locked
--p luuna-tui` in the selected profile. Node remains required for the local JSONL
-bridge and script commands. The installed launcher always selects this staged
-binary; it never selects a checkout's debug executable or falls back to the old
-JavaScript interactive renderer. The package report includes its SHA-256.
+The terminal payload is `luuna-tui.exe` alone, built with `cargo build --locked
+-p luuna-tui` in the selected profile: the command line, the workbench and its
+in-process command service are one executable that embeds its command table and the
+capability catalog (ADR 0037), so the terminal needs no Node. The installed launcher
+always selects this staged binary; it never selects a checkout's debug executable.
+The package report includes its SHA-256.
 
-To stage only this payload for testing, first build the native terminal and run
-`npm run build --workspace @luuna/api-client`, then use
+To stage only this payload for testing, first build the native terminal, then use
 `node scripts/stage-terminal.mjs --out <new-stage-directory> --binary <absolute-luuna-tui.exe>`.
 This creates the same terminal payload used by the packager without installing
 an application. A staged `--help` check only proves command startup: actual
@@ -41,7 +41,6 @@ The bundle's `luuna/` folder beside `luuna-desktop.exe` contains:
 | `components\dist-manifest.json` | `scripts/stage-components.mjs` | per-component commit and tree digest, Bun hash |
 | `components\missions`, `components\atlas`, `components\beacon` | frozen, script-free Bun install in the pinned checkouts, copied without `.git` | the component CLIs with their dependencies |
 | `bun\bun.exe` | `npm install bun@1.4.3` into `.tools\bun` (as `scripts/setup-cloud.sh`) | the pinned Bun 1.4.3 |
-| `packages\tui`, `node_modules\@luuna\api-client`, `schemas\capability-catalog.json` | repository | the terminal client and its only dependency, laid out as in the checkout |
 | `Luuna Terminal.cmd`, `luuna.cmd`, `scripts\start-terminal.ps1` | repository / generated | opens `luuna-tui` against the local runtime with the connection obtained in memory from the fixed helper |
 
 Host prerequisites on the target (reported by `luuna-runtime doctor`):
@@ -140,4 +139,4 @@ checkout-based verification already recorded; both remain required.
 - Signing, a host update policy and service supervision are unchanged
   (ADR 0018).
 
-The API client is compiled before staging (`npm run build --workspace @luuna/api-client`, `packages/api-client/tsconfig.build.json`): Node refuses to strip types from files under `node_modules`, so the staged `@luuna/api-client` package exports `dist/index.js`, and the packager starts the staged terminal client once (`luuna-tui.mjs --help`) before building the installer.
+The packager starts the staged terminal client once (`luuna-tui.exe --help`) before building the installer.

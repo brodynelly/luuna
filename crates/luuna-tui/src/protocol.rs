@@ -105,6 +105,7 @@ impl BridgeEvent {
             "event",
             "connection",
             "error",
+            "guide",
         ]
         .contains(&event.event.as_str())
         {

@@ -55,7 +55,7 @@ export const DOCUMENTS: readonly { path: string; title: string }[] = [
   { path: "docs/decisions/0022-testing-setup-prerequisite.md", title: "ADR 0022: the testing-setup prerequisite workflow" },
   { path: "docs/decisions/0023-delegated-roles-and-dependency-overrides.md", title: "ADR 0023: roles, assignment traces and dependency overrides" },
   { path: "docs/decisions/0027-v1-advertised-scope.md", title: "ADR 0027: the advertised v1 scope, including these surfaces" },
-  { path: "packages/tui/README.md", title: "The terminal client: the same actions and projections" },
+  { path: "crates/luuna-tui/README.md", title: "The terminal client: the same actions and projections" },
 ];
 
 /** The keyboard shortcuts: one per view (derived from the view list, Settings is Ctrl+,) and the global ones. */

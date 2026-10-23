@@ -71,6 +71,22 @@ impl Input {
         })
     }
 
+    /// Stops reading the terminal (and joins the thread) so a child process can own it.
+    pub fn pause(&mut self) {
+        self.stop.store(true, Ordering::Release);
+        self.receiver.close();
+        if let Some(thread) = self.thread.take() {
+            let _ = thread.join();
+        }
+    }
+
+    /// Reads the terminal again after `pause`, on a fresh thread and queue.
+    pub fn resume(&mut self) -> io::Result<()> {
+        let fresh = Self::spawn()?;
+        drop(std::mem::replace(self, fresh));
+        Ok(())
+    }
+
     pub async fn recv(&mut self) -> Option<io::Result<Event>> {
         self.receiver.recv().await
     }

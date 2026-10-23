@@ -62,17 +62,19 @@ Linux cloud checks cannot establish Mac or Windows installation support. A front
 
 ## Terminal workbench
 
-Build the Rust terminal with `npm run build:tui` (Rust 1.90.0, locked dependencies),
+Build the terminal client with `npm run build:tui` (Rust 1.90.0, locked dependencies),
 then run `npm run tui` with a local runtime and private `LUUNA_API_TOKEN`. A missing
-token is entered without echo. `npm run tui -- help` and named commands such as
-`npm run tui -- projects --json` remain available without the Rust build.
+token is entered without echo. `npm run tui -- help`, `npm run tui -- init` (guided
+project setup) and named commands such as `npm run tui -- projects --json` run the
+same executable.
 
 The interactive application uses the DOS palette and component layout from
-`luuna-ai`; Node runs the shared local command bridge. The checkout launcher
+`luuna-ai`; its actions run in process, without Node. The checkout launcher
 resolves `target/debug/luuna-tui.exe` on Windows, or `luuna-tui` on Unix, and honors
 an explicit `CARGO_TARGET_DIR`. Installed Windows distributions carry their own
-native executable. See [the terminal package](packages/tui/README.md) and
-[ADR 0029](docs/decisions/0029-rust-terminal-workbench.md).
+native executable. See [the terminal client](crates/luuna-tui/README.md),
+[ADR 0029](docs/decisions/0029-rust-terminal-workbench.md) and
+[ADR 0037](docs/decisions/0037-single-rust-terminal-client.md).
 The [native terminal verification guide](docs/TERMINAL-VERIFICATION.md) describes
 the pinned build, real terminal audit and the limits of fixture evidence.
 

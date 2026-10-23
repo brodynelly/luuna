@@ -165,6 +165,30 @@ impl Drop for TerminalGuard {
     }
 }
 
+/// Hands the terminal to a child process (an editor): the normal screen, a visible cursor, cooked mode.
+pub fn suspend() -> io::Result<()> {
+    close_sync(&mut io::stdout());
+    execute!(
+        io::stdout(),
+        DisableBracketedPaste,
+        Show,
+        LeaveAlternateScreen
+    )?;
+    disable_raw_mode()
+}
+
+/// Takes the terminal back after `suspend` and forces a full redraw.
+pub fn resume(screen: &mut Screen) -> io::Result<()> {
+    enable_raw_mode()?;
+    execute!(
+        io::stdout(),
+        EnterAlternateScreen,
+        EnableBracketedPaste,
+        Hide
+    )?;
+    screen.clear()
+}
+
 /// Restore before panic diagnostics; the guard also restores normally and during unwind.
 pub fn install_panic_restore() {
     let previous = std::panic::take_hook();

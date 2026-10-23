@@ -2,8 +2,8 @@
 # carries the Tauri desktop, the release runtime, the Windows helper scripts,
 # the pinned Pi tree (ADR 0018), the pinned Missions/Atlas/Beacon trees with
 # their distribution manifest and the pinned Bun 1.4.3 executable (ADR 0024),
-# and the terminal client (packages/tui with @luuna/api-client and the
-# capability catalog). Node.js, Git and Python stay host prerequisites that
+# and the Rust terminal client (luuna-tui.exe, one self-contained executable).
+# Node.js (for the pinned Pi engine), Git and Python stay host prerequisites that
 # `luuna-runtime doctor` reports. The installer is unsigned unless a
 # certificate thumbprint is supplied; an unsigned installer is a development
 # distribution, never release evidence. See docs/PACKAGING.md for the layout
@@ -120,28 +120,17 @@ if (!$SkipComponents) {
     if ($LASTEXITCODE -ne 0) { throw 'The staged component layout did not verify against its distribution manifest.' }
 }
 
-Step 'Rust terminal, JSONL bridge, @luuna/api-client and capability catalog'
-# Mirrors the checkout layout so the client resolves its dependency and the
-# catalog exactly as in development: packages/tui/src/catalog.mjs reads
-# ../../../schemas/capability-catalog.json and `@luuna/api-client` resolves
-# through node_modules. The API client is compiled to JavaScript first
-# (`npm run build --workspace @luuna/api-client`, tsconfig.build.json): Node
-# refuses to strip types from files under node_modules, so the staged package
-# exports dist/index.js rather than the TypeScript source.
-& npm.cmd run build --workspace @luuna/api-client
-if ($LASTEXITCODE -ne 0) { throw 'Compiling @luuna/api-client failed.' }
-if (-not (Test-Path (Join-Path $root 'packages\api-client\dist\index.js'))) { throw 'The compiled API client is missing packages\api-client\dist\index.js.' }
+Step 'Rust terminal client'
+# One executable: the command table and the capability catalog are embedded, and the
+# workbench runs its actions in process, so nothing else is staged for the terminal.
 & node.exe (Join-Path $root 'scripts\stage-terminal.mjs') --root $root --out $stage --binary $terminal
 if ($LASTEXITCODE -ne 0) { throw 'Staging the Rust terminal payload failed.' }
-# The staged terminal client must start on the host Node without the checkout.
-Push-Location $stage
-try {
-    & node.exe 'packages\tui\bin\luuna-tui.mjs' --help | Out-Null
-    if ($LASTEXITCODE -ne 0) { throw 'The staged terminal client did not start (node packages\tui\bin\luuna-tui.mjs --help failed).' }
-} finally { Pop-Location }
+# The staged terminal client must start without the checkout.
+& (Join-Path $stage 'luuna-tui.exe') --help | Out-Null
+if ($LASTEXITCODE -ne 0) { throw 'The staged terminal client did not start (luuna-tui.exe --help failed).' }
 $terminalLauncher = @(
     '@echo off',
-    'rem Opens the Luuna terminal client against the local runtime. Node.js 24.19 or newer must be on PATH.',
+    'rem Opens the Luuna terminal client against the local runtime.',
     'powershell -NoProfile -ExecutionPolicy Bypass -File "%~dp0scripts\start-terminal.ps1" %*'
 ) -join "`r`n"
 Set-Content -LiteralPath (Join-Path $stage 'Luuna Terminal.cmd') -Value $terminalLauncher -Encoding ascii
@@ -177,7 +166,7 @@ try {
 Step 'Verifying the packaged layout'
 $built = Join-Path $tauriDirectory ('target\' + $profile)
 $copied = Join-Path $built 'luuna'
-foreach ($required in @('luuna-runtime.exe', 'luuna-tui.exe', 'scripts\ensure-windows-runtime.ps1', 'scripts\windows-common.ps1', 'scripts\start-terminal.ps1', 'Configure Luuna.cmd', 'Luuna Terminal.cmd', 'luuna.cmd', 'packages\tui\bin\luuna-tui.mjs', 'packages\tui\src\bridge.mjs', 'packages\tui\src\catalog.mjs', 'node_modules\@luuna\api-client\dist\index.js', 'schemas\capability-catalog.json')) {
+foreach ($required in @('luuna-runtime.exe', 'luuna-tui.exe', 'scripts\ensure-windows-runtime.ps1', 'scripts\windows-common.ps1', 'scripts\start-terminal.ps1', 'Configure Luuna.cmd', 'Luuna Terminal.cmd', 'luuna.cmd')) {
     if (!(Test-Path -LiteralPath (Join-Path $copied $required))) { throw ('Packaged resource missing after build: ' + $required) }
 }
 if (!$SkipPi -and !(Test-Path -LiteralPath (Join-Path $copied 'pi\node_modules\@earendil-works\pi-coding-agent\dist\cli.js'))) { throw 'Packaged Pi tree missing after build.' }
@@ -208,7 +197,7 @@ $report = [ordered]@{
     host = [ordered]@{ os = [Environment]::OSVersion.VersionString; architecture = $env:PROCESSOR_ARCHITECTURE; rust = $rustVersion; node = $nodeVersion; pi = $piVersion; bun = $bunVersion }
     signed = $signed
     webview_install_mode = 'downloadBootstrapper'
-    prerequisites_on_target = @('WebView2 Runtime (bootstrapped by the installer when absent)', 'Node.js 24.19 or newer on PATH for the pinned Pi engine and the terminal client', 'Git 2.43 or newer on PATH', 'Python 3 for Python check recipes', 'a provider key saved with Configure Luuna.cmd')
+    prerequisites_on_target = @('WebView2 Runtime (bootstrapped by the installer when absent)', 'Node.js 24.19 or newer on PATH for the pinned Pi engine', 'Git 2.43 or newer on PATH', 'Python 3 for Python check recipes', 'a provider key saved with Configure Luuna.cmd')
     components = $stagedComponents
     terminal_client = 'Luuna Terminal.cmd (native Rust workbench; Node JSONL bridge and script commands)'
     terminal_executable = [ordered]@{ path = (Join-Path $copied 'luuna-tui.exe'); sha256 = (Sha256 (Join-Path $copied 'luuna-tui.exe')) }

@@ -115,7 +115,7 @@ checks += 1;
 console.log(`Capability catalog: ${capabilities.length} actions validated against ${served.size} runtime routes and the typed client.${uncataloged.length ? ` Runtime mutations without client parity yet (${uncataloged.length}): ${uncataloged.join(', ')}.` : ''}`);
 // ---- Required actions (R02, R14, A33; docs/06-memory.md, docs/09-experience.md, ADR 0017/0018/0026):
 // each product action the specification requires maps to at least one catalog entry whose desktop
-// control (a data-capability marker in apps/desktop/src) and TUI command (packages/tui/src/commands.mjs)
+// control (a data-capability marker in apps/desktop/src) and TUI command (crates/luuna-tui/commands.json)
 // both exist, and every entry says what requires it. A catalog that merely lists routes cannot
 // establish these obligations; this check fails when either client loses the control. ----
 const REQUIRED_ACTIONS = {
@@ -139,7 +139,7 @@ const REQUIRED_ACTIONS = {
 // ---- Experience surfaces (docs/09-experience.md#views, ADR 0027 point 4): projections of the
 // cataloged read actions, not actions of their own. Each is traced to the catalog entries it
 // projects (both clients wired), to a desktop panel carrying `data-surface="<name>"` and to a TUI
-// projection command (`PROJECTIONS` in packages/tui/src/commands.mjs) reading only those entries. ----
+// projection command (`projections` in crates/luuna-tui/commands.json) reading only those entries. ----
 const REQUIRED_SURFACES = {
   'home summary: projects, validation health, blockers, create ticket (docs/09-experience.md#views, ADR 0027 point 4)': { projects: ['projects.list', 'projects.show', 'baselines.list', 'tickets.list', 'runs.list', 'tickets.create'], desktop: 'home', tui: 'home' },
   'kanban projection of authoritative run state (docs/09-experience.md#views, ADR 0027 point 4)': { projects: ['projects.list', 'projects.show', 'tickets.list', 'runs.list'], desktop: 'board', tui: 'board' },
@@ -154,7 +154,13 @@ const desktopSources = readdirSync(resolve(root, 'apps/desktop/src'), { recursiv
   .map((file) => readFileSync(resolve(root, 'apps/desktop/src', file), 'utf8'))
   .join('\n');
 const desktopMarkers = new Set([...desktopSources.matchAll(/data-capability="([^"]+)"/g)].flatMap((match) => match[1].split(/\s+/).filter(Boolean)));
-const { commandsById } = await import('../packages/tui/src/commands.mjs');
+// The terminal client's command table is data the Rust client embeds (crates/luuna-tui/commands.json).
+const tuiTable = JSON.parse(readFileSync(resolve(root, 'crates/luuna-tui/commands.json'), 'utf8'));
+const commandsById = new Map(tuiTable.commands.map((command) => [command.id, command]));
+// Parity: exactly one terminal command per catalog entry, named as the catalog names it.
+assert.equal(tuiTable.commands.length, capabilities.length, `the terminal client has ${tuiTable.commands.length} commands for ${capabilities.length} catalog entries`);
+for (const capability of capabilities) assert.equal(commandsById.get(capability.id)?.name, capability.tui, `${capability.id}: the terminal command must be ${capability.tui}`);
+for (const projection of tuiTable.projections) assert.ok(projection.projects.every((id) => byId.get(id)?.method === 'GET'), `projection ${projection.name} must read cataloged GET actions only`);
 for (const [action, ids] of Object.entries(REQUIRED_ACTIONS)) {
   const wired = ids.filter((id) => {
     const capability = byId.get(id);
@@ -172,7 +178,8 @@ for (const capability of capabilities) assert.ok(capability.required_by.length >
 checks += Object.keys(REQUIRED_ACTIONS).length;
 console.log(`Required actions: ${Object.keys(REQUIRED_ACTIONS).length} specification obligations traced to cataloged actions with desktop and TUI controls.`);
 const desktopSurfaces = new Set([...desktopSources.matchAll(/data-surface="([^"]+)"/g)].map((match) => match[1]));
-const { commandsByName, projectionsByName } = await import('../packages/tui/src/commands.mjs');
+const commandsByName = new Map(tuiTable.commands.map((command) => [command.name, command]));
+const projectionsByName = new Map(tuiTable.projections.map((command) => [command.name, command]));
 for (const [surface, trace] of Object.entries(REQUIRED_SURFACES)) {
   for (const id of trace.projects) {
     const capability = byId.get(id);

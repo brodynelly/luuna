@@ -1,4 +1,5 @@
 //! Presentation state over the shared command bridge; no domain writes or HTTP live here.
+pub mod guide;
 pub mod render;
 use crate::{
     app::{AppState, FormField, Mode},
@@ -25,9 +26,12 @@ pub enum Screen {
     Plan,
     Commands,
     Help,
+    /// Opens the setup guide (`prime`) instead of a workbench screen.
+    Setup,
 }
 pub const NAV: &[(&str, Screen)] = &[
     ("Home", Screen::Home),
+    ("Set up a project", Screen::Setup),
     ("Projects", Screen::Projects),
     ("Missions", Screen::Missions),
     ("Atlas", Screen::Memory),
@@ -183,8 +187,8 @@ fn identity(v: &Value) -> String {
 }
 pub fn hints(screen: Screen) -> &'static str {
     match screen {
-        Screen::Home => "Enter project  F3 Projects  F5 refresh",
-        Screen::Projects => "Enter open  n register  F5 refresh",
+        Screen::Home => "Enter project  s set up a project  F3 Projects  F5 refresh",
+        Screen::Projects => "Enter open  n register  s guided setup  F5 refresh",
         Screen::Project => "b baseline  d discover  c confirm  x components  y activate",
         Screen::Missions => "←→ columns  Enter ticket  n new  r refresh",
         Screen::Ticket => "e edit  p plan  g run  o source  c reconcile",
@@ -196,6 +200,7 @@ pub fn hints(screen: Screen) -> &'static str {
         Screen::RunDetail => "←→ evidence  f follow  c cancel  a actions  p plan",
         Screen::Plan => "a approve full hash  i implement  g run",
         Screen::Help => "F10 menu  F2 all actions  Esc back",
+        Screen::Setup => "Guided setup",
         Screen::Commands => "Enter action  Tab context  / search",
     }
 }
@@ -217,6 +222,11 @@ pub fn choose_project(app: &mut AppState, id: &str) {
     }
 }
 pub fn open(app: &mut AppState, screen: Screen) {
+    if screen == Screen::Setup {
+        app.workbench.nav = false;
+        guide::begin(app, "init", Map::new());
+        return;
+    }
     if app.active_request.is_some() {
         app.status = "Wait for this request, or Esc to stop waiting.".into();
         return;
@@ -687,6 +697,9 @@ pub fn key(app: &mut AppState, key: KeyEvent) -> bool {
                 Screen::PromptDetail => prompt_form(app, true),
                 _ => {}
             }
+        }
+        KeyCode::Char('s') if matches!(screen, Screen::Home | Screen::Projects) => {
+            guide::begin(app, "init", Map::new())
         }
         KeyCode::Char('s') => {
             let v = selected(app);

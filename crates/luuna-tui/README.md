@@ -1,92 +1,101 @@
-# Rust terminal foundation
+# Luuna terminal client (`luuna-tui`, `lu`, `luuna`)
 
-This crate owns the actual terminal, keyboard, forms and child lifecycle. The owned
-Node process in `packages/tui/src/bridge.mjs` reuses the existing command table and
-typed HTTP/SSE client. Node remains a distribution prerequisite. The runtime alone
-authorizes execution, approval, validation and publication.
-
-Development invocation from the repository:
+One Rust executable for the Luuna runtime: the scriptable command line and the interactive
+workbench. It exposes the same product actions as the desktop client through the shared
+capability catalog (`schemas/capability-catalog.json`, ADR 0020) and explains every refusal with
+the shared sentence `<Action> refused: <reason> <next step>`. The runtime alone authorizes
+execution, approval, validation and publication. Since [ADR 0037](../../docs/decisions/0037-single-rust-terminal-client.md)
+the client has no Node process: it was a Node command line plus a Node bridge behind the Rust
+renderer, and is now this crate alone, with byte-identical commands, output and requests.
 
 ```sh
-cargo run --locked -p luuna-tui
-cargo run --locked -p luuna-tui -- --help
+cargo build --locked -p luuna-tui                # target/debug/luuna-tui[.exe]; `npm run tui -- …` runs it too
+export LUUNA_URL=http://127.0.0.1:4242          # loopback only; this is the default
+export LUUNA_API_TOKEN=...                       # never echoed; prompted (hidden) on a terminal when unset
+luuna-tui                                        # interactive workbench (on a terminal)
+luuna-tui help                                   # the overview: commands grouped by workflow, the component CLIs, flags, environment
+luuna-tui plan --help                            # one command's page: arguments, every flag, the runtime route, an example (also `help plan`)
+luuna-tui help --all                             # the complete reference
+luuna-tui init                                   # guided project setup (terminal only)
+luuna-tui projects --json                        # one cataloged action for scripts; --json prints the runtime's record unchanged
+luuna-tui approve <plan> --acknowledge-hash sha256:<complete plan hash>
+luuna-tui follow <run>                           # live events over SSE, resumed after an outage from the last sequence
+luuna-tui home                                   # Home summary: projects, validation health, blockers (a projection, not an action)
+luuna-tui board --project <id>                   # Kanban projection of the recorded run states; nothing is dragged
+luuna-tui doctor                                 # Settings: environment and credential presence by name; values are never shown
+luuna-tui catalog                                # the capability catalog, as embedded
 ```
 
-Large scroll jumps (PgUp/PgDn, Home/End, following streamed output) ease over about
-120 ms in whole rows; settled frames are identical. `LUUNA_TUI_ANIMATION=0` (or
-`off`/`false`/`no`) makes every scroll move instant.
+On Windows, `bin\luuna.cmd` (and `bin/luuna` for Git Bash; the installed `lu.cmd` calls it) run
+the client through `scripts/start-terminal.ps1`, which supplies `LUUNA_URL` and the token in memory
+(ADR 0011) and names the client `lu` in its help (`LUUNA_CLI_NAME`). Every help form needs no
+token and starts no runtime. `lu missions|atlas|beacon …` (and `lu help missions`) run the
+component CLIs themselves. `-DataDirectory <dir>` is accepted only by name.
 
-Connection uses `LUUNA_URL` and `LUUNA_API_TOKEN`. Missing tokens are entered hidden
-inside the Rust terminal and passed to the child environment, never arguments.
-`--bridge <absolute path>` and `--node <executable>` support deployed launchers;
-the default bridge path is compile-time checkout-relative, not relative to the
-user's project. The launcher/distribution wave supplies deployed paths. Named
-script commands remain in the existing Node CLI.
+Exit codes: 0 done, 1 refused or failed, 2 usage. Transport failures and 5xx responses are plain
+sentences; a server body is never shown.
 
-Ratatui **0.29.0** (declared MSRV 1.74) and matching Crossterm **0.28.1**
-(declared MSRV 1.63) are exact-pinned and compile with the repository's Rust 1.90.
-Version metadata was verified using `cargo info` and the registry manifests.
-See [Ratatui installation](https://ratatui.rs/installation/) and
-[Crossterm terminal API](https://docs.rs/crossterm/0.28.1/crossterm/terminal/).
+## Layout
 
-## Rendering
+| Module | What it is |
+| --- | --- |
+| `cli.rs` | The command line: argument parsing, connection, hidden token entry, exit codes |
+| `commands.rs` + `commands.json` | The command table (data, also read by `scripts/check-contracts.mjs`) and each command's behaviour |
+| `client.rs` | Loopback URL check, bearer-token HTTP/1.1, refusal mapping, SSE follower with `Last-Event-ID` |
+| `failures.rs` | The shared failure explanations and next steps |
+| `builders.rs`, `projections.rs` | The registration and plan request builders; the Home and Board projections |
+| `format.rs`, `help.rs`, `text.rs` | Human output with the six tones, the help, width-aware wrapping |
+| `js.rs` | A JSON value with JavaScript semantics (key order, `undefined`, number printing, UTF-16 lengths) |
+| `bridge.rs` | The workbench's in-process command service (the versioned protocol of `protocol.rs`) |
+| `prime.rs`, `components.rs` | `lu init`'s flow and the component CLI runner |
+| `app.rs`, `views/`, `ui.rs`, `guide.rs` | The workbench's state and screens, including the guide mode |
 
-Frames are event-driven and capped at `LUUNA_TUI_FPS` (default 60, clamped to
-30-144); an idle workbench performs zero redraws. Terminal input, bridge events and
-the frame deadline wake the loop, pending work is drained, and at most one frame is
-drawn per interval. DEC 2026 synchronized output wraps each frame and is on by
-default; `LUUNA_TUI_SYNC=0` turns it off. Terminals without support ignore it. A
-dedicated input thread (`input.rs`) is the only crossterm event reader and is joined
-before the terminal is restored. Shutdown markers and signals are checked every
-100 ms, so marker latency is at most 100 ms.
+`js.rs` exists so output stays exactly what the original JavaScript client printed: objects keep
+insertion order with integer-like keys first, missing fields are `undefined` and omitted from
+JSON, numbers print like `Number.prototype.toString`, and string lengths count UTF-16 units.
+serde_json's order-preserving feature is deliberately not enabled: it would change ordering for
+the whole workspace, including the runtime's canonical hashing.
 
-## Shared interface
+## `init`
 
-`app::AppState` is the UI state/reducer; `ui::render` draws it. Later views queue
-commands through `begin`, `invoke` and `refresh`; they do not implement transport.
-`protocol::{CommandDef, ClientCommand, BridgeEvent}` is the JSONL interface.
-`bridge::Bridge` owns one Node child and bounded IO tasks. `terminal::TerminalGuard`
-restores raw mode, cursor and alternate screen. `theme::Theme` supplies presentation
-tokens and six outcome tones. `NO_COLOR` and `TERM=dumb` disable palette styling.
+`init` is a guide, not a catalog action. On a terminal it opens the workbench's full-screen guide
+mode. Eight steps: runtime, project (an already registered checkout is continued; `--project <id>`
+names one), discovery, manifest (review, add a required check, edit in `$EDITOR`, confirm),
+baseline, suite (managed stores, an optional first Atlas memory), agents, and the first ticket.
+Each runtime step runs a cataloged command, so it sends the same bodies as the commands and every
+refusal is the runtime's, offered as retry, skip or leave. The agents step runs the component CLIs
+in the checkout only as ticked (repo-local stores, CLAUDE.md/AGENTS.md sections previewed before
+they are written, optional Claude Code hooks, each component's primed context); they run with
+Bun's own executable, no shell, and never receive the runtime's URL or token.
 
-Every request is `{v:1,id,op,...}`, every response `{v:1,id,event,...}`. Operations:
-`catalog`, `read`, `invoke`, `reply`, `abort`, `shutdown`. Catalog metadata exposes
-all arguments/flags and the read-only classification. Reads/invocations carry
-`name,args,flags`; invoke optionally carries `stdin_document`. Document input is
-never read from the JSONL pipe. Reply carries `request_id,prompt_id,value` (boolean
-for confirmation, string otherwise). Events are `catalog`, `result`, `error`,
-`output`, `prompt`, `event`, `connection`. Results keep raw `value` and plain
-`formatted` separate. Errors name `outcome` including uncertain mutation outcomes.
-Control acknowledgments have their own correlation IDs. Only matching active
-requests can change an action or answer a prompt.
+## Workbench
 
-Limits: 1 MiB frame, 32 queued frames, four reads and one mutation in the bridge,
-64 KiB output chunks, 256 KiB displayed text, 200 live events. Oversized results
-are explicit; dropped display history is visibly marked and durable replay remains
-available. Health polling is bounded at two seconds; SSE uses the shared resumable
-client. Redirect/URL guards and exact-plan acknowledgment remain shared behavior.
-Malformed/oversized peer data closes the owned transport and disables further
-actions; restart the terminal to reconnect. No mutation is automatically replayed.
+Luuna opens on Home. `s` on Home or Projects (or "Set up a project" in the menu) starts the guide.
+F3 Projects, F4 Missions, F6 Atlas, F7 Beacon, F8 Runs, F2 the complete command catalog, F1 Help;
+F10 opens navigation, Tab changes focus, arrows select, Enter inspects, Esc returns, F5 refreshes.
+Forms: Tab or Up/Down move fields, Ctrl-U clears, Alt-Enter adds a line, Ctrl-S submits. Hash
+prompts accept a fresh typed full hash only, and a terminal too small to show the plan cannot
+approve. Esc stops local waiting; the `cancel` action requests runtime cancellation. Quitting
+leaves the runtime running.
 
-## Interaction and checks
+Frames are event-driven and capped at `LUUNA_TUI_FPS` (default 60, 30-144); an idle workbench does
+not redraw. DEC 2026 synchronized output is on by default (`LUUNA_TUI_SYNC=0` turns it off); large
+scroll jumps ease over about 120 ms (`LUUNA_TUI_ANIMATION=0` makes them instant). `NO_COLOR` and
+`TERM=dumb` disable colour. The in-process service keeps the former bridge's limits: four reads and
+one mutation at a time, health polled every two seconds, the token redacted from every event.
 
-F2 opens all actions; Tab filters context; Enter opens a form. Forms expose every
-argument/option: Tab/Up/Down select, Alt+Enter adds a line, Ctrl+S submits. Repeated
-flags use one value per line. Document prompts use Enter for lines and Ctrl+S to
-submit. Hash prompts accept fresh typed full hashes only; arrows and paging scroll
-the plan, and a terminal too small to show it cannot approve. Esc aborts local
-waiting; the separate `cancel` action requests runtime cancellation. Quit leaves
-the independent runtime running.
+## Evidence
 
 ```sh
 cargo test --locked -p luuna-tui
 cargo clippy --locked -p luuna-tui --all-targets -- -D warnings
-npm run test --workspace @luuna/tui
 npm run test:contracts
 ```
 
-`LUUNA_TEST_NODE` optionally selects the exact Node executable for Rust integration
-tests. `bridge_process` launches the actual Node bridge against a synthetic HTTP
-server, checks fresh hash acknowledgment and process cleanup. `terminal_lifecycle`
-uses portable-pty (ConPTY on Windows) for actual key/resize/exit checks. These are
-fixture/local-host checks, not genuine-provider or other-platform evidence.
+`tests/cli.rs` runs the built client against a mock runtime: every catalog entry's command issues
+its method and route, request bodies, refusal sentences, usage errors, the full-hash approval and
+SSE resumption. `tests/guide_flow.rs` drives `init` with scripted answers, `tests/bridge_service.rs`
+the workbench's service, and `tests/terminal_lifecycle.rs` and `tests/guide_pty.rs` run the binary
+in a real PTY (ConPTY on Windows). The end-to-end harnesses are `node scripts/tui-smoke.mjs` and
+`node scripts/tui-native-audit.mjs` against a disposable synthetic runtime. These are fixture and
+local-host checks, not genuine-provider or other-platform evidence.
