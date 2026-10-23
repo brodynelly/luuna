@@ -28,7 +28,7 @@ const ProjectPanel = memo(Projects);
 export function App() {
   const runtime = useRuntime();
   const { client, connectionEpoch, refresh, error, setError, outage } = runtime;
-  // The Windows desktop window has no native title bar; the top bar draws it (ADR 0036). Null elsewhere.
+  // The Windows desktop window has no native title bar; the top bar draws it (ADR 0038). Null elsewhere.
   const chrome = useWindowChrome();
   const { view, navigate, entering, motion, collapsed, toggle, toggleSidebar, palette, setPalette, nav } = useWindowNavigation();
   // A Home or Board control opens a project (and a ticket, or the ticket form) in Projects.

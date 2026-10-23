@@ -1,4 +1,4 @@
-# ADR 0036: a custom in-app title bar on Windows
+# ADR 0038: a custom in-app title bar on Windows
 
 Date: 2026-10-22. Status: Accepted. Amends [ADR 0030](0030-desktop-shell-and-tailwind.md) (the top bar and the native menu on Windows) and [ADR 0034](0034-owned-component-library.md) (a new navigation-family component, `WindowControls`).
 

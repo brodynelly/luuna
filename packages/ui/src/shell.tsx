@@ -13,7 +13,7 @@ import { Kbd } from "./docs";
  */
 export function AppShell({ collapsed, sidebar, banner, topbar, rail, navOpen, onDismissNav, children, motion, titleBar }: {
   collapsed: boolean; sidebar: ReactNode; banner?: ReactNode; topbar?: ReactNode; rail?: ReactNode; navOpen?: boolean; onDismissNav?: () => void; children: ReactNode; motion?: ViewMotion;
-  /** The top bar is the window's title bar (ADR 0036): it stays on the window's top edge, so the banner sits under it. */
+  /** The top bar is the window's title bar (ADR 0038): it stays on the window's top edge, so the banner sits under it. */
   titleBar?: boolean;
 }) {
   const bannerBar = banner ? <div className="shell-banner" inert={navOpen}>{banner}</div> : null;
@@ -45,7 +45,7 @@ export function Banner({ label, children, action, className, title }: { label: s
 
 /**
  * The sticky top bar: the menu button (under 768 px), the palette trigger shaped as a Ledger search field, then `actions`.
- * With `windowControls` (ADR 0036) it is also the window's title bar: the bar and its spacer are drag regions and the
+ * With `windowControls` (ADR 0038) it is also the window's title bar: the bar and its spacer are drag regions and the
  * controls sit flush at the right edge. Buttons stay separate elements, so pressing one never starts a drag.
  */
 export function TopBar({ onMenu, menuOpen, onSearch, actions, windowControls }: { onMenu: () => void; menuOpen: boolean; onSearch: () => void; actions?: ReactNode; windowControls?: ReactNode }) {
@@ -81,7 +81,7 @@ export function Breadcrumbs({ items }: { items: ReadonlyArray<Crumb> }) {
   </nav>;
 }
 
-/** `dragRegion` (ADR 0036) makes the brand row move the window; the toggle button inside it stays a button. */
+/** `dragRegion` (ADR 0038) makes the brand row move the window; the toggle button inside it stays a button. */
 export function Sidebar({ status, onToggle, collapsed, children, dragRegion }: { status: ReactNode; onToggle: () => void; collapsed: boolean; children: ReactNode; dragRegion?: boolean }) {
   const drag = dragRegion ? "" : undefined;
   return <aside id="app-sidebar" className="sidebar flex flex-col gap-5">

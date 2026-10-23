@@ -1,7 +1,7 @@
 {
   "$schema": "../gen/schemas/windows-schema.json",
   "identifier": "windows-titlebar",
-  "description": "Windows only (ADR 0036): the in-app title bar moves, minimizes, maximizes and closes its own window. Window management only; no filesystem, shell, process or event permissions.",
+  "description": "Windows only (ADR 0038): the in-app title bar moves, minimizes, maximizes and closes its own window. Window management only; no filesystem, shell, process or event permissions.",
   "windows": ["main"],
   "platforms": ["windows"],
   "permissions": [
