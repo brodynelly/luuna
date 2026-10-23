@@ -60,6 +60,10 @@ pub struct Command {
     pub confirm: Option<String>,
     pub args: Vec<Arg>,
     pub flags: Vec<(String, Flag)>,
+    /// Takes every word after its own arguments verbatim (`sbx <project> pi --model x`).
+    pub rest: bool,
+    /// How a result marks the command failed (exit 1): `orbit` when a repository failed or was blocked.
+    pub failed: Option<String>,
     /// The parity example: positional arguments and flags.
     pub example: J,
     /// Projections: the catalog ids they read. Guides: the catalog ids they run.
@@ -127,6 +131,8 @@ fn command_of(raw: &J) -> Command {
                     .collect()
             })
             .unwrap_or_default(),
+        rest: raw.get("rest") == &J::Bool(true),
+        failed: text("failed"),
         example: raw.get("example").clone(),
         projects: strings(raw.get("projects")),
         uses: strings(raw.get("uses")),
@@ -302,6 +308,96 @@ pub trait Io: Send + Sync {
     fn show(&self, text: &str) -> Result<(), Failure>;
     fn note(&self, text: &str);
     fn emit(&self, event: &J);
+    /// Whether this environment can open a sandbox with the terminal attached (`lu sbx`); the
+    /// workbench cannot, so there the command returns the plan.
+    fn can_launch(&self) -> bool {
+        false
+    }
+    /// Opens the sandbox a plan describes and resolves with the sandboxed command's exit code.
+    fn launch(
+        &self,
+        _plan: J,
+        _command: Vec<String>,
+        _grants: Vec<String>,
+    ) -> Fut<'_, Result<i32, Failure>> {
+        Box::pin(async { Err(Failure::error("The sandbox needs a terminal.")) })
+    }
+    /// The exit code of the sandboxed command, once `launch` ran; it becomes the client's.
+    fn sandbox_exit(&self) -> Option<i32> {
+        None
+    }
+}
+
+/// An Orbit run in which some repository failed or was blocked exits 1, so scripts can chain on it:
+/// `(execution?.results ?? []).some((result) => result.status === "failed" || result.status === "blocked")`.
+pub fn orbit_failed(execution: &J) -> Result<bool, Failure> {
+    match execution.get("results") {
+        J::Undefined | J::Null => Ok(false),
+        J::Arr(results) => {
+            for result in results {
+                if result.nullish() {
+                    return Err(Failure::type_error());
+                }
+                if matches!(result.get("status").as_str(), Some("failed" | "blocked")) {
+                    return Ok(true);
+                }
+            }
+            Ok(false)
+        }
+        _ => Err(Failure::type_error()),
+    }
+}
+
+/// Whether a command's result marks it failed (`command.failed?.(result)`).
+pub fn failed(command: &Command, result: &J) -> Result<bool, Failure> {
+    match command.failed.as_deref() {
+        Some("orbit") => orbit_failed(result),
+        _ => Ok(false),
+    }
+}
+
+/// `orbitCommand(line)`: splits a command line typed by the developer into executable and
+/// arguments as `/"([^"]*)"|'([^']*)'|(\S+)/g` does (quotes group words); no shell runs it.
+pub fn orbit_command(line: &str) -> Result<(String, Vec<String>), String> {
+    let chars: Vec<char> = line.chars().collect();
+    let space = |c: char| c.is_whitespace() || c == '\u{feff}';
+    let mut words = Vec::new();
+    let mut at = 0;
+    while at < chars.len() {
+        let c = chars[at];
+        if c == '"' || c == '\'' {
+            if let Some(close) = chars[at + 1..].iter().position(|&d| d == c) {
+                words.push(chars[at + 1..at + 1 + close].iter().collect::<String>());
+                at += close + 2;
+                continue;
+            }
+        }
+        if space(c) {
+            at += 1;
+            continue;
+        }
+        let start = at;
+        while at < chars.len() && !space(chars[at]) {
+            at += 1;
+        }
+        words.push(chars[start..at].iter().collect::<String>());
+    }
+    if words.is_empty() {
+        return Err("Type a command to run in each repository.".into());
+    }
+    let executable = words.remove(0);
+    Ok((executable, words))
+}
+
+/// `--repository` flags as the repository ids an Orbit request selects.
+fn selected_repositories(input: &Input, request: &mut J) {
+    let selected = input.list("repository");
+    if !selected.is_empty() {
+        request.set(
+            "repositories",
+            J::Arr(selected.into_iter().map(J::Str).collect()),
+        );
+    }
 }
 
 /// Node's messages for the file errors the client meets (`ENOENT: no such file or directory, open 'x'`).
@@ -1457,6 +1553,115 @@ pub async fn run(
         "runs.worktrees" => client.get(&format!("/runs/{}/worktrees", e(0)), s).await,
         "runs.attempts" => client.get(&format!("/runs/{}/attempts", e(0)), s).await,
         "runs.tasks" => client.get(&format!("/runs/{}/tasks", e(0)), s).await,
+        // Orbit (ADR 0036): every repository of a project at once; the developer's commands, never evidence.
+        "orbit.status" => client.get(&format!("/projects/{}/orbit", e(0)), s).await,
+        "orbit.exec" => {
+            let (executable, args) = orbit_command(&a(1)).map_err(refusal)?;
+            let mut request = obj![
+                ("executable", executable.clone()),
+                ("args", J::Arr(args.into_iter().map(J::Str).collect()))
+            ];
+            selected_repositories(input, &mut request);
+            if input.truthy("parallel") {
+                request.set("parallel", J::Bool(true));
+            }
+            let timeout = integer(input.flag("timeout"), "timeout", 1.0)?;
+            if let Some(timeout) = timeout {
+                request.set("timeout_seconds", J::num(timeout));
+            }
+            if let Some(cwd) = input.text_if("cwd") {
+                request.set("cwd", J::str(cwd));
+            }
+            if js_trim(&executable).is_empty() {
+                return Err(Failure::error("Type a command to run in each repository."));
+            }
+            if timeout.is_some_and(|t| !(1.0..=3600.0).contains(&t)) {
+                return Err(Failure::error("The timeout must be 1 to 3600 seconds."));
+            }
+            client
+                .post(&format!("/projects/{}/orbit/exec", e(0)), Some(&request), s)
+                .await
+        }
+        "orbit.run" => {
+            let mut request = obj![("recipe", a(1))];
+            selected_repositories(input, &mut request);
+            if input.truthy("parallel") {
+                request.set("parallel", J::Bool(true));
+            }
+            if js_trim(&a(1)).is_empty() {
+                return Err(Failure::error("Choose a recipe to run."));
+            }
+            client
+                .post(&format!("/projects/{}/orbit/run", e(0)), Some(&request), s)
+                .await
+        }
+        "orbit.sync" => {
+            let mut request = J::obj();
+            selected_repositories(input, &mut request);
+            if input.truthy("no-fetch") {
+                request.set("fetch", J::Bool(false));
+            }
+            client
+                .post(&format!("/projects/{}/orbit/sync", e(0)), Some(&request), s)
+                .await
+        }
+        // `lu sbx <project> [-- command ...]`: the runtime's plan, applied by the native launcher with
+        // the terminal attached. --plan-only (or --json) prints the plan instead of opening the sandbox.
+        "orbit.sandbox" => {
+            let network = input
+                .flag("network")
+                .map(FlagValue::text)
+                .unwrap_or_else(|| "open".into());
+            if network != "open" && network != "none" {
+                return Err(usage_error("--network takes open or none."));
+            }
+            let plan = client
+                .get(
+                    &format!("/projects/{}/orbit/sandbox?network={network}", e(0)),
+                    s,
+                )
+                .await?;
+            if input.truthy("plan-only") || input.flag("json").is_some() || !io.can_launch() {
+                return Ok(plan);
+            }
+            if plan.nullish() {
+                return Err(Failure::type_error());
+            }
+            if !plan.get("available").truthy() {
+                let reason = plan.get("reason");
+                return Err(refusal(if reason.nullish() {
+                    "The sandbox is not available on this host.".to_string()
+                } else {
+                    reason.js()
+                }));
+            }
+            let Some(items) = plan.get("repositories").as_arr() else {
+                return Err(Failure::type_error());
+            };
+            let mut reachable = Vec::new();
+            for repository in items {
+                if repository.nullish() {
+                    return Err(Failure::type_error());
+                }
+                reachable.push(repository.get("repository_id").clone());
+            }
+            io.note(&format!(
+                "Opening the {} sandbox ({}, network {}) in {}; only {} {} reachable. Exit the shell to leave it.",
+                a(0),
+                plan.get("backend").js(),
+                plan.get("network").js(),
+                plan.get("workdir").js(),
+                reachable.iter().map(J::js_or_empty).collect::<Vec<_>>().join(", "),
+                if items.len() == 1 { "is" } else { "are" }
+            ));
+            io.launch(
+                plan.clone(),
+                input.args[1..].to_vec(),
+                input.list("grant-read"),
+            )
+            .await?;
+            Ok(J::Undefined)
+        }
         "artifacts.read" => client.artifact(&a(0), &a(1), s).await,
         "projection.home" | "projection.board" => {
             let only = input.text_if("project");
@@ -1840,9 +2045,54 @@ mod tests {
     use super::*;
 
     #[test]
+    fn orbit_command_lines_split_like_the_regular_expression() {
+        let split = |line: &str| orbit_command(line).unwrap();
+        assert_eq!(
+            split(r#"git commit -m "two words""#),
+            (
+                "git".into(),
+                vec!["commit".into(), "-m".into(), "two words".into()]
+            )
+        );
+        // Quotes group words only when closed; an open quote starts an ordinary word.
+        assert_eq!(
+            split(r#"echo "unclosed words"#),
+            ("echo".into(), vec!["\"unclosed".into(), "words".into()])
+        );
+        assert_eq!(split(r#""" arg"#), (String::new(), vec!["arg".into()]));
+        assert_eq!(
+            split("echo 'a b' mid\"x y\"z"),
+            (
+                "echo".into(),
+                vec!["a b".into(), "mid\"x".into(), "y\"z".into()]
+            )
+        );
+        assert_eq!(
+            orbit_command(
+                " 	
+"
+            )
+            .unwrap_err(),
+            "Type a command to run in each repository."
+        );
+    }
+
+    #[test]
+    fn an_orbit_run_fails_when_a_repository_failed_or_was_blocked() {
+        let execution = |status: &str| obj![("results", J::Arr(vec![obj![("status", status)]]))];
+        assert!(orbit_failed(&execution("failed")).unwrap());
+        assert!(orbit_failed(&execution("blocked")).unwrap());
+        assert!(!orbit_failed(&execution("skipped")).unwrap());
+        assert!(!orbit_failed(&J::Undefined).unwrap());
+        assert!(!orbit_failed(&J::str("text")).unwrap());
+        assert!(orbit_failed(&obj![("results", J::Arr(vec![J::Null]))]).is_err());
+        assert!(orbit_failed(&obj![("results", "str")]).is_err());
+    }
+
+    #[test]
     fn the_table_matches_the_catalog_and_parses_specs_like_the_regular_expressions() {
         let table = table();
-        assert_eq!(table.commands.len(), 59);
+        assert_eq!(table.commands.len(), 64);
         assert_eq!(table.projections.len(), 2);
         for command in &table.commands {
             assert_eq!(

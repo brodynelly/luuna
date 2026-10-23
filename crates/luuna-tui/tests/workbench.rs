@@ -651,3 +651,263 @@ fn eased_tail_follow_tracks_new_output_until_the_user_scrolls_up() {
     }
     assert_eq!(settle(&mut a).pop().unwrap(), held);
 }
+
+/// The Orbit catalog entries as the bridge advertises them (ADR 0036).
+fn orbit_app() -> AppState {
+    let mut a = app();
+    let commands: Vec<CommandDef> = serde_json::from_value(json!([
+        {"id":"orbit.status","name":"orbit","action":"Orbit status","context":"project","args":[{"name":"project","context":true}],"flags":{},"read_only":true},
+        {"id":"orbit.exec","name":"orbit-exec","action":"Orbit command","context":"project","args":[{"name":"project","context":true},{"name":"command","prompt":"Command to run in each repository"}],"flags":{"repository":{"repeat":true},"parallel":{"boolean":true},"timeout":{},"cwd":{}}},
+        {"id":"orbit.run","name":"orbit-run","action":"Orbit recipe run","context":"project","args":[{"name":"project","context":true},{"name":"recipe","prompt":"Recipe id"}],"flags":{"repository":{"repeat":true},"parallel":{"boolean":true}}},
+        {"id":"orbit.sync","name":"orbit-sync","action":"Orbit sync","context":"project","args":[{"name":"project","context":true}],"flags":{"repository":{"repeat":true},"no-fetch":{"boolean":true}}},
+        {"id":"orbit.sandbox","name":"sbx","action":"Project sandbox","context":"project","args":[{"name":"project","context":true}],"flags":{"network":{},"plan-only":{"boolean":true},"grant-read":{"repeat":true}},"read_only":true}
+    ]))
+    .unwrap();
+    a.commands.extend(commands);
+    a.snapshots.insert("orbit".into(), json!({
+        "project_id":"demo","name":"Demo workspace","observed_at":"2026-10-22T00:00:00Z","manifest_revision":2,
+        "repositories":[
+            {"repository_id":"api","local_path":"/fixture/api","present":true,"branch":"main","head_commit":"aabbcc","upstream":{"name":"origin/main","ahead":1,"behind":2},"dirty":{"staged":1,"unstaged":2,"untracked":0,"conflicted":0,"paths":["src/lib.rs"],"truncated":false},"remote":"https://example.invalid/api.git","recipes":["test","lint"],"error":null},
+            {"repository_id":"web","local_path":"/fixture/web","present":true,"branch":null,"head_commit":"ddeeff","upstream":null,"dirty":{"staged":0,"unstaged":0,"untracked":0,"conflicted":0,"paths":[],"truncated":false},"remote":null,"recipes":[],"error":null},
+            {"repository_id":"docs-with-a-very-long-repository-name","local_path":"/fixture/docs","present":false,"branch":null,"head_commit":null,"upstream":null,"dirty":null,"remote":null,"recipes":["build"],"error":null}
+        ],
+        "recipes":["build","lint","test"]
+    }));
+    a.workbench.screen = Screen::Orbit;
+    a
+}
+
+/// Every row inside the framed panel still ends at its border: nothing spills past it.
+fn cells_fit(painted: &str, h: u16) -> bool {
+    painted
+        .lines()
+        .skip(2)
+        .take(usize::from(h).saturating_sub(4))
+        .all(|line| line.ends_with(['║', '╗', '╝']))
+}
+
+#[test]
+fn orbit_is_in_navigation_after_projects_and_loads_the_context_project() {
+    let labels = views::NAV.iter().map(|(l, _)| *l).collect::<Vec<_>>();
+    let at = labels
+        .iter()
+        .position(|l| *l == "Orbit")
+        .expect("Orbit in NAV");
+    assert_eq!(labels[at - 1], "Projects");
+    assert_eq!(views::NAV[at].1, Screen::Orbit);
+    let mut a = orbit_app();
+    a.workbench.screen = Screen::Home;
+    views::open(&mut a, Screen::Orbit);
+    let request = a.queue.back().unwrap();
+    assert_eq!(request.op, "read");
+    assert_eq!(request.fields["name"], "orbit");
+    assert_eq!(request.fields["args"], json!(["demo"]));
+    // Without a project, nothing is sent.
+    let mut a = orbit_app();
+    a.context.clear();
+    let queued = a.queue.len();
+    views::open(&mut a, Screen::Orbit);
+    assert_eq!(a.queue.len(), queued);
+    assert!(a.status.contains("Select a project"));
+}
+
+#[test]
+fn orbit_rows_are_the_repositories_and_render_their_status() {
+    let mut a = orbit_app();
+    let rows = views::rows(&a);
+    assert_eq!(rows.len(), 3);
+    assert_eq!(rows[0]["repository_id"], "api");
+    let painted = draw(&mut a, 120, 35, false);
+    for expected in [
+        "api",
+        "main",
+        "↑1 ↓2",
+        "3 changes",
+        "test, lint",
+        "(detached)",
+        "no upstream",
+        "clean",
+        "missing",
+    ] {
+        assert!(painted.contains(expected), "missing {expected}:\n{painted}");
+    }
+    // A response recorded for another project is never shown under the current one.
+    a.snapshot_requests.insert(
+        "orbit".into(),
+        luuna_tui::protocol::ClientCommand::new(
+            "x",
+            "read",
+            json!({"name":"orbit","args":["other"],"flags":{}}),
+        ),
+    );
+    assert!(views::rows(&a).is_empty());
+}
+
+#[test]
+fn orbit_renders_within_supported_sizes_without_overflow() {
+    for (w, h) in [(40, 12), (60, 24), (80, 12), (80, 24), (120, 35)] {
+        for color in [true, false] {
+            let mut a = orbit_app();
+            a.workbench.orbit_detail = Some("orbit-exec".into());
+            a.snapshots.insert("orbit-exec".into(), json!({"id":"orbit-1","kind":"exec","command":["git","status"],"results":[{"repository_id":"api","status":"succeeded","exit_code":0,"reason":null,"stdout_excerpt":"界".repeat(200),"stderr_excerpt":""}]}));
+            let painted = draw(&mut a, w, h, color);
+            assert_eq!(painted.lines().count(), usize::from(h));
+            assert!(cells_fit(&painted, h), "{w}x{h} overflow:\n{painted}");
+            assert!(painted.contains("Orbit"), "{w}x{h}");
+            assert!(!painted.lines().last().unwrap_or("").trim().is_empty());
+        }
+    }
+}
+
+#[test]
+fn orbit_keys_prefill_exec_run_sync_and_read_the_sandbox_plan() {
+    let mut a = orbit_app();
+    key(&mut a, KeyCode::Char('x'));
+    let form = a.form.as_ref().unwrap();
+    assert_eq!(form.command.name, "orbit-exec");
+    assert_eq!(
+        form.fields
+            .iter()
+            .find(|f| f.name == "project")
+            .unwrap()
+            .value,
+        "demo"
+    );
+    assert!(a.queue.is_empty(), "exec waits for the developer's command");
+
+    let mut a = orbit_app();
+    key(&mut a, KeyCode::Char('r'));
+    let form = a.form.as_ref().unwrap();
+    assert_eq!(form.command.name, "orbit-run");
+    let (args, _) = form.input().unwrap();
+    assert_eq!(
+        args,
+        ["demo", "test"],
+        "the selected repository's first recipe"
+    );
+    assert!(a.queue.is_empty(), "r on Orbit is not a refresh");
+
+    let mut a = orbit_app();
+    key(&mut a, KeyCode::Down);
+    key(&mut a, KeyCode::Char('r'));
+    let (args, _) = a.form.as_ref().unwrap().input().unwrap();
+    assert_eq!(
+        args,
+        ["demo", "build"],
+        "falls back to the project's recipes"
+    );
+
+    let mut a = orbit_app();
+    key(&mut a, KeyCode::Char('s'));
+    let form = a.form.as_ref().unwrap();
+    assert_eq!(form.command.name, "orbit-sync");
+    assert_eq!(form.input().unwrap().0, ["demo"]);
+    a.submit();
+    let request = a.queue.back().unwrap();
+    assert_eq!(request.op, "invoke");
+    assert_eq!(request.fields["name"], "orbit-sync");
+
+    let mut a = orbit_app();
+    key(&mut a, KeyCode::Char('b'));
+    let request = a.queue.back().unwrap();
+    assert_eq!(request.op, "read");
+    assert_eq!(request.fields["name"], "sbx");
+    assert_eq!(request.fields["args"], json!(["demo"]));
+    assert_eq!(request.fields["flags"]["plan-only"], true);
+    event(
+        &mut a,
+        json!({"backend":"appcontainer","available":true,"reason":null,"workdir":"C:/sbx","home":"C:/data/sandboxes/demo/home","repositories":[{"repository_id":"api","host_path":"/fixture/api","sandbox_path":"C:/sbx/api"}],"network":"open","notes":["Grants persist until revoked."]}),
+    );
+    assert_eq!(a.mode, Mode::Workbench);
+    let painted = draw(&mut a, 120, 35, false);
+    assert!(painted.contains("SANDBOX PLAN"), "{painted}");
+    assert!(
+        painted.contains("Open it outside the workbench: lu sbx demo"),
+        "{painted}"
+    );
+
+    let mut a = orbit_app();
+    key(&mut a, KeyCode::F(5));
+    assert_eq!(a.queue.back().unwrap().fields["name"], "orbit");
+}
+
+#[test]
+fn orbit_mutation_results_are_shown_then_status_is_refreshed() {
+    let mut a = orbit_app();
+    key(&mut a, KeyCode::Char('x'));
+    a.form
+        .as_mut()
+        .unwrap()
+        .fields
+        .iter_mut()
+        .find(|f| f.name == "command")
+        .unwrap()
+        .value = "git status --short".into();
+    a.submit();
+    assert_eq!(a.queue.back().unwrap().fields["name"], "orbit-exec");
+    event(
+        &mut a,
+        json!({"id":"orbit-1","kind":"exec","command":["git","status","--short"],"results":[
+            {"repository_id":"api","status":"succeeded","exit_code":0,"reason":null,"stdout_excerpt":"M src/lib.rs\n","stderr_excerpt":""},
+            {"repository_id":"web","status":"failed","exit_code":1,"reason":"exited with code 1","stdout_excerpt":"","stderr_excerpt":"fatal: example\n"},
+            {"repository_id":"docs","status":"blocked","exit_code":null,"reason":"checkout missing","stdout_excerpt":"","stderr_excerpt":""}
+        ]}),
+    );
+    assert_eq!(a.workbench.screen, Screen::Orbit);
+    let refresh = a.queue.back().unwrap();
+    assert_eq!(refresh.op, "read");
+    assert_eq!(refresh.fields["name"], "orbit");
+    // The refreshed status arrives; the action's results stay visible above it.
+    event(
+        &mut a,
+        json!({"project_id":"demo","name":"Demo workspace","observed_at":"now","repositories":[]}),
+    );
+    let painted = draw(&mut a, 120, 35, false);
+    for expected in [
+        "LAST ORBIT ACTION",
+        "git status --short",
+        "- succeeded api",
+        "! failed web",
+        "exited with code 1",
+        "fatal: example",
+        "! blocked docs",
+        "M src/lib.rs",
+    ] {
+        assert!(painted.contains(expected), "missing {expected}:\n{painted}");
+    }
+}
+
+#[test]
+fn orbit_succeeded_is_never_the_success_tone() {
+    assert_ne!(views::orbit_tone("succeeded"), "success");
+    assert_eq!(views::orbit_tone("succeeded"), "neutral");
+    assert_eq!(views::orbit_tone("skipped"), "neutral");
+    assert_eq!(views::orbit_tone("cancelled"), "neutral");
+    assert_eq!(views::orbit_tone("failed"), "danger");
+    assert_eq!(views::orbit_tone("blocked"), "danger");
+    // And on screen: the painted status never uses the success colour.
+    let theme = Theme { color: true };
+    let mut a = orbit_app();
+    a.workbench.orbit_detail = Some("orbit-run".into());
+    a.snapshots.insert("orbit-run".into(), json!({"id":"orbit-2","kind":"run","command":["test"],"results":[{"repository_id":"api","status":"succeeded","exit_code":0,"stdout_excerpt":"","stderr_excerpt":""}]}));
+    let mut terminal = Terminal::new(TestBackend::new(120, 35)).unwrap();
+    terminal.draw(|f| ui::render(f, &mut a, theme)).unwrap();
+    let buffer = terminal.backend().buffer();
+    let symbols = buffer
+        .content
+        .iter()
+        .map(|c| c.symbol())
+        .collect::<Vec<_>>();
+    let start = (0..symbols.len())
+        .find(|&i| {
+            "succeeded"
+                .chars()
+                .enumerate()
+                .all(|(k, c)| symbols.get(i + k) == Some(&c.to_string().as_str()))
+        })
+        .expect("succeeded painted");
+    let cells = &buffer.content[start..start + "succeeded".len()];
+    let success = theme.tone("success").fg.unwrap();
+    assert!(cells.iter().all(|c| c.fg != success));
+    assert_eq!(cells[0].fg, theme.tone("neutral").fg.unwrap());
+}

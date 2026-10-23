@@ -57,7 +57,23 @@ async fn catalog_reads_and_redaction() {
     bridge.send(&request("c1", "catalog", json!({}))).unwrap();
     let catalog = next(&mut bridge, "c1").await;
     let commands = catalog.fields["commands"].as_array().unwrap();
-    assert_eq!(commands.len(), 61, "59 actions and 2 projections");
+    assert_eq!(commands.len(), 66, "64 actions and 2 projections");
+    // Orbit (ADR 0036): status and the sandbox plan are reads; exec, run and sync are mutations.
+    for (name, read_only) in [
+        ("orbit", true),
+        ("sbx", true),
+        ("orbit-exec", false),
+        ("orbit-run", false),
+        ("orbit-sync", false),
+    ] {
+        let command = commands.iter().find(|c| c["name"] == name).unwrap();
+        assert_eq!(command["read_only"], read_only, "{name}");
+        assert!(command.get("failed").is_none(), "{name}");
+    }
+    assert_eq!(
+        commands.iter().find(|c| c["name"] == "sbx").unwrap()["rest"],
+        true
+    );
     let approve = commands.iter().find(|c| c["name"] == "approve").unwrap();
     assert!(
         approve["flags"].get("acknowledge-hash").is_none(),

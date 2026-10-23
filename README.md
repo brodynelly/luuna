@@ -78,6 +78,27 @@ native executable. See [the terminal client](crates/luuna-tui/README.md),
 The [native terminal verification guide](docs/TERMINAL-VERIFICATION.md) describes
 the pinned build, real terminal audit and the limits of fixture evidence.
 
+## Orbit and the project sandbox
+
+`lu` is the short name of `luuna` (`bin/lu`, `bin/lu.cmd`). Orbit acts on every
+registered repository of a project at once; the sandbox opens a shell or agent
+that can reach only those repositories, enforced by the operating system
+([ADR 0036](docs/decisions/0036-orbit-and-project-sandbox.md)):
+
+```sh
+lu orbit luuna                                # branch, upstream, changes, recipes per repository
+lu orbit-exec luuna "git status --short" --parallel
+lu orbit-run luuna test                       # a confirmed manifest recipe where it is defined
+lu orbit-sync luuna                           # clone missing checkouts, fetch present ones
+lu sbx luuna                                  # a shell that sees only the project's repositories
+lu sbx luuna -- pi                            # or any agent CLI; --network none, --plan-only
+```
+
+Build the launcher once with `cargo build --locked -p luuna-sandbox`. It uses
+bubblewrap on Linux, `sandbox-exec` on macOS and an AppContainer on Windows; the
+desktop's Orbit view shows the same status, commands and sandbox plan. Orbit
+results are the developer's commands, never check evidence.
+
 ## Design references and licensing
 
 The [desktop/Pi RPC proposal](LUUNA-Desktop-Pi-RPC-Full-Development-Proposal.md) supplies detailed rationale. The thirteen numbered chapters under `docs/`, [the complete reference](LUUNA-COMPLETE-REFERENCE.md), diagrams, examples, HTML, and PDF remain historical source material. Their original browser/TUI delivery order and conflicting API examples are superseded by the current architecture and decisions. Browser/TUI capability parity remains a full-v1 obligation.

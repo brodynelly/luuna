@@ -487,3 +487,110 @@ fn help_lists_every_command_once_and_needs_no_token() {
     assert_eq!(code, 0);
     assert_eq!(serde_json::from_str::<Value>(&out).unwrap(), catalog());
 }
+
+/// Orbit (ADR 0036): the typed command travels as an argument array, a failed repository exits 1
+/// after printing every repository, and `sbx` shows the plan or refuses an unavailable sandbox.
+#[test]
+fn orbit_commands_and_the_sandbox_plan() {
+    let directory = tempfile::tempdir().unwrap();
+    let mock = serve(|request: &Request| {
+        let path = request.path.as_str();
+        if path.ends_with("/orbit/sandbox") {
+            let available = request.query.contains("network=none");
+            return json(
+                json!({"version":1,"project_id":"luuna","backend":"bwrap","available":available,"reason":if available { Value::Null } else { json!("bwrap missing") },"workdir":"/home/dev/github","host_root":null,"home":"/data/home","repositories":[{"repository_id":"luuna","host_path":"/home/dev/github/luuna","sandbox_path":"/home/dev/github/luuna"}],"network":"none","container_name":null,"notes":[]}),
+            );
+        }
+        json(
+            json!({"id":"x","kind":"recipe","command":["test"],"results":[{"repository_id":"app","status":"succeeded","exit_code":0,"reason":null,"stdout_excerpt":"ok","stderr_excerpt":""},{"repository_id":"lib","status":"failed","exit_code":1,"reason":"exit code 1","stdout_excerpt":"1 failed","stderr_excerpt":""}]}),
+        )
+    });
+    let run = |argv: &[&str]| run_client(argv, &mock.url(), Some(TOKEN), "", directory.path());
+    let (code, _, err) = run(&[
+        "orbit-exec",
+        "luuna",
+        r#"git commit -m "two words""#,
+        "--repository",
+        "atlas",
+        "--repository",
+        "beacon",
+        "--parallel",
+        "--timeout",
+        "60",
+    ]);
+    assert_eq!(code, 1, "the mock's lib repository failed: {err}");
+    let posted = mock.take().remove(0);
+    assert_eq!(posted.path, "/api/v1/projects/luuna/orbit/exec");
+    assert_eq!(
+        posted.body,
+        r#"{"executable":"git","args":["commit","-m","two words"],"repositories":["atlas","beacon"],"parallel":true,"timeout_seconds":60}"#
+    );
+    let (code, _, err) = run(&["orbit-exec", "luuna", "   "]);
+    assert_eq!(code, 1);
+    assert!(err.contains("Type a command"), "{err}");
+    assert!(mock.take().is_empty(), "an empty command is never sent");
+    let (code, out, _) = run(&["orbit-run", "p", "test"]);
+    assert_eq!(code, 1);
+    assert!(
+        out.contains("── app  succeeded exit 0\n   ok\n── lib  failed exit 1\n   1 failed"),
+        "{out}"
+    );
+    // The sandboxed command's own flags stay its own, with or without the `--`.
+    for argv in [
+        &[
+            "sbx",
+            "luuna",
+            "--network",
+            "none",
+            "--plan-only",
+            "--",
+            "pi",
+            "--model",
+            "x",
+        ][..],
+        &[
+            "sbx",
+            "luuna",
+            "--network",
+            "none",
+            "--plan-only",
+            "pi",
+            "--model",
+            "x",
+        ][..],
+    ] {
+        let (code, out, err) = run(argv);
+        assert_eq!(code, 0, "{err}");
+        assert!(
+            out.starts_with("sandbox luuna · bwrap · available"),
+            "{out}"
+        );
+        assert!(
+            out.contains("open it with: lu sbx luuna --network none"),
+            "{out}"
+        );
+    }
+    let (code, _, err) = run(&["sbx", "luuna"]);
+    assert_eq!(code, 1);
+    assert!(
+        err.contains("Project sandbox refused: bwrap missing"),
+        "{err}"
+    );
+    let (code, _, err) = run(&["sbx", "luuna", "--network", "wide"]);
+    assert_eq!(code, 2);
+    assert!(err.contains("--network takes open or none."), "{err}");
+}
+
+#[test]
+fn a_trailing_command_is_taken_verbatim() {
+    let command = luuna_tui::commands::by_name("sbx").unwrap();
+    for argv in [
+        vec!["luuna", "--network", "none", "--", "pi", "--model", "x"],
+        vec!["luuna", "--network", "none", "pi", "--model", "x"],
+    ] {
+        let argv: Vec<String> = argv.into_iter().map(String::from).collect();
+        let input = luuna_tui::cli::parse_arguments(&argv, Some(command)).unwrap();
+        assert_eq!(input.args, ["luuna", "pi", "--model", "x"]);
+        assert_eq!(input.flags.len(), 1);
+    }
+}

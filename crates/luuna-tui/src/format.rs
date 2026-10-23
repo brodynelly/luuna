@@ -965,6 +965,256 @@ pub fn format_board(board: &J, colour: bool) -> R<String> {
 }
 
 /// The doctor report as `luuna-runtime doctor` prints it.
+pub fn orbit_tone(status: &str) -> Option<&'static str> {
+    Some(match status {
+        "succeeded" => "success",
+        "failed" | "blocked" => "danger",
+        "cancelled" | "skipped" => "neutral",
+        _ => return None,
+    })
+}
+
+/// `${count} ${count === 1 ? one : many}`
+fn plural(count: &J, one: &str, many: &str) -> String {
+    format!(
+        "{} {}",
+        s(count),
+        if count.as_f64() == Some(1.0) {
+            one
+        } else {
+            many
+        }
+    )
+}
+
+/// JavaScript's `a + b`: strings and objects concatenate as text, everything else adds as numbers.
+fn add(a: &J, b: &J) -> J {
+    let text = |v: &J| matches!(v, J::Str(_) | J::Obj(_) | J::Arr(_));
+    if text(a) || text(b) {
+        J::Str(format!("{}{}", a.js(), b.js()))
+    } else {
+        J::num(a.to_number() + b.to_number())
+    }
+}
+
+/// `a !== b` for values read from JSON: objects and arrays are never the same value.
+fn strictly_different(a: &J, b: &J) -> bool {
+    match (a, b) {
+        (J::Undefined, J::Undefined) | (J::Null, J::Null) => false,
+        (J::Bool(x), J::Bool(y)) => x != y,
+        (J::Str(x), J::Str(y)) => x != y,
+        (J::Num(_), J::Num(_)) => a.as_f64() != b.as_f64(),
+        _ => true,
+    }
+}
+
+/// `value.map(fn)` spread into a list (`...(value ?? []).map(fn)`).
+fn spread_map(value: &J, each: impl FnMut(&J) -> R<String>) -> R<Vec<String>> {
+    if value.nullish() {
+        Ok(Vec::new())
+    } else {
+        map(value, each)
+    }
+}
+
+/// One line per repository: branch, upstream distance, uncommitted changes and recipes.
+pub fn format_orbit(view: &J, colour: bool) -> R<String> {
+    let repositories = f(view, "repositories")?.or(&EMPTY_ARR).clone();
+    let revision = f(view, "manifest_revision")?;
+    let mut lines = vec![format!(
+        "{} ({}) · {} · {}",
+        s(f(view, "name")?),
+        s(f(view, "project_id")?),
+        plural(&len(&repositories)?, "repository", "repositories"),
+        if revision.nullish() {
+            "manifest unconfirmed".to_string()
+        } else {
+            format!("manifest r{}", s(revision))
+        }
+    )];
+    for repository in iterate(&repositories)? {
+        if !f(&repository, "present")?.truthy() {
+            lines.push(format!(
+                "  {}  {}  {}  (orbit-sync clones it)",
+                s(f(&repository, "repository_id")?),
+                paint("missing", Some("attention"), colour),
+                s(f(&repository, "local_path")?)
+            ));
+            continue;
+        }
+        let dirty_state = f(&repository, "dirty")?;
+        let dirty = if dirty_state.truthy() {
+            let sum = add(
+                &add(
+                    &add(dirty_state.get("staged"), dirty_state.get("unstaged")),
+                    dirty_state.get("untracked"),
+                ),
+                dirty_state.get("conflicted"),
+            );
+            sum
+        } else {
+            J::num(0)
+        };
+        let upstream = f(&repository, "upstream")?;
+        let upstream = if upstream.truthy() {
+            format!(
+                "  {} ↑{} ↓{}",
+                s(upstream.get("name")),
+                s(upstream.get("ahead")),
+                s(upstream.get("behind"))
+            )
+        } else {
+            "  no upstream".to_string()
+        };
+        let recipes = f(&repository, "recipes")?;
+        let recipes = if olen(recipes).truthy() {
+            format!("  recipes: {}", join(recipes, ", ")?)
+        } else {
+            String::new()
+        };
+        lines.push(format!(
+            "  {}  {}{}  {}  {}{}",
+            s(f(&repository, "repository_id")?),
+            or(f(&repository, "branch")?, "(detached)"),
+            upstream,
+            if dirty.truthy() {
+                paint(&format!("{} changed", s(&dirty)), Some("attention"), colour)
+            } else {
+                paint("clean", Some("neutral"), colour)
+            },
+            s(f(&repository, "local_path")?),
+            recipes
+        ));
+        let error = f(&repository, "error")?;
+        if error.truthy() {
+            lines.push(format!("    {}", paint(&s(error), Some("danger"), colour)));
+        }
+    }
+    Ok(lines.join("\n"))
+}
+
+/// `text.trimEnd().split(/\r?\n/)`
+fn trimmed_lines(text: &str) -> Vec<String> {
+    text.trim_end_matches(|c: char| c.is_whitespace() || c == '\u{feff}')
+        .split('\n')
+        .map(|line| line.strip_suffix('\r').unwrap_or(line).to_string())
+        .collect()
+}
+
+/// Per repository: the outcome, then the tail of its output.
+pub fn format_orbit_execution(execution: &J, colour: bool) -> R<String> {
+    let results = f(execution, "results")?.or(&EMPTY_ARR).clone();
+    let command = f(execution, "command")?;
+    let command = if command.nullish() {
+        String::new()
+    } else {
+        join(command, " ")?
+    };
+    let mut lines = vec![format!(
+        "{} {} · {} · not evidence",
+        or(f(execution, "kind")?, "orbit"),
+        command,
+        plural(&len(&results)?, "repository", "repositories")
+    )];
+    for result in iterate(&results)? {
+        let status = f(&result, "status")?;
+        let action = f(&result, "action")?;
+        let exit_code = f(&result, "exit_code")?;
+        let reason = f(&result, "reason")?;
+        let exit = J::str(format!("exit code {}", s(exit_code)));
+        lines.push(format!(
+            "── {}  {}{}{}{}",
+            s(f(&result, "repository_id")?),
+            paint(&s(status), orbit_tone(&s(status)), colour),
+            if action.truthy() {
+                format!(" ({})", s(action))
+            } else {
+                String::new()
+            },
+            if exit_code.nullish() {
+                String::new()
+            } else {
+                format!(" exit {}", s(exit_code))
+            },
+            if reason.truthy() && strictly_different(reason, &exit) {
+                format!(" · {}", s(reason))
+            } else {
+                String::new()
+            }
+        ));
+        for text in [f(&result, "stdout_excerpt")?, f(&result, "stderr_excerpt")?] {
+            if !text.truthy() {
+                continue;
+            }
+            let J::Str(text) = text else {
+                return Err(type_error());
+            };
+            if crate::builders::js_trim(text).is_empty() {
+                continue;
+            }
+            lines.push(
+                trimmed_lines(text)
+                    .iter()
+                    .map(|line| format!("   {line}"))
+                    .collect::<Vec<_>>()
+                    .join("\n"),
+            );
+        }
+    }
+    Ok(lines.join("\n"))
+}
+
+/// What the sandbox reaches, and the limits that come with it.
+pub fn format_sandbox_plan(plan: &J, colour: bool) -> R<String> {
+    let reason = f(plan, "reason")?;
+    let mut lines = vec![
+        format!(
+            "sandbox {} · {} · {}{}",
+            s(f(plan, "project_id")?),
+            s(f(plan, "backend")?),
+            if f(plan, "available")?.truthy() {
+                paint("available", Some("success"), colour)
+            } else {
+                paint("unavailable", Some("danger"), colour)
+            },
+            if reason.truthy() {
+                format!(" · {}", s(reason))
+            } else {
+                String::new()
+            }
+        ),
+        format!("  starts in {}", s(f(plan, "workdir")?)),
+    ];
+    lines.extend(spread_map(f(plan, "repositories")?, |r| {
+        let (host, sandbox) = (f(r, "host_path")?, f(r, "sandbox_path")?);
+        Ok(format!(
+            "  read-write {}: {}{}",
+            s(f(r, "repository_id")?),
+            s(host),
+            if strictly_different(sandbox, host) {
+                format!(" (as {})", s(sandbox))
+            } else {
+                String::new()
+            }
+        ))
+    })?);
+    lines.push(format!("  home {}", s(f(plan, "home")?)));
+    lines.push(format!("  network {}", s(f(plan, "network")?)));
+    lines.extend(spread_map(f(plan, "notes")?, |note| {
+        Ok(format!("  note: {}", s(note)))
+    })?);
+    lines.push(format!(
+        "  open it with: lu sbx {}{}",
+        s(f(plan, "project_id")?),
+        if f(plan, "network")?.as_str() == Some("none") {
+            " --network none"
+        } else {
+            ""
+        }
+    ));
+    Ok(lines.join("\n"))
+}
+
 pub fn format_doctor(report: &J) -> R<String> {
     let pad = |value: &J, width: usize| match value {
         J::Str(text) => Ok(js::pad_end(text, width)),
@@ -1282,6 +1532,9 @@ pub fn format(id: &str, value: &J, colour: bool) -> R<String> {
         "projection.home" => format_home(v, colour)?,
         "projection.board" => format_board(v, colour)?,
         "artifacts.read" => if v.truthy() { s(v) } else { "Empty log.".into() },
+        "orbit.status" => format_orbit(v, colour)?,
+        "orbit.exec" | "orbit.run" | "orbit.sync" => format_orbit_execution(v, colour)?,
+        "orbit.sandbox" => format_sandbox_plan(v, colour)?,
         "shutdown" => format!("Runtime {}. Runs, candidates and worktrees stay durable; start it again with the same data directory and token.", s(f(v, "status")?)),
         _ => match v {
             J::Str(text) => text.clone(),

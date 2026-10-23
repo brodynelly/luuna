@@ -30,6 +30,21 @@ Behaviour was ported exactly, including one defect that existed before: `export-
 - `node scripts/tui-native-audit.mjs` (ConPTY, Windows 11): 81 checks passed, 0 failed, UI coverage complete. One check could not run on the audit host: warm reuse through the production PowerShell bootstrap, because the owner's own runtime held port 4242.
 - Linux (WSL Ubuntu, rustc 1.90, Node 22): `cargo test -p luuna-tui` passed, `tui-smoke` passed 51 of 51, and the differential harness found 1419 of 1419 cases identical. The oracle loaded the frozen API client's compiled `dist`, because that Node build has no TypeScript support. The first Linux run found one real platform difference, now fixed: on POSIX, Node's file-error messages name the path as given; only on Windows do they name the resolved absolute path.
 
-- `scripts/package-windows.ps1` (release profile, 2026-10-23) built the unsigned development installer `Luuna_0.1.0_x64-setup.exe`. Its terminal payload is `luuna-tui.exe` alone, the staged executable answered `--help`, and the packaged-layout verification passed, including the component digests.
+- `scripts/package-windows.ps1` (release profile, 2026-10-23) built the unsigned development installer `Luuna_0.1.0_x64-setup.exe`. Its terminal payload is `luuna-tui.exe` alone, the staged executable answered `--help`, and the packaged-layout verification passed, including the component digests. That build preceded the Orbit merge below, so it has no `luuna-sbx.exe`.
+
+## Merge with Orbit (ADR 0036)
+
+[ADR 0036](0036-orbit-and-project-sandbox.md) landed on `main` while this rewrite was in progress. It added the commands `orbit`, `orbit-exec`, `orbit-run`, `orbit-sync` and `sbx` to the JavaScript client this ADR removes. Merging the two ported them into the Rust client:
+- `commands.json` gained their entries unchanged, generated from the merged JavaScript table. Two fields were added: `rest` (a trailing command taken verbatim) and `failed: "orbit"` (exit 1 when a repository failed or was blocked); the bridge's catalog omits `failed`, as the original did.
+- `format.rs` gained the three Orbit formatters.
+- `sandbox.rs` hands the plan to `luuna-sbx` exactly as `sandbox.mjs` did: in the launcher's environment, without the runtime token or URL. The launcher is found under `target/debug` in a checkout and beside the client in an installed layout.
+- Exit codes widened to `i32`, so a sandboxed command's code passes through unchanged.
+
+One behaviour was carried over as the original had it. In the workbench, an Orbit run in which a repository failed reports "The command failed." instead of the per-repository result, because the original bridge did so.
+
+Evidence for the merge, 2026-10-23:
+- The differential harness was re-run against the merged JavaScript client, with Orbit records, failure shapes and about 220 Orbit and sandbox cases added: 1639 of 1639 cases identical on Windows and on Linux (WSL). Help listings are compared without `init`, which only the Rust client has.
+- An end-to-end run against a disposable runtime and the real AppContainer passed 9 of 9 checks: Orbit status, exec, exit 1 for a failed repository, the plan, a sandboxed `exit 7` returned as the client's exit code, the project readable inside the sandbox, and neither `LUUNA_API_TOKEN` nor `LUUNA_URL` present inside it. The grants were revoked afterwards.
+- `cargo test -p luuna-tui` (Windows and Linux), `cargo test -p luuna-sandbox`, clippy, `cargo check --workspace --all-targets`, `npm run test:contracts` (64 actions), and the terminal, guard, component-pin, smoke-harness, API client, UI and desktop suites.
 
 Not established here: the installer was not installed on a clean machine (the clean-machine procedure in `docs/PACKAGING.md` was not run), macOS was not exercised, and the Linux run was not a native tmux workbench audit.

@@ -7,6 +7,7 @@ export const VIEWS = [
   { id: "home", label: "Home", description: "What needs your attention, and how each project's checks stand." },
   { id: "board", label: "Board", description: "Every ticket, in the column of its latest plan's state. Select a card to open it." },
   { id: "projects", label: "Projects", description: "Add a repository to plan, implement and review changes. Luuna reads your checkout but never changes it." },
+  { id: "orbit", label: "Orbit", description: "Every repository of a project at once: status, one command across all of them, and the sandbox that reaches only them." },
   { id: "sessions", label: "Sessions", description: "Every run the runtime recorded, with its live output and durable event record." },
   { id: "settings", label: "Settings", description: "The connected runtime and its environment." },
   { id: "help", label: "Help", description: "How Luuna works, what each status means and where its evidence is kept." },
@@ -16,7 +17,7 @@ export type View = (typeof VIEWS)[number]["id"];
 
 /** The sidebar's sections, in VIEWS order so the Ctrl+N shortcuts stay stable. */
 export const NAV_SECTIONS = [
-  { id: "workspace", label: "Workspace", views: ["home", "board", "projects", "sessions"] },
+  { id: "workspace", label: "Workspace", views: ["home", "board", "projects", "orbit", "sessions"] },
   { id: "general", label: "General", views: ["settings", "help"] },
 ] as const satisfies ReadonlyArray<{ id: string; label: string; views: readonly View[] }>;
 

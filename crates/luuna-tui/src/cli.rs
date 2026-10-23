@@ -60,7 +60,7 @@ impl Process {
 /// What `main` decided when it did not finish by itself: open the workbench (optionally the guide).
 #[derive(Debug, PartialEq)]
 pub enum Next {
-    Exit(u8),
+    Exit(i32),
     Workbench {
         guide: Option<Vec<(String, String)>>,
     },
@@ -75,6 +75,14 @@ pub fn parse_arguments(argv: &[String], command: Option<&Command>) -> Result<Inp
         if token == "--" {
             input.args.extend(argv[index + 1..].iter().cloned());
             break;
+        }
+        // A command with a trailing command (`sbx <project> pi --model x`) takes every word after its
+        // own arguments verbatim, so the result is the same when a launcher drops the `--`.
+        if let Some(command) = command {
+            if command.rest && !token.starts_with("--") && input.args.len() >= command.args.len() {
+                input.args.extend(argv[index..].iter().cloned());
+                break;
+            }
         }
         let Some(stripped) = token.strip_prefix("--") else {
             input.args.push(token.clone());
@@ -192,6 +200,8 @@ struct CliIo {
     signal: Signal,
     json: bool,
     colour: bool,
+    env: Vec<(String, String)>,
+    sandbox: std::sync::Mutex<Option<i32>>,
     stdout: std::sync::Mutex<Box<dyn Write + Send>>,
     stderr: std::sync::Mutex<Box<dyn Write + Send>>,
     stdin: std::sync::Mutex<Option<Box<dyn Read + Send>>>,
@@ -238,6 +248,24 @@ impl Io for CliIo {
         let _ = writeln!(err, "{text}");
         let _ = err.flush();
     }
+    fn can_launch(&self) -> bool {
+        true
+    }
+    fn launch(
+        &self,
+        plan: J,
+        command: Vec<String>,
+        grants: Vec<String>,
+    ) -> Fut<'_, Result<i32, Failure>> {
+        Box::pin(async move {
+            let code = crate::sandbox::launch(&plan, &command, &grants, &self.env).await?;
+            *self.sandbox.lock().unwrap() = Some(code);
+            Ok(code)
+        })
+    }
+    fn sandbox_exit(&self) -> Option<i32> {
+        *self.sandbox.lock().unwrap()
+    }
     fn emit(&self, event: &J) {
         let line = if self.json {
             event.stringify().unwrap_or_default()
@@ -267,7 +295,7 @@ pub async fn execute(
             usage(command)
         )));
     }
-    if input.args.len() > expected {
+    if input.args.len() > expected && !command.rest {
         return Err(Failure::Usage(format!(
             "{} takes {expected} argument(s); unexpected: {}. Usage: {}",
             command.name,
@@ -301,28 +329,39 @@ pub async fn run_command(
     colour: bool,
     out: &mut dyn FnMut(&str),
     err: &mut dyn FnMut(&str),
-) -> u8 {
-    let label = &command.action;
-    let outcome: Result<(), Failure> = async {
-        match execute(command, input, client, io).await? {
-            None => out("Cancelled.\n"),
-            Some(result) if json => out(&format!(
-                "{}\n",
-                result.stringify().unwrap_or_else(|| "null".into())
-            )),
+) -> i32 {
+    let outcome: Result<i32, Failure> = async {
+        let result = match execute(command, input, client, io).await? {
+            None => {
+                out("Cancelled.\n");
+                J::Undefined
+            }
+            // A sandboxed command ran; its exit code becomes the client's.
+            Some(_) if io.sandbox_exit().is_some() => return Ok(io.sandbox_exit().unwrap()),
+            Some(result) if json => {
+                out(&format!(
+                    "{}\n",
+                    result.stringify().unwrap_or_else(|| "null".into())
+                ));
+                result
+            }
             Some(result) => {
                 let text = format(&command.id, &result, colour)?;
                 if !text.is_empty() {
                     out(&format!("{text}\n"));
                 }
+                result
             }
-        }
-        Ok(())
+        };
+        Ok(if commands::failed(command, &result)? {
+            1
+        } else {
+            0
+        })
     }
     .await;
-    let _ = label;
     match outcome {
-        Ok(()) => 0,
+        Ok(code) => code,
         Err(Failure::Usage(message)) => {
             err(&format!("{message}\n"));
             2
@@ -445,7 +484,7 @@ pub async fn main(argv: Vec<String>, process: &mut Process) -> Next {
         return Next::Workbench { guide: Some(flags) };
     }
     let client = match connect(process) {
-        Err(code) => return Next::Exit(code),
+        Err(code) => return Next::Exit(code.into()),
         Ok(Ok(client)) => client,
         Ok(Err(failure)) => {
             let usage = matches!(failure, Failure::Usage(_));
@@ -472,6 +511,8 @@ pub async fn main(argv: Vec<String>, process: &mut Process) -> Next {
         signal,
         json,
         colour,
+        env: process.env.clone(),
+        sandbox: std::sync::Mutex::new(None),
         stdout: std::sync::Mutex::new(std::mem::replace(
             &mut process.stdout,
             Box::new(std::io::sink()),

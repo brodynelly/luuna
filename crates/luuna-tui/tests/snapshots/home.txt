@@ -1,16 +1,16 @@
- Home  Setup  Projects  Missions  Atlas  Beacon  Runs  Commands  Help
+ Home  Setup  Projects  Orbit  Missions  Atlas  Beacon  Runs  Commands  Help
  LUUNA  / WORKBENCH connected
 ╔ LUUNA ══════════════════════╗╔ > Home / workspace health ════════════════════════════════════════════════════════════╗
 ║ 1 Home *                    ║║> Demo workspace [1/1]                                                                 ║
 ║ 2 Set up a project          ║║Up/Down project / Enter opens / PgUp/PgDn details                                      ║
 ║ 3 Projects                  ║║YOUR DEVELOPMENT WORKSPACE                                                             ║
-║ 4 Missions                  ║║Repository health and work waiting for your attention.                                 ║
-║ 5 Atlas                     ║║                                                                                       ║
-║ 6 Beacon                    ║║> Demo workspace                                                                       ║
-║ 7 Runs                      ║║Project: demo                                                                          ║
-║ 8 Commands                  ║║Manifest revision: 2                                                                   ║
-║ 9 Help                      ║║Manifest hash:                                                                         ║
-║                             ║║Work: 1 tickets / 1 active workflows                                                   ║
+║ 4 Orbit                     ║║Repository health and work waiting for your attention.                                 ║
+║ 5 Missions                  ║║                                                                                       ║
+║ 6 Atlas                     ║║> Demo workspace                                                                       ║
+║ 7 Beacon                    ║║Project: demo                                                                          ║
+║ 8 Runs                      ║║Manifest revision: 2                                                                   ║
+║ 9 Commands                  ║║Manifest hash:                                                                         ║
+║ 10 Help                     ║║Work: 1 tickets / 1 active workflows                                                   ║
 ║                             ║║Repository: api                                                                        ║
 ║                             ║║Checkout: /fixture/api                                                                 ║
 ║                             ║║+ passed                                                                               ║

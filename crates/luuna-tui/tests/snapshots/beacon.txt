@@ -1,16 +1,16 @@
- Home  Setup  Projects  Missions  Atlas  Beacon  Runs  Commands  Help
+ Home  Setup  Projects  Orbit  Missions  Atlas  Beacon  Runs  Commands  Help
  LUUNA  / WORKBENCH connected
 ╔ LUUNA ══════════════════════╗╔ > Beacon / exact preview ═════════════════════════════════════════════════════════════╗
 ║ 1 Home                      ║║Unsent context: not selected / s selects                                               ║
 ║ 2 Set up a project          ║║review                                                                                 ║
 ║ 3 Projects                  ║║Version: 2                                                                             ║
-║ 4 Missions                  ║║Exact hash: sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa    ║
-║ 5 Atlas                     ║║                                                                                       ║
-║ 6 Beacon *                  ║║RENDERED BODY                                                                          ║
-║ 7 Runs                      ║║Review the exact candidate.                                                            ║
-║ 8 Commands                  ║║Explain every finding.                                                                 ║
-║ 9 Help                      ║║                                                                                       ║
-║                             ║║                                                                                       ║
+║ 4 Orbit                     ║║Exact hash: sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa    ║
+║ 5 Missions                  ║║                                                                                       ║
+║ 6 Atlas                     ║║RENDERED BODY                                                                          ║
+║ 7 Beacon *                  ║║Review the exact candidate.                                                            ║
+║ 8 Runs                      ║║Explain every finding.                                                                 ║
+║ 9 Commands                  ║║                                                                                       ║
+║ 10 Help                     ║║                                                                                       ║
 ║                             ║║                                                                                       ║
 ║                             ║║                                                                                       ║
 ║                             ║║                                                                                       ║

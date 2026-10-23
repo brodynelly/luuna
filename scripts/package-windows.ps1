@@ -48,7 +48,7 @@ $rustVersion = (& cargo --version)
 $nodeVersion = (& node.exe --version)
 
 Step 'Runtime and Rust terminal (locked workspace toolchain)'
-$cargoArguments = @('build', '--locked', '-p', 'luuna-runtime', '-p', 'luuna-tui')
+$cargoArguments = @('build', '--locked', '-p', 'luuna-runtime', '-p', 'luuna-tui', '-p', 'luuna-sandbox')
 if (!$DebugBuild) { $cargoArguments += '--release' }
 & cargo @cargoArguments
 if ($LASTEXITCODE -ne 0) { throw 'The runtime build failed.' }
@@ -57,6 +57,8 @@ $runtime = Join-Path $cargoTarget ($profile + '\luuna-runtime.exe')
 $terminal = Join-Path $cargoTarget ($profile + '\luuna-tui.exe')
 if (!(Test-Path -LiteralPath $runtime)) { throw ('Runtime executable missing: ' + $runtime) }
 if (!(Test-Path -LiteralPath $terminal)) { throw ('Rust terminal executable missing: ' + $terminal) }
+$sandboxLauncher = Join-Path $cargoTarget ($profile + '\luuna-sbx.exe')
+if (!(Test-Path -LiteralPath $sandboxLauncher)) { throw ('Sandbox launcher executable missing: ' + $sandboxLauncher) }
 
 $piSource = Join-Path $root 'tools\pi'
 if (!$SkipPi) {
@@ -136,6 +138,9 @@ $terminalLauncher = @(
 Set-Content -LiteralPath (Join-Path $stage 'Luuna Terminal.cmd') -Value $terminalLauncher -Encoding ascii
 # The same launcher under the short name `luuna` for a PATH entry on the install folder.
 Set-Content -LiteralPath (Join-Path $stage 'luuna.cmd') -Value $terminalLauncher -Encoding ascii
+# `lu` is the shorter name (ADR 0036); `lu sbx` finds luuna-sbx.exe beside it.
+Set-Content -LiteralPath (Join-Path $stage 'lu.cmd') -Value $terminalLauncher -Encoding ascii
+Copy-Item -LiteralPath $sandboxLauncher -Destination (Join-Path $stage 'luuna-sbx.exe')
 
 Step 'Bundle configuration overlay'
 $stageRelative = ('target/stage-' + $profile)
@@ -166,7 +171,7 @@ try {
 Step 'Verifying the packaged layout'
 $built = Join-Path $tauriDirectory ('target\' + $profile)
 $copied = Join-Path $built 'luuna'
-foreach ($required in @('luuna-runtime.exe', 'luuna-tui.exe', 'scripts\ensure-windows-runtime.ps1', 'scripts\windows-common.ps1', 'scripts\start-terminal.ps1', 'Configure Luuna.cmd', 'Luuna Terminal.cmd', 'luuna.cmd')) {
+foreach ($required in @('luuna-runtime.exe', 'luuna-tui.exe', 'luuna-sbx.exe', 'lu.cmd', 'scripts\ensure-windows-runtime.ps1', 'scripts\windows-common.ps1', 'scripts\start-terminal.ps1', 'Configure Luuna.cmd', 'Luuna Terminal.cmd', 'luuna.cmd')) {
     if (!(Test-Path -LiteralPath (Join-Path $copied $required))) { throw ('Packaged resource missing after build: ' + $required) }
 }
 if (!$SkipPi -and !(Test-Path -LiteralPath (Join-Path $copied 'pi\node_modules\@earendil-works\pi-coding-agent\dist\cli.js'))) { throw 'Packaged Pi tree missing after build.' }
@@ -199,8 +204,9 @@ $report = [ordered]@{
     webview_install_mode = 'downloadBootstrapper'
     prerequisites_on_target = @('WebView2 Runtime (bootstrapped by the installer when absent)', 'Node.js 24.19 or newer on PATH for the pinned Pi engine', 'Git 2.43 or newer on PATH', 'Python 3 for Python check recipes', 'a provider key saved with Configure Luuna.cmd')
     components = $stagedComponents
-    terminal_client = 'Luuna Terminal.cmd (native Rust workbench; Node JSONL bridge and script commands)'
+    terminal_client = 'Luuna Terminal.cmd (the Rust terminal client, one executable; ADR 0037)'
     terminal_executable = [ordered]@{ path = (Join-Path $copied 'luuna-tui.exe'); sha256 = (Sha256 (Join-Path $copied 'luuna-tui.exe')) }
+    sandbox_launcher = [ordered]@{ path = (Join-Path $copied 'luuna-sbx.exe'); sha256 = (Sha256 (Join-Path $copied 'luuna-sbx.exe')) }
     clean_machine_test = 'not executed by this script; see docs/PACKAGING.md'
     artifacts = @(
         foreach ($installer in $installers) { [ordered]@{ path = $installer.FullName; sha256 = (Sha256 $installer.FullName); size_bytes = $installer.Length } }

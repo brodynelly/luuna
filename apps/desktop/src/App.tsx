@@ -6,6 +6,7 @@ import type { OpenRequest } from "./Home";
 import { Board } from "./Board";
 import { Help } from "./Help";
 import { Settings } from "./Settings";
+import { Orbit } from "./Orbit";
 import { Sessions } from "./sessions/Sessions";
 import { ConnectPage, RuntimeCard } from "./shell/Connection";
 import { WindowSidebar } from "./shell/WindowSidebar";
@@ -50,6 +51,7 @@ export function App() {
       <ViewSlot hidden={gated || view !== "home"} entering={entering === "home"}><Home client={client} connectionEpoch={connectionEpoch} refreshEpoch={refresh} onOpen={open} onNavigate={navigate} /></ViewSlot>
       <ViewSlot hidden={gated || view !== "board"} entering={entering === "board"}><Board client={client} connectionEpoch={connectionEpoch} refreshEpoch={refresh} onOpen={open} /></ViewSlot>
       <ViewSlot hidden={gated || view !== "projects"} entering={entering === "projects"}><ProjectPanel client={client} connectionEpoch={connectionEpoch} requested={requested} /></ViewSlot>
+      <ViewSlot hidden={gated || view !== "orbit"} entering={entering === "orbit"}><Orbit client={client} connectionEpoch={connectionEpoch} refreshEpoch={refresh} /></ViewSlot>
       <ViewSlot hidden={gated || view !== "sessions"} entering={entering === "sessions"}><Sessions runtime={runtime} /></ViewSlot>
       <ViewSlot hidden={gated || view !== "settings"} entering={entering === "settings"}><Settings client={client} connectionEpoch={connectionEpoch} refreshEpoch={refresh}><RuntimeCard runtime={runtime} /></Settings></ViewSlot>
       <ViewSlot hidden={view !== "help"} entering={entering === "help"}><Help /></ViewSlot>

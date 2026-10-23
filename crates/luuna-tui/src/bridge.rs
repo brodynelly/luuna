@@ -262,6 +262,8 @@ impl Service {
                     _ => Map::new(),
                 };
                 entry.remove("example");
+                // How a result marks the command failed is the client's own rule, not catalog data.
+                entry.remove("failed");
                 if let Some(Value::Object(flags)) = entry.get_mut("flags") {
                     flags.remove("acknowledge-hash");
                 }
@@ -510,7 +512,7 @@ impl Service {
                 if input.args.len() < expected {
                     return Err(Failure::Usage(format!("{} needs {expected} argument(s). Usage: {}", command.name, usage(command))));
                 }
-                if input.args.len() > expected {
+                if input.args.len() > expected && !command.rest {
                     return Err(Failure::Usage(format!("{} takes {expected} argument(s); unexpected: {}. Usage: {}", command.name, input.args[expected..].join(" "), usage(command))));
                 }
                 if let Some(question) = &command.confirm {
@@ -530,6 +532,21 @@ impl Service {
                     code = 0;
                     if value.is_some() {
                         completed = true;
+                    }
+                    // A result that marks the command failed (an Orbit run with a failed or blocked
+                    // repository) exits 1 without a refusal, as the original bridge reported it.
+                    match commands::failed(command, value.as_ref().unwrap_or(&J::Undefined)) {
+                        Ok(false) => {}
+                        Ok(true) => {
+                            code = 1;
+                            return Err((Failure::error("The command failed."), None));
+                        }
+                        Err(failure) => {
+                            code = 1;
+                            let stderr = format!("{}\n", crate::cli::refusal_text(command, &failure));
+                            let stderr = crate::js::slice16(&plain(&stderr), 0, Some(DISPLAY as isize));
+                            return Err((failure, Some(stderr)));
+                        }
                     }
                     value
                 }

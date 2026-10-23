@@ -34,7 +34,7 @@ describe("components and templates", () => {
   }
 
   test("every view page renders through the Page template", () => {
-    const pages = ["Home.tsx", "Board.tsx", "projects/Projects.tsx", "sessions/Sessions.tsx", "Settings.tsx", "Help.tsx"];
+    const pages = ["Home.tsx", "Board.tsx", "projects/Projects.tsx", "sessions/Sessions.tsx", "Settings.tsx", "Help.tsx", "Orbit.tsx"];
     for (const file of pages) expect(source(file), file).toMatch(/<Page\b/);
   });
 

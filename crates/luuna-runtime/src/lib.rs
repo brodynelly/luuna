@@ -230,6 +230,7 @@ pub mod doctor;
 mod graph;
 mod integrations;
 mod missions;
+mod orbit;
 mod policy;
 mod projects;
 mod publication;
@@ -751,6 +752,11 @@ pub fn router(state: AppState) -> Router {
             "/api/v1/projects/{id}/events",
             get(projects::project_events),
         )
+        .route("/api/v1/projects/{id}/orbit", get(orbit::status))
+        .route("/api/v1/projects/{id}/orbit/exec", post(orbit::exec))
+        .route("/api/v1/projects/{id}/orbit/run", post(orbit::run))
+        .route("/api/v1/projects/{id}/orbit/sync", post(orbit::sync))
+        .route("/api/v1/projects/{id}/orbit/sandbox", get(orbit::sandbox))
         .route(
             "/api/v1/projects/{id}/baselines",
             get(baselines::list_baselines).post(baselines::start_baseline),

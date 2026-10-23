@@ -1564,6 +1564,166 @@
       }
     },
     {
+      "id": "orbit.status",
+      "name": "orbit",
+      "action": "Orbit status",
+      "context": "project",
+      "args": [
+        {
+          "name": "project",
+          "context": true
+        }
+      ],
+      "flags": {},
+      "example": {
+        "args": [
+          "walkthrough"
+        ],
+        "flags": {}
+      }
+    },
+    {
+      "id": "orbit.exec",
+      "name": "orbit-exec",
+      "action": "Orbit command",
+      "context": "project",
+      "failed": "orbit",
+      "args": [
+        {
+          "name": "project",
+          "context": true
+        },
+        {
+          "name": "command",
+          "description": "the command to run in each repository, for example \"git status --short\" (no shell runs it)",
+          "prompt": "Command to run in each repository"
+        }
+      ],
+      "flags": {
+        "repository": {
+          "repeat": true,
+          "description": "only this repository (repeatable; all when omitted)"
+        },
+        "parallel": {
+          "boolean": true,
+          "description": "run up to four repositories at once"
+        },
+        "timeout": {
+          "description": "seconds per repository (1-3600, default 300)"
+        },
+        "cwd": {
+          "description": "working directory relative to each repository root"
+        }
+      },
+      "example": {
+        "args": [
+          "walkthrough",
+          "git status --short"
+        ],
+        "flags": {
+          "parallel": true
+        }
+      }
+    },
+    {
+      "id": "orbit.run",
+      "name": "orbit-run",
+      "action": "Orbit recipe run",
+      "context": "project",
+      "failed": "orbit",
+      "args": [
+        {
+          "name": "project",
+          "context": true
+        },
+        {
+          "name": "recipe",
+          "description": "a confirmed manifest recipe id, for example test",
+          "prompt": "Recipe id"
+        }
+      ],
+      "flags": {
+        "repository": {
+          "repeat": true,
+          "description": "only this repository (repeatable; all when omitted)"
+        },
+        "parallel": {
+          "boolean": true,
+          "description": "run up to four repositories at once"
+        }
+      },
+      "example": {
+        "args": [
+          "walkthrough",
+          "test"
+        ],
+        "flags": {}
+      }
+    },
+    {
+      "id": "orbit.sync",
+      "name": "orbit-sync",
+      "action": "Orbit sync",
+      "context": "project",
+      "failed": "orbit",
+      "args": [
+        {
+          "name": "project",
+          "context": true
+        }
+      ],
+      "flags": {
+        "repository": {
+          "repeat": true,
+          "description": "only this repository (repeatable; all when omitted)"
+        },
+        "no-fetch": {
+          "boolean": true,
+          "description": "only clone missing checkouts; do not fetch present ones"
+        }
+      },
+      "example": {
+        "args": [
+          "walkthrough"
+        ],
+        "flags": {}
+      }
+    },
+    {
+      "id": "orbit.sandbox",
+      "name": "sbx",
+      "action": "Project sandbox",
+      "context": "project",
+      "rest": true,
+      "args": [
+        {
+          "name": "project",
+          "context": true
+        }
+      ],
+      "flags": {
+        "network": {
+          "description": "open (default) or none"
+        },
+        "plan-only": {
+          "boolean": true,
+          "description": "print the plan without opening the sandbox"
+        },
+        "grant-read": {
+          "repeat": true,
+          "description": "another absolute directory the sandbox may read and run tools from (repeatable)"
+        }
+      },
+      "example": {
+        "args": [
+          "walkthrough"
+        ],
+        "flags": {
+          "plan-only": true
+        }
+      }
+    },
+    {
       "id": "artifacts.read",
       "name": "artifact",
       "action": "Log inspection",

@@ -47,10 +47,10 @@ pub fn render(frame: &mut Frame, app: &mut AppState, theme: Theme) {
         .style(theme.base()),
         header,
     );
-    let menu_text = if area.width < 65 {
+    let menu_text = if area.width < 78 {
         " F10 Menu  F2 Commands  F1 Help"
     } else {
-        " Home  Setup  Projects  Missions  Atlas  Beacon  Runs  Commands  Help"
+        " Home  Setup  Projects  Orbit  Missions  Atlas  Beacon  Runs  Commands  Help"
     };
     let menu_line = Line::from(
         menu_text

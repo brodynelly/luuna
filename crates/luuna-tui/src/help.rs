@@ -10,7 +10,7 @@ use crate::text::{visible_width, wrap};
 pub const DEFAULT_NAME: &str = "luuna-tui";
 
 /// Display groups, in workflow order. Each command is listed once.
-pub const HELP_GROUPS: [(&str, &str, &[&str]); 9] = [
+pub const HELP_GROUPS: [(&str, &str, &[&str]); 10] = [
     (
         "Start here",
         "Is the runtime up, and what needs attention?",
@@ -34,6 +34,11 @@ pub const HELP_GROUPS: [(&str, &str, &[&str]); 9] = [
             "export",
             "import",
         ],
+    ),
+    (
+        "Orbit and sandbox",
+        "Every repository of a project at once, and a shell that reaches only them (ADR 0036).",
+        &["orbit", "orbit-exec", "orbit-run", "orbit-sync", "sbx"],
     ),
     (
         "Tickets",

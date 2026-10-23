@@ -15,6 +15,7 @@ pub enum Screen {
     Home,
     Projects,
     Project,
+    Orbit,
     Missions,
     Ticket,
     Memory,
@@ -33,6 +34,7 @@ pub const NAV: &[(&str, Screen)] = &[
     ("Home", Screen::Home),
     ("Set up a project", Screen::Setup),
     ("Projects", Screen::Projects),
+    ("Orbit", Screen::Orbit),
     ("Missions", Screen::Missions),
     ("Atlas", Screen::Memory),
     ("Beacon", Screen::Prompts),
@@ -68,6 +70,8 @@ pub struct WorkbenchState {
     pub refresh_after: bool,
     pub selected_id: Option<String>,
     pub initialized: bool,
+    /// Which Orbit record the detail area shows first: `sbx` or the last Orbit mutation.
+    pub orbit_detail: Option<String>,
 }
 pub fn snapshot(app: &AppState, key: &str) -> Value {
     if let Some(request) = app.snapshot_requests.get(key) {
@@ -79,7 +83,8 @@ pub fn snapshot(app: &AppState, key: &str) -> Value {
         };
         let context = |name: &str| app.context.get(name).map(String::as_str).unwrap_or("");
         let matches = match key {
-            "project" | "memory" | "prompts" => arg(0) == context("project"),
+            "project" | "memory" | "prompts" | "orbit" | "orbit-exec" | "orbit-run"
+            | "orbit-sync" | "sbx" => arg(0) == context("project"),
             "show-ticket" => arg(0) == context("ticket"),
             "show-plan" => arg(0) == context("plan"),
             "run" | "candidate" | "diff" | "tasks" | "worktrees" | "attempts" | "events"
@@ -108,6 +113,7 @@ pub fn rows(app: &AppState) -> Vec<Value> {
     match app.workbench.screen {
         Screen::Home => array(snapshot(app, "home")["projects"].clone()),
         Screen::Projects => array(snapshot(app, "projects")),
+        Screen::Orbit => array(snapshot(app, "orbit")["repositories"].clone()),
         Screen::Missions => {
             array(snapshot(app, "board")["columns"][app.workbench.column]["cards"].clone())
         }
@@ -189,6 +195,7 @@ pub fn hints(screen: Screen) -> &'static str {
     match screen {
         Screen::Home => "Enter project  s set up a project  F3 Projects  F5 refresh",
         Screen::Projects => "Enter open  n register  s guided setup  F5 refresh",
+        Screen::Orbit => "x exec  r recipe  s sync  b sandbox  F5 refresh",
         Screen::Project => "b baseline  d discover  c confirm  x components  y activate",
         Screen::Missions => "←→ columns  Enter ticket  n new  r refresh",
         Screen::Ticket => "e edit  p plan  g run  o source  c reconcile",
@@ -216,6 +223,7 @@ pub fn choose_project(app: &mut AppState, id: &str) {
         app.workbench.memory_ids.clear();
         app.workbench.prompt_selection = None;
         app.workbench.include_user = false;
+        app.workbench.orbit_detail = None;
         app.workbench.selected = Value::Null;
         app.workbench.query.clear();
         app.last_read = None;
@@ -264,6 +272,7 @@ pub fn load(app: &mut AppState) {
         Screen::Home => ("home", vec![]),
         Screen::Projects => ("projects", vec![]),
         Screen::Project => ("project", vec![p.clone()]),
+        Screen::Orbit => ("orbit", vec![p.clone()]),
         Screen::Missions => {
             if !p.is_empty() {
                 flags.insert("project".into(), json!(p));
@@ -593,6 +602,9 @@ pub fn key(app: &mut AppState, key: KeyEvent) -> bool {
         return true;
     }
     let count = rows(app).len();
+    if screen == Screen::Orbit && orbit_key(app, key.code) {
+        return true;
+    }
     match key.code {
         KeyCode::Tab | KeyCode::BackTab => app.workbench.nav = true,
         KeyCode::Up | KeyCode::Char('k') => {
@@ -814,6 +826,60 @@ pub fn key(app: &mut AppState, key: KeyEvent) -> bool {
     true
 }
 
+/// Orbit outcomes are the developer's own commands, never evidence (ADR 0013, ADR 0036):
+/// `succeeded` is deliberately neutral, so only passed evidence ever reads as success.
+pub fn orbit_tone(status: &str) -> &'static str {
+    match status {
+        "failed" | "blocked" => "danger",
+        _ => "neutral",
+    }
+}
+
+/// The recipe the Orbit run form starts with: the selected repository's first, else the project's.
+fn orbit_recipe(app: &AppState) -> String {
+    let first = |v: &Value| {
+        v["recipes"]
+            .as_array()
+            .and_then(|r| r.iter().find_map(Value::as_str))
+            .map(str::to_owned)
+    };
+    rows(app)
+        .get(app.workbench.cursor)
+        .and_then(first)
+        .or_else(|| first(&snapshot(app, "orbit")))
+        .unwrap_or_default()
+}
+
+fn orbit_key(app: &mut AppState, code: KeyCode) -> bool {
+    if !matches!(code, KeyCode::Char('x' | 'r' | 's' | 'b')) {
+        return false;
+    }
+    let p = project(app);
+    if p.is_empty() {
+        app.status = "Select a project or record first (F3 Projects).".into();
+        return true;
+    }
+    match code {
+        KeyCode::Char('x') => prefill(app, "orbit-exec", vec![("project", p)]),
+        KeyCode::Char('r') => {
+            let recipe = orbit_recipe(app);
+            prefill(app, "orbit-run", vec![("project", p), ("recipe", recipe)]);
+        }
+        KeyCode::Char('s') => prefill(app, "orbit-sync", vec![("project", p)]),
+        _ => {
+            if app.active_request.is_some() {
+                app.status = "Wait for this request, or Esc to stop waiting.".into();
+                return true;
+            }
+            let mut flags = Map::new();
+            flags.insert("plan-only".into(), json!(true));
+            app.workbench.orbit_detail = Some("sbx".into());
+            read(app, "sbx", vec![p], flags);
+        }
+    }
+    true
+}
+
 /// Called after the core protocol reducer, with the original request identity captured first.
 pub fn received(app: &mut AppState, event: &BridgeEvent, command: Option<&str>, was_read: bool) {
     if event.event == "catalog" && !app.workbench.initialized && !app.commands.is_empty() {
@@ -877,6 +943,11 @@ pub fn received(app: &mut AppState, event: &BridgeEvent, command: Option<&str>, 
         "save-prompt" => open(app, Screen::Prompts),
         "approve" => open(app, Screen::Plan),
         "implement" | "cancel" | "validate" | "repair" => open(app, Screen::RunDetail),
+        // Show the per-repository outcome in the Orbit view and re-read the status.
+        "orbit-exec" | "orbit-run" | "orbit-sync" => {
+            app.workbench.orbit_detail = Some(command.to_owned());
+            open(app, Screen::Orbit);
+        }
         _ => {}
     }
     if app.active_request.is_some() {

@@ -43,7 +43,11 @@ async fn main() -> std::process::ExitCode {
         cli::main(argv, &mut process).await
     };
     match next {
-        Next::Exit(code) => std::process::ExitCode::from(code),
+        // Codes beyond a byte (a sandboxed command's, on Windows) leave unchanged, as Node's did.
+        Next::Exit(code) => match u8::try_from(code) {
+            Ok(code) => std::process::ExitCode::from(code),
+            Err(_) => std::process::exit(code),
+        },
         Next::Workbench { guide } => match workbench(guide).await {
             Ok(code) => std::process::ExitCode::from(code),
             Err(error) => {
