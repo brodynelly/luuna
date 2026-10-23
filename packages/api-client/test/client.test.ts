@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from "vitest";
-import { ApiError, EventReplay, EventWindow, LuunaClient, MAX_REASON_LENGTH, advisoryRole, assistantText, awaitsValidation, checkResults, confirmedManifest, isTerminal, loopbackUrl, mergeEvents, nextStep, overrideFromRefusal, planRequestForTasks, registerProjectRequest } from "../src/index";
+import { ApiError, EventReplay, EventWindow, LuunaClient, MAX_REASON_LENGTH, advisoryRole, assistantText, awaitsValidation, checkResults, confirmedManifest, isTerminal, loopbackUrl, mergeEvents, nextStep, orbitCommand, overrideFromRefusal, planRequestForTasks, registerProjectRequest, sandboxCommand } from "../src/index";
 import type { DoctorReport, EventEnvelope, ProjectManifest, ProjectExport } from "../src/index";
 
 it("retains bounded event payloads while replaying text and rejects a gap atomically", () => {
@@ -585,5 +585,35 @@ describe("testing-setup prerequisite and delegated roles", () => {
     expect(overrideFromRefusal("repository app already has an active writer")).toBeNull();
     expect(overrideFromRefusal("dependency_overrides [{broken")).toBeNull();
     expect(nextStep(reason)).toContain("record the quoted dependency override");
+  });
+});
+
+describe("orbit (ADR 0036)", () => {
+  it("sends the five orbit routes project scoped and refuses empty commands and bad timeouts locally", async () => {
+    const fetcher = vi.fn<typeof fetch>().mockImplementation(() => Promise.resolve(new Response("{}")));
+    const client = new LuunaClient("http://127.0.0.1:4242", "test-token", fetcher);
+    await client.orbit("my/app");
+    await client.orbitExec("my/app", { executable: "git", args: ["status", "--short"], parallel: true });
+    await client.orbitRun("my/app", { recipe: "test", repositories: ["api"] });
+    await client.orbitSync("my/app", { fetch: false });
+    await client.orbitSandbox("my/app", "none");
+    expect(fetcher.mock.calls.map(([url, init]) => [String(url), init?.method ?? "GET", init?.body])).toEqual([
+      ["http://127.0.0.1:4242/api/v1/projects/my%2Fapp/orbit", "GET", undefined],
+      ["http://127.0.0.1:4242/api/v1/projects/my%2Fapp/orbit/exec", "POST", JSON.stringify({ executable: "git", args: ["status", "--short"], parallel: true })],
+      ["http://127.0.0.1:4242/api/v1/projects/my%2Fapp/orbit/run", "POST", JSON.stringify({ recipe: "test", repositories: ["api"] })],
+      ["http://127.0.0.1:4242/api/v1/projects/my%2Fapp/orbit/sync", "POST", JSON.stringify({ fetch: false })],
+      ["http://127.0.0.1:4242/api/v1/projects/my%2Fapp/orbit/sandbox?network=none", "GET", undefined],
+    ]);
+    expect(() => client.orbitExec("p", { executable: "  " })).toThrow("Type a command");
+    expect(() => client.orbitExec("p", { executable: "git", timeout_seconds: 0 })).toThrow("timeout");
+    expect(() => client.orbitRun("p", { recipe: "" })).toThrow("recipe");
+    expect(fetcher).toHaveBeenCalledTimes(5);
+  });
+
+  it("splits a typed command into an argument array without a shell and names the sandbox command", () => {
+    expect(orbitCommand(`git commit -m "two words" 'and more'`)).toEqual({ executable: "git", args: ["commit", "-m", "two words", "and more"] });
+    expect(() => orbitCommand("   ")).toThrow("Type a command");
+    expect(sandboxCommand("luuna")).toBe("lu sbx luuna");
+    expect(sandboxCommand("luuna", "none")).toBe("lu sbx luuna --network none");
   });
 });

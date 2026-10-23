@@ -9,13 +9,14 @@ use tauri::menu::{Menu, MenuBuilder, MenuItemBuilder, SubmenuBuilder};
 use tauri::{AppHandle, Manager, Runtime};
 
 /// The views in sidebar order with their shortcuts; the ids match `src/content/views.ts`.
-const VIEWS: [(&str, &str, &str); 6] = [
+const VIEWS: [(&str, &str, &str); 7] = [
     ("home", "Home", "CmdOrCtrl+1"),
     ("board", "Board", "CmdOrCtrl+2"),
     ("projects", "Projects", "CmdOrCtrl+3"),
-    ("sessions", "Sessions", "CmdOrCtrl+4"),
-    ("settings", "Settings", "CmdOrCtrl+5"),
-    ("help", "Help", "CmdOrCtrl+6"),
+    ("orbit", "Orbit", "CmdOrCtrl+4"),
+    ("sessions", "Sessions", "CmdOrCtrl+5"),
+    ("settings", "Settings", "CmdOrCtrl+6"),
+    ("help", "Help", "CmdOrCtrl+7"),
 ];
 
 pub fn build<R: Runtime>(app: &AppHandle<R>) -> tauri::Result<Menu<R>> {

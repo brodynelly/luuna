@@ -3,8 +3,10 @@
 //! Every command runs with optional locks disabled, so even `git status` leaves
 //! the index and working tree byte-identical. Repository-controlled hooks,
 //! filesystem monitors and content filters (including those configured only in
-//! a populated submodule) are neutralised from the command line, no network
-//! operation is issued, and remote URLs are redacted before they leave this crate.
+//! a populated submodule) are neutralised from the command line, inspection
+//! issues no network operation (publication's push in `remote` and Orbit's
+//! explicit fetch and clone in `sync` are the only ones), and remote URLs are
+//! redacted before they leave this crate.
 //! Output is capped per stream: a command passing the cap is killed at once.
 use chrono::{SecondsFormat, Utc};
 use luuna_domain::{
@@ -26,8 +28,10 @@ use tokio::{
 pub const MAX_OUTPUT_BYTES: usize = 8 * 1024 * 1024;
 
 mod remote;
+mod sync;
 mod worktree;
 pub use remote::*;
+pub use sync::*;
 pub use worktree::*;
 const MAX_ROOT_COMMITS: usize = 64;
 /// Roots reachable from any local branch, observed only to match a registration.

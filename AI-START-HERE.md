@@ -1,5 +1,18 @@
 # Luuna implementation handoff
 
+## Latest: Orbit and the project sandbox (October 22, 2026)
+
+[ADR 0036](docs/decisions/0036-orbit-and-project-sandbox.md) adds Orbit (status, exec,
+recipe runs and sync across a project's registered repositories; never evidence) and
+the project sandbox: the runtime computes a plan, `luuna-sbx` (new crate
+`luuna-sandbox`) applies it with bubblewrap, Seatbelt or a Windows AppContainer, and
+`lu sbx <project>` opens it with the terminal attached. `lu` is the short name of
+`luuna`. Both clients gained an Orbit view. Evidence on this Windows host: the
+AppContainer denied a sibling repository, `Documents` and the parent listing while
+reading and writing the project's repositories through `lu sbx` against a live
+runtime; bubblewrap was exercised in WSL Ubuntu with the Linux build of the
+launcher. The macOS profile is unit-tested only. Nothing was committed.
+
 ## Latest: M4–M8 slices, the Windows recovery drill and client parity (October 21, 2026)
 
 On top of the PR 11 audit branch, this change set lands bounded, tested slices of

@@ -3,7 +3,8 @@
 // Rust workbench opens. Exit codes: 0 done, 1 refused or failed, 2 usage.
 import { readFileSync, writeFileSync } from "node:fs";
 import { LuunaClient, describeFailure, explainFailure } from "@luuna/api-client";
-import { ClientRefusal, UsageError, commandsByName, usage } from "./commands.mjs";
+import { ClientRefusal, SandboxExit, UsageError, commandsByName, usage } from "./commands.mjs";
+import { launchSandbox } from "./sandbox.mjs";
 import { catalog } from "./catalog.mjs";
 import { colourEnabled, format } from "./format.mjs";
 import { DEFAULT_NAME, commandHelp, overview, reference, suggestions } from "./help.mjs";
@@ -18,6 +19,9 @@ export function parseArguments(argv, command) {
   for (let index = 0; index < argv.length; index += 1) {
     const token = argv[index];
     if (token === "--") { args.push(...argv.slice(index + 1)); break; }
+    // A command with a trailing command (`sbx <project> pi --model x`) takes every word after its
+    // own arguments verbatim, so the result is the same when a launcher drops the `--`.
+    if (command?.rest && !token.startsWith("--") && args.length >= command.args.length) { args.push(...argv.slice(index)); break; }
     if (!token.startsWith("--")) { args.push(token); continue; }
     const equals = token.indexOf("=");
     const name = equals === -1 ? token.slice(2) : token.slice(2, equals);
@@ -97,12 +101,13 @@ export async function runCommand(command, input, client, io) {
   try {
     const expected = command.args.length;
     if (input.args.length < expected) throw new UsageError(`${command.name} needs ${expected} argument(s). Usage: ${usage(command)}`);
-    if (input.args.length > expected) throw new UsageError(`${command.name} takes ${expected} argument(s); unexpected: ${input.args.slice(expected).join(" ")}. Usage: ${usage(command)}`);
+    if (input.args.length > expected && !command.rest) throw new UsageError(`${command.name} takes ${expected} argument(s); unexpected: ${input.args.slice(expected).join(" ")}. Usage: ${usage(command)}`);
     if (command.confirm && io.interactive && !(await io.confirm(command.confirm))) { io.stdout.write("Cancelled.\n"); return 0; }
     const result = await command.run(client, input, io);
+    if (result instanceof SandboxExit) return result.code;
     if (io.json) io.stdout.write(`${JSON.stringify(result === undefined ? null : result)}\n`);
     else { const text = format(command.id, result, { colour: io.colour }); if (text) io.stdout.write(`${text}\n`); }
-    return 0;
+    return command.failed?.(result) ? 1 : 0;
   } catch (failure) {
     if (failure instanceof UsageError) { io.stderr.write(`${failure.message}\n`); return 2; }
     const refusal = failure instanceof ClientRefusal ? `${label} refused: ${failure.message}` : explainFailure(label, failure).message;
@@ -113,9 +118,9 @@ export async function runCommand(command, input, client, io) {
 }
 
 /** The io a command sees: output streams, hidden prompts, document reads, the follow hooks and whether tones are painted. */
-export function makeIo({ stdin, stdout, stderr, json = false, interactive = false, colour = false, signal, prompt, confirm, show }) {
+export function makeIo({ stdin, stdout, stderr, json = false, interactive = false, colour = false, signal, prompt, confirm, show, launch }) {
   return {
-    stdin, stdout, stderr, json, interactive, colour, signal,
+    stdin, stdout, stderr, json, interactive, colour, signal, launch,
     readFile: (path) => readFileSync(path, "utf8"),
     writeFile: (path, text) => writeFileSync(path, text, "utf8"),
     readStdin: () => readAll(stdin),
@@ -169,7 +174,8 @@ export async function main(argv, { env, stdin, stdout, stderr, fetcher, nativeLa
   const abort = () => controller.abort();
   process.once("SIGINT", abort);
   try {
-    return await runCommand(command, input, client, makeIo({ stdin, stdout, stderr, json: Boolean(input.flags.json), colour: colourEnabled({ env, stdout }), signal: controller.signal }));
+    const launch = (plan, sandboxed, grants) => launchSandbox(plan, sandboxed, { grants, env });
+    return await runCommand(command, input, client, makeIo({ stdin, stdout, stderr, json: Boolean(input.flags.json), colour: colourEnabled({ env, stdout }), signal: controller.signal, launch }));
   } finally {
     process.off("SIGINT", abort);
   }

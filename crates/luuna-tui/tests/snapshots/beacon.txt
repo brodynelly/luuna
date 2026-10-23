@@ -1,15 +1,15 @@
- Home  Projects  Missions  Atlas  Beacon  Runs  Commands  Help
+ Home  Projects  Orbit  Missions  Atlas  Beacon  Runs  Commands  Help
  LUUNA  / WORKBENCH connected
 ╔ LUUNA ══════════════════════╗╔ > Beacon / exact preview ═════════════════════════════════════════════════════════════╗
 ║ 1 Home                      ║║Unsent context: not selected / s selects                                               ║
 ║ 2 Projects                  ║║review                                                                                 ║
-║ 3 Missions                  ║║Version: 2                                                                             ║
-║ 4 Atlas                     ║║Exact hash: sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa    ║
-║ 5 Beacon *                  ║║                                                                                       ║
-║ 6 Runs                      ║║RENDERED BODY                                                                          ║
-║ 7 Commands                  ║║Review the exact candidate.                                                            ║
-║ 8 Help                      ║║Explain every finding.                                                                 ║
-║                             ║║                                                                                       ║
+║ 3 Orbit                     ║║Version: 2                                                                             ║
+║ 4 Missions                  ║║Exact hash: sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa    ║
+║ 5 Atlas                     ║║                                                                                       ║
+║ 6 Beacon *                  ║║RENDERED BODY                                                                          ║
+║ 7 Runs                      ║║Review the exact candidate.                                                            ║
+║ 8 Commands                  ║║Explain every finding.                                                                 ║
+║ 9 Help                      ║║                                                                                       ║
 ║                             ║║                                                                                       ║
 ║                             ║║                                                                                       ║
 ║                             ║║                                                                                       ║

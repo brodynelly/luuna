@@ -2,7 +2,7 @@ import { describe, expect, test } from "vitest";
 import { createElement } from "react";
 import { renderToStaticMarkup } from "react-dom/server";
 import { StatusBadge } from "../StatusBadge";
-import { TONES, baselineTone, candidateTone, checkTone, confidenceTone, connectionTone, leaseTone, manifestTone, runTone, severityTone, verdictTone } from "../tone/tone";
+import { TONES, baselineTone, candidateTone, checkTone, confidenceTone, connectionTone, leaseTone, manifestTone, orbitTone, runTone, severityTone, verdictTone } from "../tone/tone";
 import type { Tone } from "../tone/tone";
 import { declarations, motionProblems, rules } from "./lint";
 import { ALLOWED_SELECTORS, DARK_MEDIA, DARK_MEDIA_SELECTOR, MANIFEST, TOKENS, TOKEN_SHEETS, colourThemes, depthThemes, media, read, sheets } from "./sheet-fixtures";
@@ -13,7 +13,7 @@ const TAILWIND = "ui/styles/tailwind.css";
 // Bundled font (ADR 0035): the Outfit @font-face descriptors. Last import of the tokens layer, but not a token sheet.
 const FONTS = "ui/styles/fonts.css";
 // Every sheet is registered once (ADR 0032); later items replace a sheet's content, never this list.
-const EXPECTED_SHEETS = [MANIFEST, ...TOKEN_SHEETS, FONTS, "ui/styles/base.css", "ui/styles/components.css", "ui/styles/overlays.css", "ui/styles/controls.css", "ui/styles/motion.css", "ui/navigation/navigation.css", "ui/navigation/window-controls.css", "ui/forms/forms.css", "ui/forms/pickers.css", "ui/data/data.css", "ui/data/table.css", "ui/overlay/overlay.css", "ui/overlay/feedback.css", "ui/primitives/primitives.css", "screens/app.css", "screens/shell.css", "screens/projects.css", "screens/workflows.css", "screens/candidate-review.css", "screens/project-components.css", "screens/help.css", "screens/settings.css", "screens/sessions.css", "ui/styles/tailwind.css"];
+const EXPECTED_SHEETS = [MANIFEST, ...TOKEN_SHEETS, FONTS, "ui/styles/base.css", "ui/styles/components.css", "ui/styles/overlays.css", "ui/styles/controls.css", "ui/styles/motion.css", "ui/navigation/navigation.css", "ui/navigation/window-controls.css", "ui/forms/forms.css", "ui/forms/pickers.css", "ui/data/data.css", "ui/data/table.css", "ui/overlay/overlay.css", "ui/overlay/feedback.css", "ui/primitives/primitives.css", "screens/app.css", "screens/shell.css", "screens/projects.css", "screens/workflows.css", "screens/candidate-review.css", "screens/project-components.css", "screens/help.css", "screens/settings.css", "screens/sessions.css", "screens/orbit.css", "ui/styles/tailwind.css"];
 // The desktop manifest imports library sheets by package path (ADR 0034) and its own screen sheets relatively.
 const importPath = (sheet: string) => (sheet.startsWith("ui/") ? "@luuna/ui/" + sheet.slice("ui/".length) : "./" + sheet);
 function layerOf(sheet: string): string {
@@ -25,7 +25,7 @@ function layerOf(sheet: string): string {
 }
 const MEDIA = ["(max-width: 920px)", "(max-width: 768px)", "(max-width: 680px)", "(prefers-reduced-motion: reduce)", "(prefers-color-scheme: dark)", "(prefers-contrast: more)", "(forced-colors: active)", "(hover: hover)", "(pointer: fine)"];
 
-const STATES = [...new Set([runTone, candidateTone, checkTone, baselineTone, verdictTone, severityTone, leaseTone, connectionTone].flatMap((map) => Object.keys(map)))];
+const STATES = [...new Set([runTone, candidateTone, checkTone, baselineTone, verdictTone, severityTone, leaseTone, connectionTone, orbitTone].flatMap((map) => Object.keys(map)))];
 const STATE_SELECTOR = new RegExp(`[.="'](?:${STATES.join("|")})(?![\\w-])`);
 
 describe("stylesheets", () => {
@@ -147,7 +147,7 @@ describe("token sheets", () => {
 
 // ---- Tone taxonomy ----
 describe("tone taxonomy", () => {
-  const maps: Record<string, Record<string, Tone | undefined>> = { run: runTone, candidate: candidateTone, check: checkTone, baseline: baselineTone, verdict: verdictTone, severity: severityTone, lease: leaseTone, confidence: confidenceTone };
+  const maps: Record<string, Record<string, Tone | undefined>> = { run: runTone, candidate: candidateTone, check: checkTone, baseline: baselineTone, verdict: verdictTone, severity: severityTone, lease: leaseTone, confidence: confidenceTone, orbit: orbitTone };
   test("every mapped value is one of the six tones", () => {
     for (const map of [...Object.values(maps), connectionTone]) for (const tone of Object.values(map)) if (tone !== undefined) expect(TONES).toContain(tone);
   });
@@ -156,6 +156,9 @@ describe("tone taxonomy", () => {
     expect(success).toEqual(["baseline.passed", "candidate.reviewed", "check.passed", "run.reviewed", "verdict.passed"]);
     expect(Object.entries(connectionTone).filter(([, tone]) => tone === "success").map(([key]) => key)).toEqual(["connected"]);
     expect(runTone.completed).not.toBe("success");
+    // Orbit results are the developer's commands, not evidence (ADR 0013, ADR 0036).
+    expect(Object.values(orbitTone)).not.toContain("success");
+    expect(orbitTone).toEqual({ succeeded: "neutral", failed: "danger", blocked: "danger", cancelled: "neutral", skipped: "neutral" });
   });
   test("interruption is not failure", () => {
     expect([runTone.interrupted, candidateTone.interrupted, checkTone.interrupted, baselineTone.interrupted, leaseTone.abandoned, connectionTone.reconnecting]).toEqual(Array(6).fill("interrupted"));

@@ -994,6 +994,7 @@ version = "0.1.0"
 dependencies = [
  "chrono",
  "luuna-domain",
+ "serde",
  "serde_json",
  "tempfile",
  "thiserror 2.0.21",
@@ -1016,6 +1017,7 @@ dependencies = [
  "luuna-engine-pi",
  "luuna-executor",
  "luuna-git",
+ "luuna-sandbox",
  "luuna-storage",
  "reqwest",
  "rustls",
@@ -1027,6 +1029,17 @@ dependencies = [
  "tower",
  "tower-http",
  "uuid",
+]
+
+[[package]]
+name = "luuna-sandbox"
+version = "0.1.0"
+dependencies = [
+ "serde",
+ "serde_json",
+ "tempfile",
+ "thiserror 2.0.21",
+ "windows-sys 0.61.2",
 ]
 
 [[package]]
