@@ -1,6 +1,6 @@
 import type { AttemptRecord, PlanRevision, RunRecord, TaskRecord, Ticket } from "@luuna/api-client";
 import { advisoryRole } from "@luuna/api-client";
-import { Button, Id, Inline, Meta, StatusBadge, Stack, runTone } from "@luuna/ui";
+import { Button, Id, Inline, Meta, StatusBadge, Stack, runTone, ShortId } from "@luuna/ui";
 import { dollars, stateText } from "./model";
 import type { RunSnapshot } from "./read";
 import { TaskGraph } from "./TaskGraph";
@@ -21,7 +21,7 @@ export function PlanMeta({ plan, earlier }: { plan: PlanRevision; earlier: { pla
   const budgets = plan.budgets;
   return <>
     <Meta className="plan-meta">
-      plan <Id>{plan.id}</Id> r{plan.revision} · base <Id>{Object.values(plan.base_commits)[0]?.slice(0, 12)}</Id> · paths {plan.tasks[0]?.paths.join(", ")} · budget {budgets.max_attempts} attempt(s), {budgets.timeout_seconds}s, {dollars(budgets.cost_usd_micros, 2)}
+      plan <ShortId value={plan.id} kind="plan" /> r{plan.revision} · base <Id>{Object.values(plan.base_commits)[0]?.slice(0, 12)}</Id> · paths {plan.tasks[0]?.paths.join(", ")} · budget {budgets.max_attempts} attempt(s), {budgets.timeout_seconds}s, {dollars(budgets.cost_usd_micros, 2)}
     </Meta>
     {settled.length > 0 && <Meta className="plan-history">Earlier revisions: {settled.map(({ plan: revision, run }, index) => <span key={revision.id}>
       {index > 0 && " · "}r{revision.revision} <StatusBadge tone={runTone[run.state]}>{stateText(run.state)}</StatusBadge>

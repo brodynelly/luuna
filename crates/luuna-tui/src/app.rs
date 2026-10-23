@@ -15,7 +15,7 @@ pub enum Mode {
     Guide,
 }
 
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, Default)]
 pub struct FormField {
     pub name: String,
     pub label: String,
@@ -24,6 +24,34 @@ pub struct FormField {
     pub argument: bool,
     pub boolean: bool,
     pub repeated: bool,
+    /// Values the developer can pick with Left/Right instead of typing (ADR 0040): records the
+    /// workbench already read (as short ids), the scopes and roles the runtime accepts, yes/no.
+    /// Each is `(value, label)`. Typing stays possible; a choice only fills the field.
+    pub choices: Vec<(String, String)>,
+}
+
+impl FormField {
+    /// Moves to the next (or previous) choice and puts its value in the field.
+    pub fn cycle(&mut self, forward: bool) -> bool {
+        let n = self.choices.len();
+        if n == 0 {
+            return false;
+        }
+        let next = match self.choice_index() {
+            Some(i) if forward => (i + 1) % n,
+            Some(i) => (i + n - 1) % n,
+            None if forward => 0,
+            None => n - 1,
+        };
+        self.value = self.choices[next].0.clone();
+        true
+    }
+    /// The position of the current value among the choices.
+    pub fn choice_index(&self) -> Option<usize> {
+        self.choices
+            .iter()
+            .position(|(value, _)| *value == self.value)
+    }
 }
 
 #[derive(Clone, Debug)]
@@ -49,6 +77,7 @@ impl ActionForm {
                 argument: true,
                 boolean: false,
                 repeated: false,
+                choices: Vec::new(),
             })
             .collect::<Vec<_>>();
         fields.extend(
@@ -68,6 +97,11 @@ impl ActionForm {
                     argument: false,
                     boolean: flag.boolean,
                     repeated: flag.repeat || flag.multiline,
+                    choices: if flag.boolean {
+                        vec![("yes".into(), String::new()), ("no".into(), String::new())]
+                    } else {
+                        Vec::new()
+                    },
                 }),
         );
         Self {
@@ -246,7 +280,9 @@ impl AppState {
             return;
         }
         if let Some(command) = self.commands.iter().find(|c| c.name == name).cloned() {
-            self.form = Some(ActionForm::new(command, &self.context));
+            let mut form = ActionForm::new(command, &self.context);
+            crate::views::offer_choices(self, &mut form);
+            self.form = Some(form);
             self.mode = Mode::Form;
             self.status.clear();
             if self.form.as_ref().is_some_and(|f| f.fields.is_empty()) {
@@ -641,6 +677,16 @@ impl AppState {
                     KeyCode::BackTab | KeyCode::Up => {
                         form.cursor = (form.cursor + count - 1) % count
                     }
+                    KeyCode::Left | KeyCode::Right
+                        if form
+                            .fields
+                            .get(form.cursor)
+                            .is_some_and(|f| !f.choices.is_empty()) =>
+                    {
+                        if let Some(field) = form.fields.get_mut(form.cursor) {
+                            field.cycle(key.code == KeyCode::Right);
+                        }
+                    }
                     KeyCode::Enter if !key.modifiers.contains(KeyModifiers::ALT) => {
                         if form.cursor + 1 == count {
                             self.submit();
@@ -760,7 +806,7 @@ fn edit(text: &mut String, key: KeyEvent, multiline: bool) {
     }
 }
 
-pub const HELP: &str = "LUUNA / TERMINAL WORKBENCH\n\nThe runtime owns projects, tickets, plans, execution and evidence.\nUse F2 to browse every catalog action. Tab filters its context.\nForms expose every argument and option. Empty options are omitted.\nTab/Up/Down change fields; Alt+Enter adds a line. Repeated flags use one value per line.\nEnter advances; Ctrl+S submits. Boolean options take yes or no.\nDocument prompts: Enter adds a line, Ctrl+S submits.\n\nApproval displays the complete plan and requires its exact full hash.\nEsc stops a LOCAL request or follower. It does not cancel runtime work.\nChoose the cancel action to request runtime cancellation.\nF5 refreshes the latest read. Reconnect never retries a mutation.\n\nSTATES\npassed/accepted: verified success\nrunning/implementing/validating: active\nfailed/rejected: failure\nblocked/pending: attention\ninterrupted/reconnecting: interrupted\ncompleted/cancelled: neutral\n\nHome and Board are read-only projections. Catalog actions expose durable evidence, artifacts, memory and publication status. Merging stays the developer's decision.\n\nPgUp/PgDn scroll; q or Ctrl+C exits and leaves the runtime running.";
+pub const HELP: &str = "LUUNA / TERMINAL WORKBENCH\n\nThe runtime owns projects, tickets, plans, execution and evidence.\nUse F2 to browse every catalog action. Tab filters its context.\nForms expose every argument and option. Empty options are omitted.\nTab/Up/Down change fields; Alt+Enter adds a line. Repeated flags use one value per line.\nLeft/Right pick from a field's choices (repositories, records, scopes, yes/no); typing still works.\nEnter advances; Ctrl+S submits. Boolean options take yes or no.\nDocument prompts: Enter adds a line, Ctrl+S submits.\n\nApproval displays the complete plan and hash; type approve (or its first 8 hash digits) to approve exactly that plan.\nTicket, plan, run and memory ids accept their short id: the first 4 or more characters lists show.\nEsc stops a LOCAL request or follower. It does not cancel runtime work.\nChoose the cancel action to request runtime cancellation.\nF5 refreshes the latest read. Reconnect never retries a mutation.\n\nSTATES\npassed/accepted: verified success\nrunning/implementing/validating: active\nfailed/rejected: failure\nblocked/pending: attention\ninterrupted/reconnecting: interrupted\ncompleted/cancelled: neutral\n\nHome and Board are read-only projections. Catalog actions expose durable evidence, artifacts, memory and publication status. Merging stays the developer's decision.\n\nPgUp/PgDn scroll; q or Ctrl+C exits and leaves the runtime running.";
 
 #[cfg(test)]
 mod tests {

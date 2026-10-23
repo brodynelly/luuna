@@ -1,3 +1,4 @@
+import type { TaskRecord } from "@luuna/api-client";
 import { Button, Checkbox, Hint, InlineFields, Stack, Surface, TextField } from "@luuna/ui";
 import { TaskGraphEditor } from "./TaskGraphEditor";
 import type { Patch, RunSettings as Settings } from "./settings";
@@ -8,10 +9,12 @@ interface Props {
   repositoryId: string;
   repositoryIds: string[];
   error: string;
+  /** Advisory tasks of the runs inspected so far: what a task row can derive from (ADR 0040). */
+  advisoryTasks?: TaskRecord[];
 }
 
 /** The settings the next plan, approval and action use: scope, budgets, provider and model, automatic repair. */
-export function RunSettings({ settings, update, repositoryId, repositoryIds, error }: Props) {
+export function RunSettings({ settings, update, repositoryId, repositoryIds, error, advisoryTasks = [] }: Props) {
   const openGraph = () => update({ taskRows: [
     { repository_id: repositoryId, paths: settings.paths, write: settings.write, depends_on: [] },
     { repository_id: repositoryIds.find((id) => id !== repositoryId) ?? repositoryId, paths: "src", write: true, depends_on: [] },
@@ -22,7 +25,7 @@ export function RunSettings({ settings, update, repositoryId, repositoryIds, err
       <Checkbox className="checkbox" label="allow writes" checked={settings.write} onChange={(event) => update({ write: event.target.checked })} />
       <TextField label="Approver" value={settings.approver} onChange={(event) => update({ approver: event.target.value })} />
       {repositoryIds.length > 1 && <Button variant="text" onClick={openGraph}>Plan a task graph across repositories</Button>}
-    </InlineFields> : <TaskGraphEditor settings={settings} update={update} repositoryId={repositoryId} repositoryIds={repositoryIds} error={error} />}
+    </InlineFields> : <TaskGraphEditor settings={settings} update={update} repositoryId={repositoryId} repositoryIds={repositoryIds} error={error} advisoryTasks={advisoryTasks} />}
     <InlineFields columns={3} className="plan-budgets">
       <TextField label="Writer attempts" type="number" inputMode="numeric" min={1} max={10} step={1} value={settings.attempts} onChange={(event) => update({ attempts: event.target.value })} />
       <TextField label="Time budget (seconds)" type="number" inputMode="numeric" min={1} max={86400} step={1} value={settings.timeoutSeconds} onChange={(event) => update({ timeoutSeconds: event.target.value })} />

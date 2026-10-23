@@ -1,6 +1,6 @@
 import { useState } from "react";
 import type { MemoryRecord } from "@luuna/api-client";
-import { Button, Checkbox, Form, FormFooter, Hint, Id, Inline, ListGroup, ListRow, Meta, Stack, submitted, TextArea } from "@luuna/ui";
+import { Button, Checkbox, Form, FormFooter, Hint, Id, Inline, ListGroup, ListRow, Meta, Stack, submitted, TextArea, ShortId, shortId } from "@luuna/ui";
 import { promotionTarget } from "./model";
 
 /**
@@ -12,8 +12,8 @@ export function MemoryCorrection({ record, busy, onSave, onCancel }: { record: M
   const [content, setContent] = useState(record.content);
   const changed = content.trim() !== "" && content.trim() !== record.content;
   return <Form className="memory-correction form-group" onSubmit={submitted(() => { if (changed) onSave(content.trim()); })} disabled={busy}>
-    <TextArea label={<>Corrected content for <Id>{record.id}</Id></>} value={content} onChange={(event) => setContent(event.target.value)} required rows={3} maxLength={16000} />
-    <Hint>Replaces the content at hash <Id>{record.hash}</Id>; the record keeps its {record.scope} scope and its provenance records the correction. An approved plan that selected this record can no longer be implemented until it is re-planned.</Hint>
+    <TextArea label={<>Corrected content for <Id>{shortId(record.id)}</Id></>} value={content} onChange={(event) => setContent(event.target.value)} required rows={3} maxLength={16000} />
+    <Hint>Replaces the content at hash <ShortId value={record.hash} kind="content hash" />; the record keeps its {record.scope} scope and its provenance records the correction. An approved plan that selected this record can no longer be implemented until it is re-planned.</Hint>
     <FormFooter>
       <Button variant="primary" submit disabled={!changed} data-capability="memory.update">Save correction</Button>
       <Button variant="text" onClick={onCancel}>Cancel correction</Button>
@@ -34,7 +34,7 @@ export function MemorySelection({ records, selected, busy, onToggle, onDelete, o
       meta={<Hint>{record.scope === "user" ? "Private user memory" : `${record.scope} memory`} · provenance: {record.provenance}</Hint>}
       detail={<Stack gap={2}>
         <Checkbox className="component-selection" label="Include this memory in the next plan" checked={selected.includes(record.id)} disabled={busy} onChange={() => onToggle(record)} />
-        <Meta block className="component-record-meta"><Id>{record.id}</Id></Meta>
+        <Meta block className="component-record-meta"><ShortId value={record.id} kind="memory id" /></Meta>
         <Inline gap={1} align="center" wrap className="component-record-actions">
           <Button variant="text" disabled={busy} data-capability="memory.delete" onClick={() => onDelete(record)}>Delete memory</Button>
           {onPromote && target && <Button variant="text" disabled={busy} data-capability="memory.promote" onClick={() => onPromote(record, target)}>Promote to {target} memory</Button>}

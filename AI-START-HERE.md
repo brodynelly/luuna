@@ -1,5 +1,17 @@
 # Luuna implementation handoff
 
+## Latest: short references and picked input (October 23, 2026)
+
+[ADR 0040](docs/decisions/0040-short-references-and-picked-input.md) removes copying generated ids
+and hashes from every client. Terminal lists show short ids (first eight hex digits of a record's
+UUID) and every ticket, plan, run and memory argument accepts one, a unique 4+ digit prefix or
+`latest` (runs), resolved to the exact id before anything is sent (`crates/luuna-tui/src/refs.rs`).
+Hash arguments accept an 8+ digit prefix of the hash just read; interactive approval takes a typed
+`approve` after the displayed plan and hash. Workbench forms offer known records and accepted
+values as Left/Right choices. The desktop's `ShortId` (`@luuna/ui`) shows short forms and copies
+the whole value; "derived from advisory task" is a select, and repository ids come from the folder
+name. Evidence: `cargo test -p luuna-tui` and `npm test` only; no live runtime or browser run.
+
 ## Latest: Orbit and the project sandbox (October 22, 2026)
 
 [ADR 0036](docs/decisions/0036-orbit-and-project-sandbox.md) adds Orbit (status, exec,

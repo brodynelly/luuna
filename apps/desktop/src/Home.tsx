@@ -3,7 +3,7 @@ import type { BaselineEvidence, HomeBlocker, HomeSummary, LuunaClient, ProjectVi
 import { homeSummary } from "@luuna/api-client";
 import { boundedMap } from "./Workflows";
 import { describeFailure } from "./failures";
-import { baselineTone, manifestTone, runTone, Actions, Button, copyText, EmptyState, ErrorBanner, Grid, Id, ListGroup, ListRow, Loading, Meta, MetricCard, Page, ReasonNote, Section, Stack, StatusBadge, Surface, useNotify, VisuallyHidden } from "@luuna/ui";
+import { baselineTone, manifestTone, runTone, Actions, Button, copyText, EmptyState, ErrorBanner, Grid, Id, ListGroup, ListRow, Loading, Meta, MetricCard, Page, ReasonNote, Section, Stack, StatusBadge, Surface, useNotify, VisuallyHidden, ShortId } from "@luuna/ui";
 import { viewInfo } from "./content/views";
 import type { View } from "./content/views";
 
@@ -39,7 +39,7 @@ function Blockers({ summary, busy, onOpen }: Summary) {
       return <ListRow key={`${blocker.project_id}-${blocker.run_id ?? blocker.repository_id ?? index}`} className="home-blocker"
         leading={<StatusBadge tone={tone}>{blocker.state ? blocker.state.replace(/_/g, " ") : "testing setup"}</StatusBadge>}
         title={blocker.title}
-        meta={<>{blocker.project_id}{blocker.run_id && <> · workflow <Id>{blocker.run_id}</Id></>}{blocker.repository_id && <> · repository <Id>{blocker.repository_id}</Id></>}</>}
+        meta={<>{blocker.project_id}{blocker.run_id && <> · workflow <ShortId value={blocker.run_id} kind="workflow" /></>}{blocker.repository_id && <> · repository <Id>{blocker.repository_id}</Id></>}</>}
         detail={<ReasonNote tone={tone} reason={blocker.detail} />}
         trailing={<Button variant="text" disabled={busy} aria-label={`Open ${blocker.title}`} onClick={() => onOpen({ projectId: blocker.project_id, ticketId: blocker.ticket_id })}>Open</Button>} />;
     })}</ListGroup> : <EmptyState>Nothing is waiting on you.</EmptyState>}

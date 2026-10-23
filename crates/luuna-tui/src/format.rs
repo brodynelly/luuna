@@ -234,6 +234,22 @@ fn p(value: &J, table: fn(&str) -> Option<&'static str>, colour: bool) -> String
 }
 
 /// `short(hash)`
+/// A generated identity as its short id (ADR 0040): what lists show and what every argument accepts.
+fn sid(value: &J) -> String {
+    crate::refs::short_id(&s(value))
+}
+
+/// A content hash as `sha256:` and its first twelve digits, which acknowledge it as an argument.
+fn shash(value: &J) -> String {
+    let full = s(value);
+    let short = crate::refs::short_hash(&full);
+    if short == full {
+        full
+    } else {
+        format!("{short}…")
+    }
+}
+
 fn short(hash: &J) -> String {
     match hash {
         J::Str(text) if js::len16(text) > 20 => format!("{}…", js::slice16(text, 0, Some(19))),
@@ -281,7 +297,7 @@ pub fn run_line(run: &J, colour: bool) -> R<String> {
     } else if kind.as_str() == Some("workflow") {
         format!(
             "workflow · plan {} r{}",
-            or(f(metadata, "plan_id")?, ""),
+            crate::refs::short_id(&or(f(metadata, "plan_id")?, "")),
             or(f(metadata, "plan_revision")?, "?")
         )
     } else if let Some(prompt) = o(metadata, "prompt").as_str() {
@@ -291,7 +307,7 @@ pub fn run_line(run: &J, colour: bool) -> R<String> {
     };
     Ok(format!(
         "{}  {}  {what}  {}",
-        s(f(run, "id")?),
+        sid(f(run, "id")?),
         p(f(run, "state")?, run_tone, colour),
         when(f(run, "created_at")?)
     ))
@@ -902,7 +918,7 @@ pub fn format_home(summary: &J, colour: bool) -> R<String> {
             s(f(&blocker, "title")?),
             s(f(&blocker, "detail")?),
             if run.truthy() {
-                format!(" (run {})", s(run))
+                format!(" (run {})", sid(run))
             } else {
                 String::new()
             }
@@ -939,7 +955,7 @@ pub fn format_board(board: &J, colour: bool) -> R<String> {
                     "  [ticket] {} · {} · {} r{}{}{}",
                     s(f(&card, "title")?),
                     s(f(&card, "project_id")?),
-                    s(f(&card, "ticket_id")?),
+                    sid(f(&card, "ticket_id")?),
                     s(f(&card, "ticket_revision")?),
                     if purpose.truthy() {
                         format!(" · {}", reason_text(purpose)?.replace('_', " "))
@@ -949,7 +965,7 @@ pub fn format_board(board: &J, colour: bool) -> R<String> {
                     if run.truthy() {
                         format!(
                             " · run {} {} (plan r{})",
-                            s(run),
+                            sid(run),
                             p(f(&card, "state")?, run_tone, colour),
                             s(f(&card, "plan_revision")?)
                         )
@@ -1260,7 +1276,7 @@ fn format_ticket(ticket: &J) -> R<String> {
     };
     Ok(format!(
         "{}  r{}  {}  {}{usage_text}\n  {}\n  criteria: {}",
-        s(f(ticket, "id")?),
+        sid(f(ticket, "id")?),
         s(f(ticket, "revision")?),
         s(f(ticket, "source")?),
         s(f(ticket, "title")?),
@@ -1349,9 +1365,9 @@ fn format_plan_record(plan: &J) -> R<String> {
     Ok([
         format!(
             "Plan {} revision {}  ticket {} r{}",
-            s(f(plan, "id")?),
+            sid(f(plan, "id")?),
             s(f(plan, "revision")?),
-            s(f(plan, "ticket_id")?),
+            sid(f(plan, "ticket_id")?),
             s(f(plan, "ticket_revision")?)
         ),
         format!("immutable plan hash: {}", s(f(plan, "hash")?)),
@@ -1411,7 +1427,7 @@ pub fn format(id: &str, value: &J, colour: bool) -> R<String> {
             )
         }
         "memory.list" => listed(v, "No memory records in this view.", |r| {
-            Ok(format!("{}  {}  {}\n  {}\n  provenance: {}", s(f(r, "id")?), s(f(r, "scope")?), s(f(r, "hash")?), s(f(r, "content")?), s(f(r, "provenance")?)))
+            Ok(format!("{}  {}  {}\n  {}\n  provenance: {}", sid(f(r, "id")?), s(f(r, "scope")?), shash(f(r, "hash")?), s(f(r, "content")?), s(f(r, "provenance")?)))
         })?,
         "memory.create" => format!("{}  {}  {}", s(f(v, "id")?), s(f(v, "scope")?), s(f(v, "hash")?)),
         "memory.delete" => if f(v, "deleted")?.truthy() { "Memory deleted." } else { "Memory not deleted." }.into(),
@@ -1466,20 +1482,20 @@ pub fn format(id: &str, value: &J, colour: bool) -> R<String> {
             )
         }
         "plans.create" => format!("{}\nworkflow run: {}", format_plan_record(f(v, "plan")?)?, run_line(f(v, "run")?, colour)?),
-        "plans.list" => listed(v, "No plan revisions.", |plan| Ok(format!("{}  r{}  {}", s(f(plan, "id")?), s(f(plan, "revision")?), s(f(plan, "hash")?))))?,
+        "plans.list" => listed(v, "No plan revisions.", |plan| Ok(format!("{}  r{}  {}", sid(f(plan, "id")?), s(f(plan, "revision")?), shash(f(plan, "hash")?))))?,
         "plans.show" => format_plan_record(v)?,
         "plans.approve" => {
             let approval = f(v, "approval")?;
             format!(
                 "Approved plan {} r{} by {} (hash {})\nworkflow run: {}",
-                s(f(approval, "plan_id")?),
+                sid(f(approval, "plan_id")?),
                 s(f(approval, "plan_revision")?),
                 s(f(approval, "approved_by")?),
                 s(f(approval, "plan_hash")?),
                 run_line(f(v, "run")?, colour)?
             )
         }
-        "runs.stream" => format!("Followed {}: {} event(s), last sequence {}, run {}.", s(f(v, "run_id")?), s(f(v, "events_followed")?), s(f(v, "last_sequence")?), s(f(v, "state")?)),
+        "runs.stream" => format!("Followed {}: {} event(s), last sequence {}, run {}.", sid(f(v, "run_id")?), s(f(v, "events_followed")?), s(f(v, "last_sequence")?), s(f(v, "state")?)),
         "runs.candidate" => format_candidate(v, colour)?,
         "runs.diff" => {
             let mut items = vec![J::str(format!("Diff for {}  {} · base {} · candidate commit {}", s(f(v, "candidate_hash")?), s(f(v, "repository_id")?), s(f(v, "base_commit")?), s(f(v, "commit")?)))];

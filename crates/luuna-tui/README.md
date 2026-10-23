@@ -18,7 +18,8 @@ luuna-tui plan --help                            # one command's page: arguments
 luuna-tui help --all                             # the complete reference
 luuna-tui init                                   # guided project setup (terminal only)
 luuna-tui projects --json                        # one cataloged action for scripts; --json prints the runtime's record unchanged
-luuna-tui approve <plan> --acknowledge-hash sha256:<complete plan hash>
+luuna-tui approve 3f2a91c0 --acknowledge-hash <first 8+ hash digits>   # short ids and hash prefixes work (ADR 0040)
+luuna-tui run latest                             # the newest run; ticket, plan, run and memory ids accept their short id
 luuna-tui follow <run>                           # live events over SSE, resumed after an outage from the last sequence
 luuna-tui home                                   # Home summary: projects, validation health, blockers (a projection, not an action)
 luuna-tui board --project <id>                   # Kanban projection of the recorded run states; nothing is dragged
@@ -73,9 +74,11 @@ Bun's own executable, no shell, and never receive the runtime's URL or token.
 Luuna opens on Home. `s` on Home or Projects (or "Set up a project" in the menu) starts the guide.
 F3 Projects, F4 Missions, F6 Atlas, F7 Beacon, F8 Runs, F2 the complete command catalog, F1 Help;
 F10 opens navigation, Tab changes focus, arrows select, Enter inspects, Esc returns, F5 refreshes.
-Forms: Tab or Up/Down move fields, Ctrl-U clears, Alt-Enter adds a line, Ctrl-S submits. Hash
-prompts accept a fresh typed full hash only, and a terminal too small to show the plan cannot
-approve. Esc stops local waiting; the `cancel` action requests runtime cancellation. Quitting
+Forms: Tab or Up/Down move fields, Left/Right pick from a field's choices (repositories, records,
+scopes, yes/no), Ctrl-U clears, Alt-Enter adds a line, Ctrl-S submits. Approval shows the complete
+plan and hash and takes a typed `approve` (or the hash's first 8 digits), never a prefilled answer;
+a terminal too small to show the plan cannot approve. Lists show short ids, and every ticket, plan,
+run and memory argument accepts one (ADR 0040). Esc stops local waiting; the `cancel` action requests runtime cancellation. Quitting
 leaves the runtime running.
 
 Frames are event-driven and capped at `LUUNA_TUI_FPS` (default 60, 30-144); an idle workbench does

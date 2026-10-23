@@ -239,7 +239,10 @@ test("the task graph shows each task's trace and advisory result, and derives th
   const derived: TaskRecord[] = [];
   const html = renderToStaticMarkup(<TaskGraph run={runOf("run-1", "completed")} tasks={[orchestrate, consumer]} busy={false} onResume={() => {}} onDerive={(task) => derived.push(task)} />);
   expect(html).toContain("role project orchestrator");
-  expect(html).toContain("assigned by developer · approval <code>approval-1</code> at 2026-10-22T10:00:00Z · plan <code>plan-1</code> r1");
+  // Generated identities show their short form and copy the whole value (ADR 0040).
+  expect(html).toContain("assigned by developer · approval <button");
+  expect(html).toContain('aria-label="Copy approval approval-1"><code>approval-1</code></button> at 2026-10-22T10:00:00Z · plan <button');
+  expect(html).toContain('aria-label="Copy plan plan-1"><code>plan-1</code></button> r1');
   expect(html).toContain(trace.plan_hash);
   expect(html).toContain("derived from advisory task <code>orchestrate</code>");
   expect(html).toContain("waive <code>consumer</code> ← <code>shared</code> (pinned package)");

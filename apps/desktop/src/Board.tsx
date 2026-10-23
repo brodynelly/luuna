@@ -4,7 +4,7 @@ import { boardProjection } from "@luuna/api-client";
 import type { OpenRequest } from "./Home";
 import { boundedMap } from "./Workflows";
 import { describeFailure } from "./failures";
-import { runTone, BoardColumn, Button, copyText, EmptyState, ErrorBanner, Id, ListRow, Loading, Meta, Page, SimpleGrid, StatusBadge, useNotify, VisuallyHidden } from "@luuna/ui";
+import { runTone, BoardColumn, Button, copyText, EmptyState, ErrorBanner, Id, ListRow, Loading, Meta, Page, SimpleGrid, StatusBadge, useNotify, VisuallyHidden, shortId } from "@luuna/ui";
 import { viewInfo } from "./content/views";
 
 /** One read of what the board projects: every project view (with its offers), its tickets, and the run listing. */
@@ -25,7 +25,7 @@ function BoardCardView({ card, busy, onOpen }: { card: BoardCard; busy: boolean;
   const meta = <>
     {state}
     {card.purpose && <StatusBadge>{card.purpose.replace(/_/g, " ")}</StatusBadge>}
-    <Id>{card.kind === "prerequisite" ? card.repository_id : card.ticket_id}</Id>
+    <Id>{card.kind === "prerequisite" ? card.repository_id : shortId(card.ticket_id ?? "")}</Id>
     {card.plan_revision !== undefined && <span>plan r{card.plan_revision}</span>}
     <span>{card.project_id}</span>
   </>;

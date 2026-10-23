@@ -1,5 +1,6 @@
 import { useEffect, useRef, useState } from "react";
 import type { ComponentContext, LuunaClient, PlanRevision, TaskRecord, TestingPrerequisite } from "@luuna/api-client";
+import { advisoryRole } from "@luuna/api-client";
 import { retryIdentity } from "../ProjectComponents";
 import { Alert, Button, EmptyState, ListGroup, Section } from "@luuna/ui";
 import { rowsFromProposal, setupTicketDraft, ticketTextSizes, tooLong } from "./model";
@@ -127,6 +128,6 @@ export function Workflows({ client, projectId, repositoryId, repositoryIds = [re
         tasks={work.inspections.tasks} logs={work.inspections.logs} busy={work.busy} connected={client !== null} actions={actions} repositoryIds={repositoryIds} />
     </ListGroup>}
     <TicketForm form={form} update={updateForm} sizes={sizes} tooLong={blocked} disabled={!client || work.busy || !manifestConfirmed} manifestConfirmed={manifestConfirmed} repositoryIds={repositoryIds} scoped={scoped} onCreate={createTicket} />
-    <RunSettings settings={settings} update={updateSettings} repositoryId={repositoryId} repositoryIds={repositoryIds} error={work.error} />
+    <RunSettings settings={settings} update={updateSettings} repositoryId={repositoryId} repositoryIds={repositoryIds} error={work.error} advisoryTasks={Object.values(work.inspections.tasks).flat().filter((task) => advisoryRole(task.role))} />
   </Section>;
 }

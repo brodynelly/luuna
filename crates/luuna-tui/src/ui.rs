@@ -194,9 +194,19 @@ fn render_form(frame: &mut Frame, app: &mut AppState, area: Rect, theme: Theme) 
         } else {
             safe_text(&field.value).replace('\n', " ↵ ")
         };
+        // A field with choices names the picked record beside its short id (ADR 0040).
+        let picked = match field.choice_index().map(|i| &field.choices[i].1) {
+            Some(label) if !label.is_empty() => format!("  {}", safe_text(label)),
+            _ => String::new(),
+        };
+        let marker = if field.choices.is_empty() {
+            ""
+        } else {
+            " ◂▸"
+        };
         lines.push(Line::styled(
             format!(
-                "{} {}: {}",
+                "{} {}{marker}: {}{picked}",
                 if index == form.cursor { "▸" } else { " " },
                 safe_text(&field.label),
                 value
@@ -225,10 +235,25 @@ fn render_form(frame: &mut Frame, app: &mut AppState, area: Rect, theme: Theme) 
             .style(theme.title()),
             edit_area,
         );
-        frame.render_widget(
-            Paragraph::new(safe_text(&field.hint)).style(theme.muted()),
-            hint_area,
-        );
+        let hint = if field.choices.is_empty() {
+            safe_text(&field.hint)
+        } else {
+            let position = field
+                .choice_index()
+                .map(|i| format!("{} of {}", i + 1, field.choices.len()))
+                .unwrap_or_else(|| format!("{} choices", field.choices.len()));
+            let names = field
+                .choices
+                .iter()
+                .map(|(value, _)| value.as_str())
+                .collect::<Vec<_>>()
+                .join(", ");
+            safe_text(&format!(
+                "←/→ choose ({position}): {names} · or type · {}",
+                field.hint
+            ))
+        };
+        frame.render_widget(Paragraph::new(hint).style(theme.muted()), hint_area);
     }
     frame.render_widget(Paragraph::new(lines), fields_area);
 }

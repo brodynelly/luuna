@@ -15,6 +15,7 @@ pub mod js;
 pub mod prime;
 pub mod projections;
 pub mod protocol;
+pub mod refs;
 pub mod sandbox;
 pub mod scroll;
 pub mod terminal;

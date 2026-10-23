@@ -541,25 +541,24 @@ fn render_collection(frame: &mut Frame, app: &AppState, area: Rect, theme: Theme
                         theme,
                     ),
                 ],
+                // What a record says leads; its short id (ADR 0040) is what an argument accepts.
                 Screen::Memory => vec![
                     heading(
-                        &format!("[{}] {}", text(record, "scope"), text(record, "id")),
+                        &format!(
+                            "[{}] {}",
+                            text(record, "scope"),
+                            text(record, "content").lines().next().unwrap_or("")
+                        ),
                         theme,
                     ),
-                    Line::raw(
-                        text(record, "content")
-                            .lines()
-                            .next()
-                            .unwrap_or("")
-                            .to_owned(),
-                    ),
+                    field("id", short_id(&text(record, "id")), theme),
                 ],
                 Screen::Prompts => vec![
                     heading(&text(record, "name"), theme),
                     field("version", text(record, "version"), theme),
                 ],
                 _ => vec![
-                    heading(&text(record, "id"), theme),
+                    heading(&run_title(record), theme),
                     status(&text(record, "state"), theme),
                 ],
             };
@@ -629,14 +628,14 @@ fn render_board(frame: &mut Frame, app: &AppState, area: Rect, theme: Theme) {
                     lines.push(field("Repository", text(card, "repository_id"), theme));
                     lines.push(Line::raw(text(card, "reason")));
                 } else {
-                    lines.push(field("Ticket", text(card, "ticket_id"), theme));
+                    lines.push(field("Ticket", short_id(&text(card, "ticket_id")), theme));
                     lines.push(field("Revision", text(card, "ticket_revision"), theme));
                     let state = text(card, "state");
                     if !state.is_empty() {
                         lines.push(status(&state, theme));
                     }
                     if !text(card, "run_id").is_empty() {
-                        lines.push(field("Run", text(card, "run_id"), theme));
+                        lines.push(field("Run", short_id(&text(card, "run_id")), theme));
                     }
                 }
                 lines.push(Line::styled("------------------------", theme.muted()));
@@ -693,6 +692,7 @@ fn detail_lines(screen: Screen, record: &Value, theme: Theme) -> Vec<Line<'stati
         }
         Screen::Ticket => {
             lines.push(heading(&text(record, "title"), theme));
+            lines.push(field("Short id", short_id(&text(record, "id")), theme));
             append_fields(
                 &mut lines,
                 record,
@@ -726,6 +726,7 @@ fn detail_lines(screen: Screen, record: &Value, theme: Theme) -> Vec<Line<'stati
         }
         Screen::Memory | Screen::MemoryDetail => {
             lines.push(heading(&text(record, "id"), theme));
+            lines.push(field("Short id", short_id(&text(record, "id")), theme));
             append_fields(
                 &mut lines,
                 record,
@@ -774,7 +775,8 @@ fn detail_lines(screen: Screen, record: &Value, theme: Theme) -> Vec<Line<'stati
             }
         }
         Screen::Runs | Screen::RunDetail => {
-            lines.push(heading(&text(record, "id"), theme));
+            lines.push(heading(&run_title(record), theme));
+            lines.push(field("Run", text(record, "id"), theme));
             lines.push(status(&text(record, "state"), theme));
             append_fields(
                 &mut lines,
@@ -799,6 +801,7 @@ fn detail_lines(screen: Screen, record: &Value, theme: Theme) -> Vec<Line<'stati
         }
         Screen::Plan => {
             lines.push(heading("IMMUTABLE PLAN / REVIEW BEFORE APPROVAL", theme));
+            lines.push(field("Short id", short_id(&text(record, "id")), theme));
             append_fields(
                 &mut lines,
                 record,
@@ -1385,4 +1388,38 @@ fn sandbox_lines(lines: &mut Vec<Line<'static>>, plan: &Value, project: &str, th
         ),
         theme.accent(),
     ));
+}
+
+fn short_id(id: &str) -> String {
+    crate::refs::short_id(id)
+}
+
+/// A run's list title: what kind of run it is, its short id and what it is about, instead of the
+/// generated identity alone (ADR 0040). The detail pane still shows the complete identity.
+pub fn run_title(record: &Value) -> String {
+    let metadata = record.get("metadata").cloned().unwrap_or(Value::Null);
+    let short = short_id(&text(record, "id"));
+    match text(&metadata, "kind").as_str() {
+        "workflow" => format!(
+            "workflow {short} · plan {} r{}",
+            short_id(&text(&metadata, "plan_id")),
+            text(&metadata, "plan_revision")
+        ),
+        "baseline" => format!("baseline {short} · {}", text(&metadata, "repository_id")),
+        _ => {
+            let prompt = text(&metadata, "prompt");
+            let prompt: String = prompt
+                .lines()
+                .next()
+                .unwrap_or("")
+                .chars()
+                .take(40)
+                .collect();
+            if prompt.is_empty() {
+                format!("session {short}")
+            } else {
+                format!("session {short} · {prompt}")
+            }
+        }
+    }
 }
