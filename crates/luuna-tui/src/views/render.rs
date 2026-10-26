@@ -838,7 +838,7 @@ fn detail_lines(screen: Screen, record: &Value, theme: Theme) -> Vec<Line<'stati
                 lines.push(Line::raw(""));
             }
             lines.push(Line::styled(
-                "Approval requires typing the complete hash into a blank prompt.",
+                "Approval: after reviewing this plan, type approve (or the hash's first 8 digits) into a blank prompt; the complete hash is sent.",
                 theme.tone("attention"),
             ));
             lines.push(Line::raw("Implementation is a separate explicit action."));
@@ -969,8 +969,8 @@ fn render_help(frame: &mut Frame, app: &mut AppState, area: Rect, theme: Theme) 
         ("MISSIONS", "Left/Right pages all eight runtime workflow columns. Cards open tickets or testing prerequisites. This is a read-only projection: a card never moves a workflow or bypasses approval."),
         ("ORBIT", "Every repository of the project at once. x runs one command in each, r runs a manifest recipe, s fetches present checkouts and clones missing ones; each opens a form first. These are your own commands, never evidence. b shows the sandbox plan; open the sandbox outside the workbench with lu sbx <project>."),
         ("ATLAS AND BEACON", "Browse scoped memory and versioned prompts. User memory requires explicit inclusion. Select context deliberately; it stays unsent until a plan is submitted. Project changes clear these choices."),
-        ("FORMS", "Tab and Shift+Tab move fields. Alt+Enter (or Ctrl+J; Shift+Enter where the terminal reports it) inserts a line. Ctrl+S submits. Escape cancels. Letters, including q, are text while editing. Shared commands retain their confirmations and stale-version guards."),
-        ("PLANS AND EVIDENCE", "Read the complete plan and hash. Approval starts with a blank acknowledgment; the complete hash must match. Implementation remains separate. Run evidence tabs retain exact runtime state and reasons."),
+        ("FORMS", "Tab and Shift+Tab move fields. Alt+Enter (or Ctrl+J; Shift+Enter where the terminal reports it) inserts a line. Ctrl+S submits. Escape cancels. Left/Right pick from a field's choices (repositories, records, scopes, yes/no); typing still works. Letters, including q, are text while editing. Shared commands retain their confirmations and stale-version guards."),
+        ("PLANS AND EVIDENCE", "Read the complete plan and hash. Approval starts with a blank prompt: type approve (or the hash's first 8 digits) to approve exactly the plan shown; the complete hash is what is sent. Implementation remains separate. Run evidence tabs retain exact runtime state and reasons."),
         ("SERVICE LIFETIME", "Leaving a view or closing this client never cancels the underlying run. Cancel and shutdown are explicitly named commands. Interrupted work is distinct from failed checks; completed alone is not passed evidence."),
     ] { lines.push(heading(title, theme)); lines.push(Line::raw(body)); lines.push(Line::raw("")); }
     lines.push(heading("STATE LEGEND / WORDS REMAIN AUTHORITATIVE", theme));
@@ -990,9 +990,16 @@ fn render_help(frame: &mut Frame, app: &mut AppState, area: Rect, theme: Theme) 
     lines.push(Line::raw(""));
     lines.push(heading("KEYS / AS CONFIGURED", theme));
     let keymap = crate::keys::keymap();
+    // The keys column is as wide as the longest binding list, so a description never runs into it.
+    let width = crate::keys::ACTIONS
+        .iter()
+        .map(|(name, ..)| keymap.all(name).chars().count() + 2)
+        .max()
+        .unwrap_or(0)
+        .max(26);
     for (name, _, _, about) in crate::keys::ACTIONS {
         lines.push(Line::raw(format!(
-            "{:<14}{:<26}{about}",
+            "{:<14}{:<width$}{about}",
             name,
             keymap.all(name)
         )));

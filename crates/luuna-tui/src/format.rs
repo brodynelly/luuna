@@ -233,7 +233,6 @@ fn p(value: &J, table: fn(&str) -> Option<&'static str>, colour: bool) -> String
     paint(&value.js(), table(&value.js()), colour)
 }
 
-/// `short(hash)`
 /// A generated identity as its short id (ADR 0042): what lists show and what every argument accepts.
 fn sid(value: &J) -> String {
     crate::refs::short_id(&s(value))
@@ -250,6 +249,7 @@ fn shash(value: &J) -> String {
     }
 }
 
+/// `short(hash)`
 fn short(hash: &J) -> String {
     match hash {
         J::Str(text) if js::len16(text) > 20 => format!("{}…", js::slice16(text, 0, Some(19))),

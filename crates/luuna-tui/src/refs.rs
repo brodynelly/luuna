@@ -10,7 +10,7 @@
 //! memory content) accept a prefix of at least eight hex digits that must match the record the
 //! command just read; the exact full hash is still what reaches the runtime.
 use crate::client::{encode_component, Client, Signal};
-use crate::commands::{Command, Input};
+use crate::commands::{Command, FlagValue, Input};
 use crate::failures::Failure;
 use crate::js::J;
 
@@ -55,10 +55,11 @@ pub fn short_id(id: &str) -> String {
         .unwrap_or_else(|| id.to_string())
 }
 
-/// `sha256:` and the first twelve hex digits, for display beside the complete hash.
+/// `sha256:` and the first twelve hex digits, for display beside the complete hash; anything else
+/// (not a hex digest) is shown whole, as `@luuna/ui`'s `shortHash` does.
 pub fn short_hash(hash: &str) -> String {
     match hash.strip_prefix("sha256:") {
-        Some(digits) if digits.len() > 12 => format!("sha256:{}", &digits[..12]),
+        Some(digits) if digits.len() > 12 && hex(digits) => format!("sha256:{}", &digits[..12]),
         _ => hash.to_string(),
     }
 }
@@ -86,6 +87,33 @@ fn reference(text: &str) -> Option<String> {
 /// Whether an argument is a short reference this module resolves (else it passes through).
 pub fn is_short_reference(text: &str) -> bool {
     reference(text).is_some()
+}
+
+/// The kind of record a reference's own prefix names (`ticket-3f2a` names a ticket), if any.
+fn named_kind(text: &str) -> Option<&'static str> {
+    let lower = text.trim().to_ascii_lowercase();
+    [
+        ("plan-", "plan"),
+        ("ticket-", "ticket"),
+        ("workflow-", "run"),
+        ("run-", "run"),
+        ("mem-", "memory record"),
+    ]
+    .into_iter()
+    .find(|(prefix, _)| lower.starts_with(prefix))
+    .map(|(_, kind)| kind)
+}
+
+/// Refuses a reference whose prefix names another kind of record than the argument takes, so
+/// `cancel ticket-3f2a` never cancels a run whose id happens to begin `3f2a`.
+fn same_kind(text: &str, expected: &str, allowed: &[&str]) -> Result<(), Failure> {
+    match named_kind(text) {
+        Some(kind) if !allowed.contains(&kind) => Err(Failure::Refusal(format!(
+            "{} names a {kind}, not a {expected}.",
+            text.trim()
+        ))),
+        _ => Ok(()),
+    }
 }
 
 fn named_by(id: &str, prefix: &str) -> bool {
@@ -198,6 +226,11 @@ async fn run_id(client: &Client, text: &str, signal: &Signal) -> Result<String, 
     Ok(pick("run", text, &all, label)?.get("id").js())
 }
 
+fn memory_label(record: &J) -> String {
+    let content = record.get("content").as_str().unwrap_or("").to_string();
+    content.chars().take(40).collect()
+}
+
 async fn memory(client: &Client, project: &str, signal: &Signal) -> Result<Vec<J>, Failure> {
     let path = format!(
         "/projects/{}/memory?include_user=true",
@@ -238,16 +271,52 @@ pub async fn resolve(
     let latest = first.trim().eq_ignore_ascii_case("latest");
     match command.context.as_str() {
         "ticket" if is_short_reference(&first) => {
+            same_kind(&first, "ticket", &["ticket"])?;
             resolved.args[0] = ticket_id(client, &first, signal).await?;
         }
+        // A plan's short id is its ticket's.
         "plan" if is_short_reference(&first) => {
+            same_kind(&first, "plan", &["plan", "ticket"])?;
             let ticket = ticket_id(client, &first, signal).await?;
             resolved.args[0] = format!("plan-{ticket}");
         }
         "run" if latest || is_short_reference(&first) => {
+            same_kind(&first, "run", &["run"])?;
             resolved.args[0] = run_id(client, &first, signal).await?;
         }
         _ => {}
+    }
+    // Lists print short ids, so the flags that take a run or memory id accept them too.
+    if command.id == "runs.list" {
+        if let Some(before) = input.text_if("before").filter(|b| is_short_reference(b)) {
+            same_kind(&before, "run", &["run"])?;
+            let exact = run_id(client, &before, signal).await?;
+            resolved.set("before", FlagValue::Str(exact));
+        }
+    }
+    let selected = input.list("memory");
+    if command.id == "plans.create" && selected.iter().any(|id| is_short_reference(id)) {
+        let ticket = client
+            .get(
+                &format!("/tickets/{}", encode_component(&resolved.args[0])),
+                signal,
+            )
+            .await?;
+        let all = memory(client, &ticket.get("project_id").js(), signal).await?;
+        let mut exact = Vec::new();
+        for id in &selected {
+            if is_short_reference(id) {
+                same_kind(id, "memory record", &["memory record"])?;
+                exact.push(
+                    pick("memory record", id, &all, memory_label)?
+                        .get("id")
+                        .js(),
+                );
+            } else {
+                exact.push(id.clone());
+            }
+        }
+        resolved.set("memory", FlagValue::List(exact));
     }
     if matches!(
         command.name.as_str(),
@@ -257,12 +326,9 @@ pub async fn resolve(
         let (id, hash) = (&input.args[1], &input.args[2]);
         let short_hash = !hash.trim().starts_with("sha256:") || hash.trim().len() < 71;
         if is_short_reference(id) || short_hash {
+            same_kind(id, "memory record", &["memory record"])?;
             let all = memory(client, &input.args[0], signal).await?;
-            let label = |r: &J| {
-                let content = r.get("content").as_str().unwrap_or("").to_string();
-                content.chars().take(40).collect::<String>()
-            };
-            let record = pick("memory record", id, &all, label)?;
+            let record = pick("memory record", id, &all, memory_label)?;
             resolved.args[1] = record.get("id").js();
             resolved.args[2] = complete_hash(hash, &record.get("hash").js());
         }
@@ -274,6 +340,30 @@ pub async fn resolve(
 mod tests {
     use super::*;
     const T: &str = "ticket-3f2a91c0-1b2c-4d5e-8f90-0123456789ab";
+
+    #[test]
+    fn a_hash_is_shortened_only_when_it_is_a_hex_digest() {
+        let full = format!("sha256:{}", "ab".repeat(32));
+        assert_eq!(short_hash(&full), "sha256:abababababab");
+        assert_eq!(short_hash("sha256:abc"), "sha256:abc");
+        assert_eq!(
+            short_hash("sha256:aééééééé"),
+            "sha256:aééééééé",
+            "never panics"
+        );
+        assert_eq!(short_hash("sha256:zzzzzzzzzzzzzz"), "sha256:zzzzzzzzzzzzzz");
+    }
+
+    #[test]
+    fn a_prefix_naming_another_kind_is_refused() {
+        assert!(same_kind("ticket-3f2a", "run", &["run"]).is_err());
+        assert!(same_kind("workflow-3f2a", "run", &["run"]).is_ok());
+        assert!(same_kind("#3f2a", "run", &["run"]).is_ok());
+        assert!(same_kind("3f2a", "run", &["run"]).is_ok());
+        assert!(same_kind("ticket-3f2a", "plan", &["plan", "ticket"]).is_ok());
+        assert!(same_kind("plan-ticket-3f2a", "plan", &["plan", "ticket"]).is_ok());
+        assert!(same_kind("mem-3f2a", "ticket", &["ticket"]).is_err());
+    }
 
     #[test]
     fn short_ids_come_from_the_generated_uuid() {

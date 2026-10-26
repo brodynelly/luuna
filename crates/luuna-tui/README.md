@@ -6,7 +6,9 @@ capability catalog (`schemas/capability-catalog.json`, ADR 0020) and explains ev
 the shared sentence `<Action> refused: <reason> <next step>`. The runtime alone authorizes
 execution, approval, validation and publication. Since [ADR 0037](../../docs/decisions/0037-single-rust-terminal-client.md)
 the client has no Node process: it was a Node command line plus a Node bridge behind the Rust
-renderer, and is now this crate alone, with byte-identical commands, output and requests.
+renderer, and is now this crate alone, with byte-identical commands and requests. Human output has
+since changed only where [ADR 0042](../../docs/decisions/0042-short-references-and-picked-input.md)
+shows short ids and hash prefixes; `--json` output is unchanged.
 
 ```sh
 cargo build --locked -p luuna-tui                # target/debug/luuna-tui[.exe]; `npm run tui -- …` runs it too
@@ -50,6 +52,8 @@ sentences; a server body is never shown.
 | `bridge.rs` | The workbench's in-process command service (the versioned protocol of `protocol.rs`) |
 | `prime.rs`, `components.rs` | `lu init`'s flow and the component CLI runner |
 | `app.rs`, `views/`, `ui.rs`, `guide.rs` | The workbench's state and screens, including the guide mode |
+| `keys.rs`, `config.rs`, `theme.rs` | The keymap, the settings file and the colors (ADR 0040) |
+| `refs.rs` | Short ids, unique prefixes, `latest` and hash prefixes, resolved before anything is sent (ADR 0042) |
 
 `js.rs` exists so output stays exactly what the original JavaScript client printed: objects keep
 insertion order with integer-like keys first, missing fields are `undefined` and omitted from
@@ -72,13 +76,22 @@ Bun's own executable, no shell, and never receive the runtime's URL or token.
 ## Workbench
 
 Luuna opens on Home. `s` on Home or Projects (or "Set up a project" in the menu) starts the guide.
-F3 Projects, F4 Missions, F6 Atlas, F7 Beacon, F8 Runs, F2 the complete command catalog, F1 Help;
-F10 opens navigation, Tab changes focus, arrows select, Enter inspects, Esc returns, F5 refreshes.
+F3 or 1 Projects, F4 or 2 Missions, F6 or 3 Atlas, F7 or 4 Beacon, F8 or 5 Runs, F2 or `:` the
+complete command catalog, F1 or `?` Help; F10 or `m` opens navigation, Tab changes focus, arrows
+(or h/j/k/l) select, Enter inspects, Esc returns, F5 or Ctrl-R refreshes. Every key has a plain-key
+alternative because macOS terminals keep F1-F12 unless Fn is held ([ADR 0040](../../docs/decisions/0040-terminal-keymap-and-settings.md)).
 Forms: Tab or Up/Down move fields, Left/Right pick from a field's choices (repositories, records,
-scopes, yes/no), Ctrl-U clears, Alt-Enter adds a line, Ctrl-S submits. Approval shows the complete
+scopes, yes/no; typing still works), Ctrl-U clears, Alt-Enter, Shift-Enter or Ctrl-J adds a line (on
+a Mac, Option-Enter sends a plain Enter), Ctrl-S submits. Keys, colors and the kitty keyboard flag
+are read from `~/.config/luuna/tui.json` (`$LUUNA_TUI_CONFIG`, `$XDG_CONFIG_HOME/luuna/tui.json`,
+`%APPDATA%\luuna\tui.json`); `luuna-tui --print-config` prints every default and `--config-path`
+where the file is read. Help lists the keys as configured. Approval shows the complete
 plan and hash and takes a typed `approve` (or the hash's first 8 digits), never a prefilled answer;
 a terminal too small to show the plan cannot approve. Lists show short ids, and every ticket, plan,
-run and memory argument accepts one (ADR 0042). Esc stops local waiting; the `cancel` action requests runtime cancellation. Quitting
+run and memory argument accepts one, as do `runs --before` and `plan --memory` (ADR 0042). A
+workbench form resolves a short id or `latest` among the records it has loaded and sends that exact
+id; one it cannot resolve is sent as typed for the command to resolve or refuse. Esc stops local
+waiting; the `cancel` action requests runtime cancellation. Quitting
 leaves the runtime running.
 
 Frames are event-driven and capped at `LUUNA_TUI_FPS` (default 60, 30-144); an idle workbench does
@@ -96,8 +109,8 @@ npm run test:contracts
 ```
 
 `tests/cli.rs` runs the built client against a mock runtime: every catalog entry's command issues
-its method and route, request bodies, refusal sentences, usage errors, the full-hash approval and
-SSE resumption. `tests/guide_flow.rs` drives `init` with scripted answers, `tests/bridge_service.rs`
+its method and route, request bodies, refusal sentences, usage errors, approval by full hash or an
+8+ digit prefix (a 7-digit prefix is refused), short-id and `latest` resolution, and SSE resumption. `tests/guide_flow.rs` drives `init` with scripted answers, `tests/bridge_service.rs`
 the workbench's service, and `tests/terminal_lifecycle.rs` and `tests/guide_pty.rs` run the binary
 in a real PTY (ConPTY on Windows). The end-to-end harnesses are `node scripts/tui-smoke.mjs` and
 `node scripts/tui-native-audit.mjs` against a disposable synthetic runtime. These are fixture and

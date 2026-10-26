@@ -908,6 +908,7 @@ pub fn received(app: &mut AppState, event: &BridgeEvent, command: Option<&str>, 
         app.workbench.cursor = app.workbench.cursor.min(rows(app).len().saturating_sub(1));
     }
     let v = event.fields.get("value").cloned().unwrap_or(Value::Null);
+    adopt_identity(app, command, &v);
     // A successful authoritative run read is the only link used by its Plan action.
     if command == "run" && text(&v, "id") == app.context.get("run").cloned().unwrap_or_default() {
         app.context.remove("plan");
@@ -980,8 +981,8 @@ pub fn received(app: &mut AppState, event: &BridgeEvent, command: Option<&str>, 
 }
 
 /// Records and values already on screen that a form field can pick from (ADR 0042), as
-/// `(value, label)`. Record values are short ids, which every argument resolves to the exact
-/// identity before anything is sent; nothing here reads from the runtime.
+/// `(value, label)`. Record values are exact identities, which the form shows by their short ids;
+/// nothing here reads from the runtime.
 fn known_choices(app: &AppState, command: &str, field: &str) -> Vec<(String, String)> {
     let pair = |value: String, label: String| (value, label);
     let fixed = |values: &[&str]| {
@@ -1055,11 +1056,15 @@ fn known_choices(app: &AppState, command: &str, field: &str) -> Vec<(String, Str
                 )
             })
             .collect(),
+        // `latest` is offered only beside the loaded runs it is resolved among.
         "run" => {
-            let mut out = vec![pair("latest".into(), "the newest run".into())];
+            let runs = array(snapshot(app, "runs"));
+            let mut out = Vec::new();
+            if !runs.is_empty() {
+                out.push(pair("latest".into(), "the newest run".into()));
+            }
             out.extend(
-                array(snapshot(app, "runs"))
-                    .iter()
+                runs.iter()
                     .map(|r| pair(text(r, "id"), render::run_title(r))),
             );
             out
@@ -1129,25 +1134,65 @@ fn known_choices(app: &AppState, command: &str, field: &str) -> Vec<(String, Str
     }
 }
 
-/// The exact identity a context value names, so the workbench context never holds a short id or
-/// `latest` (its record checks compare exact identities). A value no loaded record matches is kept;
-/// the command resolves it against the runtime and refuses it if it names nothing.
-pub fn exact_context(app: &AppState, name: &str, value: &str) -> String {
-    if name == "run" && value.trim().eq_ignore_ascii_case("latest") {
+/// The exact identity a context value names among the records the workbench has loaded, so the
+/// request, the context and the snapshot's provenance all name one record (ADR 0042). `None` for a
+/// short id or `latest` that nothing loaded resolves: the command then resolves it against the
+/// runtime (or refuses it), and the context waits for the record the runtime returns.
+pub fn exact_context(app: &AppState, name: &str, value: &str) -> Option<String> {
+    if !matches!(name, "ticket" | "plan" | "run") {
+        return Some(value.to_string());
+    }
+    if name == "run" && is_latest(value) {
         return array(snapshot(app, "runs"))
             .iter()
             .max_by_key(|r| text(r, "created_at"))
-            .map(|r| text(r, "id"))
-            .unwrap_or_else(|| value.to_string());
+            .map(|r| text(r, "id"));
     }
     if !crate::refs::is_short_reference(value) {
-        return value.to_string();
+        return Some(value.to_string());
     }
     let ids: Vec<String> = known_choices(app, "", name)
         .into_iter()
         .map(|(id, _)| id)
         .collect();
-    crate::refs::unique_match(value, &ids).unwrap_or_else(|| value.to_string())
+    crate::refs::unique_match(value, &ids)
+}
+
+fn is_latest(value: &str) -> bool {
+    value.trim().eq_ignore_ascii_case("latest")
+}
+
+/// A record read sent with a short id or `latest` that nothing loaded resolved (ADR 0042): the
+/// record the runtime returned is the one it named, so its exact identity becomes the context and
+/// the snapshot's provenance. The context was cleared when the reference was sent.
+fn adopt_identity(app: &mut AppState, command: &str, v: &Value) {
+    let name = match command {
+        "run" => "run",
+        "show-ticket" => "ticket",
+        "show-plan" => "plan",
+        _ => return,
+    };
+    let id = text(v, "id");
+    let Some(request) = app.snapshot_requests.get_mut(command) else {
+        return;
+    };
+    let Some(sent) = request
+        .fields
+        .get_mut("args")
+        .and_then(Value::as_array_mut)
+        .and_then(|args| args.first_mut())
+    else {
+        return;
+    };
+    let typed = sent.as_str().unwrap_or("").to_string();
+    let named = (name == "run" && is_latest(&typed))
+        || (crate::refs::is_short_reference(&typed)
+            && crate::refs::unique_match(&typed, std::slice::from_ref(&id)).is_some());
+    if id.is_empty() || !named || app.context.contains_key(name) {
+        return;
+    }
+    *sent = json!(id);
+    app.context.insert(name.into(), id);
 }
 
 /// Gives each field of a new form the choices the workbench already knows, and fills a required

@@ -866,7 +866,7 @@
         "R07",
         "A33"
       ],
-      "acknowledgment": "The developer acknowledges the complete plan hash: the desktop checkbox stands for the hash shown beside it; the TUI's typed or --acknowledge-hash value must equal the plan's hash exactly."
+      "acknowledgment": "The developer acknowledges the complete plan hash: the desktop checkbox stands for the hash shown beside it; the TUI's typed approve stands for the complete hash it displayed, and --acknowledge-hash takes that hash or a prefix of at least 8 hex digits of the plan just read. The complete hash is what is sent (ADR 0042)."
     },
     {
       "id": "runs.list",

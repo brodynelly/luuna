@@ -102,18 +102,18 @@ export async function auditWorkflows({ terminal, fixture, capture, screenContain
   const plan = plans.at(-1); await screenContains(terminal, /Plan \/ immutable snapshot/); await capture(terminal, "plan-full-context");
   const serialized = JSON.stringify(plan);
   record("explicit plan records selected memory and exact prompt context", serialized.includes(fixture.memory.id) && serialized.includes("native-guidance"));
-  await send("a"); await fill("approve", {}); await submit(); await screenContains(terminal, /Type approve to approve plan/); await capture(terminal, "approval-blank-hash");
+  await send("a"); await fill("approve", {}); await submit(); await screenContains(terminal, /Type approve \(or 8\+ hash digits\) to approve plan/); await capture(terminal, "approval-blank-hash");
   await send("Enter"); await screenContains(terminal, /does not match|complete|hash/i);
   const run = (await apiRows("/runs")).find((row) => row.metadata?.plan_id === plan.id);
   record("empty hash does not approve the plan", (await apiRows(`/runs/${run.id}`))?.state === "plan_ready");
   await send("Escape"); await send("Escape");
   await send("F2"); await send("/"); await send("approve"); await send("Enter"); await send("Enter");
-  await fill("approve", { plan: plan.id }); await submit(); await screenContains(terminal, /Type approve to approve plan/);
+  await fill("approve", { plan: plan.id }); await submit(); await screenContains(terminal, /Type approve \(or 8\+ hash digits\) to approve plan/);
   await terminal.send(`sha256:${"0".repeat(64)}`); await send("Enter"); await screenContains(terminal, /acknowledged hash does not match/);
   await capture(terminal, "approval-wrong-full-hash-refused");
   record("wrong nonempty full hash does not approve the plan", (await apiRows(`/runs/${run.id}`))?.state === "plan_ready");
   await send("Escape"); await send("F2"); await send("/"); await send("approve"); await send("Enter"); await send("Enter");
-  await fill("approve", { plan: plan.id }); await submit(); await screenContains(terminal, /Type approve to approve plan/);
+  await fill("approve", { plan: plan.id }); await submit(); await screenContains(terminal, /Type approve \(or 8\+ hash digits\) to approve plan/);
   // ADR 0042: the typed word stands for the complete hash displayed above it; the client sends that hash.
   await terminal.send("approve"); await send("Enter");
   await changed(async () => (await apiRows(`/runs/${run.id}`))?.state === "approved", "Typed approval did not persist");

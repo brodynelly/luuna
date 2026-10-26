@@ -1037,7 +1037,26 @@ fn a_short_or_latest_run_in_a_form_keeps_the_exact_identity_as_context() {
             Some(RUN),
             "{typed}"
         );
+        // The request names the same record as the context: resolved once, sent exact.
+        let sent = a.queue.back().unwrap().fields["args"][0].clone();
+        assert_eq!(sent, json!(RUN), "{typed}");
     }
+    // A read by short id keeps its snapshot: its provenance is the exact identity.
+    let mut a = app();
+    a.snapshots.insert("runs".into(), json!([{"id":RUN,"state":"implementing","metadata":{"kind":"workflow"},"created_at":"2026-10-22T00:00:00Z"}]));
+    a.begin("run");
+    let form = a.form.as_mut().unwrap();
+    form.fields
+        .iter_mut()
+        .find(|f| f.name == "run")
+        .unwrap()
+        .value = "8b1e".into();
+    a.submit();
+    event(
+        &mut a,
+        json!({"id":RUN,"state":"implementing","metadata":{"kind":"workflow"}}),
+    );
+    assert_eq!(views::snapshot(&a, "run")["id"], json!(RUN));
     // A picked record shows its short id in the form.
     let mut a = app();
     a.snapshots.insert("runs".into(), json!([{"id":RUN,"state":"implementing","metadata":{"kind":"workflow"},"created_at":"2026-10-22T00:00:00Z"}]));
@@ -1051,6 +1070,75 @@ fn a_short_or_latest_run_in_a_form_keeps_the_exact_identity_as_context() {
     let painted = draw(&mut a, 120, 35, false);
     assert!(
         painted.contains("run ◂▸: 8b1e0000  workflow 8b1e0000"),
+        "{painted}"
+    );
+}
+#[test]
+fn a_reference_nothing_loaded_resolves_never_becomes_the_context() {
+    const RUN: &str = "workflow-8b1e0000-1b2c-4d5e-8f90-0123456789ab";
+    for typed in ["latest", "8b1e"] {
+        let mut a = app();
+        a.snapshots.remove("runs");
+        a.begin("run");
+        let form = a.form.as_mut().unwrap();
+        let field = form.fields.iter_mut().find(|f| f.name == "run").unwrap();
+        assert!(
+            !field.choices.iter().any(|(value, _)| value == "latest"),
+            "latest is offered only beside loaded runs"
+        );
+        field.value = typed.into();
+        a.submit();
+        // Sent as typed for the command to resolve; the old run and its links are not kept.
+        assert_eq!(a.queue.back().unwrap().fields["args"][0], json!(typed));
+        assert_eq!(a.context.get("run"), None, "{typed}");
+        assert_eq!(a.context.get("plan"), None, "{typed}");
+        // The record the runtime returned is what the reference named.
+        event(
+            &mut a,
+            json!({"id":RUN,"state":"implementing","metadata":{"kind":"workflow","plan_id":"plan-1","ticket_id":"ticket-1"}}),
+        );
+        assert_eq!(
+            a.context.get("run").map(String::as_str),
+            Some(RUN),
+            "{typed}"
+        );
+        assert_eq!(a.context.get("plan").map(String::as_str), Some("plan-1"));
+        assert_eq!(views::snapshot(&a, "run")["id"], json!(RUN), "{typed}");
+    }
+    // A short id that names another record is not adopted.
+    let mut a = app();
+    a.snapshots.remove("runs");
+    a.begin("run");
+    let form = a.form.as_mut().unwrap();
+    form.fields
+        .iter_mut()
+        .find(|f| f.name == "run")
+        .unwrap()
+        .value = "9c3d".into();
+    a.submit();
+    event(&mut a, json!({"id":RUN,"state":"implementing"}));
+    assert_eq!(a.context.get("run"), None);
+}
+#[test]
+fn the_approval_question_shows_what_to_type_and_how_to_cancel_at_eighty_columns() {
+    let mut a = app();
+    a.mode = Mode::Result;
+    a.prompt = Some(luuna_tui::app::PendingPrompt {
+        request_id: "r".into(),
+        prompt_id: "p".into(),
+        kind: "hash".into(),
+        question: luuna_tui::commands::approval_question(
+            "plan-ticket-3f2a91c0-1b2c-4d5e-8f90-0123456789ab",
+            "12",
+            &hash(),
+        ),
+        value: String::new(),
+    });
+    let painted = draw(&mut a, 80, 24, false);
+    assert!(
+        painted.contains(
+            "Type approve (or 8+ hash digits) to approve plan 3f2a91c0 r12 · empty cancels"
+        ),
         "{painted}"
     );
 }

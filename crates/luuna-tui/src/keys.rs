@@ -45,8 +45,18 @@ pub const ACTIONS: &[(&str, &str, &[&str], &str)] = &[
     ("menu", "f10", &["f10", "m"], "Toggle the section menu"),
     ("up", "up", &["up", "k", "ctrl+p"], "Move up"),
     ("down", "down", &["down", "j", "ctrl+n"], "Move down"),
-    ("left", "left", &["left", "h"], "Previous column or tab"),
-    ("right", "right", &["right", "l"], "Next column or tab"),
+    (
+        "left",
+        "left",
+        &["left", "h"],
+        "Previous column, tab or form choice",
+    ),
+    (
+        "right",
+        "right",
+        &["right", "l"],
+        "Next column, tab or form choice",
+    ),
     (
         "page-up",
         "pageup",
@@ -328,6 +338,17 @@ impl Keymap {
         if self.canonicals.contains(&chord) {
             return None;
         }
+        // A modified form of a named canonical key whose action was unbound or moved (Ctrl+Right
+        // after `"right": []`) must not reach that action's handler either.
+        if !chord.modifiers.is_empty() && !matches!(chord.code, KeyCode::Char(_)) {
+            let base = Chord {
+                code: chord.code,
+                modifiers: KeyModifiers::NONE,
+            };
+            if self.canonicals.contains(&base) && !self.lookup.contains_key(&base) {
+                return None;
+            }
+        }
         Some(key)
     }
 
@@ -476,6 +497,45 @@ mod tests {
             None
         );
         assert_eq!(map.first("help"), "unbound");
+    }
+
+    #[test]
+    fn unbinding_a_named_key_also_stops_its_modified_forms() {
+        let (map, _) = Keymap::build(&BTreeMap::from([("right".to_string(), vec![])]));
+        for (modifiers, text_entry) in [
+            (KeyModifiers::NONE, false),
+            (KeyModifiers::CONTROL, false),
+            (KeyModifiers::SHIFT, true),
+            (KeyModifiers::ALT, true),
+        ] {
+            assert_eq!(
+                map.translate(press(KeyCode::Right, modifiers), text_entry),
+                None,
+                "{modifiers:?}"
+            );
+        }
+        // Moved rather than unbound: the new chord reaches the handler as the canonical key.
+        let (moved, _) = Keymap::build(&BTreeMap::from([(
+            "right".to_string(),
+            vec!["ctrl+right".into()],
+        )]));
+        let right = moved
+            .translate(press(KeyCode::Right, KeyModifiers::CONTROL), true)
+            .unwrap();
+        assert_eq!(
+            (right.code, right.modifiers),
+            (KeyCode::Right, KeyModifiers::NONE)
+        );
+        assert_eq!(
+            moved.translate(press(KeyCode::Right, KeyModifiers::SHIFT), true),
+            None
+        );
+        // With the defaults a modified arrow still passes through untouched.
+        let (defaults, _) = Keymap::build(&BTreeMap::new());
+        let passed = defaults
+            .translate(press(KeyCode::Right, KeyModifiers::CONTROL), true)
+            .unwrap();
+        assert_eq!(passed.modifiers, KeyModifiers::CONTROL);
     }
 
     #[test]

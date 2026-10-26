@@ -687,11 +687,10 @@ async fn acknowledged_hash(io: &dyn Io, input: &Input, plan: &J) -> Result<Strin
     io.show(&format_plan(plan))?;
     let hash = plan.get("hash").js();
     let typed = js_trim(
-        &io.prompt(format!(
-            "Type approve to approve plan {} r{} with hash {}… as shown above, or its first 8 hash digits (empty cancels)",
-            crate::refs::short_id(&plan.get("id").js()),
-            plan.get("revision").js(),
-            crate::refs::short_hash(&hash)
+        &io.prompt(approval_question(
+            &plan.get("id").js(),
+            &plan.get("revision").js(),
+            &hash,
         ))
         .await?,
     );
@@ -1717,6 +1716,16 @@ pub async fn run(
         }
         _ => Err(Failure::error(format!("Unknown command {}.", command.name))),
     }
+}
+
+/// The interactive approval question. What to type and how to cancel lead, so the workbench's
+/// one-line prompt panel shows them on an 80-column terminal; the plan and its hash follow.
+pub fn approval_question(plan_id: &str, revision: &str, hash: &str) -> String {
+    format!(
+        "Type approve (or 8+ hash digits) to approve plan {} r{revision} · empty cancels · hash {}… as shown above",
+        crate::refs::short_id(plan_id),
+        crate::refs::short_hash(hash)
+    )
 }
 
 /// `plan <ticket>`: the plan request both clients send for the same tasks.

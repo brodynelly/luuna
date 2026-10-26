@@ -1,7 +1,8 @@
 //! The command line's contract, against the built client and a mock runtime: parity with the
 //! capability catalog (every entry has one command that issues its method and route), connection
-//! and refusal sentences that never show a server body, usage errors, the full-hash approval
-//! acknowledgment, the SSE follower's resumption, and help that needs no token.
+//! and refusal sentences that never show a server body, usage errors, the approval acknowledgment
+//! (full hash or an 8+ digit prefix), short-id resolution, the SSE follower's resumption, and help
+//! that needs no token.
 mod support;
 use serde_json::{json, Value};
 use support::{json, run_client, serve, status, Reply, Request};
@@ -599,6 +600,7 @@ const TICKET_A: &str = "ticket-3f2a91c0-1b2c-4d5e-8f90-0123456789ab";
 const TICKET_B: &str = "ticket-3f2a0000-1b2c-4d5e-8f90-0123456789ab";
 const RUN_NEW: &str = "workflow-8b1e0000-1b2c-4d5e-8f90-0123456789ab";
 const RUN_OLD: &str = "workflow-77770000-1b2c-4d5e-8f90-0123456789ab";
+const MEMORY: &str = "mem-5e5e0000-1b2c-4d5e-8f90-0123456789ab";
 
 /// A runtime whose records carry generated identities, for short-id resolution (ADR 0042).
 fn generated(request: &Request) -> Reply {
@@ -616,7 +618,14 @@ fn generated(request: &Request) -> Reply {
             run(RUN_OLD, "2026-10-20T00:00:00Z"),
             run(RUN_NEW, "2026-10-21T00:00:00Z")
         ])),
-        p if p == format!("/tickets/{TICKET_A}") => json(ticket(TICKET_A, "Greeting")),
+        p if p == format!("/tickets/{TICKET_A}") => {
+            let mut record = ticket(TICKET_A, "Greeting");
+            record["project_id"] = json!("walkthrough");
+            json(record)
+        }
+        "/projects/walkthrough/memory" => json(json!([
+            {"id":MEMORY,"scope":"project","content":"Use structured errors","hash":HASH}
+        ])),
         p if p == format!("/runs/{RUN_NEW}") => json(run(RUN_NEW, "2026-10-21T00:00:00Z")),
         p if p == format!("/plans/plan-{TICKET_A}") => json(plan_a),
         p if p == format!("/plans/plan-{TICKET_A}/approvals") => json(
@@ -699,5 +708,38 @@ fn short_ids_name_exactly_one_record_before_anything_is_sent() {
         sent.json()["plan_hash"],
         HASH,
         "the complete hash is what reaches the runtime"
+    );
+
+    // A prefix naming another kind of record is refused, not matched against runs.
+    let (code, _, err) = run(&["cancel", "ticket-8b1e"]);
+    assert_eq!(code, 1);
+    assert!(
+        err.contains("ticket-8b1e names a ticket, not a run"),
+        "{err}"
+    );
+    assert!(mock.take().is_empty(), "nothing is read or sent for it");
+
+    // The flags that take the ids lists print accept their short ids too.
+    let _ = run(&["runs", "--before", "7777"]);
+    let listed = mock.take();
+    assert!(
+        listed
+            .iter()
+            .any(|r| r.path == "/api/v1/runs" && r.query.contains(&format!("before={RUN_OLD}"))),
+        "{:?}",
+        listed
+            .iter()
+            .map(|r| (&r.path, &r.query))
+            .collect::<Vec<_>>()
+    );
+    let _ = run(&["plan", "3f2a91", "--memory", "5e5e"]);
+    let planned = mock
+        .take()
+        .into_iter()
+        .find(|r| r.method == "POST")
+        .expect("the plan request is sent");
+    assert_eq!(
+        planned.json()["component_context"]["memory_ids"],
+        json!([MEMORY])
     );
 }

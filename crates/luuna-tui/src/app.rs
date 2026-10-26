@@ -337,7 +337,7 @@ impl AppState {
             return;
         };
         match form.input() {
-            Ok((args, flags)) => {
+            Ok((mut args, flags)) => {
                 let document = form
                     .fields
                     .iter()
@@ -345,24 +345,28 @@ impl AppState {
                     .map(|f| f.value.clone());
                 let name = form.command.name.clone();
                 let read = form.command.read_only && !flags.contains_key("output");
-                let contexts = form
-                    .command
-                    .args
-                    .iter()
-                    .zip(&args)
-                    .filter(|(arg, _)| arg.context)
-                    // The context keeps exact identities: a short id or `latest` becomes the
-                    // loaded record it names (ADR 0042).
-                    .map(|(arg, value)| {
+                // One resolution (ADR 0042): a short id or `latest` that names a loaded record is
+                // sent as that record's exact identity, so the request, the context and the
+                // snapshot's provenance agree. One that nothing loaded resolves is sent as typed
+                // for the command to resolve or refuse, and its context is cleared, never kept as
+                // the reference, until a read returns the record.
+                let mut contexts = Vec::new();
+                for (arg, value) in form.command.args.iter().zip(args.iter_mut()) {
+                    if arg.context {
                         let exact = crate::views::exact_context(self, &arg.name, value);
-                        (arg.name.clone(), exact)
-                    })
-                    .collect::<Vec<_>>();
+                        if let Some(exact) = &exact {
+                            value.clone_from(exact);
+                        }
+                        contexts.push((arg.name.clone(), exact));
+                    }
+                }
                 for (name, value) in contexts {
                     if name == "project" {
-                        crate::views::choose_project(self, &value);
+                        if let Some(value) = value {
+                            crate::views::choose_project(self, &value);
+                        }
                     } else {
-                        if self.context.get(&name) != Some(&value) {
+                        if self.context.get(&name) != value.as_ref() {
                             match name.as_str() {
                                 "ticket" => {
                                     self.context.remove("run");
@@ -379,7 +383,10 @@ impl AppState {
                                 _ => {}
                             }
                         }
-                        self.context.insert(name, value);
+                        match value {
+                            Some(value) => self.context.insert(name, value),
+                            None => self.context.remove(&name),
+                        };
                     }
                 }
                 self.invoke(&name, args, flags, read);
@@ -823,7 +830,7 @@ fn edit(text: &mut String, key: KeyEvent, multiline: bool) {
     }
 }
 
-pub const HELP: &str = "LUUNA / TERMINAL WORKBENCH\n\nThe runtime owns projects, tickets, plans, execution and evidence.\nUse F2 to browse every catalog action. Tab filters its context.\nForms expose every argument and option. Empty options are omitted.\nTab/Up/Down change fields; Alt+Enter adds a line. Repeated flags use one value per line.\nLeft/Right pick from a field's choices (repositories, records, scopes, yes/no); typing still works.\nEnter advances; Ctrl+S submits. Boolean options take yes or no.\nDocument prompts: Enter adds a line, Ctrl+S submits.\n\nApproval displays the complete plan and hash; type approve (or its first 8 hash digits) to approve exactly that plan.\nTicket, plan, run and memory ids accept their short id: the first 4 or more characters lists show.\nEsc stops a LOCAL request or follower. It does not cancel runtime work.\nChoose the cancel action to request runtime cancellation.\nF5 refreshes the latest read. Reconnect never retries a mutation.\n\nSTATES\npassed/accepted: verified success\nrunning/implementing/validating: active\nfailed/rejected: failure\nblocked/pending: attention\ninterrupted/reconnecting: interrupted\ncompleted/cancelled: neutral\n\nHome and Board are read-only projections. Catalog actions expose durable evidence, artifacts, memory and publication status. Merging stays the developer's decision.\n\nPgUp/PgDn scroll; q or Ctrl+C exits and leaves the runtime running.";
+pub const HELP: &str = "LUUNA / TERMINAL WORKBENCH\n\nThe runtime owns projects, tickets, plans, execution and evidence.\nUse F2 (or :) to browse every catalog action. Tab filters its context.\nForms expose every argument and option. Empty options are omitted.\nTab/Up/Down change fields; Alt+Enter (or Ctrl+J) adds a line. Repeated flags use one value per line.\nLeft/Right pick from a field's choices (repositories, records, scopes, yes/no); typing still works.\nEnter advances; Ctrl+S submits. Boolean options take yes or no.\nDocument prompts: Enter adds a line, Ctrl+S submits.\n\nApproval displays the complete plan and hash; type approve (or its first 8 hash digits) to approve exactly that plan.\nTicket, plan, run and memory ids accept their short id: the first 4 or more characters lists show.\nEsc stops a LOCAL request or follower. It does not cancel runtime work.\nChoose the cancel action to request runtime cancellation.\nF5 (or Ctrl+R) refreshes the latest read. Reconnect never retries a mutation.\n\nSTATES\npassed/accepted: verified success\nrunning/implementing/validating: active\nfailed/rejected: failure\nblocked/pending: attention\ninterrupted/reconnecting: interrupted\ncompleted/cancelled: neutral\n\nHome and Board are read-only projections. Catalog actions expose durable evidence, artifacts, memory and publication status. Merging stays the developer's decision.\n\nPgUp/PgDn scroll; q or Ctrl+C exits and leaves the runtime running.";
 
 #[cfg(test)]
 mod tests {

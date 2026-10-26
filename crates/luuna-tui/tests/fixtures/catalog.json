@@ -868,7 +868,7 @@
     ],
     "flags": {
       "acknowledge-hash": {
-        "description": "the complete plan hash you reviewed; approval binds to exactly this hash"
+        "description": "the plan hash you reviewed, complete or its first 8+ hex digits; approval binds to exactly the complete hash"
       },
       "approved-by": {
         "description": "the approver's name (default developer)"
