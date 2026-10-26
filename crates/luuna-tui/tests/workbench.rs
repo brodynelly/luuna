@@ -1268,3 +1268,29 @@ fn latest_names_the_newest_run_only_when_the_loaded_runs_are_a_first_page() {
         "the command resolves it"
     );
 }
+#[test]
+fn a_run_action_by_an_unloaded_reference_opens_the_run_it_acted_on() {
+    const RUN: &str = "workflow-8b1e0000-1b2c-4d5e-8f90-0123456789ab";
+    let mut a = app();
+    a.snapshots.remove("runs");
+    a.begin("cancel");
+    let form = a.form.as_mut().unwrap();
+    form.fields
+        .iter_mut()
+        .find(|f| f.name == "run")
+        .unwrap()
+        .value = "8b1e".into();
+    a.submit();
+    assert_eq!(a.context.get("run"), None);
+    event(
+        &mut a,
+        json!({"id":RUN,"state":"cancelled","metadata":{"kind":"workflow"}}),
+    );
+    assert_eq!(a.context.get("run").map(String::as_str), Some(RUN));
+    assert_eq!(a.workbench.screen, Screen::RunDetail);
+    assert_eq!(
+        a.queue.back().unwrap().fields["args"][0],
+        json!(RUN),
+        "the detail view reads the run that was cancelled"
+    );
+}

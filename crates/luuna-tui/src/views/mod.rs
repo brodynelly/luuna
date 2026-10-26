@@ -1187,12 +1187,13 @@ fn newest_loaded_run(app: &AppState) -> Option<Value> {
         .max_by_key(|r| text(r, "created_at"))
 }
 
-/// A record read sent with a short id or `latest` that nothing loaded resolved (ADR 0042): the
-/// record the runtime returned is the one it named, so its exact identity becomes the context and
-/// the snapshot's provenance. The context was cleared when the reference was sent.
+/// A read or run action sent with a short id or `latest` that nothing loaded resolved (ADR 0042):
+/// the record the runtime returned is the one it named (run actions return the run they acted
+/// on), so its exact identity becomes the context and the snapshot's provenance. The context was
+/// cleared when the reference was sent.
 fn adopt_identity(app: &mut AppState, command: &str, v: &Value) {
     let name = match command {
-        "run" => "run",
+        "run" | "cancel" | "validate" | "repair" | "implement" => "run",
         "show-ticket" => "ticket",
         "show-plan" => "plan",
         _ => return,
