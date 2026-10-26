@@ -293,7 +293,8 @@ pub async fn resolve(
     }
     // Lists print short ids, so the flags that take a run or memory id accept them too.
     if command.id == "runs.list" {
-        if let Some(before) = input.text_if("before").filter(|b| is_short_reference(b)) {
+        let named = |b: &String| is_short_reference(b) || b.trim().eq_ignore_ascii_case("latest");
+        if let Some(before) = input.text_if("before").filter(named) {
             same_kind(&before, "run", &["run"])?;
             let exact = run_id(client, &before, signal).await?;
             resolved.set("before", FlagValue::Str(exact));

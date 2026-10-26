@@ -2,7 +2,8 @@ import { useState } from "react";
 import { Button, Form, FormFooter, Stack, TextField, submitted } from "@luuna/ui";
 import type { RepositoryRow } from "./project-model";
 
-const FIRST_ROW: RepositoryRow = { id: "app", path: "" };
+// The id starts empty: it follows the path's folder name, or what the developer types.
+const FIRST_ROW: RepositoryRow = { id: "", path: "" };
 
 /**
  * A repository id from the checkout's folder name (ADR 0042): `C:\\src\\My API` becomes `my-api`.
