@@ -37,6 +37,14 @@ select it). PR #18 (Stripe-inspired desktop UI) was closed unmerged: its commits
 [ADR 0042](docs/decisions/0042-short-references-and-picked-input.md#evidence) on the Linux cloud
 container; no Mac, Windows, live-provider or native-window run.
 
+**Known, pre-existing, not caused by these changes:** on a 4-CPU host, 2 or 3 `luuna-runtime`
+tests fail per full run, different ones each time. Most fail with `409 workflow already has active
+work` right after the run reports a settled state. Pre-PR `ca230fb` failed at the same rate. Cause:
+`spawn_supervised` (`crates/luuna-runtime/src/lib.rs`) removes a run's `active` entry only after the
+worker, which has already written the settled state, drops, while the tests' `settled()` helpers
+poll only the state. Rerun a failing test alone before treating it as a regression. The fix belongs
+in the runtime or those helpers, not in client changes.
+
 ## Latest: Orbit and the project sandbox (October 22, 2026)
 
 [ADR 0036](docs/decisions/0036-orbit-and-project-sandbox.md) adds Orbit (status, exec,
