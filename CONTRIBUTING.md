@@ -10,6 +10,8 @@ Preserve user changes, historical design references, upstream license notices, a
 
 ## Set up and check
 
+There is no CI/CD in this repository ([ADR 0041](docs/decisions/0041-no-repository-ci.md)). Nothing runs on push or on a pull request; the checks below are run by the contributor, on the hosts available, and the results are recorded with the change. Name what was not run.
+
 Use Rust 1.90.0 from `rust-toolchain.toml` and committed lockfiles. Rust tests also need a host `git` (2.40 or newer) on `PATH` for the read-only repository inspection fixtures. Run from the repository root:
 
 ```sh
@@ -30,6 +32,8 @@ npm run build
 ```
 
 Run `npm run components:setup` with Bun 1.4.3 after cloning, or clone with `--recurse-submodules` and then install frozen component dependencies. `npm run components:verify` checks exact pins; `npm run test:components` exercises real CLI JSON operations on disposable stores. The component sources live in their independent public repositories.
+
+The remaining checks, each run where its prerequisites exist: `node scripts/check-hygiene.mjs` (no tracked session histories, auth stores, real `.env` files or dependencies); the terminal client against a built runtime, `npm run test:tui-terminal` and `node scripts/tui-interactive-audit.mjs --runtime <path> --components-root .` (tmux on Linux); the native desktop shell, `cargo check --locked --manifest-path apps/desktop/src-tauri/Cargo.toml`, on macOS and Windows.
 
 `npm test` includes component pin rejection tests, JSON-schema fixtures and API-client tests. These are separate from the Rust tests and component CLI suites. Each maintained CLI has its own Bun lockfile and package scripts; follow its package README rather than running its hook installer against the root repository.
 

@@ -10,7 +10,7 @@ Inspect `git status` before and after work. Preserve user changes. In cloud task
 
 Prioritize bounded M0/M1 slices: deterministic contracts/policy, durable state, then genuine supervised Pi RPC streaming and cancellation. Do not scaffold unrelated empty crates or implement the complete roadmap in one pass. Keep domain rules in the runtime; clients display authoritative state.
 
-Use pinned toolchains, lockfiles, and repository-supported commands. Required checks must match the affected code. Report actual commands and failures; a fixture, model statement, frontend build, or missing check cannot establish real-provider or platform success. Keep the original documentation validation report separate from product test evidence.
+Use pinned toolchains, lockfiles, and repository-supported commands. Required checks must match the affected code. This repository has no CI/CD (ADR 0041): there is no workflow under `.github/`, nothing runs on push, and no status check gates a pull request. Do not add workflows, pipelines or release automation, and never treat a hosted check as a blocker or as evidence. Run the local checks in CONTRIBUTING.md yourself and record what ran. Report actual commands and failures; a fixture, model statement, frontend build, or missing check cannot establish real-provider or platform success. Keep the original documentation validation report separate from product test evidence.
 
 ## Enforce product policy
 

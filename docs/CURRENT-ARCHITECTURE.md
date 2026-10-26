@@ -26,6 +26,13 @@ README and AI-START-HERE are entry points, not alternative specifications. Exist
 
 ## Delivery and boundaries
 
+The repository has no CI/CD ([ADR 0041](decisions/0041-no-repository-ci.md)): no
+workflow, no status check, no deployment or release automation. Checks are run
+locally by the contributor and recorded as evidence with the change; merging
+remains the developer's decision. The runtime's observation of CI on pull requests
+it publishes to a developer's repositories (ADR 0018) is a product feature and is
+unrelated.
+
 Runtime I/O isolation and bounded session history follow
 [ADR 0015](decisions/0015-bounded-runtime-and-history.md): synchronous transactions
 run under bounded blocking admission, SSE reads in pages, and the desktop keeps
