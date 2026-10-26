@@ -64,7 +64,6 @@ export function setupTicketDraft(offer: TestingPrerequisite): { purpose: TicketP
   };
 }
 
-/** The rows the derive convenience pre-fills from an advisory task's proposal (ADR 0023 point 4): every task derives from the advisory task. */
 /**
  * The advisory tasks a plan row of this ticket can derive from (ADR 0042): only those of runs of
  * this ticket's own plan, because the runtime accepts a derivation only from an earlier revision of
@@ -75,6 +74,7 @@ export function advisoryTasksForTicket(planIds: readonly string[], runs: readonl
   return Object.entries(inspected).filter(([runId]) => own.has(runId)).flatMap(([, tasks]) => tasks).filter((task) => advisoryRole(task.role));
 }
 
+/** The rows the derive convenience pre-fills from an advisory task's proposal (ADR 0023 point 4): every task derives from the advisory task. */
 export function rowsFromProposal(task: TaskRecord): TaskRow[] {
   const proposed = task.advisory_result?.proposed_tasks ?? [];
   const ids = proposed.map((item) => item.repository_id);

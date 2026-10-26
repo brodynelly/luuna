@@ -115,7 +115,7 @@ export function shortId(id: string): string {
 
 /** `sha256:` and the first twelve hex digits of a content hash, else the value unchanged. */
 export function shortHash(hash: string): string {
-  return /^sha256:[0-9a-f]{13,}$/i.test(hash) ? hash.slice(0, 19) : hash;
+  return /^sha256:[0-9a-fA-F]{13,}$/.test(hash) ? hash.slice(0, 19) : hash;
 }
 
 /**

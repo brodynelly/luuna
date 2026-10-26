@@ -8,7 +8,7 @@ type Review = NonNullable<CandidateEvidence["review"]>;
 /** The diff bound to this candidate's hash; an oversized diff lists what it omits instead of claiming no changes. */
 export function CandidateDiffView({ diff }: { diff: CandidateDiff }) {
   const body = diff.diff || (diff.truncated ? "Diff omitted because it exceeds the display limit. Inspect the changed files listed below." : "No changes.");
-  return <Disclosure open className="candidate-diff" summary={<>Diff for <Id>{shortHash(diff.candidate_hash)}…</Id></>}>
+  return <Disclosure open className="candidate-diff" summary={<>Diff for <Id>{shortHash(diff.candidate_hash)}{shortHash(diff.candidate_hash) !== diff.candidate_hash && "…"}</Id></>}>
     <Meta block className="diff-meta">{diff.repository_id} · base <Id>{diff.base_commit}</Id> · candidate commit <Id>{diff.commit}</Id></Meta>
     <CodeBlock label="Candidate diff">{body}</CodeBlock>
     {diff.truncated && <Text role="status">This diff is truncated. It does not show all candidate changes.</Text>}

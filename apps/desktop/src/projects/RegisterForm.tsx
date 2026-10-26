@@ -16,6 +16,15 @@ export function repositoryIdFromPath(path: string): string {
 }
 
 /**
+ * A row after its path changed: an id the developer typed stays; otherwise the id follows the
+ * path's folder name, and is empty (to be typed) when that name yields none, never an id derived
+ * from an earlier, partly typed path.
+ */
+export function rowForPath(row: RepositoryRow, path: string, typed: boolean): RepositoryRow {
+  return typed ? { ...row, path } : { ...row, path, id: repositoryIdFromPath(path) };
+}
+
+/**
  * Registers a project with every related repository at once (R05). The form clears itself once
  * the runtime has registered the project.
  */
@@ -27,10 +36,7 @@ export function RegisterForm({ disabled, onRegister }: { disabled: boolean; onRe
   const [typed, setTyped] = useState<boolean[]>([false]);
   const rowsComplete = rows.length > 0 && rows.every((row) => row.id.trim() && row.path.trim());
   const update = (index: number, patch: Partial<RepositoryRow>) => setRows((current) => current.map((item, i) => i === index ? { ...item, ...patch } : item));
-  const setPath = (index: number, path: string) => {
-    const derived = repositoryIdFromPath(path);
-    update(index, typed[index] || !derived ? { path } : { path, id: derived });
-  };
+  const setPath = (index: number, path: string) => setRows((current) => current.map((item, i) => i === index ? rowForPath(item, path, typed[index] ?? false) : item));
   const setId = (index: number, id: string) => {
     setTyped((current) => current.map((value, i) => i === index ? id !== "" : value));
     update(index, { id });
@@ -51,11 +57,11 @@ export function RegisterForm({ disabled, onRegister }: { disabled: boolean; onRe
     </Stack>
     <Stack gap={3} role="group" aria-label="Repositories to register">{rows.map((row, index) => <Stack key={index} className="repository-row" gap={2}>
       <TextField label="Repository root path" value={row.path} onChange={(event) => setPath(index, event.target.value)} required mono placeholder="/absolute/path/to/checkout" />
-      <TextField label="Repository ID (from the folder name; edit to choose another)" value={row.id} onChange={(event) => setId(index, event.target.value)} required mono pattern="[a-z][a-z0-9\-]{0,63}" />
+      <TextField label="Repository ID" value={row.id} onChange={(event) => setId(index, event.target.value)} required mono placeholder="from the folder name" pattern="[a-z][a-z0-9\-]{0,63}" />
       {rows.length > 1 && <Button variant="text" onClick={() => { setRows((current) => current.filter((_, i) => i !== index)); setTyped((current) => current.filter((_, i) => i !== index)); }}>Remove repository {row.id || index + 1}</Button>}
     </Stack>)}</Stack>
     <Button variant="text" onClick={() => { setRows((current) => [...current, { id: "", path: "" }]); setTyped((current) => [...current, false]); }}>Add another repository</Button>
-    <FormFooter hint="Register every related repository together. Paths stay on this machine and never enter the manifest.">
+    <FormFooter hint="Register every related repository together. A repository ID follows its folder name until you type your own. Paths stay on this machine and never enter the manifest.">
       <Button variant="primary" submit disabled={!name.trim() || !rowsComplete} data-capability="projects.register">
         Register {rows.length > 1 ? `${rows.length} repositories` : "repository"}
       </Button>
