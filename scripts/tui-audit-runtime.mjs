@@ -38,7 +38,8 @@ export class AuditRuntime {
     this.exited = new Promise((resolve) => { this.child.once("exit", (code, signal) => resolve({ code, signal })); this.child.once("error", () => resolve({ code: -1 })); });
     await waitUntil(() => fetch(`${this.base}/health`, { signal: AbortSignal.timeout(1000) }).then((response) => response.ok).catch(() => false), { timeout: 30000, message: "Disposable runtime did not become healthy" });
   }
-  environment(extra = {}) { return { ...toolEnvironment(), LUUNA_URL: this.base, LUUNA_API_TOKEN: this.token, ...extra }; }
+  // The workbench reads its defaults, never the developer's own settings file (ADR 0040).
+  environment(extra = {}) { return { ...toolEnvironment(), LUUNA_URL: this.base, LUUNA_API_TOKEN: this.token, LUUNA_TUI_CONFIG: path.join(this.out, "tui-settings-absent.json"), ...extra }; }
   async api(method, route, body) {
     const response = await fetch(`${this.base}/api/v1${route}`, { method, signal: AbortSignal.timeout(60000), headers: { Authorization: `Bearer ${this.token}`, ...(body === undefined ? {} : { "Content-Type": "application/json" }) }, body: body === undefined ? undefined : JSON.stringify(body) });
     return { status: response.status, body: await response.json().catch(() => null) };

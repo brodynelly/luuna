@@ -541,25 +541,24 @@ fn render_collection(frame: &mut Frame, app: &AppState, area: Rect, theme: Theme
                         theme,
                     ),
                 ],
+                // What a record says leads; its short id (ADR 0042) is what an argument accepts.
                 Screen::Memory => vec![
                     heading(
-                        &format!("[{}] {}", text(record, "scope"), text(record, "id")),
+                        &format!(
+                            "[{}] {}",
+                            text(record, "scope"),
+                            text(record, "content").lines().next().unwrap_or("")
+                        ),
                         theme,
                     ),
-                    Line::raw(
-                        text(record, "content")
-                            .lines()
-                            .next()
-                            .unwrap_or("")
-                            .to_owned(),
-                    ),
+                    field("id", short_id(&text(record, "id")), theme),
                 ],
                 Screen::Prompts => vec![
                     heading(&text(record, "name"), theme),
                     field("version", text(record, "version"), theme),
                 ],
                 _ => vec![
-                    heading(&text(record, "id"), theme),
+                    heading(&run_title(record), theme),
                     status(&text(record, "state"), theme),
                 ],
             };
@@ -629,14 +628,14 @@ fn render_board(frame: &mut Frame, app: &AppState, area: Rect, theme: Theme) {
                     lines.push(field("Repository", text(card, "repository_id"), theme));
                     lines.push(Line::raw(text(card, "reason")));
                 } else {
-                    lines.push(field("Ticket", text(card, "ticket_id"), theme));
+                    lines.push(field("Ticket", short_id(&text(card, "ticket_id")), theme));
                     lines.push(field("Revision", text(card, "ticket_revision"), theme));
                     let state = text(card, "state");
                     if !state.is_empty() {
                         lines.push(status(&state, theme));
                     }
                     if !text(card, "run_id").is_empty() {
-                        lines.push(field("Run", text(card, "run_id"), theme));
+                        lines.push(field("Run", short_id(&text(card, "run_id")), theme));
                     }
                 }
                 lines.push(Line::styled("------------------------", theme.muted()));
@@ -693,6 +692,7 @@ fn detail_lines(screen: Screen, record: &Value, theme: Theme) -> Vec<Line<'stati
         }
         Screen::Ticket => {
             lines.push(heading(&text(record, "title"), theme));
+            lines.push(field("Short id", short_id(&text(record, "id")), theme));
             append_fields(
                 &mut lines,
                 record,
@@ -726,6 +726,7 @@ fn detail_lines(screen: Screen, record: &Value, theme: Theme) -> Vec<Line<'stati
         }
         Screen::Memory | Screen::MemoryDetail => {
             lines.push(heading(&text(record, "id"), theme));
+            lines.push(field("Short id", short_id(&text(record, "id")), theme));
             append_fields(
                 &mut lines,
                 record,
@@ -774,7 +775,8 @@ fn detail_lines(screen: Screen, record: &Value, theme: Theme) -> Vec<Line<'stati
             }
         }
         Screen::Runs | Screen::RunDetail => {
-            lines.push(heading(&text(record, "id"), theme));
+            lines.push(heading(&run_title(record), theme));
+            lines.push(field("Run", text(record, "id"), theme));
             lines.push(status(&text(record, "state"), theme));
             append_fields(
                 &mut lines,
@@ -799,6 +801,7 @@ fn detail_lines(screen: Screen, record: &Value, theme: Theme) -> Vec<Line<'stati
         }
         Screen::Plan => {
             lines.push(heading("IMMUTABLE PLAN / REVIEW BEFORE APPROVAL", theme));
+            lines.push(field("Short id", short_id(&text(record, "id")), theme));
             append_fields(
                 &mut lines,
                 record,
@@ -835,7 +838,7 @@ fn detail_lines(screen: Screen, record: &Value, theme: Theme) -> Vec<Line<'stati
                 lines.push(Line::raw(""));
             }
             lines.push(Line::styled(
-                "Approval requires typing the complete hash into a blank prompt.",
+                "Approval: after reviewing this plan, type approve (or the hash's first 8 digits) into a blank prompt; the complete hash is sent.",
                 theme.tone("attention"),
             ));
             lines.push(Line::raw("Implementation is a separate explicit action."));
@@ -966,8 +969,8 @@ fn render_help(frame: &mut Frame, app: &mut AppState, area: Rect, theme: Theme) 
         ("MISSIONS", "Left/Right pages all eight runtime workflow columns. Cards open tickets or testing prerequisites. This is a read-only projection: a card never moves a workflow or bypasses approval."),
         ("ORBIT", "Every repository of the project at once. x runs one command in each, r runs a manifest recipe, s fetches present checkouts and clones missing ones; each opens a form first. These are your own commands, never evidence. b shows the sandbox plan; open the sandbox outside the workbench with lu sbx <project>."),
         ("ATLAS AND BEACON", "Browse scoped memory and versioned prompts. User memory requires explicit inclusion. Select context deliberately; it stays unsent until a plan is submitted. Project changes clear these choices."),
-        ("FORMS", "Tab and Shift+Tab move fields. Alt+Enter (or Ctrl+J; Shift+Enter where the terminal reports it) inserts a line. Ctrl+S submits. Escape cancels. Letters, including q, are text while editing. Shared commands retain their confirmations and stale-version guards."),
-        ("PLANS AND EVIDENCE", "Read the complete plan and hash. Approval starts with a blank acknowledgment; the complete hash must match. Implementation remains separate. Run evidence tabs retain exact runtime state and reasons."),
+        ("FORMS", "Tab and Shift+Tab move fields. Alt+Enter (or Ctrl+J; Shift+Enter where the terminal reports it) inserts a line. Ctrl+S submits. Escape cancels. Left/Right pick from a field's choices (repositories, records, scopes, yes/no); typing still works. Letters, including q, are text while editing. Shared commands retain their confirmations and stale-version guards."),
+        ("PLANS AND EVIDENCE", "Read the complete plan and hash. Approval starts with a blank prompt: type approve (or the hash's first 8 digits) to approve exactly the plan shown; the complete hash is what is sent. Implementation remains separate. Run evidence tabs retain exact runtime state and reasons."),
         ("SERVICE LIFETIME", "Leaving a view or closing this client never cancels the underlying run. Cancel and shutdown are explicitly named commands. Interrupted work is distinct from failed checks; completed alone is not passed evidence."),
     ] { lines.push(heading(title, theme)); lines.push(Line::raw(body)); lines.push(Line::raw("")); }
     lines.push(heading("STATE LEGEND / WORDS REMAIN AUTHORITATIVE", theme));
@@ -987,9 +990,16 @@ fn render_help(frame: &mut Frame, app: &mut AppState, area: Rect, theme: Theme) 
     lines.push(Line::raw(""));
     lines.push(heading("KEYS / AS CONFIGURED", theme));
     let keymap = crate::keys::keymap();
+    // The keys column is as wide as the longest binding list, so a description never runs into it.
+    let width = crate::keys::ACTIONS
+        .iter()
+        .map(|(name, ..)| keymap.all(name).chars().count() + 2)
+        .max()
+        .unwrap_or(0)
+        .max(26);
     for (name, _, _, about) in crate::keys::ACTIONS {
         lines.push(Line::raw(format!(
-            "{:<14}{:<26}{about}",
+            "{:<14}{:<width$}{about}",
             name,
             keymap.all(name)
         )));
@@ -1415,4 +1425,38 @@ fn sandbox_lines(lines: &mut Vec<Line<'static>>, plan: &Value, project: &str, th
         ),
         theme.accent(),
     ));
+}
+
+fn short_id(id: &str) -> String {
+    crate::refs::short_id(id)
+}
+
+/// A run's list title: what kind of run it is, its short id and what it is about, instead of the
+/// generated identity alone (ADR 0042). The detail pane still shows the complete identity.
+pub fn run_title(record: &Value) -> String {
+    let metadata = record.get("metadata").cloned().unwrap_or(Value::Null);
+    let short = short_id(&text(record, "id"));
+    match text(&metadata, "kind").as_str() {
+        "workflow" => format!(
+            "workflow {short} · plan {} r{}",
+            short_id(&text(&metadata, "plan_id")),
+            text(&metadata, "plan_revision")
+        ),
+        "baseline" => format!("baseline {short} · {}", text(&metadata, "repository_id")),
+        _ => {
+            let prompt = text(&metadata, "prompt");
+            let prompt: String = prompt
+                .lines()
+                .next()
+                .unwrap_or("")
+                .chars()
+                .take(40)
+                .collect();
+            if prompt.is_empty() {
+                format!("session {short}")
+            } else {
+                format!("session {short} · {prompt}")
+            }
+        }
+    }
 }

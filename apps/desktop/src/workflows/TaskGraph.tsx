@@ -1,5 +1,5 @@
 import type { DependencyOverride, RunRecord, TaskRecord } from "@luuna/api-client";
-import { Alert, Button, Hint, Id, Inline, ListGroup, ListRow, Meta, Stack } from "@luuna/ui";
+import { Alert, Button, Hint, Id, Inline, ListGroup, ListRow, Meta, Stack, ShortId } from "@luuna/ui";
 import { stateText, taskResumable } from "./model";
 
 type AdvisoryResult = NonNullable<TaskRecord["advisory_result"]>;
@@ -30,7 +30,7 @@ function TaskTraces({ task, named }: { task: TaskRecord; named: DependencyOverri
   const trace = task.assigned_by;
   return <>
     {trace && <Meta className="task-trace" label={`Assignment trace of ${task.task_id}`}>
-      assigned by {trace.approved_by} · approval <Id>{trace.approval_id}</Id> at {trace.approved_at} · plan <Id>{trace.plan_id}</Id> r{trace.plan_revision} · <Id>{trace.plan_hash}</Id>
+      assigned by {trace.approved_by} · approval <ShortId value={trace.approval_id} kind="approval" /> at {trace.approved_at} · plan <ShortId value={trace.plan_id} kind="plan" /> r{trace.plan_revision} · <ShortId value={trace.plan_hash} kind="plan hash" />
     </Meta>}
     {task.derived_from_task && <Meta className="task-trace">derived from advisory task <Id>{task.derived_from_task}</Id></Meta>}
     {named.length > 0 && <Meta className="task-trace">dependency overrides: {named.map((override, index) => <span key={index}>

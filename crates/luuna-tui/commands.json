@@ -575,8 +575,8 @@
         },
         {
           "name": "hash",
-          "description": "the record's exact content hash (sha256:…)",
-          "prompt": "Exact content hash"
+          "description": "the record's content hash (sha256:…), complete or its first 8+ hex digits; the complete hash is sent",
+          "prompt": "Content hash (or its first 8+ digits)"
         }
       ],
       "flags": {},
@@ -606,8 +606,8 @@
         },
         {
           "name": "hash",
-          "description": "the record's exact content hash (sha256:…)",
-          "prompt": "Exact content hash"
+          "description": "the record's content hash (sha256:…), complete or its first 8+ hex digits; the complete hash is sent",
+          "prompt": "Content hash (or its first 8+ digits)"
         },
         {
           "name": "to-scope",
@@ -649,8 +649,8 @@
         },
         {
           "name": "hash",
-          "description": "the record's exact content hash (sha256:…)",
-          "prompt": "Exact content hash"
+          "description": "the record's content hash (sha256:…), complete or its first 8+ hex digits; the complete hash is sent",
+          "prompt": "Content hash (or its first 8+ digits)"
         },
         {
           "name": "content",
@@ -1171,7 +1171,7 @@
       ],
       "flags": {
         "acknowledge-hash": {
-          "description": "the complete plan hash you reviewed; approval binds to exactly this hash"
+          "description": "the plan hash you reviewed, complete or its first 8+ hex digits; approval binds to exactly the complete hash"
         },
         "approved-by": {
           "description": "the approver's name (default developer)"
@@ -1355,7 +1355,7 @@
       ],
       "flags": {
         "candidate-hash": {
-          "description": "the complete candidate hash shown by `candidate` (read from the run when omitted)"
+          "description": "the candidate hash shown by `candidate`, complete or its first 8+ hex digits (read from the run when omitted); the complete hash is sent"
         },
         "auto-repair": {
           "boolean": true,
@@ -1390,7 +1390,7 @@
       ],
       "flags": {
         "candidate-hash": {
-          "description": "the complete candidate hash shown by `candidate` (read from the run when omitted)"
+          "description": "the candidate hash shown by `candidate`, complete or its first 8+ hex digits (read from the run when omitted); the complete hash is sent"
         },
         "provider": {
           "description": "provider override"
@@ -1421,7 +1421,7 @@
       ],
       "flags": {
         "candidate-hash": {
-          "description": "the complete candidate hash shown by `candidate` (read from the run when omitted)"
+          "description": "the candidate hash shown by `candidate`, complete or its first 8+ hex digits (read from the run when omitted); the complete hash is sent"
         },
         "key": {
           "description": "idempotency key (generated when omitted; repeat the same key to resume)"
@@ -1488,7 +1488,7 @@
       ],
       "flags": {
         "candidate-hash": {
-          "description": "the complete candidate hash shown by `publication` (read from the run when omitted)"
+          "description": "the candidate hash shown by `publication`, complete or its first 8+ hex digits (read from the run when omitted); the complete hash is sent"
         },
         "provider": {
           "description": "provider override"

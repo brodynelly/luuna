@@ -1,5 +1,5 @@
 import type { CandidateDiff, CandidateEvidence } from "@luuna/api-client";
-import { checkTone, severityTone, verdictTone, Accordion, Actions, Button, CodeBlock, Disclosure, EmptyState, HeadingRow, Id, Item, List, ListGroup, ListRow, Meta, Output, PropertyList, ReasonNote, Stack, StatusBadge, Surface, Text } from "@luuna/ui";
+import { checkTone, severityTone, verdictTone, Accordion, Actions, Button, CodeBlock, Disclosure, EmptyState, HeadingRow, Id, Item, List, ListGroup, ListRow, Meta, Output, PropertyList, ReasonNote, Stack, StatusBadge, Surface, Text, ShortId, shortHash } from "@luuna/ui";
 import { viewableArtifact } from "./rules";
 
 type CheckResult = CandidateEvidence["results"][number];
@@ -8,7 +8,7 @@ type Review = NonNullable<CandidateEvidence["review"]>;
 /** The diff bound to this candidate's hash; an oversized diff lists what it omits instead of claiming no changes. */
 export function CandidateDiffView({ diff }: { diff: CandidateDiff }) {
   const body = diff.diff || (diff.truncated ? "Diff omitted because it exceeds the display limit. Inspect the changed files listed below." : "No changes.");
-  return <Disclosure open className="candidate-diff" summary={<>Diff for <Id>{diff.candidate_hash}</Id></>}>
+  return <Disclosure open className="candidate-diff" summary={<>Diff for <Id>{shortHash(diff.candidate_hash)}{shortHash(diff.candidate_hash) !== diff.candidate_hash && "…"}</Id></>}>
     <Meta block className="diff-meta">{diff.repository_id} · base <Id>{diff.base_commit}</Id> · candidate commit <Id>{diff.commit}</Id></Meta>
     <CodeBlock label="Candidate diff">{body}</CodeBlock>
     {diff.truncated && <Text role="status">This diff is truncated. It does not show all candidate changes.</Text>}
@@ -20,7 +20,7 @@ export function CandidateDiffView({ diff }: { diff: CandidateDiff }) {
 /** One executed check: recipe and badge, the exact command, its identities, reason, logs and the complete record. */
 function CheckRecord({ result, busy, onArtifact }: { result: CheckResult; busy: boolean; onArtifact: (id: string) => void }) {
   const facts = [
-    { term: "Candidate hash", value: result.candidate_hash, mono: true },
+    { term: "Candidate hash", value: <ShortId value={result.candidate_hash} kind="candidate hash" /> },
     { term: "Commit", value: result.commit, mono: true },
     { term: "Environment", value: result.environment_fingerprint, mono: true },
     { term: "Exit code", value: result.exit_code ?? "not recorded" },
@@ -58,8 +58,8 @@ export function ReviewVerdict({ review }: { review?: Review }) {
     <HeadingRow level={4} title="Independent review" />
     {review ? <>
       <Text className="verdict-line">Verdict: <strong><StatusBadge tone={verdictTone[review.verdict]}>{review.verdict.replace(/_/g, " ")}</StatusBadge></strong></Text>
-      <Meta block>Candidate: <Id>{review.candidate_hash}</Id></Meta>
-      <Meta block>Reviewer session: <Id>{review.reviewer_session}</Id></Meta>
+      <Meta block>Candidate: <ShortId value={review.candidate_hash} kind="candidate hash" /></Meta>
+      <Meta block>Reviewer session: <ShortId value={review.reviewer_session} kind="reviewer session" /></Meta>
       {review.findings.length > 0
         ? <ListGroup className="review-findings" aria-label="Review findings">{review.findings.map((finding, index) => <Finding key={index} finding={finding} />)}</ListGroup>
         : <EmptyState>No findings recorded.</EmptyState>}

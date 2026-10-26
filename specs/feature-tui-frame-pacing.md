@@ -170,6 +170,7 @@ loop {
       app.advance_animations(clock.frame_delta(now))
       draw_frame(&mut terminal, sync, |f| ui::render(f, &mut app, theme))   // on Err break Err
       clock.frame_drawn(now)
+      if app.animating() { clock.request_animation_frame() }   // frame_drawn clears the request
   }
   if app.quit -> break Ok(0)
   deadline = clock.next_deadline(Instant::now())

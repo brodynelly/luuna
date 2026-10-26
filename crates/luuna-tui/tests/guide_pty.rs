@@ -32,6 +32,9 @@ fn the_guide_runs_in_a_real_pty_and_answers_with_keys() {
     command.env("LUUNA_API_TOKEN", "guide-fixture-private-token");
     command.env("LUUNA_URL", mock.url());
     command.env("LUUNA_CLI_NAME", "lu");
+    // The defaults, never the developer's own settings file (ADR 0040).
+    let settings = tempfile::tempdir().unwrap();
+    command.env("LUUNA_TUI_CONFIG", settings.path().join("tui.json"));
     let mut child = pair.slave.spawn_command(command).unwrap();
     drop(pair.slave);
     let captured = Arc::new(Mutex::new(Vec::new()));

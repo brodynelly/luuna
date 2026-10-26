@@ -3,18 +3,18 @@
 ╔ LUUNA ══════════════════════╗╔ > Atlas / scoped memory ══════════════════════════════════════════════════════════════╗
 ║ 1 Home                      ║║Search:                                                                                ║
 ║ 2 Set up a project          ║║User memory: excluded (explicit choice)                                                ║
-║ 3 Projects                  ║║> [project] mem-1                  ║mem-1                                              ║
-║ 4 Orbit                     ║║  Use structured errors            ║Scope: project                                     ║
-║ 5 Missions                  ║║                                   ║Provenance: Maintainer notes                       ║
-║ 6 Atlas *                   ║║                                   ║Exact hash: sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa║
-║ 7 Beacon                    ║║                                   ║aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa                   ║
-║ 8 Runs                      ║║                                   ║                                                   ║
-║ 9 Commands                  ║║                                   ║CONTENT                                            ║
-║ 10 Help                     ║║                                   ║Use structured errors                              ║
+║ 3 Projects                  ║║> [project] Use structured errors  ║mem-1                                              ║
+║ 4 Orbit                     ║║  id: mem-1                        ║Short id: mem-1                                    ║
+║ 5 Missions                  ║║                                   ║Scope: project                                     ║
+║ 6 Atlas *                   ║║                                   ║Provenance: Maintainer notes                       ║
+║ 7 Beacon                    ║║                                   ║Exact hash: sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa║
+║ 8 Runs                      ║║                                   ║aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa                   ║
+║ 9 Commands                  ║║                                   ║                                                   ║
+║ 10 Help                     ║║                                   ║CONTENT                                            ║
+║                             ║║                                   ║Use structured errors                              ║
 ║                             ║║                                   ║                                                   ║
 ║                             ║║                                   ║Context selection is unsent until you submit a plan║
 ║                             ║║                                   ║.                                                  ║
-║                             ║║                                   ║                                                   ║
 ║                             ║║                                   ║                                                   ║
 ║                             ║║                                   ║                                                   ║
 ║                             ║║                                   ║                                                   ║

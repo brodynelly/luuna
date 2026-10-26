@@ -1,4 +1,5 @@
-import type { AnchorHTMLAttributes, HTMLAttributes, ReactNode } from "react";
+import { useState, type AnchorHTMLAttributes, type HTMLAttributes, type ReactNode } from "react";
+import { copyText } from "./menus";
 import type { Tone } from "./tone/tone";
 import { useStickyScroll } from "./useStickyScroll";
 
@@ -100,6 +101,35 @@ export function Meta({ block = false, className, label, id, children, ...marker 
   return block
     ? <p className={classes} aria-label={label} id={id} {...marker}>{children}</p>
     : <small className={classes} aria-label={label} id={id} {...marker}>{children}</small>;
+}
+
+/**
+ * The short id of a generated identity (ADR 0042): the first eight hex digits of the UUID inside
+ * `ticket-…`, `plan-ticket-…`, `workflow-…` or `mem-…`, else the id unchanged. The terminal client
+ * shows the same short id and accepts it, or any unique prefix of four or more digits, as input.
+ */
+export function shortId(id: string): string {
+  const match = /(?:^|-)([0-9a-f]{8})-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}/i.exec(id);
+  return match ? match[1].toLowerCase() : id;
+}
+
+/** `sha256:` and the first twelve hex digits of a content hash, else the value unchanged. */
+export function shortHash(hash: string): string {
+  return /^sha256:[0-9a-fA-F]{13,}$/.test(hash) ? hash.slice(0, 19) : hash;
+}
+
+/**
+ * A generated identity or hash shown by its short form; the whole value is its tooltip and one
+ * click copies it, so nobody retypes a UUID or a hash. Evidence that must be read whole (the
+ * plan hash beside an approval) keeps using `Id`.
+ */
+export function ShortId({ value, kind = "id", className }: { value: string; kind?: string; className?: string }) {
+  const [copied, setCopied] = useState(false);
+  const shown = value.startsWith("sha256:") ? shortHash(value) : shortId(value);
+  const copy = () => void copyText(value).then(() => { setCopied(true); setTimeout(() => setCopied(false), 1500); }, () => undefined);
+  return <button type="button" className={["short-id", className].filter(Boolean).join(" ")} title={`${value} · click to copy`} aria-label={`Copy ${kind} ${value}`} data-copied={copied || undefined} onClick={copy}>
+    <code>{shown}{shown !== value && "…"}</code>{copied && <span className="short-id-note" role="status">copied</span>}
+  </button>;
 }
 
 /** A static descriptor chip. */

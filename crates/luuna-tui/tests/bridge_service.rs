@@ -136,7 +136,7 @@ async fn catalog_reads_and_redaction() {
 }
 
 #[tokio::test(flavor = "multi_thread")]
-async fn approval_prompts_for_the_typed_hash_and_validates_replies() {
+async fn approval_prompts_for_a_typed_acknowledgment_and_validates_replies() {
     let mock = mock();
     let mut bridge = Bridge::start(TOKEN, Some(&mock.url()));
     bridge
@@ -177,11 +177,18 @@ async fn approval_prompts_for_the_typed_hash_and_validates_replies() {
         ))
         .unwrap();
     assert_eq!(next(&mut bridge, "x2").await.fields["code"], "stale_prompt");
+    assert!(
+        prompt.fields["question"]
+            .as_str()
+            .unwrap()
+            .contains("Type approve"),
+        "the developer types a word, not the hash"
+    );
     bridge
         .send(&request(
             "x3",
             "reply",
-            json!({"request_id":"a1","prompt_id":prompt_id,"value":HASH}),
+            json!({"request_id":"a1","prompt_id":prompt_id,"value":"approve"}),
         ))
         .unwrap();
     assert_eq!(next(&mut bridge, "x3").await.event, "result");

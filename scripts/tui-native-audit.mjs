@@ -30,7 +30,7 @@ const required = [
   "Home and Projects use the real confirmed project", "Atlas and exact Beacon preview can select unsent plan context", "all eight Missions columns are keyboard reachable",
   "ticket create/edit forms persist through the real runtime", "Atlas invalid/create/correct/promote/delete forms enforce runtime identity", "user-memory inclusion is an explicit UI choice",
   "Beacon multiline create/update/exact preview use recorded versions", "explicit plan records selected memory and exact prompt context", "empty hash does not approve the plan",
-  "exact full hash approval persists against the same immutable plan", "Runs exposes all eight real evidence tabs", "Help, searchable command catalog and doctor settings remain reachable",
+  "typed approval after the displayed plan persists against the same immutable plan", "Runs exposes all eight real evidence tabs", "Help, searchable command catalog and doctor settings remain reachable",
   "wrong nonempty full hash does not approve the plan", "all catalog actions and projections are searchable",
   "long Unicode multiline input remains visible in the native form", "stale Beacon version cannot overwrite a concurrent prompt update",
   "40x12: visible header/footer and bounded cursor", "60x24: visible header/footer and bounded cursor", "80x24: visible header/footer and bounded cursor", "120x40: visible header/footer and bounded cursor",

@@ -17,6 +17,34 @@ in [CONTRIBUTING.md](CONTRIBUTING.md) and record what ran. The runtime's CI
 observation on published pull requests (ADR 0018) is a product feature and is
 unchanged.
 
+## Latest: short references and picked input (October 23, 2026; merged October 26, 2026)
+
+[ADR 0042](docs/decisions/0042-short-references-and-picked-input.md) removes copying generated ids
+and hashes from every client. Terminal lists show short ids (first eight hex digits of a record's
+UUID) and every ticket, plan, run and memory argument accepts one, a unique 4+ digit prefix or
+`latest` (runs), resolved to the exact id before anything is sent (`crates/luuna-tui/src/refs.rs`).
+Hash arguments accept an 8+ digit prefix of the hash just read; interactive approval takes a typed
+`approve` after the displayed plan and hash. Workbench forms offer known records and accepted
+values as Left/Right choices. The desktop's `ShortId` (`@luuna/ui`) shows short forms and copies
+the whole value; "derived from advisory task" is a select, and repository ids come from the folder
+name. Drafted as ADR 0040 (PR #21) and renumbered 0042 at merge. The merge (PR #22) also fixed
+what a review of the combined tree found: a workbench form resolves a reference once among loaded
+records and sends that exact id (never keeping a short id or `latest` as context), the bridge loop
+no longer drops the event it dequeues at its per-wake limit, unbinding left/right also stops their
+modified forms, and the desktop's Repository ID label is exactly that again (the browser smokes
+select it). PR #18 (Stripe-inspired desktop UI) was closed unmerged: its commits were already on
+`main` and its direction was superseded by ADR 0033 and 0035. Evidence: the local checks listed in
+[ADR 0042](docs/decisions/0042-short-references-and-picked-input.md#evidence) on the Linux cloud
+container; no Mac, Windows, live-provider or native-window run.
+
+**Known, pre-existing, not caused by these changes:** on a 4-CPU host, 2 or 3 `luuna-runtime`
+tests fail per full run, different ones each time. Most fail with `409 workflow already has active
+work` right after the run reports a settled state. Pre-PR `ca230fb` failed at the same rate. Cause:
+`spawn_supervised` (`crates/luuna-runtime/src/lib.rs`) removes a run's `active` entry only after the
+worker, which has already written the settled state, drops, while the tests' `settled()` helpers
+poll only the state. Rerun a failing test alone before treating it as a regression. The fix belongs
+in the runtime or those helpers, not in client changes.
+
 ## Latest: Orbit and the project sandbox (October 22, 2026)
 
 [ADR 0036](docs/decisions/0036-orbit-and-project-sandbox.md) adds Orbit (status, exec,
