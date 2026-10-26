@@ -205,7 +205,7 @@ pub fn hints(screen: Screen) -> &'static str {
         Screen::PromptDetail => "e update  s select exact prompt",
         Screen::Runs => "Enter inspect  r refresh",
         Screen::RunDetail => "←→ evidence  f follow  c cancel  a actions  p plan",
-        Screen::Plan => "a approve full hash  i implement  g run",
+        Screen::Plan => "a approve (type approve)  i implement  g run",
         Screen::Help => "F10 menu  F2 all actions  Esc back",
         Screen::Setup => "Guided setup",
         Screen::Commands => "Enter action  Tab context  / search",
@@ -347,6 +347,7 @@ fn prefill(app: &mut AppState, name: &str, values: Vec<(&str, String)>) {
                 argument: false,
                 boolean: false,
                 repeated: false,
+                choices: vec![("yes".into(), String::new()), ("no".into(), String::new())],
             });
         }
     }
@@ -401,6 +402,7 @@ fn prompt_form(app: &mut AppState, update: bool) {
             argument: false,
             boolean: false,
             repeated: false,
+            choices: Vec::new(),
         });
         form.fields.retain(|f| f.name != "body");
         // Keep positional body argument in its original position but hide it only visually.
@@ -415,6 +417,7 @@ fn prompt_form(app: &mut AppState, update: bool) {
                 argument: true,
                 boolean: false,
                 repeated: false,
+                choices: Vec::new(),
             },
         );
     }
@@ -936,6 +939,13 @@ pub fn received(app: &mut AppState, event: &BridgeEvent, command: Option<&str>, 
                 open(app, Screen::Plan);
             }
         }
+        // The proposal just shown is what the scaffold form confirms; it is never typed (ADR 0042).
+        "propose-scaffold" => {
+            let hash = text(&v, "hash");
+            if !hash.is_empty() {
+                app.context.insert("proposal-hash".into(), hash);
+            }
+        }
         "create-ticket" | "edit-ticket" | "reconcile-ticket" => open(app, Screen::Missions),
         "remember" | "correct-memory" | "forget" | "promote" => open(app, Screen::Memory),
         "save-prompt" => open(app, Screen::Prompts),
@@ -965,6 +975,197 @@ pub fn received(app: &mut AppState, event: &BridgeEvent, command: Option<&str>, 
         };
         if !preferred.is_empty() {
             app.workbench.selected_id = Some(preferred);
+        }
+    }
+}
+
+/// Records and values already on screen that a form field can pick from (ADR 0042), as
+/// `(value, label)`. Record values are short ids, which every argument resolves to the exact
+/// identity before anything is sent; nothing here reads from the runtime.
+fn known_choices(app: &AppState, command: &str, field: &str) -> Vec<(String, String)> {
+    let pair = |value: String, label: String| (value, label);
+    let fixed = |values: &[&str]| {
+        values
+            .iter()
+            .map(|v| ((*v).to_string(), String::new()))
+            .collect::<Vec<_>>()
+    };
+    let project_id = project(app);
+    let repositories = || {
+        let mut seen = Vec::new();
+        let view = snapshot(app, "project");
+        let mut sources = array(view["repositories"].clone());
+        for home in array(snapshot(app, "home")["projects"].clone()) {
+            if text(&home, "id") == project_id {
+                sources.extend(array(home["repositories"].clone()));
+            }
+        }
+        for orbit in array(snapshot(app, "orbit")["repositories"].clone()) {
+            sources.push(orbit);
+        }
+        for repository in sources {
+            let id = text(&repository, "repository_id");
+            if !id.is_empty() && !seen.iter().any(|(v, _): &(String, String)| *v == id) {
+                seen.push(pair(id, text(&repository, "local_path")));
+            }
+        }
+        seen
+    };
+    let cards = || {
+        let mut out = Vec::new();
+        for column in array(snapshot(app, "board")["columns"].clone()) {
+            for card in array(column["cards"].clone()) {
+                if !text(&card, "ticket_id").is_empty() {
+                    out.push(card);
+                }
+            }
+        }
+        out
+    };
+    match field {
+        "project" => {
+            let mut out: Vec<(String, String)> = array(snapshot(app, "projects"))
+                .iter()
+                .map(|p| p.get("project").unwrap_or(p))
+                .map(|p| pair(text(p, "id"), text(p, "name")))
+                .collect();
+            for p in array(snapshot(app, "home")["projects"].clone()) {
+                if !out.iter().any(|(v, _)| *v == text(&p, "id")) {
+                    out.push(pair(text(&p, "id"), text(&p, "name")));
+                }
+            }
+            out
+        }
+        "repository" | "repository-id" if command != "register" && command != "import" => {
+            repositories()
+        }
+        // Record choices carry the exact identity, which the workbench context must hold; the
+        // form shows each by its short id and label (ADR 0042).
+        "ticket" => cards()
+            .iter()
+            .map(|c| pair(text(c, "ticket_id"), text(c, "title")))
+            .collect(),
+        "plan" => cards()
+            .iter()
+            .filter(|c| !text(c, "run_id").is_empty())
+            .map(|c| {
+                pair(
+                    format!("plan-{}", text(c, "ticket_id")),
+                    format!("plan of {}", text(c, "title")),
+                )
+            })
+            .collect(),
+        "run" => {
+            let mut out = vec![pair("latest".into(), "the newest run".into())];
+            out.extend(
+                array(snapshot(app, "runs"))
+                    .iter()
+                    .map(|r| pair(text(r, "id"), render::run_title(r))),
+            );
+            out
+        }
+        "memory-id" => array(snapshot(app, "memory"))
+            .iter()
+            .map(|m| {
+                let content: String = text(m, "content")
+                    .lines()
+                    .next()
+                    .unwrap_or("")
+                    .chars()
+                    .take(40)
+                    .collect();
+                pair(text(m, "id"), format!("[{}] {content}", text(m, "scope")))
+            })
+            .collect(),
+        "scope" => fixed(&["project", "process", "user"]),
+        "to-scope" => fixed(&["project", "user"]),
+        "profile" => fixed(&[
+            "node",
+            "node-typescript",
+            "react",
+            "nextjs",
+            "python",
+            "go",
+            "rust",
+            "flutter",
+            "android",
+            "ios",
+        ]),
+        "purpose" => fixed(&["feature", "testing_setup"]),
+        "role" => fixed(&["implementer", "repository_lead", "project_orchestrator"]),
+        "recipe" => {
+            let mut out = Vec::new();
+            let orbit = snapshot(app, "orbit");
+            let mut lists = vec![orbit["recipes"].clone()];
+            lists.extend(
+                array(orbit["repositories"].clone())
+                    .into_iter()
+                    .map(|r| r["recipes"].clone()),
+            );
+            for list in lists {
+                for recipe in array(list) {
+                    let id = recipe
+                        .as_str()
+                        .map(str::to_owned)
+                        .unwrap_or_else(|| text(&recipe, "id"));
+                    if !id.is_empty() && !out.iter().any(|(v, _): &(String, String)| *v == id) {
+                        out.push(pair(id, String::new()));
+                    }
+                }
+            }
+            out
+        }
+        "task" if command == "implement" => array(snapshot(app, "tasks"))
+            .iter()
+            .map(|t| {
+                pair(
+                    text(t, "task_id"),
+                    format!("{} · {}", text(t, "repository_id"), text(t, "state")),
+                )
+            })
+            .filter(|(v, _)| !v.is_empty())
+            .collect(),
+        _ => Vec::new(),
+    }
+}
+
+/// The exact identity a context value names, so the workbench context never holds a short id or
+/// `latest` (its record checks compare exact identities). A value no loaded record matches is kept;
+/// the command resolves it against the runtime and refuses it if it names nothing.
+pub fn exact_context(app: &AppState, name: &str, value: &str) -> String {
+    if name == "run" && value.trim().eq_ignore_ascii_case("latest") {
+        return array(snapshot(app, "runs"))
+            .iter()
+            .max_by_key(|r| text(r, "created_at"))
+            .map(|r| text(r, "id"))
+            .unwrap_or_else(|| value.to_string());
+    }
+    if !crate::refs::is_short_reference(value) {
+        return value.to_string();
+    }
+    let ids: Vec<String> = known_choices(app, "", name)
+        .into_iter()
+        .map(|(id, _)| id)
+        .collect();
+    crate::refs::unique_match(value, &ids).unwrap_or_else(|| value.to_string())
+}
+
+/// Gives each field of a new form the choices the workbench already knows, and fills a required
+/// argument that has exactly one possible value (the only repository, the only project).
+pub fn offer_choices(app: &AppState, form: &mut crate::app::ActionForm) {
+    let command = form.command.name.clone();
+    for field in &mut form.fields {
+        if !field.choices.is_empty() || field.name.starts_with('@') {
+            continue;
+        }
+        field.choices = known_choices(app, &command, &field.name)
+            .into_iter()
+            .filter(|(value, _)| !value.is_empty())
+            .collect();
+        let only_record = field.choices.len() == 1
+            && !matches!(field.name.as_str(), "scope" | "to-scope" | "run");
+        if field.argument && field.value.is_empty() && only_record {
+            field.value = field.choices[0].0.clone();
         }
     }
 }

@@ -2,7 +2,7 @@ import { useEffect, useRef, useState } from "react";
 import type { ComponentContext, LuunaClient, PlanRevision, TaskRecord, TestingPrerequisite } from "@luuna/api-client";
 import { retryIdentity } from "../ProjectComponents";
 import { Alert, Button, EmptyState, ListGroup, Section } from "@luuna/ui";
-import { rowsFromProposal, setupTicketDraft, ticketTextSizes, tooLong } from "./model";
+import { advisoryTasksForTicket, rowsFromProposal, setupTicketDraft, ticketTextSizes, tooLong } from "./model";
 import { DEFAULT_RUN_SETTINGS, emptyTicketForm, usePatchState } from "./settings";
 import { useWorkflowData } from "./useWorkflowData";
 import { useWorkflowActions } from "./useWorkflowActions";
@@ -127,6 +127,6 @@ export function Workflows({ client, projectId, repositoryId, repositoryIds = [re
         tasks={work.inspections.tasks} logs={work.inspections.logs} busy={work.busy} connected={client !== null} actions={actions} repositoryIds={repositoryIds} />
     </ListGroup>}
     <TicketForm form={form} update={updateForm} sizes={sizes} tooLong={blocked} disabled={!client || work.busy || !manifestConfirmed} manifestConfirmed={manifestConfirmed} repositoryIds={repositoryIds} scoped={scoped} onCreate={createTicket} />
-    <RunSettings settings={settings} update={updateSettings} repositoryId={repositoryId} repositoryIds={repositoryIds} error={work.error} />
+    <RunSettings settings={settings} update={updateSettings} repositoryId={repositoryId} repositoryIds={repositoryIds} error={work.error} advisoryTasks={detail ? advisoryTasksForTicket((data.tickets.plans[detail.id] ?? []).map((plan) => plan.id), data.runs, work.inspections.tasks) : []} />
   </Section>;
 }

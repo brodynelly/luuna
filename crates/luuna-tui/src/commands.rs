@@ -612,8 +612,13 @@ async fn candidate_hash(
     input: &Input,
     signal: &Signal,
 ) -> Result<J, Failure> {
-    if let Some(value) = input.flag("candidate-hash") {
-        return Ok(J::str(js_trim(&value.text())));
+    let typed = input
+        .flag("candidate-hash")
+        .map(|value| js_trim(&value.text()));
+    if let Some(value) = &typed {
+        if full_hash(&J::str(value.clone())) {
+            return Ok(J::str(value.clone()));
+        }
     }
     let view = client
         .get(
@@ -627,7 +632,13 @@ async fn candidate_hash(
             "No candidate is recorded for this run yet; the writer has not settled.",
         ));
     }
-    Ok(field(field(evidence, "candidate")?, "hash")?.clone())
+    let current = field(field(evidence, "candidate")?, "hash")?.clone();
+    // A typed prefix (ADR 0042) acknowledges only the current candidate it begins; anything else
+    // is sent as typed, and the runtime refuses a hash that is not the current candidate's.
+    Ok(match typed {
+        Some(value) => J::str(crate::refs::complete_hash(&value, &current.js())),
+        None => current,
+    })
 }
 
 /// /^sha256:[a-f0-9]{64}$/ on `String(value)`.
@@ -666,7 +677,7 @@ async fn acknowledged_hash(io: &dyn Io, input: &Input, plan: &J) -> Result<Strin
     }
     if !io.interactive() {
         return Err(usage_error(format!(
-            "Approval requires the complete plan hash. Review plan {} r{} (show-plan {}), then approve it with --acknowledge-hash {}",
+            "Approval requires the plan hash. Review plan {} r{} (show-plan {}), then approve it with --acknowledge-hash {} (its first 8 hash digits are enough)",
             field(plan, "id")?.js(),
             plan.get("revision").js(),
             plan.get("id").js(),
@@ -674,10 +685,25 @@ async fn acknowledged_hash(io: &dyn Io, input: &Input, plan: &J) -> Result<Strin
         )));
     }
     io.show(&format_plan(plan))?;
-    Ok(js_trim(
-        &io.prompt("Type the complete plan hash to approve it (empty cancels)".into())
-            .await?,
-    ))
+    let hash = plan.get("hash").js();
+    let typed = js_trim(
+        &io.prompt(format!(
+            "Type approve to approve plan {} r{} with hash {}… as shown above, or its first 8 hash digits (empty cancels)",
+            crate::refs::short_id(&plan.get("id").js()),
+            plan.get("revision").js(),
+            crate::refs::short_hash(&hash)
+        ))
+        .await?,
+    );
+    // The typed word stands for the complete hash displayed above, as the desktop's checkbox does
+    // for the hash beside it (ADR 0042); the exact hash read with the plan is what is sent.
+    Ok(
+        if typed.eq_ignore_ascii_case("approve") || typed.eq_ignore_ascii_case("yes") {
+            hash
+        } else {
+            typed
+        },
+    )
 }
 
 /// `Math.round`.
@@ -776,6 +802,9 @@ pub async fn run(
 ) -> Result<J, Failure> {
     let signal = io.signal();
     let s = &signal;
+    // Short ids and hash prefixes name exactly one record before anything is sent (ADR 0042).
+    let resolved = crate::refs::resolve(command, client, input, s).await?;
+    let input = &resolved;
     let a = |i: usize| input.args.get(i).cloned().unwrap_or_default();
     let e = |i: usize| encode_component(&a(i));
     match command.id.as_str() {
@@ -1419,8 +1448,9 @@ pub async fn run(
                 ));
             }
             let hash = field(&plan, "hash")?;
+            let acknowledged = crate::refs::complete_hash(&acknowledged, &hash.js());
             if hash.as_str() != Some(acknowledged.as_str()) {
-                return Err(refusal(format!("The acknowledged hash does not match plan {} r{} ({}). Review the complete plan, then acknowledge its exact hash.", plan.get("id").js(), plan.get("revision").js(), hash.js())));
+                return Err(refusal(format!("The acknowledged hash does not match plan {} r{} ({}). Review the complete plan, then acknowledge its hash (the first 8 hash digits are enough).", plan.get("id").js(), plan.get("revision").js(), hash.js())));
             }
             let approver = input
                 .flag("approved-by")

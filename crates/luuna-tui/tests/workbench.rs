@@ -911,3 +911,146 @@ fn orbit_succeeded_is_never_the_success_tone() {
     assert!(cells.iter().all(|c| c.fg != success));
     assert_eq!(cells[0].fg, theme.tone("neutral").fg.unwrap());
 }
+#[test]
+fn forms_offer_known_records_and_values_as_choices() {
+    let field = |a: &AppState, name: &str| {
+        a.form
+            .as_ref()
+            .unwrap()
+            .fields
+            .iter()
+            .find(|f| f.name == name)
+            .cloned()
+            .unwrap()
+    };
+    let focus = |a: &mut AppState, name: &str| {
+        let form = a.form.as_mut().unwrap();
+        form.cursor = form.fields.iter().position(|f| f.name == name).unwrap();
+    };
+    // Two repositories: both offered, neither chosen for the developer.
+    let mut a = app();
+    a.begin("baseline");
+    let repository = field(&a, "repository");
+    assert_eq!(repository.value, "");
+    assert_eq!(
+        repository
+            .choices
+            .iter()
+            .map(|(v, _)| v.as_str())
+            .collect::<Vec<_>>(),
+        ["api", "web"]
+    );
+    focus(&mut a, "repository");
+    key(&mut a, KeyCode::Right);
+    assert_eq!(field(&a, "repository").value, "api");
+    key(&mut a, KeyCode::Right);
+    assert_eq!(field(&a, "repository").value, "web");
+    key(&mut a, KeyCode::Left);
+    assert_eq!(field(&a, "repository").value, "api");
+    assert!(draw(&mut a, 120, 35, false).contains("←/→ choose (1 of 2): api, web"));
+    a.form = None;
+    a.mode = Mode::Workbench;
+
+    // The only repository is filled in; a scope stays the developer's pick.
+    let mut a = app();
+    a.snapshots.get_mut("project").unwrap()["repositories"] = json!([{"repository_id":"api"}]);
+    a.snapshots.remove("orbit");
+    a.begin("baseline");
+    assert_eq!(field(&a, "repository").value, "api");
+    a.form = None;
+    a.begin("remember");
+    let scope = field(&a, "scope");
+    assert_eq!(scope.value, "");
+    assert_eq!(scope.choices.len(), 3);
+    a.form = None;
+
+    // Records are offered by short id with what they say; booleans as yes/no.
+    a.begin("forget");
+    let memory = field(&a, "memory-id");
+    assert_eq!(
+        memory.choices,
+        vec![("mem-1".into(), "[project] Use structured errors".into())]
+    );
+    a.form = None;
+    a.begin("validate");
+    let auto = field(&a, "auto-repair");
+    assert_eq!(
+        auto.choices
+            .iter()
+            .map(|(v, _)| v.as_str())
+            .collect::<Vec<_>>(),
+        ["yes", "no"]
+    );
+    let run = field(&a, "run");
+    assert_eq!(run.value, "run-1", "the selected run stays the context");
+    assert_eq!(run.choices[0].0, "latest");
+}
+#[test]
+fn a_scaffold_confirms_the_proposal_just_shown_without_typing_its_hash() {
+    let mut a = app();
+    a.begin("propose-scaffold");
+    let id = a.active_request.clone().unwrap_or_else(|| {
+        let form = a.form.as_mut().unwrap();
+        for (field, value) in form.fields.iter_mut().zip(["python", "fresh", "/tmp"]) {
+            field.value = value.into();
+        }
+        a.submit();
+        a.active_request.clone().unwrap()
+    });
+    a.apply(serde_json::from_value(json!({"v":1,"id":id,"event":"result","value":{"hash":hash(),"status":"ready"},"formatted":"proposal"})).unwrap());
+    a.active_request = None;
+    a.begin("scaffold");
+    let form = a.form.as_ref().unwrap();
+    assert_eq!(
+        form.fields
+            .iter()
+            .find(|f| f.name == "proposal-hash")
+            .unwrap()
+            .value,
+        hash()
+    );
+}
+#[test]
+fn a_short_or_latest_run_in_a_form_keeps_the_exact_identity_as_context() {
+    const RUN: &str = "workflow-8b1e0000-1b2c-4d5e-8f90-0123456789ab";
+    for typed in ["8b1e0000", "8b1e", "latest", RUN] {
+        let mut a = app();
+        a.context.remove("run");
+        a.snapshots.insert(
+            "runs".into(),
+            json!([
+                {"id":"run-1","state":"completed","metadata":{"kind":"session"},"created_at":"2026-10-21T00:00:00Z"},
+                {"id":RUN,"state":"implementing","metadata":{"kind":"workflow"},"created_at":"2026-10-22T00:00:00Z"}
+            ]),
+        );
+        a.begin("cancel");
+        let form = a.form.as_mut().unwrap();
+        let run = form.fields.iter_mut().find(|f| f.name == "run").unwrap();
+        assert!(
+            run.choices.iter().any(|(value, _)| value == RUN),
+            "choices carry exact ids"
+        );
+        run.value = typed.into();
+        a.submit();
+        assert_eq!(
+            a.context.get("run").map(String::as_str),
+            Some(RUN),
+            "{typed}"
+        );
+    }
+    // A picked record shows its short id in the form.
+    let mut a = app();
+    a.snapshots.insert("runs".into(), json!([{"id":RUN,"state":"implementing","metadata":{"kind":"workflow"},"created_at":"2026-10-22T00:00:00Z"}]));
+    a.context.remove("run");
+    a.begin("cancel");
+    let form = a.form.as_mut().unwrap();
+    form.cursor = form.fields.iter().position(|f| f.name == "run").unwrap();
+    key(&mut a, KeyCode::Right);
+    assert!(draw(&mut a, 120, 35, false).contains("run ◂▸: latest  the newest run"));
+    key(&mut a, KeyCode::Right);
+    let painted = draw(&mut a, 120, 35, false);
+    assert!(
+        painted.contains("run ◂▸: 8b1e0000  workflow 8b1e0000"),
+        "{painted}"
+    );
+}

@@ -221,3 +221,11 @@ ol.events summary time { margin-left: auto; color: var(--ink-muted); font-family
   summary::before { forced-color-adjust: none; border-color: transparent transparent transparent CanvasText; }
   pre[data-live]::after { forced-color-adjust: none; background: CanvasText; }
 }
+
+/* ShortId (ADR 0042): a generated identity as its short form; the button copies the whole value. */
+button.short-id { display: inline-flex; align-items: baseline; gap: var(--space-1); min-height: 0; padding: 0; border: 0; border-radius: var(--radius-sm); background: transparent; color: inherit; font: inherit; line-height: inherit; cursor: copy; }
+@media (hover: hover) and (pointer: fine) {
+  button.short-id:hover:not(:disabled) { background: transparent; }
+  button.short-id:hover code { color: var(--accent-text); }
+}
+.short-id-note { color: var(--ink-muted); font-size: var(--text-caption); }

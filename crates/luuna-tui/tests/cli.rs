@@ -594,3 +594,110 @@ fn a_trailing_command_is_taken_verbatim() {
         assert_eq!(input.flags.len(), 1);
     }
 }
+
+const TICKET_A: &str = "ticket-3f2a91c0-1b2c-4d5e-8f90-0123456789ab";
+const TICKET_B: &str = "ticket-3f2a0000-1b2c-4d5e-8f90-0123456789ab";
+const RUN_NEW: &str = "workflow-8b1e0000-1b2c-4d5e-8f90-0123456789ab";
+const RUN_OLD: &str = "workflow-77770000-1b2c-4d5e-8f90-0123456789ab";
+
+/// A runtime whose records carry generated identities, for short-id resolution (ADR 0042).
+fn generated(request: &Request) -> Reply {
+    let path = request.path.trim_start_matches("/api/v1");
+    let ticket = |id: &str, title: &str| json!({"id":id,"revision":1,"source":"luuna_sqlite_temporary","title":title,"intent":"i","acceptance_criteria":[],"repository_ids":["app"]});
+    let run = |id: &str, at: &str| json!({"id":id,"project_id":"walkthrough","state":"completed","revision":1,"metadata":{"kind":"workflow","plan_id":format!("plan-{TICKET_A}"),"plan_revision":1},"created_at":at,"updated_at":at});
+    let plan_a = json!({"id":format!("plan-{TICKET_A}"),"revision":1,"ticket_id":TICKET_A,"ticket_revision":1,"hash":HASH,"base_commits":{"app":"abc"},"tasks":[],"budgets":{}});
+    match path {
+        "/projects" => json(json!([{"id":"walkthrough","name":"Walkthrough","revision":1}])),
+        "/projects/walkthrough/tickets" => json(json!([
+            ticket(TICKET_A, "Greeting"),
+            ticket(TICKET_B, "Farewell")
+        ])),
+        "/runs" => json(json!([
+            run(RUN_OLD, "2026-10-20T00:00:00Z"),
+            run(RUN_NEW, "2026-10-21T00:00:00Z")
+        ])),
+        p if p == format!("/tickets/{TICKET_A}") => json(ticket(TICKET_A, "Greeting")),
+        p if p == format!("/runs/{RUN_NEW}") => json(run(RUN_NEW, "2026-10-21T00:00:00Z")),
+        p if p == format!("/plans/plan-{TICKET_A}") => json(plan_a),
+        p if p == format!("/plans/plan-{TICKET_A}/approvals") => json(
+            json!({"approval":{"plan_id":format!("plan-{TICKET_A}"),"plan_revision":1,"plan_hash":HASH,"approved_by":"developer"},"run":run(RUN_NEW, "2026-10-21T00:00:00Z")}),
+        ),
+        _ => status(404, r#"{"error":"not found"}"#),
+    }
+}
+
+#[test]
+fn short_ids_name_exactly_one_record_before_anything_is_sent() {
+    let directory = tempfile::tempdir().unwrap();
+    let mock = serve(generated);
+    let run = |argv: &[&str]| run_client(argv, &mock.url(), Some(TOKEN), "", directory.path());
+
+    let (code, out, err) = run(&["show-ticket", "3f2a91"]);
+    assert_eq!(code, 0, "{err}");
+    assert!(
+        out.starts_with("3f2a91c0  r1"),
+        "lists and records lead with the short id: {out}"
+    );
+    assert!(mock
+        .take()
+        .iter()
+        .any(|r| r.path == format!("/api/v1/tickets/{TICKET_A}")));
+
+    let (code, _, err) = run(&["show-ticket", "3f2a"]);
+    assert_eq!(code, 1);
+    assert!(
+        err.contains("matches 2 tickets") && err.contains("3f2a91c0 Greeting"),
+        "{err}"
+    );
+    assert!(
+        !mock
+            .take()
+            .iter()
+            .any(|r| r.path.starts_with("/api/v1/tickets/")),
+        "nothing is read for an ambiguous id"
+    );
+
+    let (code, _, err) = run(&["show-ticket", "ticket-9999"]);
+    assert_eq!(code, 1);
+    assert!(
+        err.contains("No ticket has the short id ticket-9999"),
+        "{err}"
+    );
+
+    let (code, out, err) = run(&["run", "latest"]);
+    assert_eq!(code, 0, "{err}");
+    assert!(
+        out.starts_with("8b1e0000  completed  workflow · plan 3f2a91c0 r1"),
+        "{out}"
+    );
+    assert!(mock
+        .take()
+        .iter()
+        .any(|r| r.path == format!("/api/v1/runs/{RUN_NEW}")));
+
+    let (code, _, err) = run(&["approve", "3f2a91", "--acknowledge-hash", "aaaaaaa"]);
+    assert_eq!(code, 1, "seven hash digits do not acknowledge a hash");
+    assert!(
+        err.starts_with("Approval refused: The acknowledged hash does not match"),
+        "{err}"
+    );
+    assert!(!mock.take().iter().any(|r| r.path.ends_with("/approvals")));
+
+    let (code, out, err) = run(&["approve", "3f2a91", "--acknowledge-hash", "aaaaaaaa"]);
+    assert_eq!(code, 0, "{err}");
+    assert!(out.starts_with("Approved plan 3f2a91c0 r1"), "{out}");
+    let sent = mock
+        .take()
+        .into_iter()
+        .find(|r| r.path.ends_with("/approvals"))
+        .unwrap();
+    assert_eq!(
+        sent.path,
+        format!("/api/v1/plans/plan-{TICKET_A}/approvals")
+    );
+    assert_eq!(
+        sent.json()["plan_hash"],
+        HASH,
+        "the complete hash is what reaches the runtime"
+    );
+}

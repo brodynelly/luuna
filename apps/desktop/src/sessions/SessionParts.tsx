@@ -1,7 +1,7 @@
 import { useState } from "react";
 import { isTerminal, type EventEnvelope, type LuunaClient, type RunRecord } from "@luuna/api-client";
 import { canCancel } from "../workflow-state";
-import { runTone, Button, copyText, Disclosure, EmptyState, FieldRow, Form, FormFooter, HeadingRow, Id, Inline, ListGroup, ListRow, LiveOutput, Meta, Placeholder, ReasonNote, Section, StatusBadge, StreamingDots, Surface, submitted, Tag, TextArea, TextField, Toolbar, useNotify } from "@luuna/ui";
+import { runTone, Button, copyText, Disclosure, EmptyState, FieldRow, Form, FormFooter, HeadingRow, Id, Inline, ListGroup, ListRow, LiveOutput, Meta, Placeholder, ReasonNote, Section, StatusBadge, StreamingDots, Surface, submitted, Tag, TextArea, TextField, Toolbar, useNotify, ShortId } from "@luuna/ui";
 import { localTime, runTitle, sessionStatus } from "../shell/runtime";
 import { EventList } from "./EventList";
 
@@ -60,7 +60,7 @@ export function EventPanel({ client, active, events, output, live, candidateActi
   return <Section id="events-heading" title={active ? "Session events" : "Live activity"} className="event-panel" accessory={active && <StatusBadge tone={runTone[active.state]}>{active.state}</StatusBadge>}>
     {active && client ? <>
       <Inline wrap align="center" gap={3} className="run-detail meta">
-        <Id>{active.id}</Id>
+        <ShortId value={active.id} kind="session" />
         <span role="status">{sessionStatus(live, active.state)}</span>
         {!isTerminal(active.state) && <StreamingDots />}
         <span>event replay from sequence {events.at(-1)?.sequence ?? 0}</span>
