@@ -78,14 +78,14 @@ Bun's own executable, no shell, and never receive the runtime's URL or token.
 Luuna opens on Home. `s` on Home or Projects (or "Set up a project" in the menu) starts the guide.
 F3 or 1 Projects, F4 or 2 Missions, F6 or 3 Atlas, F7 or 4 Beacon, F8 or 5 Runs, F2 or `:` the
 complete command catalog, F1 or `?` Help; F10 or `m` opens navigation, Tab changes focus, arrows
-(or h/j/k/l) select, Enter inspects, Esc returns, F5 or Ctrl-R refreshes. Every key has a plain-key
+(or h/j/k/l) select, Enter inspects, Esc returns, F5 or Ctrl-R refreshes. Every function key has a plain-key
 alternative because macOS terminals keep F1-F12 unless Fn is held ([ADR 0040](../../docs/decisions/0040-terminal-keymap-and-settings.md)).
 Forms: Tab or Up/Down move fields, Left/Right pick from a field's choices (repositories, records,
 scopes, yes/no; typing still works), Ctrl-U clears, Alt-Enter, Shift-Enter or Ctrl-J adds a line (on
 a Mac, Option-Enter sends a plain Enter), Ctrl-S submits. Keys, colors and the kitty keyboard flag
-are read from `~/.config/luuna/tui.json` (`$LUUNA_TUI_CONFIG`, `$XDG_CONFIG_HOME/luuna/tui.json`,
-`%APPDATA%\luuna\tui.json`); `luuna-tui --print-config` prints every default and `--config-path`
-where the file is read. Help lists the keys as configured. Approval shows the complete
+are read from `$LUUNA_TUI_CONFIG`, else `$XDG_CONFIG_HOME/luuna/tui.json`, else
+`%APPDATA%\luuna\tui.json` on Windows, else `~/.config/luuna/tui.json`; `luuna-tui --print-config`
+prints every default and `--config-path` the file in use. Help lists the keys as configured. Approval shows the complete
 plan and hash and takes a typed `approve` (or the hash's first 8 digits), never a prefilled answer;
 a terminal too small to show the plan cannot approve. Lists show short ids, and every ticket, plan,
 run and memory argument accepts one, as do `runs --before` and `plan --memory` (ADR 0042). A
