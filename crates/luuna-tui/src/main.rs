@@ -201,6 +201,10 @@ async fn workbench(guide: Option<Vec<(String, String)>>) -> io::Result<u8> {
                 break Err(error);
             }
             clock.frame_drawn(now);
+            // A drawn frame clears the request; an animation still running asks for the next one.
+            if app.animating() {
+                clock.request_animation_frame();
+            }
         }
         if app.quit {
             break Ok(0);
@@ -234,17 +238,7 @@ async fn workbench(guide: Option<Vec<(String, String)>>) -> io::Result<u8> {
             event = bridge.recv(), if bridge_open && !transport_stopped => {
                 clock.mark_dirty();
                 match event {
-                    Some(first) => {
-                        // Bound work per wake: terminal input still runs when the producer is busy.
-                        let mut next = Some(first);
-                        for _ in 0..=QUEUE_SIZE {
-                            let Some(result) = next.take() else { break };
-                            if !apply_bridge(&mut app, result) {
-                                break;
-                            }
-                            next = bridge.try_recv();
-                        }
-                    }
+                    Some(first) => drain(first, || bridge.try_recv(), |result| apply_bridge(&mut app, result)),
                     None => {
                         bridge_open = false;
                         if !app.bridge_failed {
@@ -303,6 +297,21 @@ fn handle_input(app: &mut AppState, clock: &mut FrameClock, event: Event) {
 }
 
 /// Returns false when the transport failed and draining should stop.
+/// Applies `first` and at most `QUEUE_SIZE` more queued events, so terminal input still runs when
+/// the producer is busy. An event leaves the channel only to be applied; the rest wait for the next
+/// wake, and applying stops at the first event that ends the transport.
+fn drain<E>(first: E, mut next: impl FnMut() -> Option<E>, mut apply: impl FnMut(E) -> bool) {
+    if !apply(first) {
+        return;
+    }
+    for _ in 0..QUEUE_SIZE {
+        let Some(event) = next() else { break };
+        if !apply(event) {
+            break;
+        }
+    }
+}
+
 fn apply_bridge(app: &mut AppState, result: Result<BridgeEvent, String>) -> bool {
     match result {
         Ok(event) => {
@@ -386,5 +395,52 @@ async fn secret(
             Event::Resize(..) => clock.mark_dirty(),
             _ => {}
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::collections::VecDeque;
+
+    #[test]
+    fn every_queued_bridge_event_is_applied_in_order_across_wakes() {
+        for total in [1, QUEUE_SIZE, QUEUE_SIZE + 1, QUEUE_SIZE + 2, 100] {
+            let mut queue: VecDeque<usize> = (0..total).collect();
+            let mut applied = Vec::new();
+            while let Some(first) = queue.pop_front() {
+                let before = applied.len();
+                drain(
+                    first,
+                    || queue.pop_front(),
+                    |event| {
+                        applied.push(event);
+                        true
+                    },
+                );
+                assert!(applied.len() - before <= QUEUE_SIZE + 1, "bounded per wake");
+            }
+            assert_eq!(applied, (0..total).collect::<Vec<_>>(), "{total} events");
+        }
+    }
+
+    #[test]
+    fn draining_stops_at_an_event_that_ends_the_transport_and_takes_nothing_more() {
+        let mut queue: VecDeque<usize> = (1..10).collect();
+        let mut applied = Vec::new();
+        drain(
+            0,
+            || queue.pop_front(),
+            |event| {
+                applied.push(event);
+                event != 3
+            },
+        );
+        assert_eq!(applied, vec![0, 1, 2, 3]);
+        assert_eq!(
+            queue.front(),
+            Some(&4),
+            "nothing past the stop was dequeued"
+        );
     }
 }

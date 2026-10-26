@@ -54,6 +54,8 @@ fn real_pty_keyboard_resize_and_terminal_cleanup() {
         );
         command.env("LUUNA_URL", "http://127.0.0.1:1");
         command.env("LUUNA_TUI_SHUTDOWN_FILE", &marker);
+        // The defaults, never the developer's own settings file (ADR 0040).
+        command.env("LUUNA_TUI_CONFIG", control.path().join("tui.json"));
         let mut child = pair.slave.spawn_command(command).unwrap();
         drop(pair.slave);
         let captured = Arc::new(Mutex::new(Vec::new()));
