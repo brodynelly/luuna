@@ -77,7 +77,7 @@ JSONL protocol v1 (document actual JSON spelling and use it consistently in both
 
 `stdin_document` supports explicit form-submitted JSON/prompt body for existing `-` operands; `io.readStdin` consumes that supplied value or requests a document prompt, never reads protocol stdin as document bytes. Existing explicitly chosen file paths retain their existing command behavior. No shell interpolation or evaluation is used.
 
-Reuse `runCommand` with bridge IO adapters, or extract a narrowly shared command executor if needed; do not maintain two validation/confirmation implementations. Preserve structured results, plain `format` output, `io.show`, `io.emit`, failure explanations and return codes. Interactive `approve` always presents the complete current plan and requires a fresh typed full hash through its existing acknowledgment callback. Reject `acknowledge-hash` supplied through interactive bridge requests; do not convert cached/displayed plan hashes into consent. Truncated or unavailable plan display disables approval.
+Reuse `runCommand` with bridge IO adapters, or extract a narrowly shared command executor if needed; do not maintain two validation/confirmation implementations. Preserve structured results, plain `format` output, `io.show`, `io.emit`, failure explanations and return codes. Interactive `approve` always presents the complete current plan and requires a fresh typed acknowledgment through its existing acknowledgment callback (ADR 0042 replaced the full-hash entry: `approve`, `yes` or an 8+ digit prefix of the hash just read; the complete hash is sent). Reject `acknowledge-hash` supplied through interactive bridge requests; do not convert cached/displayed plan hashes into consent. Truncated or unavailable plan display disables approval.
 
 The event loop stays responsive while requests, health checks, prompts and SSE are pending. Health polls every two seconds with a bounded timeout and at most one outstanding poll; restoration reloads authoritative views and does not replay mutations. SSE uses existing `followEvents`, preserving sequence validation and resumption. User `cancel` is a separate visible runtime action; leaving a view, Esc or closing the client only aborts local work. Report unknown mutation outcomes after connection loss; never retry mutations automatically.
 
@@ -116,7 +116,7 @@ Use an owned child handle and bounded shutdown deadline: graceful shutdown, then
 
 - [ ] Rust actually owns the terminal and remains responsive during bridge work; no browser/Tauri launch occurs.
 - [ ] All catalog actions (currently 59), home and board are reachable through generic UI with equivalent context/arguments/flags; dynamic catalog equality prevents future omissions.
-- [ ] Approval displays the complete freshly read plan and only accepts the user's exact full hash; cancellation/mismatch sends no approval request.
+- [ ] Approval displays the complete freshly read plan and accepts only an unprefilled typed acknowledgment (ADR 0042: `approve`, `yes` or an 8+ digit prefix of the hash just read; the complete hash is sent); cancellation/mismatch sends no approval request.
 - [ ] Shared builders, failure semantics, policy boundaries, hidden credentials, loopback restrictions, SSE resumption and all script-mode behaviors remain intact.
 - [ ] Reconnect reloads read state; no mutation, approval or runtime cancellation occurs automatically.
 - [ ] DOS layout works without overflow at 40x12, 60x24 and 80x24, supports resize/scrolling and plain NO_COLOR mode; tiny panes have a safe compact fallback.

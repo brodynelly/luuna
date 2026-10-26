@@ -139,6 +139,7 @@ These predate the families. They are still exported and in use. "Superseded by" 
 | `Callout`, `ErrorBanner` | `content.tsx` | Inline message and dismissible error | `tone`, `status`, `label`; `message`, `onDismiss` | `Alert` |
 | `CalloutBlock`, `ReasonNote`, `NextStep`, `CalloutList`, `StatusLine` | `content.tsx` | Reason and next-step text, toned lists | `tone`, `reason`, `next`, `label` | none listed |
 | `Facts`, `Meta`, `Id`, `Tag`, `Item`, `List` | `content.tsx` | Key/value pairs, metadata, identities, lists | `items`, `label`, `ordered` | `Facts` to `PropertyList`; `List`/`Item` to `ListGroup`/`ListRow` |
+| `ShortId`, `shortId`, `shortHash` | `content.tsx` | A generated id or `sha256:` hash by its short form, copied whole on click (ADR 0042). The whole value is the `title` and the accessible name ("Copy {kind} {value}"); a `role="status"` "copied" note confirms the copy. Never nest it in a button or a `summary` (use `shortId` text there); evidence read whole, such as the plan hash beside Approve, keeps `Id` | `value`, `kind`, `className` | none |
 | `Box`, `Text`, `Hint`, `ExternalLink`, `VisuallyHidden` | `content.tsx` | Basic content elements | HTML props, `href` | none |
 | `RecordList`, `RecordItem`, `ScrollList`, `DownloadLink`, `EmptyState` | `content.tsx` | Record lists, scroll lists, empty state | `variant`, `tone`, `follow`, `title`, `action` | none listed |
 | `Button`, `TextField`, `TextArea`, `SelectField`, `Checkbox`, `Switch` | `controls.tsx` | Core controls; `options()` builds `Option[]` | `variant` (`primary`, `secondary`, `quiet`, `danger`, `text`), `label`, `options` | none; the fragment says these are unchanged |
@@ -178,6 +179,7 @@ Tone and motion helpers exported from the same barrel: `Tone`, `TONES`, `runTone
 | Right-click or keyboard context menu on a row | `ListRow` `commands`, or `ContextMenuArea` |
 | Sortable, selectable table, paged | `DataTable` with `Pagination` |
 | Key/value details | `PropertyList` |
+| A generated id or hash nobody should retype | `ShortId` (copies the whole value) |
 | One headline number | `MetricCard`; a grid of them: `StatGrid` with `StatTile` (legacy) |
 | List of items that open | `ListGroup` with `ListRow` `onOpen` |
 | One choice, shown inline as segments | `SegmentedControl` (navigation) |
