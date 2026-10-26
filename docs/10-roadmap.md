@@ -14,6 +14,8 @@ Work packages: P00 repository/CI bootstrap; P01 domain types and schemas; P02 th
 
 Exit: schema examples validate, domain transition tests reject invalid actions, Mac/Windows CI builds a skeleton binary, and a documented command runs the fixture suite. No real agent writes are enabled.
 
+*Revised by [ADR 0041](decisions/0041-no-repository-ci.md) (October 26, 2026): the repository has no CI/CD. P00's CI bootstrap and the Mac/Windows CI exit criterion are replaced by the same checks run locally on those hosts and recorded as evidence.*
+
 ## M1 - Real Pi vertical slice
 
 Implement the service shell, engine adapter, child-process supervision, event normalization, CLI client, private configuration, and one real provider connection. Test read-only exploration and structured output against a small fixture.

@@ -10,7 +10,7 @@ Keep the application and all three maintained CLI components in **this monorepo*
 
 | Area | Implemented and checked | Partial or not yet demonstrated |
 | --- | --- | --- |
-| Repository | MIT/notices, cleaned current tracking, contributor rules, pinned tools/locks, CI definitions | Historical session files remain in earlier commits; remote CI and distribution need separate evidence |
+| Repository | MIT/notices, cleaned current tracking, contributor rules, pinned tools/locks; no CI/CD by decision (ADR 0041), checks run locally and are recorded | Historical session files remain in earlier commits; distribution needs separate evidence |
 | Domain/storage | Immutable plan hashing, exact approval/revision/project guards, candidate/review guards, transactional state/events, durable SQLite runs, restart interruption | A real baseline executor is absent; storage deliberately rejects entry to feature implementation |
 | Pi/runtime | Actual Pi 1.3.0 version/RPC handshake, authenticated loopback run API, replay/SSE, timeout/cancel/reap, malformed/error fixtures, durable failed/cancelled attempts | Genuine provider-backed output observed on Linux on October 17, 2026 (OpenRouter `openai/gpt-4o-mini`, 19/19 real-mode smoke checks); Mac/Windows service lifecycle and native client remain unverified |
 | Frontend | Typed client, real service connection, run/history/cancel/reconnect, private in-memory token; browser smoke exercised | Tauri shell exists; native GUI launch, installer, and Mac/Windows results are unverified |

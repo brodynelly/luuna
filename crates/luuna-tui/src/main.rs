@@ -29,6 +29,21 @@ const SHUTDOWN_POLL: Duration = Duration::from_millis(100);
 #[tokio::main]
 async fn main() -> std::process::ExitCode {
     let argv: Vec<String> = std::env::args().skip(1).collect();
+    // The workbench's settings file (keys, colors): print every default, or where it is read.
+    match argv.first().map(String::as_str) {
+        Some("--print-config") => {
+            print!("{}", luuna_tui::config::defaults_json());
+            return std::process::ExitCode::SUCCESS;
+        }
+        Some("--config-path") => {
+            match luuna_tui::config::path() {
+                Some(path) => println!("{}", path.display()),
+                None => println!("(no home directory; set LUUNA_TUI_CONFIG)"),
+            }
+            return std::process::ExitCode::SUCCESS;
+        }
+        _ => {}
+    }
     // `--guide init [--guide-flag key=value]...` opens the guide directly (the tests' entry).
     let next = if argv.first().map(String::as_str) == Some("--guide") {
         match guide_arguments(&argv) {
@@ -86,7 +101,8 @@ async fn workbench(guide: Option<Vec<(String, String)>>) -> io::Result<u8> {
     }
     install_panic_restore();
     let shutdown = Shutdown::install()?;
-    let guard = TerminalGuard::enter()?;
+    let settings = luuna_tui::config::load_and_install();
+    let guard = TerminalGuard::enter_with(settings.keyboard_enhancement)?;
     // Declared after `guard` so early returns join the input thread before restoration.
     let mut input = Input::spawn()?;
     let mut terminal = guard.screen()?;
@@ -120,6 +136,17 @@ async fn workbench(guide: Option<Vec<(String, String)>>) -> io::Result<u8> {
     let mut app = AppState::default();
     app.set_scroll_motion(ScrollMotion::from_env());
     app.start();
+    if !settings.warnings.is_empty() {
+        let shown = settings
+            .path
+            .as_ref()
+            .map(|p| p.display().to_string())
+            .unwrap_or_default();
+        app.status = safe_text(&format!(
+            "Settings {shown}: {}",
+            settings.warnings.join("; ")
+        ));
+    }
     if let Some(flags) = guide {
         let flags = flags
             .into_iter()
@@ -343,7 +370,9 @@ async fn secret(
                     KeyCode::Backspace => {
                         value.pop();
                     }
-                    KeyCode::Char(c) if !c.is_control() && value.len() < 8192 => value.push(c),
+                    KeyCode::Char(c) if luuna_tui::keys::is_text(&key) && value.len() < 8192 => {
+                        value.push(c)
+                    }
                     _ => {}
                 }
             }

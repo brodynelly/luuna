@@ -546,7 +546,21 @@ impl AppState {
             _ => {}
         }
     }
+    /// True while keystrokes are typed text: a form, a prompt, a search, a guide question.
+    pub fn text_entry(&self) -> bool {
+        self.mode == Mode::Form
+            || self.prompt.is_some()
+            || self.workbench.searching
+            || self.mode == Mode::Guide
+                && self
+                    .guide
+                    .as_ref()
+                    .is_some_and(|guide| guide.question.is_some())
+    }
     pub fn key(&mut self, key: KeyEvent) {
+        let Some(key) = crate::keys::keymap().translate(key, self.text_entry()) else {
+            return;
+        };
         if key.modifiers.contains(KeyModifiers::CONTROL) && key.code == KeyCode::Char('c') {
             self.quit = true;
             return;
@@ -669,14 +683,14 @@ impl AppState {
                 self.filter.clear();
             }
             KeyCode::F(5) | KeyCode::Char('r') => self.refresh(),
-            KeyCode::Up | KeyCode::Char('k') => {
+            KeyCode::Up => {
                 if self.mode == Mode::Result {
                     self.scroll.scroll_up(1);
                 } else {
                     self.selected = self.selected.saturating_sub(1);
                 }
             }
-            KeyCode::Down | KeyCode::Char('j') => {
+            KeyCode::Down => {
                 if self.mode == Mode::Result {
                     self.scroll.scroll_down(1);
                 } else {
@@ -752,9 +766,7 @@ fn edit(text: &mut String, key: KeyEvent, multiline: bool) {
             text.pop();
         }
         KeyCode::Enter if multiline => text.push('\n'),
-        KeyCode::Char(c) if !key.modifiers.contains(KeyModifiers::CONTROL) && !c.is_control() => {
-            text.push(c)
-        }
+        KeyCode::Char(c) if crate::keys::is_text(&key) => text.push(c),
         KeyCode::Char('u') if key.modifiers.contains(KeyModifiers::CONTROL) => text.clear(),
         _ => {}
     }
@@ -823,6 +835,55 @@ mod tests {
             .queue
             .iter()
             .all(|q| q.fields.get("name") != Some(&json!("cancel"))));
+    }
+    #[test]
+    fn mac_friendly_keys_open_screens_but_stay_text_in_forms() {
+        let mut app = AppState {
+            mode: Mode::Workbench,
+            ..Default::default()
+        };
+        app.key(KeyEvent::new(KeyCode::Char('?'), KeyModifiers::SHIFT));
+        assert_eq!(app.workbench.screen, crate::views::Screen::Help);
+        app.key(KeyEvent::new(KeyCode::Char('m'), KeyModifiers::NONE));
+        assert!(app.workbench.nav);
+        let command = CommandDef {
+            name: "remember".into(),
+            flags: BTreeMap::from([("content".into(), FlagDef::default())]),
+            ..Default::default()
+        };
+        app.form = Some(ActionForm::new(command, &BTreeMap::new()));
+        app.mode = Mode::Form;
+        for key in [
+            KeyEvent::new(KeyCode::Char('?'), KeyModifiers::SHIFT),
+            KeyEvent::new(KeyCode::Char('q'), KeyModifiers::NONE),
+            KeyEvent::new(KeyCode::Char('j'), KeyModifiers::CONTROL),
+            KeyEvent::new(
+                KeyCode::Char('@'),
+                KeyModifiers::CONTROL | KeyModifiers::ALT,
+            ),
+        ] {
+            app.key(key);
+        }
+        assert_eq!(app.mode, Mode::Form);
+        assert!(!app.quit);
+        let value = &app.form.as_ref().unwrap().fields[0].value;
+        assert_eq!(value, "?q\n@");
+    }
+    #[test]
+    fn unbinding_down_also_removes_its_letter_alias() {
+        let (map, _) = crate::keys::Keymap::build(&BTreeMap::from([("down".into(), vec![])]));
+        let j = KeyEvent::new(KeyCode::Char('j'), KeyModifiers::NONE);
+        let down = KeyEvent::new(KeyCode::Down, KeyModifiers::NONE);
+        assert_eq!(map.translate(down, false), None);
+        // `j` reaches handlers only as itself, and no handler moves on a raw `j` any more.
+        let mut app = AppState {
+            mode: Mode::Catalog,
+            selected: 1,
+            ..Default::default()
+        };
+        app.key(KeyEvent::new(KeyCode::Char('k'), KeyModifiers::NONE));
+        assert_eq!(app.selected, 0);
+        assert_eq!(map.translate(j, false), Some(j));
     }
     #[test]
     fn stale_prompt_cannot_replace_active_request() {

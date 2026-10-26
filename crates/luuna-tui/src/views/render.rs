@@ -962,11 +962,11 @@ fn render_help(frame: &mut Frame, app: &mut AppState, area: Rect, theme: Theme) 
         Line::raw(""),
     ];
     for (title, body) in [
-        ("NAVIGATE", "F10 opens the menu. Tab changes focus. Arrow keys select; Enter opens. Escape returns. F1 opens Help; F2 opens every command; F5 refreshes. PageUp/PageDown scroll details. Ctrl+C quits the client."),
+        ("NAVIGATE", "F10 opens the menu. Tab changes focus. Arrow keys select; Enter opens. Escape returns. F1 opens Help; F2 opens every command; F5 refreshes. PageUp/PageDown scroll details. Ctrl+C quits the client. Every key has an alternative for keyboards without function keys (macOS takes F1-F12 unless Fn is held): see KEYS below."),
         ("MISSIONS", "Left/Right pages all eight runtime workflow columns. Cards open tickets or testing prerequisites. This is a read-only projection: a card never moves a workflow or bypasses approval."),
         ("ORBIT", "Every repository of the project at once. x runs one command in each, r runs a manifest recipe, s fetches present checkouts and clones missing ones; each opens a form first. These are your own commands, never evidence. b shows the sandbox plan; open the sandbox outside the workbench with lu sbx <project>."),
         ("ATLAS AND BEACON", "Browse scoped memory and versioned prompts. User memory requires explicit inclusion. Select context deliberately; it stays unsent until a plan is submitted. Project changes clear these choices."),
-        ("FORMS", "Tab and Shift+Tab move fields. Alt+Enter inserts a line. Ctrl+S submits. Escape cancels. Letters, including q, are text while editing. Shared commands retain their confirmations and stale-version guards."),
+        ("FORMS", "Tab and Shift+Tab move fields. Alt+Enter (or Ctrl+J; Shift+Enter where the terminal reports it) inserts a line. Ctrl+S submits. Escape cancels. Letters, including q, are text while editing. Shared commands retain their confirmations and stale-version guards."),
         ("PLANS AND EVIDENCE", "Read the complete plan and hash. Approval starts with a blank acknowledgment; the complete hash must match. Implementation remains separate. Run evidence tabs retain exact runtime state and reasons."),
         ("SERVICE LIFETIME", "Leaving a view or closing this client never cancels the underlying run. Cancel and shutdown are explicitly named commands. Interrupted work is distinct from failed checks; completed alone is not passed evidence."),
     ] { lines.push(heading(title, theme)); lines.push(Line::raw(body)); lines.push(Line::raw("")); }
@@ -984,6 +984,36 @@ fn render_help(frame: &mut Frame, app: &mut AppState, area: Rect, theme: Theme) 
     lines.push(Line::raw(
         "z clears unsent plan context. s toggles the inspected record.",
     ));
+    lines.push(Line::raw(""));
+    lines.push(heading("KEYS / AS CONFIGURED", theme));
+    let keymap = crate::keys::keymap();
+    for (name, _, _, about) in crate::keys::ACTIONS {
+        lines.push(Line::raw(format!(
+            "{:<14}{:<26}{about}",
+            name,
+            keymap.all(name)
+        )));
+    }
+    lines.push(Line::raw(""));
+    lines.push(heading("SETTINGS", theme));
+    let path = crate::config::path()
+        .map(|p| p.display().to_string())
+        .unwrap_or_else(|| "no home directory; set LUUNA_TUI_CONFIG".into());
+    let state = match crate::config::loaded() {
+        Some(loaded) if loaded.found => "loaded",
+        Some(_) => "not present; defaults in use",
+        None => "defaults in use",
+    };
+    lines.push(Line::raw(format!("{path} ({state})")));
+    lines.push(Line::raw(
+        "Keys, colors and terminal options. luuna-tui --print-config writes every default; restart to apply changes.",
+    ));
+    for warning in crate::config::loaded()
+        .map(|l| l.warnings.as_slice())
+        .unwrap_or_default()
+    {
+        lines.push(Line::styled(format!("! {warning}"), theme.tone("danger")));
+    }
     paragraph(frame, lines, area, &mut app.scroll, theme);
 }
 

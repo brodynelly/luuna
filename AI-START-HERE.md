@@ -1,5 +1,22 @@
 # Luuna implementation handoff
 
+## Latest: terminal key bindings and settings, and no repository CI (October 26, 2026)
+
+[ADR 0040](docs/decisions/0040-terminal-keymap-and-settings.md): the terminal
+workbench's keys go through one keymap (`crates/luuna-tui/src/keys.rs`) with
+macOS-reachable defaults (`?`, `:`, `1`–`5`, `m`, `Ctrl+J`, `Ctrl+B`/`Ctrl+F`…) beside
+the function keys, AltGr characters type correctly, and keys, colors and the kitty
+keyboard flag are read from `~/.config/luuna/tui.json` (`luuna-tui --print-config`).
+Evidence: `cargo test -p luuna-tui` including the PTY tests, clippy and fmt on Linux;
+no Mac or Windows run yet.
+
+[ADR 0041](docs/decisions/0041-no-repository-ci.md): **this repository has no
+CI/CD.** The GitHub Actions workflow is removed and nothing replaces it. Do not add
+workflows or treat a hosted check as a blocker or as evidence; run the local checks
+in [CONTRIBUTING.md](CONTRIBUTING.md) and record what ran. The runtime's CI
+observation on published pull requests (ADR 0018) is a product feature and is
+unchanged.
+
 ## Latest: Orbit and the project sandbox (October 22, 2026)
 
 [ADR 0036](docs/decisions/0036-orbit-and-project-sandbox.md) adds Orbit (status, exec,

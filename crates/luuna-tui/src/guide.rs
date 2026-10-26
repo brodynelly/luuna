@@ -463,9 +463,7 @@ impl GuideState {
                     value.clear();
                     None
                 }
-                KeyCode::Char(c)
-                    if !key.modifiers.contains(KeyModifiers::CONTROL) && !c.is_control() =>
-                {
+                KeyCode::Char(c) if crate::keys::is_text(&key) => {
                     if value.len() < MAX_ANSWER {
                         value.push(c);
                     }

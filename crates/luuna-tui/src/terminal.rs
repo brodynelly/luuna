@@ -1,6 +1,9 @@
 use crossterm::{
     cursor::{Hide, Show},
-    event::{DisableBracketedPaste, EnableBracketedPaste},
+    event::{
+        DisableBracketedPaste, EnableBracketedPaste, KeyboardEnhancementFlags,
+        PopKeyboardEnhancementFlags, PushKeyboardEnhancementFlags,
+    },
     execute, queue,
     terminal::{
         disable_raw_mode, enable_raw_mode, is_raw_mode_enabled, BeginSynchronizedUpdate,
@@ -89,6 +92,33 @@ impl Drop for Shutdown {
     }
 }
 
+/// Set while the terminal has our kitty-protocol flags pushed, so every restoration
+/// path (drop, suspend, panic) pops exactly what was pushed and nothing on other terminals.
+static ENHANCED: AtomicBool = AtomicBool::new(false);
+static WANT_ENHANCED: AtomicBool = AtomicBool::new(false);
+
+/// Disambiguated key reports: Esc, Alt+key and Shift/Ctrl+Enter arrive as themselves.
+/// Only pushed when the terminal answers the capability query (never on Windows consoles).
+fn push_enhancement() {
+    if WANT_ENHANCED.load(Ordering::Acquire)
+        && !ENHANCED.load(Ordering::Acquire)
+        && crossterm::terminal::supports_keyboard_enhancement().unwrap_or(false)
+        && execute!(
+            io::stdout(),
+            PushKeyboardEnhancementFlags(KeyboardEnhancementFlags::DISAMBIGUATE_ESCAPE_CODES)
+        )
+        .is_ok()
+    {
+        ENHANCED.store(true, Ordering::Release);
+    }
+}
+
+fn pop_enhancement<W: Write>(writer: &mut W) {
+    if ENHANCED.swap(false, Ordering::AcqRel) {
+        let _ = execute!(writer, PopKeyboardEnhancementFlags);
+    }
+}
+
 thread_local! {
     /// True between `BeginSynchronizedUpdate` and its matching End on this thread, so
     /// restoration paths (guard drop, panic hook) can close an open update. The flag is
@@ -130,6 +160,13 @@ pub struct TerminalGuard {
 }
 
 impl TerminalGuard {
+    /// Like `enter`, and asks for unambiguous key reports when `keyboard_enhancement` is set.
+    pub fn enter_with(keyboard_enhancement: bool) -> io::Result<Self> {
+        WANT_ENHANCED.store(keyboard_enhancement, Ordering::Release);
+        let guard = Self::enter()?;
+        push_enhancement();
+        Ok(guard)
+    }
     pub fn enter() -> io::Result<Self> {
         let guard = Self {
             previous_raw: is_raw_mode_enabled()?,
@@ -153,6 +190,7 @@ impl TerminalGuard {
 impl Drop for TerminalGuard {
     fn drop(&mut self) {
         close_sync(&mut io::stdout());
+        pop_enhancement(&mut io::stdout());
         let _ = execute!(
             io::stdout(),
             DisableBracketedPaste,
@@ -168,6 +206,7 @@ impl Drop for TerminalGuard {
 /// Hands the terminal to a child process (an editor): the normal screen, a visible cursor, cooked mode.
 pub fn suspend() -> io::Result<()> {
     close_sync(&mut io::stdout());
+    pop_enhancement(&mut io::stdout());
     execute!(
         io::stdout(),
         DisableBracketedPaste,
@@ -186,6 +225,7 @@ pub fn resume(screen: &mut Screen) -> io::Result<()> {
         EnableBracketedPaste,
         Hide
     )?;
+    push_enhancement();
     screen.clear()
 }
 
@@ -194,6 +234,7 @@ pub fn install_panic_restore() {
     let previous = std::panic::take_hook();
     std::panic::set_hook(Box::new(move |info| {
         close_sync(&mut io::stdout());
+        pop_enhancement(&mut io::stdout());
         let _ = execute!(
             io::stdout(),
             DisableBracketedPaste,

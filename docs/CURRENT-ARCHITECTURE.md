@@ -26,6 +26,13 @@ README and AI-START-HERE are entry points, not alternative specifications. Exist
 
 ## Delivery and boundaries
 
+The repository has no CI/CD ([ADR 0041](decisions/0041-no-repository-ci.md)): no
+workflow, no status check, no deployment or release automation. Checks are run
+locally by the contributor and recorded as evidence with the change; merging
+remains the developer's decision. The runtime's observation of CI on pull requests
+it publishes to a developer's repositories (ADR 0018) is a product feature and is
+unrelated.
+
 Runtime I/O isolation and bounded session history follow
 [ADR 0015](decisions/0015-bounded-runtime-and-history.md): synchronous transactions
 run under bounded blocking admission, SSE reads in pages, and the desktop keeps
@@ -66,7 +73,11 @@ involved. The command table is data (`crates/luuna-tui/commands.json`) that
 `@luuna/api-client`; the terminal client carries a Rust port of its client, failure explanations,
 request builders and projections, so parity is held by `check-contracts`, the Rust tests that
 assert request bodies, and the differential evidence ADR 0037 records rather than by one shared
-module. Windows packages carry `luuna-tui.exe` alone for the terminal. Historical JavaScript
+module. Windows packages carry `luuna-tui.exe` alone for the terminal. The workbench's key
+bindings, colors and terminal options are read from a JSON settings file
+([ADR 0040](decisions/0040-terminal-keymap-and-settings.md)): every handler matches one canonical
+key per action and `keys::Keymap` translates what was pressed into it, with macOS-reachable
+alternatives by default. Historical JavaScript
 interactive audit results above do not establish native renderer coverage; native UI and
 staged-launch evidence must be recorded separately.
 The native renderer draws on an event-driven frame clock (dirty flag, 60 Hz

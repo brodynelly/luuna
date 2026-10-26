@@ -47,7 +47,7 @@ The Luuna product itself needs its test setup at M0. Do not spend model tokens v
 
 Record OS version, architecture, Git/Pi/runtime versions, shell, container engine if used, toolchain, browser, and terminal. Mac ARM64 and Windows x64 are recommended initial release targets. Treat other architectures as explicit matrix entries before advertising support; this is a release-engineering scope, not a claim that every binary already exists.
 
-Linux is recommended for CI and optional server use. Native iOS validation needs the appropriate Apple toolchain and host. Android instrumentation and Flutter integration need their declared device/emulator environment. Missing access to a platform is an unmet release test, not a passed scenario.
+Linux is recommended for optional server use (the repository itself has no CI; ADR 0041). Native iOS validation needs the appropriate Apple toolchain and host. Android instrumentation and Flutter integration need their declared device/emulator environment. Missing access to a platform is an unmet release test, not a passed scenario.
 
 ## Product-level invariants
 
