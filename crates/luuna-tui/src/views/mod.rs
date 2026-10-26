@@ -1151,6 +1151,16 @@ pub fn exact_context(app: &AppState, name: &str, value: &str) -> Option<String> 
     if !crate::refs::is_short_reference(value) {
         return Some(value.to_string());
     }
+    // A prefix naming another kind (`ticket-8b1e` for a run) stays unresolved, so the command
+    // refuses it rather than this matching a loaded record of the argument's kind.
+    let allowed: &[&str] = match name {
+        "ticket" => &["ticket"],
+        "plan" => &["plan", "ticket"],
+        _ => &["run"],
+    };
+    if !crate::refs::kind_matches(value, allowed) {
+        return None;
+    }
     let ids: Vec<String> = known_choices(app, "", name)
         .into_iter()
         .map(|(id, _)| id)

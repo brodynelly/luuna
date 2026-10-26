@@ -104,6 +104,11 @@ fn named_kind(text: &str) -> Option<&'static str> {
     .map(|(_, kind)| kind)
 }
 
+/// Whether a reference's own prefix, if it has one, names one of the `allowed` kinds.
+pub fn kind_matches(text: &str, allowed: &[&str]) -> bool {
+    named_kind(text).is_none_or(|kind| allowed.contains(&kind))
+}
+
 /// Refuses a reference whose prefix names another kind of record than the argument takes, so
 /// `cancel ticket-3f2a` never cancels a run whose id happens to begin `3f2a`.
 fn same_kind(text: &str, expected: &str, allowed: &[&str]) -> Result<(), Failure> {

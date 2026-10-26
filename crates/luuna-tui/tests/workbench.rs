@@ -1105,6 +1105,22 @@ fn a_reference_nothing_loaded_resolves_never_becomes_the_context() {
         assert_eq!(a.context.get("plan").map(String::as_str), Some("plan-1"));
         assert_eq!(views::snapshot(&a, "run")["id"], json!(RUN), "{typed}");
     }
+    // A prefix naming another kind is never matched against loaded runs: the command refuses it.
+    let mut a = app();
+    a.snapshots.insert("runs".into(), json!([{"id":RUN,"state":"implementing","metadata":{"kind":"workflow"},"created_at":"2026-10-22T00:00:00Z"}]));
+    a.begin("cancel");
+    let form = a.form.as_mut().unwrap();
+    form.fields
+        .iter_mut()
+        .find(|f| f.name == "run")
+        .unwrap()
+        .value = "ticket-8b1e".into();
+    a.submit();
+    assert_eq!(
+        a.queue.back().unwrap().fields["args"][0],
+        json!("ticket-8b1e")
+    );
+    assert_eq!(a.context.get("run"), None);
     // A short id that names another record is not adopted.
     let mut a = app();
     a.snapshots.remove("runs");
