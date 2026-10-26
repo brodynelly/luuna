@@ -296,7 +296,6 @@ fn handle_input(app: &mut AppState, clock: &mut FrameClock, event: Event) {
     }
 }
 
-/// Returns false when the transport failed and draining should stop.
 /// Applies `first` and at most `QUEUE_SIZE` more queued events, so terminal input still runs when
 /// the producer is busy. An event leaves the channel only to be applied; the rest wait for the next
 /// wake, and applying stops at the first event that ends the transport.
@@ -312,6 +311,7 @@ fn drain<E>(first: E, mut next: impl FnMut() -> Option<E>, mut apply: impl FnMut
     }
 }
 
+/// Returns false when the transport failed and draining should stop.
 fn apply_bridge(app: &mut AppState, result: Result<BridgeEvent, String>) -> bool {
     match result {
         Ok(event) => {

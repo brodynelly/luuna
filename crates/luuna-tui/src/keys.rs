@@ -339,13 +339,15 @@ impl Keymap {
             return None;
         }
         // A modified form of a named canonical key whose action was unbound or moved (Ctrl+Right
-        // after `"right": []`) must not reach that action's handler either.
+        // after `"right": []`, or once Right opens instead) must not reach that action's handler
+        // either: it passes only while the key still belongs to its own action.
         if !chord.modifiers.is_empty() && !matches!(chord.code, KeyCode::Char(_)) {
             let base = Chord {
                 code: chord.code,
                 modifiers: KeyModifiers::NONE,
             };
-            if self.canonicals.contains(&base) && !self.lookup.contains_key(&base) {
+            let own = self.lookup.get(&base).map(|&i| self.canonical[i]) == Some(base);
+            if self.canonicals.contains(&base) && !own {
                 return None;
             }
         }
@@ -530,6 +532,22 @@ mod tests {
             moved.translate(press(KeyCode::Right, KeyModifiers::SHIFT), true),
             None
         );
+        // Given to another action: Right opens, and its modified forms never pick or page.
+        let (taken, warnings) = Keymap::build(&BTreeMap::from([
+            ("right".to_string(), vec!["l".into()]),
+            ("open".to_string(), vec!["enter".into(), "right".into()]),
+        ]));
+        assert!(warnings.is_empty(), "{warnings:?}");
+        let opened = taken
+            .translate(press(KeyCode::Right, KeyModifiers::NONE), false)
+            .unwrap();
+        assert_eq!(opened.code, KeyCode::Enter);
+        for modifiers in [KeyModifiers::SHIFT, KeyModifiers::CONTROL] {
+            assert_eq!(
+                taken.translate(press(KeyCode::Right, modifiers), true),
+                None
+            );
+        }
         // With the defaults a modified arrow still passes through untouched.
         let (defaults, _) = Keymap::build(&BTreeMap::new());
         let passed = defaults

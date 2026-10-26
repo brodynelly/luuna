@@ -1158,3 +1158,113 @@ fn the_approval_question_shows_what_to_type_and_how_to_cancel_at_eighty_columns(
         "{painted}"
     );
 }
+#[test]
+fn an_unresolved_reference_clears_the_records_its_context_linked() {
+    // On a ticket's screen the context holds the ticket and its run but no plan.
+    let mut a = app();
+    a.context.remove("plan");
+    a.begin("show-plan");
+    let form = a.form.as_mut().unwrap();
+    form.fields
+        .iter_mut()
+        .find(|f| f.name == "plan")
+        .unwrap()
+        .value = "3f2a".into();
+    a.submit();
+    assert_eq!(a.queue.back().unwrap().fields["args"][0], json!("3f2a"));
+    for name in ["ticket", "run", "plan"] {
+        assert_eq!(
+            a.context.get(name),
+            None,
+            "{name} is cleared with the reference"
+        );
+    }
+    let plan = "plan-ticket-3f2a91c0-1b2c-4d5e-8f90-0123456789ab";
+    event(
+        &mut a,
+        json!({"id":plan,"ticket_id":"ticket-3f2a91c0-1b2c-4d5e-8f90-0123456789ab","revision":1,"hash":hash()}),
+    );
+    assert_eq!(a.context.get("plan").map(String::as_str), Some(plan));
+    assert_eq!(
+        a.context.get("run"),
+        None,
+        "no other ticket's run stays beside it"
+    );
+}
+#[test]
+fn a_refresh_repeats_an_adopted_read_by_its_exact_identity() {
+    const RUN: &str = "workflow-8b1e0000-1b2c-4d5e-8f90-0123456789ab";
+    let mut a = app();
+    a.commands
+        .iter_mut()
+        .find(|c| c.name == "run")
+        .unwrap()
+        .read_only = true;
+    a.snapshots.remove("runs");
+    a.begin("run");
+    let form = a.form.as_mut().unwrap();
+    form.fields
+        .iter_mut()
+        .find(|f| f.name == "run")
+        .unwrap()
+        .value = "8b1e".into();
+    a.submit();
+    event(
+        &mut a,
+        json!({"id":RUN,"state":"implementing","metadata":{"kind":"workflow"}}),
+    );
+    assert_eq!(a.context.get("run").map(String::as_str), Some(RUN));
+    a.refresh();
+    assert_eq!(a.queue.back().unwrap().fields["args"][0], json!(RUN));
+    event(
+        &mut a,
+        json!({"id":RUN,"state":"validating","metadata":{"kind":"workflow"}}),
+    );
+    assert_eq!(views::snapshot(&a, "run")["state"], json!("validating"));
+}
+#[test]
+fn latest_names_the_newest_run_only_when_the_loaded_runs_are_a_first_page() {
+    const RUN: &str = "workflow-8b1e0000-1b2c-4d5e-8f90-0123456789ab";
+    let mut a = app();
+    a.snapshots.insert("runs".into(), json!([{"id":RUN,"state":"implementing","metadata":{"kind":"workflow"},"created_at":"2026-10-22T00:00:00Z"}]));
+    a.begin("cancel");
+    let field = a
+        .form
+        .as_ref()
+        .unwrap()
+        .fields
+        .iter()
+        .find(|f| f.name == "run")
+        .unwrap()
+        .clone();
+    assert_eq!(
+        field.choices[0],
+        ("latest".to_string(), "the newest run, 8b1e0000".to_string())
+    );
+    // An older page (runs --before) does not know the newest run.
+    a.form = None;
+    a.mode = Mode::Workbench;
+    a.begin("runs");
+    let form = a.form.as_mut().unwrap();
+    form.fields
+        .iter_mut()
+        .find(|f| f.name == "before")
+        .unwrap()
+        .value = "run-9".into();
+    a.submit();
+    event(
+        &mut a,
+        json!([{"id":RUN,"state":"implementing","metadata":{"kind":"workflow"},"created_at":"2026-10-22T00:00:00Z"}]),
+    );
+    a.begin("cancel");
+    let form = a.form.as_mut().unwrap();
+    let field = form.fields.iter_mut().find(|f| f.name == "run").unwrap();
+    assert!(!field.choices.iter().any(|(value, _)| value == "latest"));
+    field.value = "latest".into();
+    a.submit();
+    assert_eq!(
+        a.queue.back().unwrap().fields["args"][0],
+        json!("latest"),
+        "the command resolves it"
+    );
+}

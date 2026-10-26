@@ -366,7 +366,8 @@ impl AppState {
                             crate::views::choose_project(self, &value);
                         }
                     } else {
-                        if self.context.get(&name) != value.as_ref() {
+                        // Clearing is a change too: the ticket, plan and run it linked go with it.
+                        if value.is_none() || self.context.get(&name) != value.as_ref() {
                             match name.as_str() {
                                 "ticket" => {
                                     self.context.remove("run");

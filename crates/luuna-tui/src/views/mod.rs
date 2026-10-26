@@ -1056,15 +1056,16 @@ fn known_choices(app: &AppState, command: &str, field: &str) -> Vec<(String, Str
                 )
             })
             .collect(),
-        // `latest` is offered only beside the loaded runs it is resolved among.
+        // `latest` is offered only beside the loaded runs it is resolved among, naming the run.
         "run" => {
-            let runs = array(snapshot(app, "runs"));
             let mut out = Vec::new();
-            if !runs.is_empty() {
-                out.push(pair("latest".into(), "the newest run".into()));
+            if let Some(newest) = newest_loaded_run(app) {
+                let short = crate::refs::short_id(&text(&newest, "id"));
+                out.push(pair("latest".into(), format!("the newest run, {short}")));
             }
             out.extend(
-                runs.iter()
+                array(snapshot(app, "runs"))
+                    .iter()
                     .map(|r| pair(text(r, "id"), render::run_title(r))),
             );
             out
@@ -1143,10 +1144,7 @@ pub fn exact_context(app: &AppState, name: &str, value: &str) -> Option<String> 
         return Some(value.to_string());
     }
     if name == "run" && is_latest(value) {
-        return array(snapshot(app, "runs"))
-            .iter()
-            .max_by_key(|r| text(r, "created_at"))
-            .map(|r| text(r, "id"));
+        return newest_loaded_run(app).map(|r| text(&r, "id"));
     }
     if !crate::refs::is_short_reference(value) {
         return Some(value.to_string());
@@ -1170,6 +1168,23 @@ pub fn exact_context(app: &AppState, name: &str, value: &str) -> Option<String> 
 
 fn is_latest(value: &str) -> bool {
     value.trim().eq_ignore_ascii_case("latest")
+}
+
+/// The newest loaded run, which a form's `latest` names, when the loaded list is a first page
+/// (no `--before` or `--limit`); a paged list does not know the newest run.
+fn newest_loaded_run(app: &AppState) -> Option<Value> {
+    let flags = app
+        .snapshot_requests
+        .get("runs")
+        .and_then(|r| r.fields.get("flags"))
+        .cloned()
+        .unwrap_or(Value::Null);
+    if flags.get("before").is_some() || flags.get("limit").is_some() {
+        return None;
+    }
+    array(snapshot(app, "runs"))
+        .into_iter()
+        .max_by_key(|r| text(r, "created_at"))
 }
 
 /// A record read sent with a short id or `latest` that nothing loaded resolved (ADR 0042): the
@@ -1202,6 +1217,18 @@ fn adopt_identity(app: &mut AppState, command: &str, v: &Value) {
         return;
     }
     *sent = json!(id);
+    // A refresh repeats the read by the exact identity, not the reference it was typed as.
+    let request_id = request.id.clone();
+    if let Some(last) = app.last_read.as_mut().filter(|r| r.id == request_id) {
+        if let Some(first) = last
+            .fields
+            .get_mut("args")
+            .and_then(Value::as_array_mut)
+            .and_then(|args| args.first_mut())
+        {
+            *first = json!(id);
+        }
+    }
     app.context.insert(name.into(), id);
 }
 
